@@ -32,7 +32,7 @@ for i in range(0, len(aliases), 2):
     for alias, col in zip(aliases[i:i+2], cols):
         data = all_stats[alias]
         with col:
-            st.subheader(alias)
+            st.subheader(alias[2:])
             if st.button("⟳ Reload", key=f"reload_{alias}"):
                 try:
                     r = requests.post(f"{API_BASE}/reload/{alias}", timeout=3)
