@@ -1,5 +1,3 @@
-# monitor.py
-
 import threading
 import time
 import json
@@ -43,6 +41,9 @@ logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 # ─── ServerMonitor Definition ────────────────────────────────────────────────
 class ServerMonitor:
+    # 3번 전략: 몇 주기마다 강제 재연결할지 (10초 * 360 = 1시간)
+    RECONNECT_INTERVAL = 360
+
     def __init__(self, alias, host, port, user, passwd):
         self.alias = alias
         self.logger = logging.getLogger(f"Monitor.{alias}")
@@ -55,6 +56,9 @@ class ServerMonitor:
         self.lock = threading.Lock()
         self.data = None
         self.reload_event = threading.Event()
+
+        # 재연결 카운터 초기화
+        self._reconnect_counter = 0
 
         self.logger.info(f"Initializing monitor: {host}:{port} (user={user})")
         self._ensure_connection()
@@ -90,18 +94,17 @@ class ServerMonitor:
         stdin = stdout = stderr = None
         try:
             stdin, stdout, stderr = self.client.exec_command("gpustat --json")
-            # set a socket timeout on the channels so .read() won't block forever
             stdout.channel.settimeout(10.0)
             stderr.channel.settimeout(10.0)
 
             text = stdout.read().decode("utf-8", errors="ignore")
-            _ = stderr.read()  # drain stderr to avoid blocking
+            _ = stderr.read()  # drain stderr
 
             return json.loads(text)
 
         except socket.timeout as e:
             self.logger.error(f"gpustat command timeout: {e}")
-            # force reconnect on next loop
+            # force reconnect next loop
             self.client.close()
             raise
 
@@ -111,13 +114,16 @@ class ServerMonitor:
             raise
 
         finally:
-            # always clean up
+            # 2번 전략: 명시적 자원 해제
             try:
-                if stdin:  stdin.close()
-                if stdout: stdout.channel.close()
-                if stderr: stderr.channel.close()
-            except Exception:
-                pass
+                if stdin:
+                    stdin.close()
+                if stdout:
+                    stdout.close()
+                if stderr:
+                    stderr.close()
+            except Exception as e:
+                self.logger.warning(f"Error closing channels: {e}")
 
     def _loop(self):
         while True:
@@ -136,8 +142,19 @@ class ServerMonitor:
                         pass
                     self.client = None
 
-            # wait for reload event or 5s interval
-            if self.reload_event.wait(timeout=5):
+                # 3번 전략: 주기적 재연결
+                self._reconnect_counter += 1
+                if self._reconnect_counter >= self.RECONNECT_INTERVAL:
+                    self.logger.info("Performing scheduled reconnect to free resources")
+                    try:
+                        self.client.close()
+                    except Exception:
+                        pass
+                    self.client = None
+                    self._reconnect_counter = 0
+
+            # wait for reload event or 10s interval
+            if self.reload_event.wait(timeout=10):
                 self.logger.info("Manual reload triggered")
                 self.reload_event.clear()
 
@@ -151,13 +168,14 @@ class ServerMonitor:
 
 
 # ─── Hosts Configuration ─────────────────────────────────────────────────────
-User = "shchoi"
-Passwd = "root"
+User = "monitoring"
+Passwd = "123123"
 hosts = [
-    ("Poseidon", "166.104.167.164", 8989, User, Passwd),
-    ("Hinton",   "166.104.167.164", 8990, User, Passwd),
-    ("Turing",   "166.104.167.164", 8991, User, Passwd),
-    ("lecun",    "166.104.167.164", 8992, User, Passwd),
+    ("00Poseidon", "166.104.167.164", 8989, User, Passwd),
+    ("01Hinton",   "166.104.167.164", 8990, User, Passwd),
+    ("02Turing",   "166.104.167.164", 8991, User, Passwd),
+    ("03Lecun",    "166.104.167.164", 8992, User, Passwd),
+    ("04ACE",      "166.104.167.164", 8993, User, Passwd),
 ]
 
 
@@ -195,6 +213,5 @@ def reload(alias):
 
 
 if __name__ == "__main__":
-    # Only when run directly do we spin up threads & Flask
     monitors = create_monitors()
     app.run(host="0.0.0.0", port=5001)
