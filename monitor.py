@@ -170,12 +170,14 @@ class ServerMonitor:
 # ─── Hosts Configuration ─────────────────────────────────────────────────────
 User = "monitoring"
 Passwd = "123123"
+Address = "166.104.167.164"
 hosts = [
-    ("00Poseidon", "166.104.167.164", 8989, User, Passwd),
-    ("01Hinton",   "166.104.167.164", 8990, User, Passwd),
-    ("02Turing",   "166.104.167.164", 8991, User, Passwd),
-    ("03Lecun",    "166.104.167.164", 8992, User, Passwd),
-    ("04ACE",      "166.104.167.164", 8993, User, Passwd),
+    ("00Poseidon", Address, 8989, User, Passwd),
+    ("01Hinton",   Address, 8990, User, Passwd),
+    ("02Turing",   Address, 8991, User, Passwd),
+    ("03Lecun",    Address, 8992, User, Passwd),
+    ("04ACE",      Address, 8993, User, Passwd),
+    ("04NEO",      Address, 8994, User, Passwd),
 ]
 
 
