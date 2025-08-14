@@ -1,7 +1,7 @@
 # app.py
 
 import streamlit as st
-import datetime # Import datetime module
+# import datetime # No longer needed as timestamp comes from backend
 
 # 반드시 가장 첫 줄에 한 번만!
 st.set_page_config(page_title="GPU Dashboard", layout="wide")
@@ -86,9 +86,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# Initialize session state for last update times
-if "last_update_times" not in st.session_state:
-    st.session_state.last_update_times = {}
+# Initialize session state for last update times # No longer needed
+# if "last_update_times" not in st.session_state:
+#     st.session_state.last_update_times = {}
 
 # 전체 서버 상태 한 번에 가져오기
 try:
@@ -105,17 +105,19 @@ aliases = sorted(list(all_stats.keys()))
 for i in range(0, len(aliases), 2):
     cols = st.columns(2)
     for alias, col in zip(aliases[i:i+2], cols):
-        data = all_stats.get(alias)
+        server_info = all_stats.get(alias)
+        
+        # Extract stats and last_updated from server_info
+        stats = None
+        last_update_display = "N/A"
+        if isinstance(server_info, dict) and "stats" in server_info and "last_updated" in server_info:
+            stats = server_info["stats"]
+            last_update_display = server_info["last_updated"]
+
         with col:
             # --- Server Title with Status Dot and Last Update Time ---
-            status_class = "status-ok" if data else "status-fail"
+            status_class = "status-ok" if stats else "status-fail"
             
-            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if data:
-                st.session_state.last_update_times[alias] = current_time
-            
-            last_update_display = st.session_state.last_update_times.get(alias, "N/A")
-
             st.markdown(
                 f'<div class="server-title"><span class="status-dot {status_class}"></span><h3>{alias[2:]}</h3><span class="last-update-time">Last Update: {last_update_display}</span></div>',
                 unsafe_allow_html=True
@@ -129,13 +131,13 @@ for i in range(0, len(aliases), 2):
                 except Exception as e:
                     st.error(f"재갱신 실패: {e}")
 
-            if not data:
+            if not stats:
                 st.markdown('<div class="connection-error">서버 연결 실패</div>', unsafe_allow_html=True)
                 continue
 
             # 1) 원본 데이터에서 필요한 값 뽑아 리스트 생성
             rows = []
-            for gpu in data.get("gpus", []):
+            for gpu in stats.get("gpus", []):
                 used = gpu.get("memory.used", 0)
                 total = gpu.get("memory.total", 1) # Avoid division by zero
                 pct = (used / total) * 100 if total > 0 else 0
