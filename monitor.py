@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 import paramiko
 from tenacity import retry, stop_after_attempt, wait_fixed
 from flask import Flask, jsonify
+from flask_cors import CORS
 
 # ─── Logging Configuration ────────────────────────────────────────────────────
 logger = logging.getLogger()  # root logger
@@ -41,8 +42,8 @@ logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 # ─── ServerMonitor Definition ────────────────────────────────────────────────
 class ServerMonitor:
-    # 3번 전략: 몇 주기마다 강제 재연결할지 (10초 * 360 = 1시간)
-    RECONNECT_INTERVAL = 360
+    # 3번 전략: 몇 주기마다 강제 재연결할지 (5초 * 720 = 1시간)
+    RECONNECT_INTERVAL = 720
 
     def __init__(self, alias, host, port, user, passwd):
         self.alias = alias
@@ -64,7 +65,6 @@ class ServerMonitor:
         self._ensure_connection()
         threading.Thread(target=self._loop, daemon=True).start()
 
-    @retry(stop=stop_after_attempt(5), wait=wait_fixed(60))
     def _connect(self):
         self.logger.info("Attempting SSH connection...")
         client = paramiko.SSHClient()
@@ -87,7 +87,7 @@ class ServerMonitor:
             try:
                 self.client = self._connect()
             except Exception as e:
-                self.logger.error(f"SSH connect failed: {e}", exc_info=True)
+                self.logger.error(f"SSH connect failed: {e}")
                 self.client = None
 
     def _fetch_stats(self):
@@ -128,12 +128,28 @@ class ServerMonitor:
     def _loop(self):
         while True:
             self._ensure_connection()
+            
+            wait_interval = 15  # Default wait time is 15s for disconnected state
+
             if self.client:
                 try:
                     stats = self._fetch_stats()
                     with self.lock:
                         self.data = stats
                     self.logger.debug("Stats updated")
+                    wait_interval = 5  # If successful, next fetch is in 5s
+
+                    # 3번 전략: 주기적 재연결
+                    self._reconnect_counter += 1
+                    if self._reconnect_counter >= self.RECONNECT_INTERVAL:
+                        self.logger.info("Performing scheduled reconnect to free resources")
+                        try:
+                            self.client.close()
+                        except Exception:
+                            pass
+                        self.client = None
+                        self._reconnect_counter = 0
+
                 except Exception:
                     # on any error, drop client so _ensure_connection will reconnect
                     try:
@@ -141,20 +157,16 @@ class ServerMonitor:
                     except Exception:
                         pass
                     self.client = None
+                    # Also clear data on fetch error
+                    with self.lock:
+                        self.data = None
+            else:
+                # If connection is not established, ensure data is None
+                with self.lock:
+                    self.data = None
 
-                # 3번 전략: 주기적 재연결
-                self._reconnect_counter += 1
-                if self._reconnect_counter >= self.RECONNECT_INTERVAL:
-                    self.logger.info("Performing scheduled reconnect to free resources")
-                    try:
-                        self.client.close()
-                    except Exception:
-                        pass
-                    self.client = None
-                    self._reconnect_counter = 0
-
-            # wait for reload event or 10s interval
-            if self.reload_event.wait(timeout=10):
+            # wait for reload event or the calculated interval
+            if self.reload_event.wait(timeout=wait_interval):
                 self.logger.info("Manual reload triggered")
                 self.reload_event.clear()
 
@@ -190,6 +202,7 @@ def create_monitors():
 
 # ─── Flask App ───────────────────────────────────────────────────────────────
 app = Flask(__name__)
+CORS(app)
 monitors = {}  # filled in __main__
 
 

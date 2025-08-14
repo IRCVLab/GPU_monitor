@@ -8,7 +8,6 @@ st.set_page_config(page_title="GPU Dashboard", layout="wide")
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import requests
-import altair as alt
 
 # 자동 새로고침 (5초)
 st_autorefresh(interval=5000, key="refresh")
@@ -16,122 +15,155 @@ st_autorefresh(interval=5000, key="refresh")
 st.title("🖥️ GPU 서버 모니터링 대시보드")
 API_BASE = "http://localhost:5001"
 
+# --- CSS Styles ---
+st.markdown("""
+<style>
+    .status-dot {
+        height: 10px;
+        width: 10px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+    }
+    .status-ok {
+        background-color: #28a745; /* Green */
+    }
+    .status-fail {
+        background-color: #dc3545; /* Red */
+    }
+    .server-title {
+        display: flex;
+        align-items: center;
+    }
+    .styled-table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: auto;
+    }
+    .styled-table th, .styled-table td {
+        padding: 8px;
+        text-align: left;
+        border-bottom: 1px solid #ddd;
+    }
+    .bar-container {
+        position: relative;
+        width: 100%;
+        height: 20px;
+        background-color: #f5f5f5;
+        border-radius: 3px;
+    }
+    .bar {
+        position: absolute;
+        height: 100%;
+        border-radius: 3px;
+    }
+    .bar-text {
+        position: absolute;
+        width: 100%;
+        text-align: center;
+        color: #333;
+        z-index: 2;
+        line-height: 20px;
+        font-size: 0.9em;
+    }
+    .connection-error {
+        color: #dc3545;
+        font-weight: bold;
+        padding: 20px;
+        text-align: center;
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 5px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
 # 전체 서버 상태 한 번에 가져오기
 try:
     resp = requests.get(f"{API_BASE}/stats", timeout=3)
     resp.raise_for_status()
     all_stats = resp.json()
 except Exception as e:
-    st.error(f"서버 정보 조회 실패: {e}")
+    st.error(f"모니터링 서버에 연결할 수 없습니다: {e}")
     st.stop()
 
-aliases = list(all_stats.keys())
+aliases = sorted(list(all_stats.keys()))
+
 # 2×2 그리드로
 for i in range(0, len(aliases), 2):
     cols = st.columns(2)
     for alias, col in zip(aliases[i:i+2], cols):
-        data = all_stats[alias]
+        data = all_stats.get(alias)
         with col:
-            st.subheader(alias[2:])
+            # --- Server Title with Status Dot ---
+            status_class = "status-ok" if data else "status-fail"
+            st.markdown(
+                f'<div class="server-title"><span class="status-dot {status_class}"></span><h3>{alias[2:]}</h3></div>',
+                unsafe_allow_html=True
+            )
+
             if st.button("⟳ Reload", key=f"reload_{alias}"):
                 try:
                     r = requests.post(f"{API_BASE}/reload/{alias}", timeout=3)
                     r.raise_for_status()
-                    st.success("갱신 요청 완료")
+                    st.toast("갱신 요청 완료", icon="✅")
                 except Exception as e:
                     st.error(f"재갱신 실패: {e}")
 
-            if not data or "gpus" not in data:
-                st.write("데이터 없음")
+            if not data:
+                st.markdown('<div class="connection-error">서버 연결 실패</div>', unsafe_allow_html=True)
                 continue
 
             # 1) 원본 데이터에서 필요한 값 뽑아 리스트 생성
             rows = []
-            for gpu in data["gpus"]:
-                used = gpu["memory.used"]
-                total = gpu["memory.total"]
-                pct = used / total * 100
+            for gpu in data.get("gpus", []):
+                used = gpu.get("memory.used", 0)
+                total = gpu.get("memory.total", 1) # Avoid division by zero
+                pct = (used / total) * 100 if total > 0 else 0
                 util = gpu.get("utilization.gpu", gpu.get("utilization", 0))
                 users = ", ".join({p["username"] for p in gpu.get("processes", [])}) or "-"
 
                 rows.append({
-                    "GPU": str(gpu["index"]),
+                    "GPU": str(gpu.get("index", "N/A")),
                     "memory_used": used,
                     "memory_total": total,
                     "memory_pct": round(pct, 1),
                     "util_pct": round(util, 1),
                     "Users": users,
-                    "Temp °C": round(gpu["temperature.gpu"], 1),
+                    "Temp °C": round(gpu.get("temperature.gpu", 0), 1),
                 })
 
             df = pd.DataFrame(rows)
 
-            # 2) 테이블용 문자열 컬럼 추가
-            df["Memory Usage"] = df.apply(
-                lambda r: f"{r['memory_pct']:.1f}% ({int(r['memory_used'])}/{int(r['memory_total'])})",
-                axis=1
-            )
-            table = df[["GPU", "Memory Usage", "util_pct", "Temp °C", "Users"]].rename(
-                columns={"util_pct": "Utilization %"}
-            ).set_index("GPU")
-            st.table(table)
+            # --- Custom HTML table with bars ---
+            html = "<table class='styled-table'>"
+            html += '''
+            <tr>
+                <th width="10%">GPU</th>
+                <th width="35%">Memory Usage</th>
+                <th width="25%">Utilization %</th>
+                <th width="15%">Temp °C</th>
+                <th width="15%">Users</th>
+            </tr>
+            '''
 
-            # (st.table 이후에 아래 차트 부분 대체)
+            for _, row in df.iterrows():
+                html += f"<tr><td>{row['GPU']}</td>"
 
-            # 3) 차트용 데이터 준비
-            plot_df = (
-                df.reset_index()
-                .melt(
-                    id_vars=["GPU"],
-                    value_vars=["util_pct", "memory_pct"],
-                    var_name="Metric",
-                    value_name="Value"
-                )
-            )
-            # 카테고리 이름 만들기
-            plot_df["Category"] = plot_df.apply(
-                lambda r: f"GPU{r['GPU']} { 'Util' if r['Metric']=='util_pct' else 'Mem' }", axis=1
-            )
-            # Metric 레이블 맵핑
-            plot_df["Metric"] = plot_df["Metric"].map({
-                "util_pct": "Utilization %",
-                "memory_pct": "Memory %"
-            })
+                mem_pct = row['memory_pct']
+                mem_text = f"{mem_pct:.1f}% ({int(row['memory_used'])}/{int(row['memory_total'])})MB"
+                html += f'<td><div class="bar-container"><div class="bar" style="width: {mem_pct}%; background-color: #a5d6a7;"></div><div class="bar-text">{mem_text}</div></div></td>'
 
-            # 4) 가로 막대 차트
-            chart = (
-                alt.Chart(plot_df)
-                .mark_bar(size=8)
-                .encode(
-                    y=alt.Y(
-                        "Category:N",
-                        sort=plot_df["Category"].tolist(),
-                        title=None,
-                        axis=alt.Axis(labelFontSize=11)
-                    ),
-                    x=alt.X(
-                        "Value:Q",
-                        title="%",
-                        scale=alt.Scale(domain=[0,100]),
-                        axis=alt.Axis(format=".1f", tickMinStep=10)
-                    ),
-                    color=alt.Color(
-                        "Metric:N",
-                        scale=alt.Scale(
-                            domain=["Memory %", "Utilization %"],
-                            range=["steelblue", "orange"]
-                        ),
-                        # legend=alt.Legend(
-                        #     title="Metric",
-                        #     orient="bottom",
-                        #     direction="horizontal"
-                        # )
-                    ),
-                    tooltip=[
-                        alt.Tooltip("Category:N", title="GPU & Metric"),
-                        alt.Tooltip("Value:Q", format=".1f", title="Value (%)")
-                    ]
-                )
-                .properties(height=300)
-            )
-            st.altair_chart(chart, use_container_width=True)     
+                util_pct = row['util_pct']
+                html += f'<td><div class="bar-container"><div class="bar" style="width: {util_pct}%; background-color: #fff59d;"></div><div class="bar-text">{util_pct}%</div></div></td>'
+
+                temp = row['Temp °C']
+                normalized_temp = min(temp, 100)
+                html += f'<td><div class="bar-container"><div class="bar" style="width: {normalized_temp}%; background-color: #90caf9;"></div><div class="bar-text">{temp}°C</div></div></td>'
+
+                html += f"<td>{row['Users']}</td></tr>"
+
+            html += "</table>"
+
+            st.markdown(html, unsafe_allow_html=True)
