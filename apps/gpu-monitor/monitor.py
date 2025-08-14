@@ -89,6 +89,8 @@ class ServerMonitor:
             except Exception as e:
                 self.logger.error(f"SSH connect failed: {e}")
                 self.client = None
+                with self.lock:
+                    self.data = None
 
     def _fetch_stats(self):
         stdin = stdout = stderr = None
