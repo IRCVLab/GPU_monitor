@@ -1,6 +1,7 @@
 # app.py
 
 import streamlit as st
+import datetime # Import datetime module
 
 # 반드시 가장 첫 줄에 한 번만!
 st.set_page_config(page_title="GPU Dashboard", layout="wide")
@@ -34,6 +35,12 @@ st.markdown("""
     .server-title {
         display: flex;
         align-items: center;
+        gap: 10px; /* Space between dot and title */
+    }
+    .last-update-time {
+        font-size: 0.8em;
+        color: #6c757d;
+        margin-left: auto; /* Push to the right */
     }
     .styled-table {
         border-collapse: collapse;
@@ -79,6 +86,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# Initialize session state for last update times
+if "last_update_times" not in st.session_state:
+    st.session_state.last_update_times = {}
+
 # 전체 서버 상태 한 번에 가져오기
 try:
     resp = requests.get(f"{API_BASE}/stats", timeout=3)
@@ -96,10 +107,17 @@ for i in range(0, len(aliases), 2):
     for alias, col in zip(aliases[i:i+2], cols):
         data = all_stats.get(alias)
         with col:
-            # --- Server Title with Status Dot ---
+            # --- Server Title with Status Dot and Last Update Time ---
             status_class = "status-ok" if data else "status-fail"
+            
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if data:
+                st.session_state.last_update_times[alias] = current_time
+            
+            last_update_display = st.session_state.last_update_times.get(alias, "N/A")
+
             st.markdown(
-                f'<div class="server-title"><span class="status-dot {status_class}"></span><h3>{alias[2:]}</h3></div>',
+                f'<div class="server-title"><span class="status-dot {status_class}"></span><h3>{alias[2:]}</h3><span class="last-update-time">Last Update: {last_update_display}</span></div>',
                 unsafe_allow_html=True
             )
 
