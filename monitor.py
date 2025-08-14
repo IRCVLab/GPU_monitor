@@ -184,11 +184,11 @@ User = "monitoring"
 Passwd = "123123"
 Address = "166.104.167.164"
 hosts = [
-    ("00Poseidon", Address, 8989, User, Passwd),
+    ("00Poseidon", "192.168.0.11", 22, User, Passwd),
     ("01Hinton",   Address, 8990, User, Passwd),
-    ("02Turing",   Address, 8991, User, Passwd),
+    ("02Turing",   "192.168.0.13", 22, User, Passwd),
     ("03Lecun",    Address, 8992, User, Passwd),
-    ("04ACE",      Address, 8993, User, Passwd),
+    ("04ACE",      "192.168.0.15", 22, User, Passwd),
     ("04NEO",      Address, 8994, User, Passwd),
 ]
 
