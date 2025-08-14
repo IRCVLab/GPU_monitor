@@ -4,6 +4,7 @@ import json
 import socket
 import logging
 from logging.handlers import RotatingFileHandler
+import datetime # Added datetime import
 
 import paramiko
 from tenacity import retry, stop_after_attempt, wait_fixed
@@ -55,6 +56,7 @@ class ServerMonitor:
 
         self.client = None
         self.lock = threading.Lock()
+        # self.data will now store a dict: {'stats': ..., 'last_updated': ...} or None
         self.data = None
         self.reload_event = threading.Event()
 
@@ -90,7 +92,7 @@ class ServerMonitor:
                 self.logger.error(f"SSH connect failed: {e}")
                 self.client = None
                 with self.lock:
-                    self.data = None
+                    self.data = None # Set data to None immediately on connection failure
 
     def _fetch_stats(self):
         stdin = stdout = stderr = None
@@ -137,7 +139,11 @@ class ServerMonitor:
                 try:
                     stats = self._fetch_stats()
                     with self.lock:
-                        self.data = stats
+                        # Store stats and current timestamp
+                        self.data = {
+                            "stats": stats,
+                            "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
                     self.logger.debug("Stats updated")
                     wait_interval = 5  # If successful, next fetch is in 5s
 
