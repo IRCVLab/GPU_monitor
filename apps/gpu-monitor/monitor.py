@@ -190,14 +190,14 @@ class ServerMonitor:
 # ─── Hosts Configuration ─────────────────────────────────────────────────────
 User = "monitoring"
 Passwd = "123123"
-Address = "166.104.167.164"
+Address = "166.104.167.11"
 hosts = [
-    ("00Poseidon", "192.168.0.11", 22, User, Passwd),
-    ("01Hinton",   Address, 8990, User, Passwd),
-    ("02Turing",   "192.168.0.13", 22, User, Passwd),
-    ("03Lecun",    Address, 8992, User, Passwd),
-    ("04ACE",      "192.168.0.15", 22, User, Passwd),
-    ("04NEO",      Address, 8994, User, Passwd),
+    ("00Poseidon", Address, 2201, User, Passwd),
+    ("01Hinton",   Address, 2202, User, Passwd),
+    ("02Turing",   Address, 2203, User, Passwd),
+    ("03Lecun",    Address, 2204, User, Passwd),
+    ("04ACE",      Address, 2205, User, Passwd),
+    ("04NEO",      Address, 2206, User, Passwd),
 ]
 
 
