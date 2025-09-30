@@ -96,6 +96,7 @@ st.markdown(f"<style>{css_to_inject}</style>", unsafe_allow_html=True)
 st_autorefresh(interval=5000, key="refresh")
 
 st.title("🖥️ GPU 서버 모니터링 대시보드")
+st.info("서버 주소가 변경되었습니다. 자세한 내용은 [이 링크](https://www.notion.so/ircv/27c0b39c7ed380a2a1acf26a2aa1bf9b?source=copy_link)를 참고하세요.")
 API_BASE = "http://localhost:5001"
 
 
