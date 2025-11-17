@@ -1,15 +1,20 @@
-import threading
-import time
 import json
-import socket
+import threading
 import logging
 from logging.handlers import RotatingFileHandler
-import datetime # Added datetime import
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 import paramiko
-from tenacity import retry, stop_after_attempt, wait_fixed
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
+
+from monitoring_core.collectors import (
+    CPUCollector,
+    CollectorRegistry,
+    GPUCollector,
+    StorageCollector,
+)
 
 # ─── Logging Configuration ────────────────────────────────────────────────────
 logger = logging.getLogger()  # root logger
@@ -41,18 +46,70 @@ logger.addHandler(fh)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 
+class NoteStore:
+    """Simple JSON-backed store for per-server notes."""
+
+    def __init__(self, path="notes_store.json"):
+        self.path = Path(path)
+        self.lock = threading.Lock()
+        self.data = self._load()
+
+    def _load(self):
+        if not self.path.exists():
+            return {}
+        try:
+            with self.path.open("r", encoding="utf-8") as fp:
+                return json.load(fp)
+        except Exception:
+            return {}
+
+    def _save_locked(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as fp:
+            json.dump(self.data, fp, ensure_ascii=False, indent=2)
+        tmp_path.replace(self.path)
+
+    def get_note(self, alias):
+        with self.lock:
+            note = self.data.get(alias)
+            return dict(note) if note else None
+
+    def set_note(self, alias, content):
+        content = (content or "").strip()
+        with self.lock:
+            if not content:
+                if alias in self.data:
+                    self.data.pop(alias, None)
+                    self._save_locked()
+                return None
+            note = {
+                "content": content[:500],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            self.data[alias] = note
+            self._save_locked()
+            return note
+
+    def delete_note(self, alias):
+        with self.lock:
+            if self.data.pop(alias, None) is not None:
+                self._save_locked()
+
+
 # ─── ServerMonitor Definition ────────────────────────────────────────────────
 class ServerMonitor:
     # 3번 전략: 몇 주기마다 강제 재연결할지 (5초 * 720 = 1시간)
     RECONNECT_INTERVAL = 720
 
-    def __init__(self, alias, host, port, user, passwd):
+    def __init__(self, alias, host, port, user, passwd, registry: CollectorRegistry):
         self.alias = alias
         self.logger = logging.getLogger(f"Monitor.{alias}")
         self.host = host
         self.port = port
         self.user = user
         self.passwd = passwd
+        self.registry = registry
 
         self.client = None
         self.lock = threading.Lock()
@@ -94,40 +151,35 @@ class ServerMonitor:
                 with self.lock:
                     self.data = None # Set data to None immediately on connection failure
 
-    def _fetch_stats(self):
-        stdin = stdout = stderr = None
-        try:
-            stdin, stdout, stderr = self.client.exec_command("gpustat --json")
-            stdout.channel.settimeout(10.0)
-            stderr.channel.settimeout(10.0)
+    def _collect_snapshot(self):
+        resource_results = self.registry.collect_all(self.client)
+        resources = {}
+        resource_errors = {}
 
-            text = stdout.read().decode("utf-8", errors="ignore")
-            _ = stderr.read()  # drain stderr
+        for name, result in resource_results.items():
+            if result.payload is not None:
+                resources[name] = result.payload
+            if result.error:
+                resource_errors[name] = result.error
 
-            return json.loads(text)
+        if resources and not resource_errors:
+            status = "online"
+        elif resources:
+            status = "degraded"
+        elif resource_errors:
+            status = "error"
+        else:
+            status = "offline"
 
-        except socket.timeout as e:
-            self.logger.error(f"gpustat command timeout: {e}")
-            # force reconnect next loop
-            self.client.close()
-            raise
-
-        except json.JSONDecodeError as e:
-            snippet = text[:200] if 'text' in locals() else ""
-            self.logger.error(f"JSON parse error: {e} / payload: {snippet!r}")
-            raise
-
-        finally:
-            # 2번 전략: 명시적 자원 해제
-            try:
-                if stdin:
-                    stdin.close()
-                if stdout:
-                    stdout.close()
-                if stderr:
-                    stderr.close()
-            except Exception as e:
-                self.logger.warning(f"Error closing channels: {e}")
+        snapshot = {
+            "alias": self.alias,
+            "resources": resources,
+            "errors": resource_errors or None,
+            "metadata": {"host": self.host, "port": self.port},
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "status": status,
+        }
+        return snapshot
 
     def _loop(self):
         while True:
@@ -137,13 +189,9 @@ class ServerMonitor:
 
             if self.client:
                 try:
-                    stats = self._fetch_stats()
+                    snapshot = self._collect_snapshot()
                     with self.lock:
-                        # Store stats and current timestamp
-                        self.data = {
-                            "stats": stats,
-                            "last_updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
+                        self.data = snapshot
                     self.logger.debug("Stats updated")
                     wait_interval = 5  # If successful, next fetch is in 5s
 
@@ -197,13 +245,23 @@ hosts = [
     ("02Turing",   Address, 2203, User, Passwd),
     ("03Lecun",    Address, 2204, User, Passwd),
     ("04ACE",      Address, 2205, User, Passwd),
-    ("04NEO",      Address, 2206, User, Passwd),
+    ("05NEO",      Address, 2206, User, Passwd),
 ]
+
+note_store = NoteStore()
+
+
+def build_registry() -> CollectorRegistry:
+    registry = CollectorRegistry()
+    registry.register(GPUCollector())
+    registry.register(CPUCollector())
+    registry.register(StorageCollector())
+    return registry
 
 
 def create_monitors():
     return {
-        alias: ServerMonitor(alias, host, port, user, passwd)
+        alias: ServerMonitor(alias, host, port, user, passwd, build_registry())
         for alias, host, port, user, passwd in hosts
     }
 
@@ -216,13 +274,28 @@ monitors = {}  # filled in __main__
 
 @app.route("/stats")
 def all_stats():
-    return jsonify({alias: m.get_data() for alias, m in monitors.items()})
+    response = {}
+    for alias, monitor in monitors.items():
+        snapshot = monitor.get_data()
+        payload = {}
+        if snapshot:
+            payload.update(snapshot)
+        payload["note"] = note_store.get_note(alias)
+        response[alias] = payload
+    return jsonify(response)
 
 
 @app.route("/stats/<alias>")
 def stats(alias):
     m = monitors.get(alias)
-    return jsonify(m.get_data() if m else {})
+    if not m:
+        return jsonify({})
+    snapshot = m.get_data()
+    payload = {}
+    if snapshot:
+        payload.update(snapshot)
+    payload["note"] = note_store.get_note(alias)
+    return jsonify(payload)
 
 
 @app.route("/reload/<alias>", methods=["POST"])
@@ -233,6 +306,26 @@ def reload(alias):
         return "", 204
     else:
         return "Alias not found", 404
+
+
+@app.route("/notes/<path:alias>", methods=["GET", "POST", "DELETE"])
+def notes(alias):
+    if request.method == "GET":
+        note = note_store.get_note(alias)
+        return jsonify(note or {})
+
+    if request.method == "DELETE":
+        note_store.delete_note(alias)
+        return "", 204
+
+    data = request.get_json(silent=True) or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        note_store.delete_note(alias)
+        return "", 204
+
+    note_store.set_note(alias, content)
+    return "", 204
 
 
 if __name__ == "__main__":
