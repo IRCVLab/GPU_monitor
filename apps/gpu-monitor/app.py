@@ -2,12 +2,13 @@ import json
 import math
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Tuple
-from urllib.parse import quote, unquote, unquote_plus
+from urllib.parse import quote, unquote_plus
 from zoneinfo import ZoneInfo
 
 import requests
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
+import streamlit.components.v1 as components
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -69,6 +70,8 @@ def init_theme_state():
         st.session_state.prefs_loaded = False
     if "prefs_cache" not in st.session_state:
         st.session_state.prefs_cache = {}
+    if "prefs_changed" not in st.session_state:
+        st.session_state.prefs_changed = False
 
 
 def get_active_theme():
@@ -190,40 +193,81 @@ def fetch_stats():
     return resp.json()
 
 
+def _read_cookie_value():
+    script = """
+    <script>
+    const streamlit = window.streamlit;
+    const match = document.cookie.match(/(?:^|; )prefs=([^;]+)/);
+    if (match) streamlit.setComponentValue(match[1]);
+    else streamlit.setComponentValue("");
+    </script>
+    """
+    return components.html(script, height=0)
+
+
+def _write_cookie_value(encoded: str):
+    script = f"""
+    <script>
+    document.cookie = "prefs={encoded}; path=/";
+    </script>
+    """
+    components.html(script, height=0)
+
+
 def load_preferences():
     try:
         params = st.query_params
     except Exception:
         params = {}
     raw = params.get(PREF_QUERY_KEY)
-    if not raw:
-        return st.session_state.get("prefs_cache", {})
-    value = raw[0] if isinstance(raw, list) else raw
-    try:
-        value = unquote_plus(value)
-    except Exception:
-        pass
-    try:
-        prefs = json.loads(value)
-        if isinstance(prefs, dict):
-            return prefs
-    except Exception:
-        pass
+    if raw:
+        value = raw[0] if isinstance(raw, list) else raw
+        try:
+            prefs = json.loads(unquote_plus(value))
+            if isinstance(prefs, dict):
+                return prefs
+        except Exception:
+            pass
+
+    cookie_raw = _read_cookie_value()
+    if cookie_raw:
+        try:
+            prefs = json.loads(unquote_plus(cookie_raw))
+            if isinstance(prefs, dict):
+                return prefs
+        except Exception:
+            pass
+
     return st.session_state.get("prefs_cache", {})
+
+
+def set_preferences_in_url(preferences: dict):
+    payload = json.dumps(preferences, separators=(",", ":"))
+    encoded = quote(payload)
+    success = False
+    try:
+        st.query_params = {PREF_QUERY_KEY: encoded}
+        success = True
+    except Exception:
+        pass
+    if not success:
+        try:
+            st.experimental_set_query_params(**{PREF_QUERY_KEY: encoded})
+            success = True
+        except Exception:
+            pass
+    _write_cookie_value(encoded)
+    return success
 
 
 def save_preferences(preferences: dict):
     st.session_state.prefs_cache = preferences
-    payload = json.dumps(preferences)
-    encoded = quote(payload)
-    try:
-        st.query_params = {PREF_QUERY_KEY: encoded}
-    except Exception:
-        st.session_state.prefs_cache = preferences
+    set_preferences_in_url(preferences)
+    st.session_state.prefs_changed = False
 
 
 def render_query_update():
-    # JS fallback 제거: st.query_params만 사용
+    # st.query_params가 주소창에 반영되지 않는 환경에서는 추가 행동 없음
     return
 
 
@@ -646,6 +690,8 @@ def main():
         "[노션 공지](https://www.notion.so/ircv/27c0b39c7ed380a2a1acf26a2aa1bf9b?source=copy_link)를 참고하세요."
     )
     st.caption(f"데이터는 {REFRESH_INTERVAL_MS/1000:.0f}초마다 자동 새로고침 됩니다.")
+    st.write("query params:", dict(st.query_params))
+    st.write("parsed prefs:", load_preferences())
     st_autorefresh(interval=REFRESH_INTERVAL_MS, key="refresh")
 
     try:
