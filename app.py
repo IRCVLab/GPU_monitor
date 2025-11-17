@@ -2,6 +2,7 @@ import json
 import math
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Tuple
+from urllib.parse import quote, unquote, unquote_plus
 from zoneinfo import ZoneInfo
 
 import requests
@@ -66,6 +67,8 @@ def init_theme_state():
         st.session_state.grid_cols = 2
     if "prefs_loaded" not in st.session_state:
         st.session_state.prefs_loaded = False
+    if "prefs_cache" not in st.session_state:
+        st.session_state.prefs_cache = {}
 
 
 def get_active_theme():
@@ -188,25 +191,40 @@ def fetch_stats():
 
 
 def load_preferences():
-    params = st.query_params
+    try:
+        params = st.query_params
+    except Exception:
+        params = {}
     raw = params.get(PREF_QUERY_KEY)
     if not raw:
-        return {}
-    # st.query_params values may be list-like; coerce to string
+        return st.session_state.get("prefs_cache", {})
     value = raw[0] if isinstance(raw, list) else raw
     try:
-        prefs = json.loads(value)
-        return prefs if isinstance(prefs, dict) else {}
+        value = unquote_plus(value)
     except Exception:
-        return {}
+        pass
+    try:
+        prefs = json.loads(value)
+        if isinstance(prefs, dict):
+            return prefs
+    except Exception:
+        pass
+    return st.session_state.get("prefs_cache", {})
 
 
 def save_preferences(preferences: dict):
+    st.session_state.prefs_cache = preferences
+    payload = json.dumps(preferences)
+    encoded = quote(payload)
     try:
-        payload = json.dumps(preferences)
-        st.query_params = {PREF_QUERY_KEY: payload}
+        st.query_params = {PREF_QUERY_KEY: encoded}
     except Exception:
-        pass
+        st.session_state.prefs_cache = preferences
+
+
+def render_query_update():
+    # JS fallback 제거: st.query_params만 사용
+    return
 
 
 def format_timestamp(ts: str) -> str:
@@ -667,6 +685,8 @@ def main():
         for alias, col in zip(row_aliases, cols):
             with col:
                 render_server_card(alias, all_stats.get(alias), theme)
+    # 주소창 쿼리스트링을 한 번 더 강제 반영
+    render_query_update()
 
 
 if __name__ == "__main__":
