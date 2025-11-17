@@ -673,13 +673,12 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
 
 def main():
     init_theme_state()
-    if not st.session_state.prefs_loaded:
-        prefs = load_preferences()
-        if prefs:
-            st.session_state.preferred_order = prefs.get("order", st.session_state.preferred_order)
-            if prefs.get("grid_cols") in (1, 2, 3):
-                st.session_state.grid_cols = prefs["grid_cols"]
-        st.session_state.prefs_loaded = True
+    prefs = load_preferences()
+    if prefs:
+        st.session_state.preferred_order = prefs.get("order", st.session_state.preferred_order)
+        grid_cols_value = prefs.get("grid_cols")
+        if isinstance(grid_cols_value, int) and grid_cols_value in (1, 2, 3, 4):
+            st.session_state.grid_cols = grid_cols_value
     st.session_state.dark_mode = st.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
     theme = get_active_theme()
     inject_theme(theme)
@@ -690,8 +689,6 @@ def main():
         "[노션 공지](https://www.notion.so/ircv/27c0b39c7ed380a2a1acf26a2aa1bf9b?source=copy_link)를 참고하세요."
     )
     st.caption(f"데이터는 {REFRESH_INTERVAL_MS/1000:.0f}초마다 자동 새로고침 됩니다.")
-    st.write("query params:", dict(st.query_params))
-    st.write("parsed prefs:", load_preferences())
     st_autorefresh(interval=REFRESH_INTERVAL_MS, key="refresh")
 
     try:
