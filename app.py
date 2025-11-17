@@ -64,6 +64,8 @@ def init_theme_state():
         st.session_state.preferred_order: List[str] = []
     if "grid_cols" not in st.session_state:
         st.session_state.grid_cols = 2
+    if "prefs_loaded" not in st.session_state:
+        st.session_state.prefs_loaded = False
 
 
 def get_active_theme():
@@ -609,11 +611,13 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
 
 def main():
     init_theme_state()
-    prefs = load_preferences()
-    if prefs:
-        st.session_state.preferred_order = prefs.get("order", st.session_state.preferred_order)
-        if prefs.get("grid_cols") in (1, 2, 3):
-            st.session_state.grid_cols = prefs["grid_cols"]
+    if not st.session_state.prefs_loaded:
+        prefs = load_preferences()
+        if prefs:
+            st.session_state.preferred_order = prefs.get("order", st.session_state.preferred_order)
+            if prefs.get("grid_cols") in (1, 2, 3):
+                st.session_state.grid_cols = prefs["grid_cols"]
+        st.session_state.prefs_loaded = True
     st.session_state.dark_mode = st.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
     theme = get_active_theme()
     inject_theme(theme)
