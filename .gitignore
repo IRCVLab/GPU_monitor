@@ -1,2 +1,7 @@
 server.log
 monitoring/
+__pycache__/
+*.pyc
+notes_store.json
+backups/
+server.log.*
