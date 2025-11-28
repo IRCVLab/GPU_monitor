@@ -9,11 +9,9 @@ import requests
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import streamlit.components.v1 as components
-
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
 PREF_QUERY_KEY = "prefs"
-
 # -----------------------------------------------------------------------------
 # Page / Theme configuration
 # -----------------------------------------------------------------------------
@@ -192,84 +190,47 @@ def fetch_stats():
     resp.raise_for_status()
     return resp.json()
 
-
-def _read_cookie_value():
-    script = """
-    <script>
-    const streamlit = window.streamlit;
-    const match = document.cookie.match(/(?:^|; )prefs=([^;]+)/);
-    if (match) streamlit.setComponentValue(match[1]);
-    else streamlit.setComponentValue("");
-    </script>
+def load_preferences() -> dict:
     """
-    return components.html(script, height=0)
-
-
-def _write_cookie_value(encoded: str):
-    script = f"""
-    <script>
-    document.cookie = "prefs={encoded}; path=/";
-    </script>
+    브라우저 localStorage에서 prefs를 읽어온다.
+    - key: gpu_dashboard_prefs
+    - 값이 없거나 파싱 실패 시 {} 반환
     """
-    components.html(script, height=0)
-
-
-def load_preferences():
+    ls = st.session_state.ls
     try:
-        params = st.query_params
+        raw = ls.get("gpu_dashboard_prefs")  # StLocalStorage.get 사용 (없으면 None)
     except Exception:
-        params = {}
-    raw = params.get(PREF_QUERY_KEY)
-    if raw:
-        value = raw[0] if isinstance(raw, list) else raw
-        try:
-            prefs = json.loads(unquote_plus(value))
-            if isinstance(prefs, dict):
-                return prefs
-        except Exception:
-            pass
+        raw = None
 
-    cookie_raw = _read_cookie_value()
-    if cookie_raw:
-        try:
-            prefs = json.loads(unquote_plus(cookie_raw))
-            if isinstance(prefs, dict):
-                return prefs
-        except Exception:
-            pass
+    if not raw:
+        return st.session_state.get("prefs_cache", {})
+
+    # raw 가 이미 dict 로 저장되어 있다면 그대로 사용
+    if isinstance(raw, dict):
+        return raw
+
+    # 혹시 문자열 형태라면 JSON 파싱 시도
+    try:
+        prefs = json.loads(raw)
+        if isinstance(prefs, dict):
+            return prefs
+    except Exception:
+        pass
 
     return st.session_state.get("prefs_cache", {})
 
-
-def set_preferences_in_url(preferences: dict):
-    payload = json.dumps(preferences, separators=(",", ":"))
-    encoded = quote(payload)
-    success = False
-    try:
-        st.query_params = {PREF_QUERY_KEY: encoded}
-        success = True
-    except Exception:
-        pass
-    if not success:
-        try:
-            st.experimental_set_query_params(**{PREF_QUERY_KEY: encoded})
-            success = True
-        except Exception:
-            pass
-    _write_cookie_value(encoded)
-    return success
-
-
 def save_preferences(preferences: dict):
     st.session_state.prefs_cache = preferences
-    set_preferences_in_url(preferences)
+
+    ls = st.session_state.ls
+    try:
+        # dict 그대로 저장 가능 (StLocalStorage 안에서 json.dumps)
+        ls.set("gpu_dashboard_prefs", preferences)
+    except AttributeError:
+        # get/set 메서드 없는 버전이면 [] 연산자 사용
+        ls["gpu_dashboard_prefs"] = preferences
+
     st.session_state.prefs_changed = False
-
-
-def render_query_update():
-    # st.query_params가 주소창에 반영되지 않는 환경에서는 추가 행동 없음
-    return
-
 
 def format_timestamp(ts: str) -> str:
     if not ts:
@@ -554,10 +515,6 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
     status_key = (snapshot or {}).get("status", "offline")
     status_label, status_color = theme["status"].get(status_key, ("⚪️ 미확인", theme["muted"]))
     last_updated = format_timestamp((snapshot or {}).get("last_updated"))
-    note_info = (snapshot or {}).get("note") or {}
-    note_content = note_info.get("content") or ""
-    note_timestamp = note_info.get("timestamp")
-
     header_cols = st.columns([0.7, 0.15, 0.15])
     with header_cols[0]:
         header_html = (
@@ -567,12 +524,6 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
             f"<div class='last-updated'>업데이트 {last_updated}</div>"
         )
         st.markdown(header_html, unsafe_allow_html=True)
-    with header_cols[1]:
-        if st.button("✏️", key=f"note_btn_{alias}", use_container_width=True):
-            if st.session_state.get("note_editor") == alias:
-                close_note_editor(alias)
-            else:
-                open_note_editor(alias, note_content)
     with header_cols[2]:
         if st.button("⟳", key=f"reload_{alias}", use_container_width=True):
             try:
@@ -581,6 +532,37 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
                 st.toast(f"{alias_label} 재요청 완료", icon="✅")
             except Exception as exc:
                 st.error(f"갱신 실패: {exc}")
+
+    with st.form(key=f"quick_note_form_{alias}", clear_on_submit=True):
+        row = st.columns([0.3, 0.3, 0.4])
+        with row[0]:
+            username = st.text_input("아이디", key=f"user_{alias}", placeholder="아이디")
+        with row[1]:
+            password = st.text_input("비밀번호", type="password", key=f"pw_{alias}", placeholder="비밀번호")
+        with row[2]:
+            content = st.text_area(
+                "메모 내용",
+                key=f"content_{alias}",
+                height=70,
+                placeholder="내용",
+                label_visibility="collapsed",
+            )
+        submitted = st.form_submit_button("💾 저장", use_container_width=True)
+    if submitted:
+        if username and password and content.strip():
+            try:
+                resp = requests.post(
+                    f"{API_BASE}/notes/{alias}",
+                    json={"username": username, "password": password, "content": content},
+                    timeout=3,
+                )
+                resp.raise_for_status()
+                st.toast("메모 저장 완료", icon="📝")
+                st.experimental_rerun()
+            except Exception as exc:
+                st.error(f"저장 실패: {exc}")
+        else:
+            st.error("모두 입력해주세요.")
 
     if not snapshot:
         st.error("서버 연결 실패 또는 데이터 없음")
@@ -611,61 +593,42 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
         with tab:
             renderer(resource_data, error_msg, theme)
 
-    editor_alias = st.session_state.get("note_editor")
-    text_key = _note_state_key(alias)
-    if editor_alias == alias:
-        if text_key not in st.session_state:
-            st.session_state[text_key] = note_content or ""
-        with st.form(key=f"note_form_{alias}"):
-            st.text_area(
-                "메모 입력",
-                key=text_key,
-                height=80,
-                max_chars=300,
-                placeholder="사용 목적이나 종료 예정일 등을 적어주세요.",
-                label_visibility="collapsed",
-            )
-            btn_cols = st.columns(3)
-            save_clicked = btn_cols[0].form_submit_button("💾 저장")
-            delete_clicked = btn_cols[1].form_submit_button("🗑 삭제")
-            cancel_clicked = btn_cols[2].form_submit_button("취소")
-
-        if save_clicked:
-            note_value = st.session_state.get(text_key, "").strip()
-            try:
-                resp = requests.post(
-                    f"{API_BASE}/notes/{alias}",
-                    json={"content": note_value},
-                    timeout=3,
-                )
-                resp.raise_for_status()
-                st.toast("메모가 저장되었습니다.", icon="📝")
-                close_note_editor(alias)
-                st.rerun()
-            except Exception as exc:
-                st.error(f"메모 저장 실패: {exc}")
-
-        if delete_clicked:
-            try:
-                resp = requests.delete(f"{API_BASE}/notes/{alias}", timeout=3)
-                resp.raise_for_status()
-                st.toast("메모가 삭제되었습니다.", icon="🗑")
-                close_note_editor(alias)
-                st.rerun()
-            except Exception as exc:
-                st.error(f"메모 삭제 실패: {exc}")
-
-        if cancel_clicked:
-            close_note_editor(alias)
-            st.rerun()
-
-    else:
-        if note_content:
-            note_caption = f"📝 {note_content}"
-            if note_timestamp:
-                note_caption += f" · {format_timestamp(note_timestamp)}"
-            st.caption(note_caption)
-
+    notes = (snapshot or {}).get("notes") or []
+    if notes:
+        st.markdown("#### 서버 메모")
+        for note in notes:
+            ts = format_timestamp(note.get("timestamp"))
+            cols = st.columns([0.94, 0.06])
+            with cols[0]:
+                st.markdown(f"- **{note.get('user')}** · {ts}: {note.get('content')}")
+            with cols[1]:
+                if st.button(
+                    "🗑",
+                    key=f"del_note_{alias}_{note.get('id')}",
+                    help="자신이 쓴 메모만 삭제 가능합니다",
+                ):
+                    del_user = st.text_input("아이디", key=f"del_user_{alias}_{note.get('id')}")
+                    del_pw = st.text_input(
+                        "비밀번호", type="password", key=f"del_pw_{alias}_{note.get('id')}"
+                    )
+                    if not (del_user and del_pw):
+                        st.error("아이디/비밀번호를 입력해주세요.")
+                    else:
+                        try:
+                            resp = requests.delete(
+                                f"{API_BASE}/notes/{alias}",
+                                json={
+                                    "username": del_user,
+                                    "password": del_pw,
+                                    "note_id": note.get("id"),
+                                },
+                                timeout=3,
+                            )
+                            resp.raise_for_status()
+                            st.toast("메모 삭제 완료", icon="🗑")
+                            st.experimental_rerun()
+                        except Exception as exc:
+                            st.error(f"삭제 실패: {exc}")
 
 # -----------------------------------------------------------------------------
 # Main app
@@ -679,6 +642,7 @@ def main():
         grid_cols_value = prefs.get("grid_cols")
         if isinstance(grid_cols_value, int) and grid_cols_value in (1, 2, 3, 4):
             st.session_state.grid_cols = grid_cols_value
+                
     st.session_state.dark_mode = st.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
     theme = get_active_theme()
     inject_theme(theme)
@@ -714,11 +678,16 @@ def main():
         st.session_state.grid_cols = st.radio(
             "가로 칼럼 수",
             options=[1, 2, 3, 4],
-            index=[1, 2, 3, 4].index(st.session_state.grid_cols if st.session_state.grid_cols in (1, 2, 3, 4) else 2),
+            index=[1, 2, 3, 4].index(
+                st.session_state.grid_cols if st.session_state.grid_cols in (1, 2, 3, 4) else 2
+            ),
             horizontal=True,
         )
-        save_preferences({"order": st.session_state.preferred_order, "grid_cols": st.session_state.grid_cols})
 
+    # 설정을 URL+쿠키에 저장
+        save_preferences(
+            {"order": st.session_state.preferred_order, "grid_cols": st.session_state.grid_cols}
+        )
     ordered = list(st.session_state.preferred_order) + [a for a in aliases if a not in st.session_state.preferred_order]
 
     grid_size = st.session_state.grid_cols or 2
@@ -728,8 +697,6 @@ def main():
         for alias, col in zip(row_aliases, cols):
             with col:
                 render_server_card(alias, all_stats.get(alias), theme)
-    # 주소창 쿼리스트링을 한 번 더 강제 반영
-    render_query_update()
 
 
 if __name__ == "__main__":
