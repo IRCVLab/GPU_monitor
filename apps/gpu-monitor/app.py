@@ -1,6 +1,7 @@
 import json
 import math
 from datetime import datetime, timezone
+from html import escape
 from typing import Callable, Dict, List, Tuple
 from urllib.parse import quote, unquote_plus
 from zoneinfo import ZoneInfo
@@ -8,10 +9,10 @@ from zoneinfo import ZoneInfo
 import requests
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
-import streamlit.components.v1 as components
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
 PREF_QUERY_KEY = "prefs"
+DELETE_HELP_TEXT = "자신이 쓴 메모만 삭제 가능합니다"
 # -----------------------------------------------------------------------------
 # Page / Theme configuration
 # -----------------------------------------------------------------------------
@@ -56,20 +57,10 @@ THEMES = {
 
 
 def init_theme_state():
-    if "dark_mode" not in st.session_state:
-        st.session_state.dark_mode = True
-    if "note_editor" not in st.session_state:
-        st.session_state.note_editor = None
-    if "preferred_order" not in st.session_state:
-        st.session_state.preferred_order: List[str] = []
-    if "grid_cols" not in st.session_state:
-        st.session_state.grid_cols = 2
-    if "prefs_loaded" not in st.session_state:
-        st.session_state.prefs_loaded = False
-    if "prefs_cache" not in st.session_state:
-        st.session_state.prefs_cache = {}
-    if "prefs_changed" not in st.session_state:
-        st.session_state.prefs_changed = False
+    st.session_state.setdefault("dark_mode", True)
+    st.session_state.setdefault("preferred_order", [])
+    st.session_state.setdefault("grid_cols", 2)
+    st.session_state.setdefault("prefs_cache", {})
 
 
 def get_active_theme():
@@ -160,25 +151,86 @@ def inject_theme(theme):
                 color: {theme["muted"]};
                 margin-top: 0.15rem;
             }}
+            .note-entry {{
+                font-size: 0.85rem;
+                margin: 0.05rem 0;
+                line-height: 1.2;
+            }}
+            .note-meta {{
+                color: {theme["muted"]};
+                font-weight: 600;
+                margin-right: 0.35rem;
+            }}
+            .note-delete-button div[data-testid="stButton"] {{
+                display: inline-flex;
+                margin: 0;
+                padding: 0;
+            }}
+            .note-delete-button button {{
+                background: transparent !important;
+                border: none !important;
+                box-shadow: none !important;
+                border-radius: 0 !important;
+                padding: 0 !important;
+                min-height: 0 !important;
+                height: auto !important;
+                min-width: 0 !important;
+                width: auto !important;
+                color: {theme["muted"]} !important;
+                text-decoration: underline !important;
+                font-size: 0.85rem;
+            }}
+            .note-delete-button button p {{
+                margin: 0 !important;
+            }}
+            .note-delete-button button:hover {{
+                color: {theme["text"]} !important;
+            }}
+            .card-gap {{
+                height: 1.2rem;
+            }}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-def _note_state_key(alias: str) -> str:
-    return f"note_text_{alias}"
+def _note_form_flag(alias: str) -> str:
+    return f"note_form_visible_{alias}"
 
 
-def open_note_editor(alias: str, default: str | None = ""):
-    st.session_state.note_editor = alias
-    st.session_state[_note_state_key(alias)] = default or ""
+def _note_form_keys(alias: str) -> Dict[str, str]:
+    return {
+        "user": f"note_user_{alias}",
+        "password": f"note_pw_{alias}",
+        "content": f"note_content_{alias}",
+    }
 
 
-def close_note_editor(alias: str):
-    if st.session_state.get("note_editor") == alias:
-        st.session_state.note_editor = None
-    st.session_state.pop(_note_state_key(alias), None)
+def _clear_note_form(alias: str):
+    for key in _note_form_keys(alias).values():
+        st.session_state.pop(key, None)
+
+
+def _delete_state_key(alias: str) -> str:
+    return f"delete_note_target_{alias}"
+
+
+def _delete_form_keys(dom_key: str) -> Dict[str, str]:
+    return {
+        "user": f"del_user_{dom_key}",
+        "password": f"del_pw_{dom_key}",
+    }
+
+
+def _clear_delete_form(dom_key: str):
+    for key in _delete_form_keys(dom_key).values():
+        st.session_state.pop(key, None)
+
+
+def _note_dom_key(alias: str, note: dict, index: int) -> str:
+    raw = note.get("id") or note.get("timestamp") or f"{index}"
+    return f"{alias}_{raw}"
 
 
 # -----------------------------------------------------------------------------
@@ -191,46 +243,32 @@ def fetch_stats():
     return resp.json()
 
 def load_preferences() -> dict:
-    """
-    브라우저 localStorage에서 prefs를 읽어온다.
-    - key: gpu_dashboard_prefs
-    - 값이 없거나 파싱 실패 시 {} 반환
-    """
-    ls = st.session_state.ls
+    params = {}
     try:
-        raw = ls.get("gpu_dashboard_prefs")  # StLocalStorage.get 사용 (없으면 None)
+        params = st.query_params
     except Exception:
-        raw = None
-
+        pass
+    raw = params.get(PREF_QUERY_KEY)
     if not raw:
         return st.session_state.get("prefs_cache", {})
-
-    # raw 가 이미 dict 로 저장되어 있다면 그대로 사용
-    if isinstance(raw, dict):
-        return raw
-
-    # 혹시 문자열 형태라면 JSON 파싱 시도
+    value = raw[0] if isinstance(raw, list) else raw
     try:
-        prefs = json.loads(raw)
+        prefs = json.loads(unquote_plus(value))
         if isinstance(prefs, dict):
+            st.session_state.prefs_cache = prefs
             return prefs
     except Exception:
         pass
-
     return st.session_state.get("prefs_cache", {})
 
 def save_preferences(preferences: dict):
     st.session_state.prefs_cache = preferences
-
-    ls = st.session_state.ls
+    payload = json.dumps(preferences, separators=(",", ":"))
+    encoded = quote(payload)
     try:
-        # dict 그대로 저장 가능 (StLocalStorage 안에서 json.dumps)
-        ls.set("gpu_dashboard_prefs", preferences)
-    except AttributeError:
-        # get/set 메서드 없는 버전이면 [] 연산자 사용
-        ls["gpu_dashboard_prefs"] = preferences
-
-    st.session_state.prefs_changed = False
+        st.query_params = {PREF_QUERY_KEY: encoded}
+    except Exception:
+        pass
 
 def format_timestamp(ts: str) -> str:
     if not ts:
@@ -515,7 +553,18 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
     status_key = (snapshot or {}).get("status", "offline")
     status_label, status_color = theme["status"].get(status_key, ("⚪️ 미확인", theme["muted"]))
     last_updated = format_timestamp((snapshot or {}).get("last_updated"))
-    header_cols = st.columns([0.7, 0.15, 0.15])
+
+    note_flag = _note_form_flag(alias)
+    delete_state_key = _delete_state_key(alias)
+    delete_mode_key = f"delete_mode_{alias}"
+    if note_flag not in st.session_state:
+        st.session_state[note_flag] = False
+    if delete_state_key not in st.session_state:
+        st.session_state[delete_state_key] = None
+    if delete_mode_key not in st.session_state:
+        st.session_state[delete_mode_key] = False
+
+    header_cols = st.columns([0.76, 0.08, 0.08, 0.08])
     with header_cols[0]:
         header_html = (
             f"<div class='alias-text'>{alias_label} "
@@ -524,7 +573,38 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
             f"<div class='last-updated'>업데이트 {last_updated}</div>"
         )
         st.markdown(header_html, unsafe_allow_html=True)
+    with header_cols[1]:
+        form_open = st.session_state[note_flag]
+        btn_label = "📝" if not form_open else "✖️"
+        btn_help = "메모 작성 열기" if not form_open else "메모 작성 닫기"
+        if st.button(
+            btn_label,
+            key=f"toggle_note_{alias}",
+            help=btn_help,
+            use_container_width=True,
+        ):
+            new_state = not form_open
+            st.session_state[note_flag] = new_state
+            if not new_state:
+                _clear_note_form(alias)
     with header_cols[2]:
+        delete_mode_on = st.session_state[delete_mode_key]
+        del_label = "🗑" if not delete_mode_on else "🗑✔"
+        del_help = "삭제 모드 켜기 (메모 옆에 삭제 버튼 표시)" if not delete_mode_on else "삭제 모드 끄기"
+        if st.button(
+            del_label,
+            key=f"toggle_delete_mode_{alias}",
+            help=del_help,
+            use_container_width=True,
+        ):
+            new_state = not delete_mode_on
+            st.session_state[delete_mode_key] = new_state
+            if not new_state:
+                active_dom_key = st.session_state.get(delete_state_key)
+                if active_dom_key:
+                    _clear_delete_form(active_dom_key)
+                st.session_state[delete_state_key] = None
+    with header_cols[3]:
         if st.button("⟳", key=f"reload_{alias}", use_container_width=True):
             try:
                 resp = requests.post(f"{API_BASE}/reload/{alias}", timeout=3)
@@ -533,36 +613,63 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
             except Exception as exc:
                 st.error(f"갱신 실패: {exc}")
 
-    with st.form(key=f"quick_note_form_{alias}", clear_on_submit=True):
-        row = st.columns([0.3, 0.3, 0.4])
-        with row[0]:
-            username = st.text_input("아이디", key=f"user_{alias}", placeholder="아이디")
-        with row[1]:
-            password = st.text_input("비밀번호", type="password", key=f"pw_{alias}", placeholder="비밀번호")
-        with row[2]:
-            content = st.text_area(
-                "메모 내용",
-                key=f"content_{alias}",
-                height=70,
-                placeholder="내용",
-                label_visibility="collapsed",
-            )
-        submitted = st.form_submit_button("💾 저장", use_container_width=True)
-    if submitted:
-        if username and password and content.strip():
-            try:
-                resp = requests.post(
-                    f"{API_BASE}/notes/{alias}",
-                    json={"username": username, "password": password, "content": content},
-                    timeout=3,
+    if st.session_state[note_flag]:
+        form_keys = _note_form_keys(alias)
+        with st.container():
+            st.markdown("##### 메모 작성")
+            with st.form(key=f"note_form_{alias}", clear_on_submit=False):
+                creds = st.columns([0.5, 0.5])
+                username = creds[0].text_input(
+                    "아이디",
+                    key=form_keys["user"],
+                    placeholder="이름 또는 계정",
+                    label_visibility="collapsed",
                 )
-                resp.raise_for_status()
-                st.toast("메모 저장 완료", icon="📝")
-                st.experimental_rerun()
-            except Exception as exc:
-                st.error(f"저장 실패: {exc}")
-        else:
-            st.error("모두 입력해주세요.")
+                password = creds[1].text_input(
+                    "비밀번호",
+                    key=form_keys["password"],
+                    placeholder="비밀번호",
+                    type="password",
+                    label_visibility="collapsed",
+                )
+                content = st.text_area(
+                    "메모 내용",
+                    key=form_keys["content"],
+                    height=110,
+                    placeholder="내용을 입력하세요",
+                )
+                action_cols = st.columns([0.5, 0.5])
+                submit_clicked = action_cols[0].form_submit_button("저장", use_container_width=True)
+                cancel_clicked = action_cols[1].form_submit_button("취소", use_container_width=True)
+
+            if submit_clicked:
+                display_user = (username or "").strip() or "관리자"
+                pw_clean = (password or "").strip()
+                body = content.strip()
+                if not pw_clean or not body:
+                    st.error("비밀번호와 내용을 모두 입력해주세요.")
+                else:
+                    try:
+                        payload = {
+                            "username": display_user,
+                            "password": pw_clean,
+                            "content": content,
+                        }
+                        resp = requests.post(
+                            f"{API_BASE}/notes/{alias}",
+                            json=payload,
+                            timeout=3,
+                        )
+                        resp.raise_for_status()
+                        st.toast("메모 저장 완료", icon="📝")
+                        _clear_note_form(alias)
+                        st.session_state[note_flag] = False
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"저장 실패: {exc}")
+            elif cancel_clicked:
+                _clear_note_form(alias)
+                st.session_state[note_flag] = False
 
     if not snapshot:
         st.error("서버 연결 실패 또는 데이터 없음")
@@ -594,41 +701,100 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
             renderer(resource_data, error_msg, theme)
 
     notes = (snapshot or {}).get("notes") or []
+    active_delete = st.session_state.get(delete_state_key)
+    delete_mode_on = st.session_state.get(delete_mode_key, False)
+    if not delete_mode_on and active_delete:
+        _clear_delete_form(active_delete)
+        st.session_state[delete_state_key] = None
+        active_delete = None
     if notes:
-        st.markdown("#### 서버 메모")
-        for note in notes:
+        matched_delete_target = False
+        for idx, note in enumerate(notes):
+            dom_key = _note_dom_key(alias, note, idx)
             ts = format_timestamp(note.get("timestamp"))
-            cols = st.columns([0.94, 0.06])
-            with cols[0]:
-                st.markdown(f"- **{note.get('user')}** · {ts}: {note.get('content')}")
-            with cols[1]:
-                if st.button(
-                    "🗑",
-                    key=f"del_note_{alias}_{note.get('id')}",
-                    help="자신이 쓴 메모만 삭제 가능합니다",
-                ):
-                    del_user = st.text_input("아이디", key=f"del_user_{alias}_{note.get('id')}")
-                    del_pw = st.text_input(
-                        "비밀번호", type="password", key=f"del_pw_{alias}_{note.get('id')}"
+            user_label = note.get("user") or "N/A"
+            note_id = note.get("id")
+            meta_html = f"{escape(user_label)} · {escape(ts)}"
+            content_html = escape(note.get("content") or "")
+
+            if delete_mode_on:
+                cols = st.columns([0.94, 0.06])
+                with cols[0]:
+                    st.markdown(
+                        f"<div class='note-entry'><span class='note-meta'>{meta_html}</span>"
+                        f"<span class='note-content'>{content_html}</span></div>",
+                        unsafe_allow_html=True,
                     )
-                    if not (del_user and del_pw):
-                        st.error("아이디/비밀번호를 입력해주세요.")
+                with cols[1]:
+                    delete_wrap = st.container()
+                    delete_wrap.markdown("<div class='note-delete-button'>", unsafe_allow_html=True)
+                    delete_clicked = delete_wrap.button(
+                        "삭제",
+                        key=f"del_btn_{dom_key}",
+                        help=DELETE_HELP_TEXT,
+                    )
+                    delete_wrap.markdown("</div>", unsafe_allow_html=True)
+                    if delete_clicked:
+                        previous_target = st.session_state.get(delete_state_key)
+                        if previous_target and previous_target != dom_key:
+                            _clear_delete_form(previous_target)
+                        st.session_state[delete_state_key] = dom_key
+                        active_delete = dom_key
+            else:
+                st.markdown(
+                    f"<div class='note-entry'><span class='note-meta'>{meta_html}</span>"
+                    f"<span class='note-content'>{content_html}</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+            if delete_mode_on and active_delete == dom_key:
+                matched_delete_target = True
+                form_keys = _delete_form_keys(dom_key)
+                delete_cols = st.columns([0.45, 0.35, 0.1, 0.1])
+                del_user = delete_cols[0].text_input(
+                    "아이디",
+                    key=form_keys["user"],
+                    placeholder="아이디",
+                    label_visibility="collapsed",
+                )
+                del_pw = delete_cols[1].text_input(
+                    "비밀번호",
+                    key=form_keys["password"],
+                    placeholder="비밀번호",
+                    type="password",
+                    label_visibility="collapsed",
+                )
+                confirm = delete_cols[2].button("확인", key=f"del_confirm_{dom_key}")
+                cancel = delete_cols[3].button("취소", key=f"del_cancel_{dom_key}")
+                if confirm:
+                    pw_clean = (del_pw or "").strip()
+                    if not pw_clean:
+                        st.error("비밀번호를 입력해주세요.")
                     else:
                         try:
+                            payload = {
+                                "username": (del_user or "").strip() or "관리자",
+                                "password": pw_clean,
+                                "note_id": note_id,
+                            }
                             resp = requests.delete(
                                 f"{API_BASE}/notes/{alias}",
-                                json={
-                                    "username": del_user,
-                                    "password": del_pw,
-                                    "note_id": note.get("id"),
-                                },
+                                json=payload,
                                 timeout=3,
                             )
                             resp.raise_for_status()
                             st.toast("메모 삭제 완료", icon="🗑")
-                            st.experimental_rerun()
+                            st.session_state[delete_state_key] = None
+                            _clear_delete_form(dom_key)
+                            st.rerun()
                         except Exception as exc:
                             st.error(f"삭제 실패: {exc}")
+                elif cancel:
+                    st.session_state[delete_state_key] = None
+                    _clear_delete_form(dom_key)
+        if delete_mode_on and active_delete and not matched_delete_target:
+            _clear_delete_form(active_delete)
+            st.session_state[delete_state_key] = None
 
 # -----------------------------------------------------------------------------
 # Main app
@@ -649,8 +815,9 @@ def main():
 
     st.title("🖥️ GPU 서버 모니터링 대시보드")
     st.info(
-        "서버 주소가 변경되었습니다. 자세한 내용은 "
-        "[노션 공지](https://www.notion.so/ircv/27c0b39c7ed380a2a1acf26a2aa1bf9b?source=copy_link)를 참고하세요."
+        # "서버 주소가 변경되었습니다. 자세한 내용은 "
+        # "[노션 공지](https://www.notion.so/ircv/27c0b39c7ed380a2a1acf26a2aa1bf9b?source=copy_link)를 참고하세요."
+        "‼️ 메모 실명제를 도입하였습니다. 계정과 비밀번호는 해당 서버의 것을 입력하면 됩니다. "
     )
     st.caption(f"데이터는 {REFRESH_INTERVAL_MS/1000:.0f}초마다 자동 새로고침 됩니다.")
     st_autorefresh(interval=REFRESH_INTERVAL_MS, key="refresh")
@@ -684,7 +851,7 @@ def main():
             horizontal=True,
         )
 
-    # 설정을 URL+쿠키에 저장
+        # URL 파라미터 기반으로 개인 레이아웃을 저장
         save_preferences(
             {"order": st.session_state.preferred_order, "grid_cols": st.session_state.grid_cols}
         )
@@ -697,6 +864,7 @@ def main():
         for alias, col in zip(row_aliases, cols):
             with col:
                 render_server_card(alias, all_stats.get(alias), theme)
+        st.markdown("<div class='card-gap'></div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
