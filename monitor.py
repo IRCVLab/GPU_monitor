@@ -1,6 +1,7 @@
 import json
 import threading
 import logging
+import uuid
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -47,7 +48,7 @@ logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 
 class NoteStore:
-    """Simple JSON-backed store for per-server notes."""
+    """Thread-safe JSON-backed store for per-server memo threads."""
 
     def __init__(self, path="notes_store.json"):
         self.path = Path(path)
@@ -65,36 +66,46 @@ class NoteStore:
 
     def _save_locked(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.path.with_suffix(".tmp")
-        with tmp_path.open("w", encoding="utf-8") as fp:
+        tmp = self.path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as fp:
             json.dump(self.data, fp, ensure_ascii=False, indent=2)
-        tmp_path.replace(self.path)
+        tmp.replace(self.path)
 
-    def get_note(self, alias):
+    def get_notes(self, alias):
         with self.lock:
-            note = self.data.get(alias)
-            return dict(note) if note else None
+            notes = []
+            for note in self.data.get(alias, []):
+                if isinstance(note, dict):
+                    notes.append(note)
+                else:
+                    try:
+                        notes.append(dict(note))
+                    except Exception:
+                        # preserve as string if cannot convert
+                        notes.append({"content": str(note), "id": None})
+            return notes
 
-    def set_note(self, alias, content):
-        content = (content or "").strip()
+    def add_note(self, alias, user, content):
+        note = {
+            "id": uuid.uuid4().hex,
+            "user": user,
+            "content": content.strip()[:1000],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
         with self.lock:
-            if not content:
-                if alias in self.data:
-                    self.data.pop(alias, None)
-                    self._save_locked()
-                return None
-            note = {
-                "content": content[:500],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            self.data[alias] = note
+            self.data.setdefault(alias, []).append(note)
             self._save_locked()
-            return note
+        return note
 
-    def delete_note(self, alias):
+    def delete_note(self, alias, note_id):
         with self.lock:
-            if self.data.pop(alias, None) is not None:
-                self._save_locked()
+            notes = self.data.get(alias, [])
+            for idx, note in enumerate(notes):
+                if note["id"] == note_id:
+                    del notes[idx]
+                    self._save_locked()
+                    return True
+        return False
 
 
 # ─── ServerMonitor Definition ────────────────────────────────────────────────
@@ -171,9 +182,11 @@ class ServerMonitor:
         else:
             status = "offline"
 
+        notes = note_store.get_notes(self.alias)
         snapshot = {
             "alias": self.alias,
             "resources": resources,
+            "notes": notes,
             "errors": resource_errors or None,
             "metadata": {"host": self.host, "port": self.port},
             "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -248,6 +261,31 @@ hosts = [
     ("05NEO",      Address, 2206, User, Passwd),
 ]
 
+def authenticate_user(username: str, password: str) -> None:
+    if not username or not password:
+        raise ValueError("username/password required")
+    for alias, host, port, _, _ in hosts:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                hostname=host,
+                port=port,
+                username=username,
+                password=password,
+                timeout=5,
+                allow_agent=False,
+                look_for_keys=False,
+            )
+            client.close()
+            return
+        except Exception:
+            try:
+                client.close()
+            except Exception:
+                pass
+    raise ValueError("Invalid credentials")
+
 note_store = NoteStore()
 
 
@@ -280,7 +318,7 @@ def all_stats():
         payload = {}
         if snapshot:
             payload.update(snapshot)
-        payload["note"] = note_store.get_note(alias)
+        payload["notes"] = note_store.get_notes(alias)
         response[alias] = payload
     return jsonify(response)
 
@@ -294,7 +332,7 @@ def stats(alias):
     payload = {}
     if snapshot:
         payload.update(snapshot)
-    payload["note"] = note_store.get_note(alias)
+    payload["notes"] = note_store.get_notes(alias)
     return jsonify(payload)
 
 
@@ -308,24 +346,54 @@ def reload(alias):
         return "Alias not found", 404
 
 
-@app.route("/notes/<path:alias>", methods=["GET", "POST", "DELETE"])
-def notes(alias):
-    if request.method == "GET":
-        note = note_store.get_note(alias)
-        return jsonify(note or {})
+@app.route("/notes/<path:alias>")
+def get_notes(alias):
+    return jsonify({"notes": note_store.get_notes(alias)})
 
-    if request.method == "DELETE":
-        note_store.delete_note(alias)
-        return "", 204
 
-    data = request.get_json(silent=True) or {}
+def _require_json():
+    data = request.get_json(silent=True)
+    if not data:
+        return {}
+    return data
+
+
+@app.route("/notes/<path:alias>", methods=["POST"])
+def create_note(alias):
+    data = _require_json()
+    username = data.get("username")
+    password = data.get("password")
     content = (data.get("content") or "").strip()
     if not content:
-        note_store.delete_note(alias)
-        return "", 204
+        return "Content required", 400
+    try:
+        authenticate_user(username, password)
+    except ValueError as exc:
+        return str(exc), 401
+    note = note_store.add_note(alias, username, content)
+    return jsonify(note), 201
 
-    note_store.set_note(alias, content)
-    return "", 204
+
+@app.route("/notes/<path:alias>", methods=["DELETE"])
+def delete_note(alias):
+    data = _require_json()
+    username = data.get("username")
+    password = data.get("password")
+    note_id = data.get("note_id")
+    if not note_id:
+        return "note_id required", 400
+    try:
+        authenticate_user(username, password)
+    except ValueError as exc:
+        return str(exc), 401
+    notes = note_store.get_notes(alias)
+    for note in notes:
+        if note["id"] == note_id:
+            if note["user"] != username:
+                return "Cannot delete others' notes", 403
+            note_store.delete_note(alias, note_id)
+            return "", 204
+    return "Note not found", 404
 
 
 if __name__ == "__main__":
