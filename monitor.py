@@ -398,4 +398,34 @@ def delete_note(alias):
 
 if __name__ == "__main__":
     monitors = create_monitors()
-    app.run(host="0.0.0.0", port=5001)
+
+    # Initialize stats collector
+    try:
+        from stats_collector import StatsCollector
+        from stats_queries import register_stats_routes
+
+        stats_collector = StatsCollector(
+            db_path="data/gpu_stats.db",
+            monitors=monitors,
+            interval=60  # Collect every 60 seconds
+        )
+        stats_collector.start()
+        logger.info("Statistics collector started successfully")
+
+        # Register stats API routes
+        register_stats_routes(app, stats_collector.db)
+        logger.info("Statistics API routes registered")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize stats collector: {e}")
+        logger.warning("Continuing without statistics collection")
+
+    try:
+        app.run(host="0.0.0.0", port=5001)
+    finally:
+        # Graceful shutdown of stats collector
+        try:
+            if 'stats_collector' in locals():
+                stats_collector.stop()
+        except Exception as e:
+            logger.error(f"Error stopping stats collector: {e}")
