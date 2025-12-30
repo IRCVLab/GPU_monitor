@@ -61,6 +61,7 @@ def init_theme_state():
     st.session_state.setdefault("preferred_order", [])
     st.session_state.setdefault("grid_cols", 2)
     st.session_state.setdefault("prefs_cache", {})
+    st.session_state.setdefault("show_power", True)
 
 
 def get_active_theme():
@@ -71,6 +72,11 @@ def inject_theme(theme):
     st.markdown(
         f"""
         <style>
+            /* Hide page navigation sidebar */
+            [data-testid="stSidebarNav"] {{
+                display: none;
+            }}
+
             .stApp {{
                 background-color: {theme["background"]};
                 color: {theme["text"]};
@@ -243,32 +249,10 @@ def fetch_stats():
     return resp.json()
 
 def load_preferences() -> dict:
-    params = {}
-    try:
-        params = st.query_params
-    except Exception:
-        pass
-    raw = params.get(PREF_QUERY_KEY)
-    if not raw:
-        return st.session_state.get("prefs_cache", {})
-    value = raw[0] if isinstance(raw, list) else raw
-    try:
-        prefs = json.loads(unquote_plus(value))
-        if isinstance(prefs, dict):
-            st.session_state.prefs_cache = prefs
-            return prefs
-    except Exception:
-        pass
     return st.session_state.get("prefs_cache", {})
 
 def save_preferences(preferences: dict):
     st.session_state.prefs_cache = preferences
-    payload = json.dumps(preferences, separators=(",", ":"))
-    encoded = quote(payload)
-    try:
-        st.query_params = {PREF_QUERY_KEY: encoded}
-    except Exception:
-        pass
 
 def format_timestamp(ts: str) -> str:
     if not ts:
@@ -419,7 +403,12 @@ def render_gpu_tab(resource: dict | None, error: str | None, theme: dict):
         st.info("GPU 데이터가 아직 수집되지 않았습니다.")
         return
 
-    headers = ["GPU", "메모리 사용량", "GPU Util", "온도", "사용자"]
+    # Build headers conditionally
+    headers = ["GPU", "메모리 사용량", "GPU Util", "온도"]
+    if st.session_state.get("show_power", False):
+        headers.append("전력")
+    headers.append("사용자")
+
     rows: List[str] = []
     for gpu in resource.get("gpus", []):
         memory = gpu.get("memory", {}) or {}
@@ -429,16 +418,31 @@ def render_gpu_tab(resource: dict | None, error: str | None, theme: dict):
         mem_total = to_number(memory.get("total"), 0.0)
         mem_pct = (mem_used / mem_total * 100) if mem_total else 0.0
         util_pct = to_number(utilization.get("gpu"), 0.0)
-        mem_text = f"{mem_used:.0f}/{mem_total:.0f} MB ({mem_pct:.1f}%)"
+        mem_text = f"{mem_used/1024:.1f}/{mem_total/1024:.1f} GB ({mem_pct:.1f}%)"
         util_text = f"{util_pct:.1f}%"
         temp_text = f"{temp:.0f}°C"
         users = sorted({proc.get("username", "") for proc in gpu.get("processes", []) if proc.get("username")})
+
+        # Build power cell if toggle is on
+        power_cell = ""
+        if st.session_state.get("show_power", False):
+            power = gpu.get('power')
+            if power is not None:
+                power_text = f"{power:.1f}W"
+                power_pct = min(power / 300 * 100, 100)  # Assume 300W max
+                # Use orange/red color for power (#ff9800 for light, #ff6b35 for dark)
+                power_color = "#ff6b35" if st.session_state.dark_mode else "#ff9800"
+                power_cell = f"<td>{bar_html(power_pct, power_text, power_color)}</td>"
+            else:
+                power_cell = "<td>N/A</td>"
+
         rows.append(
             "<tr>"
             f"<td>{gpu.get('id')}</td>"
             f"<td>{bar_html(mem_pct, mem_text, theme['bars']['memory'])}</td>"
             f"<td>{bar_html(util_pct, util_text, theme['bars']['util'])}</td>"
             f"<td>{bar_html(temp, temp_text, theme['bars']['temp'])}</td>"
+            f"{power_cell}"
             f"<td>{', '.join(users) if users else '-'}</td>"
             "</tr>"
         )
@@ -447,7 +451,12 @@ def render_gpu_tab(resource: dict | None, error: str | None, theme: dict):
         st.info("GPU 정보가 비어있습니다.")
         return
 
-    col_widths = ["1%", "32.5%", "32.5%", "12%", "12%"]
+    # Adjust column widths based on power toggle
+    if st.session_state.get("show_power", False):
+        col_widths = ["1%", "22%", "28%", "10%", "12%", "12%"]
+    else:
+        col_widths = ["1%", "28%", "35%", "12%", "12%"]
+
     table_html = render_table(headers, rows, col_widths)
     st.markdown(table_html, unsafe_allow_html=True)
 
@@ -564,11 +573,27 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
     if delete_mode_key not in st.session_state:
         st.session_state[delete_mode_key] = False
 
+    # Calculate server total power if power toggle is on
+    server_power_html = ""
+    if st.session_state.get("show_power", False) and snapshot:
+        resources = snapshot.get('resources', {})
+        gpu_data = resources.get('gpu')
+        if gpu_data:
+            server_total_power = 0.0
+            for gpu in gpu_data.get('gpus', []):
+                power = gpu.get('power')
+                if power is not None:
+                    server_total_power += power
+
+            if server_total_power > 0:
+                server_power_html = f" <span style='color:{theme['text']}; font-size:1.1rem; font-weight:600;'>⚡ {server_total_power:.1f}W</span>"
+
     header_cols = st.columns([0.76, 0.08, 0.08, 0.08])
     with header_cols[0]:
         header_html = (
             f"<div class='alias-text'>{alias_label} "
             f"<span class='status-pill' style='border-color:{status_color}; color:{status_color};'>{status_label}</span>"
+            f"{server_power_html}"
             f"</div>"
             f"<div class='last-updated'>업데이트 {last_updated}</div>"
         )
@@ -660,11 +685,14 @@ def render_server_card(alias: str, snapshot: dict | None, theme: dict):
                             json=payload,
                             timeout=3,
                         )
-                        resp.raise_for_status()
-                        st.toast("메모 저장 완료", icon="📝")
-                        _clear_note_form(alias)
-                        st.session_state[note_flag] = False
-                        st.rerun()
+                        if resp.status_code == 401:
+                            st.error("계정 또는 비밀번호가 올바르지 않습니다.")
+                        else:
+                            resp.raise_for_status()
+                            st.toast("메모 저장 완료", icon="📝")
+                            _clear_note_form(alias)
+                            st.session_state[note_flag] = False
+                            st.rerun()
                     except Exception as exc:
                         st.error(f"저장 실패: {exc}")
             elif cancel_clicked:
@@ -808,6 +836,7 @@ def main():
         grid_cols_value = prefs.get("grid_cols")
         if isinstance(grid_cols_value, int) and grid_cols_value in (1, 2, 3, 4):
             st.session_state.grid_cols = grid_cols_value
+        st.session_state.show_power = prefs.get("show_power", False)
                 
     st.session_state.dark_mode = st.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
     theme = get_active_theme()
@@ -817,7 +846,7 @@ def main():
     st.info(
         # "서버 주소가 변경되었습니다. 자세한 내용은 "
         # "[노션 공지](https://www.notion.so/ircv/27c0b39c7ed380a2a1acf26a2aa1bf9b?source=copy_link)를 참고하세요."
-        "‼️ 메모 실명제를 도입하였습니다. 계정과 비밀번호는 해당 서버의 것을 입력하면 됩니다. "
+        "‼️ [메모 실명제](https://newsimg.sedaily.com/2016/08/12/1L042E3BJ9_1.jpg)를 도입하였습니다. 계정과 비밀번호는 해당 서버의 것을 입력하면 됩니다. ‼️"
     )
     st.caption(f"데이터는 {REFRESH_INTERVAL_MS/1000:.0f}초마다 자동 새로고침 됩니다.")
     st_autorefresh(interval=REFRESH_INTERVAL_MS, key="refresh")
@@ -851,9 +880,15 @@ def main():
             horizontal=True,
         )
 
+        st.session_state.show_power = st.checkbox(
+            "⚡ 전력 사용량 표시",
+            value=st.session_state.get("show_power", False),
+            help="GPU 전력 소비를 표시합니다 (W)"
+        )
+
         # URL 파라미터 기반으로 개인 레이아웃을 저장
         save_preferences(
-            {"order": st.session_state.preferred_order, "grid_cols": st.session_state.grid_cols}
+            {"order": st.session_state.preferred_order, "grid_cols": st.session_state.grid_cols, "show_power": st.session_state.show_power}
         )
     ordered = list(st.session_state.preferred_order) + [a for a in aliases if a not in st.session_state.preferred_order]
 
