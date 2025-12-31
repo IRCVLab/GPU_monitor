@@ -72,8 +72,8 @@ def inject_theme(theme):
     st.markdown(
         f"""
         <style>
-            /* Hide page navigation sidebar */
-            [data-testid="stSidebarNav"] {{
+            /* Hide entire sidebar on main dashboard */
+            [data-testid="stSidebar"] {{
                 display: none;
             }}
 
