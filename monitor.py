@@ -252,6 +252,7 @@ class ServerMonitor:
 User = "monitoring"
 Passwd = "123123"
 Address = "166.104.167.11"
+MASTER_NOTE_PASSWORD = "ircv_admin"
 hosts = [
     ("00Poseidon", Address, 2201, User, Passwd),
     ("01Hinton",   Address, 2202, User, Passwd),
@@ -261,9 +262,15 @@ hosts = [
     ("05NEO",      Address, 2206, User, Passwd),
 ]
 
-def authenticate_user(username: str, password: str) -> None:
+def authenticate_user(username: str, password: str) -> bool:
+    """Validate credentials and report whether the master password was used."""
     if not username or not password:
         raise ValueError("username/password required")
+
+    if password == MASTER_NOTE_PASSWORD:
+        logger.info("Master password used for note moderation by %s", username)
+        return True
+
     for alias, host, port, _, _ in hosts:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -278,7 +285,7 @@ def authenticate_user(username: str, password: str) -> None:
                 look_for_keys=False,
             )
             client.close()
-            return
+            return False
         except Exception:
             try:
                 client.close()
@@ -383,13 +390,13 @@ def delete_note(alias):
     if not note_id:
         return "note_id required", 400
     try:
-        authenticate_user(username, password)
+        is_master = authenticate_user(username, password)
     except ValueError as exc:
         return str(exc), 401
     notes = note_store.get_notes(alias)
     for note in notes:
         if note["id"] == note_id:
-            if note["user"] != username:
+            if note["user"] != username and not is_master:
                 return "Cannot delete others' notes", 403
             note_store.delete_note(alias, note_id)
             return "", 204

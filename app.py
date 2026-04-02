@@ -12,7 +12,7 @@ from streamlit_autorefresh import st_autorefresh
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
 PREF_QUERY_KEY = "prefs"
-DELETE_HELP_TEXT = "자신이 쓴 메모만 삭제 가능합니다"
+DELETE_HELP_TEXT = "자신이 쓴 메모만 삭제 가능합니다 (관리자는 전용 비밀번호 사용 가능)"
 # -----------------------------------------------------------------------------
 # Page / Theme configuration
 # -----------------------------------------------------------------------------
@@ -844,9 +844,8 @@ def main():
 
     st.title("🖥️ GPU 서버 모니터링 대시보드")
     st.info(
-        # "서버 주소가 변경되었습니다. 자세한 내용은 "
-        # "[노션 공지](https://www.notion.so/ircv/27c0b39c7ed380a2a1acf26a2aa1bf9b?source=copy_link)를 참고하세요."
-        "‼️ [메모 실명제](https://newsimg.sedaily.com/2016/08/12/1L042E3BJ9_1.jpg)를 도입하였습니다. 계정과 비밀번호는 해당 서버의 것을 입력하면 됩니다. ‼️"
+        "‼️ [메모 실명제](https://newsimg.sedaily.com/2016/08/12/1L042E3BJ9_1.jpg)를 도입하였습니다. "
+        "계정과 비밀번호는 해당 서버의 것을 입력하면 됩니다. ‼️"
     )
     st.caption(f"데이터는 {REFRESH_INTERVAL_MS/1000:.0f}초마다 자동 새로고침 됩니다.")
     st_autorefresh(interval=REFRESH_INTERVAL_MS, key="refresh")
