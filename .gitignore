@@ -1,7 +1,39 @@
-server.log
-monitoring/
+# Python
+.venv/
 __pycache__/
 *.pyc
-notes_store.json
-backups/
-server.log.*
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+
+# Database
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+
+# Node (frontend)
+node_modules/
+.svelte-kit/
+.output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Brainstorm companion
+.superpowers/
