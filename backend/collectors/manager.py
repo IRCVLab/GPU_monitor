@@ -123,6 +123,14 @@ async def add_server(server: Server) -> None:
         logger.warning("Collector for server %d already running.", server.id)
         return
 
+    if not server.ssh_password and not server.ssh_private_key:
+        logger.info(
+            "Skipping collector for server %s (id=%d): no SSH credentials configured",
+            server.name,
+            server.id,
+        )
+        return
+
     collector = ServerCollector(server)
     _collectors[server.id] = collector
     task = asyncio.create_task(collector.run(), name=f"collector-{server.id}")

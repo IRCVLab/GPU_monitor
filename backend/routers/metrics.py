@@ -8,11 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 try:
+    from ..event_logger import get_event_log_health
     from ..database import get_db
-    from ..models import GpuMetric
+    from ..models import GpuMetric, Server
 except ImportError:  # pragma: no cover - direct execution fallback
+    from event_logger import get_event_log_health
     from database import get_db
-    from models import GpuMetric
+    from models import GpuMetric, Server
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["metrics"])
@@ -71,13 +73,42 @@ async def get_metric_history(
 
 
 @router.get("/servers/status")
-async def get_all_server_status():
+async def get_all_server_status(db: AsyncSession = Depends(get_db)):
     try:
         try:
             from ..collectors.manager import get_current_state
         except ImportError:  # pragma: no cover - direct execution fallback
             from collectors.manager import get_current_state
-        return get_current_state()
+        state = get_current_state()
+        log_health = get_event_log_health()
+
+        result = await db.execute(select(Server).order_by(Server.display_order, Server.id))
+        for server in result.scalars().all():
+            if server.id in state:
+                continue
+            state[server.id] = {
+                "server_id": server.id,
+                "status": "unknown",
+                "last_seen": None,
+                "server_name": server.name,
+                "host": server.host,
+                "port": server.port,
+                "network": server.network,
+                "display_order": server.display_order,
+                "offline_since": None,
+                "status_reason": {
+                    "code": "credentials_missing",
+                    "source": "collector",
+                    "message": "SSH credentials not configured",
+                    "retryable": True,
+                    "updated_at": None,
+                },
+                "gpus": [],
+                "system": None,
+                "storage": None,
+                "event_log_health": log_health,
+            }
+        return state
     except ImportError:
         return {}
 
