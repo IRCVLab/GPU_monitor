@@ -1,9 +1,10 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
-const apiTarget = process.env.MONITORING_API_TARGET || 'http://127.0.0.1:8001';
+const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
+const apiTarget = env.MONITORING_API_TARGET || 'http://127.0.0.1:8001';
 const wsTarget =
-	process.env.MONITORING_WS_TARGET ||
+	env.MONITORING_WS_TARGET ||
 	apiTarget.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
 
 const proxy = {

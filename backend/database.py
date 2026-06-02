@@ -1,6 +1,7 @@
 from pathlib import Path
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker, create_async_engine
 
 try:
     from .config import get_settings
@@ -24,12 +25,27 @@ engine = create_async_engine(
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
+def ensure_notes_expiry_schema_sync(conn: Connection) -> None:
+    result = conn.execute(text("PRAGMA table_info(notes)"))
+    columns = {row[1] for row in result.fetchall()}
+
+    if "expires_at" not in columns:
+        conn.execute(text("ALTER TABLE notes ADD COLUMN expires_at DATETIME"))
+
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notes_expires_at ON notes (expires_at)"))
+
+
+async def ensure_notes_expiry_schema(conn: AsyncConnection) -> None:
+    await conn.run_sync(ensure_notes_expiry_schema_sync)
+
+
 async def init_db():
     """앱 시작 시 테이블 생성 + WAL 모드 활성화."""
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA synchronous=NORMAL"))
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_notes_expiry_schema(conn)
 
 
 async def get_db() -> AsyncSession:

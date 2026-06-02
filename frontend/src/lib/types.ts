@@ -85,6 +85,7 @@ export interface Note {
 	username: string;
 	content: string;
 	created_at: string;
+	expires_at: string | null;
 }
 
 // ─── 이벤트 로그 ─────────────────────────────────────────────────

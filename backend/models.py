@@ -40,6 +40,7 @@ class Note(Base):
     username = Column(Text, nullable=False)           # 메모 작성자
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     server = relationship("Server", back_populates="notes")
 
