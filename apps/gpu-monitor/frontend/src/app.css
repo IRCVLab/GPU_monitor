@@ -681,6 +681,37 @@
 		border: 1px solid rgba(255, 255, 255, 0.07);
 	}
 
+	.server-card-note-preview-expiry {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		height: 1.05rem;
+		padding: 0 0.34rem;
+		border-radius: 999px;
+		border: 1px solid transparent;
+		font-size: 0.62rem;
+		font-weight: 700;
+		letter-spacing: 0.01em;
+	}
+
+	.server-card-note-preview-expiry.is-fresh {
+		color: rgba(125, 211, 252, 0.94);
+		background: rgba(56, 189, 248, 0.12);
+		border-color: rgba(56, 189, 248, 0.22);
+	}
+
+	.server-card-note-preview-expiry.is-soon {
+		color: rgba(253, 224, 71, 0.94);
+		background: rgba(250, 204, 21, 0.12);
+		border-color: rgba(250, 204, 21, 0.24);
+	}
+
+	.server-card-note-preview-expiry.is-urgent {
+		color: rgba(252, 165, 165, 0.98);
+		background: rgba(248, 113, 113, 0.12);
+		border-color: rgba(248, 113, 113, 0.24);
+	}
+
 	.server-card-note-preview-user {
 		color: rgba(125, 211, 252, 0.92);
 	}
@@ -746,8 +777,156 @@
 
 	.server-card-note-actions,
 	.note-form {
-		padding-top: 0.5rem;
+		padding-top: 0.38rem;
 		border-top: 1px solid rgba(255, 255, 255, 0.08);
+	}
+
+	.note-form-identity-row {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.42rem;
+	}
+
+	.note-form-input-half {
+		min-width: 0;
+	}
+
+	.note-form-time-block {
+		display: flex;
+		flex-direction: column;
+		gap: 0.22rem;
+		min-width: 0;
+	}
+
+	.note-form-time-row {
+		display: grid;
+		grid-template-columns: auto auto auto auto auto auto;
+		align-items: center;
+		gap: 0.34rem;
+		min-width: 0;
+	}
+
+	.note-form-expiry-label {
+		font-size: 0.62rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: rgba(255, 255, 255, 0.32);
+		white-space: nowrap;
+	}
+
+	.note-form-expiry-summary {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 0.65rem;
+		line-height: 1;
+		font-weight: 600;
+		letter-spacing: 0.01em;
+		color: rgba(251, 191, 36, 0.88);
+	}
+
+	.note-form-expiry-summary-row {
+		display: flex;
+		align-items: center;
+		gap: 0.36rem;
+		min-width: 0;
+		padding-left: 0.1rem;
+	}
+
+	.note-form-expiry-summary-label {
+		flex: 0 0 auto;
+		font-size: 0.61rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		color: rgba(255, 255, 255, 0.3);
+		text-transform: uppercase;
+	}
+
+	.note-form-expiry-controls {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.16rem;
+	}
+
+	.note-form-expiry-divider {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 0.7rem;
+		color: rgba(255, 255, 255, 0.24);
+	}
+
+	.note-form-expiry-adjust {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 2.1rem;
+		height: 1.42rem;
+		border-radius: 0.48rem;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: rgba(255, 255, 255, 0.03);
+		padding: 0 0.36rem;
+		font-size: 0.62rem;
+		font-weight: 650;
+		color: rgba(255, 255, 255, 0.68);
+		transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+	}
+
+	.note-form-expiry-adjust:hover,
+	.note-form-expiry-toggle:hover {
+		background: rgba(255, 255, 255, 0.08);
+		color: rgba(255, 255, 255, 0.92);
+	}
+
+	.note-form-expiry-toggle {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		height: 1.54rem;
+		border-radius: 0.52rem;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: rgba(255, 255, 255, 0.032);
+		padding: 0 0.54rem;
+		font-size: 0.64rem;
+		font-weight: 650;
+		color: rgba(255, 255, 255, 0.76);
+		white-space: nowrap;
+	}
+
+	.note-form-expiry-adjust:active,
+	.note-form-expiry-toggle:active,
+	.note-form-submit-primary:active,
+	.server-card-note-delete-btn:active {
+		transform: scale(0.97);
+	}
+
+	.note-form-submit-primary {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.35rem;
+		min-width: 3.7rem;
+		height: 1.58rem;
+		border-radius: 0.54rem;
+		padding: 0 0.66rem;
+		background: linear-gradient(135deg, rgba(56, 189, 248, 0.96), rgba(14, 165, 233, 0.86));
+		box-shadow: 0 6px 14px rgba(14, 165, 233, 0.14);
+		font-size: 0.66rem;
+		font-weight: 700;
+		letter-spacing: 0.01em;
+		color: white;
+		transition: transform 150ms ease, filter 150ms ease, opacity 150ms ease;
+	}
+
+	.note-form-submit-primary:hover {
+		filter: brightness(1.06);
+	}
+
+	.note-form-submit-primary:disabled {
+		opacity: 0.48;
+		box-shadow: none;
 	}
 
 	.server-card-note-password,
@@ -765,7 +944,8 @@
 	}
 
 	.note-form-textarea {
-		min-height: 4.3rem;
+		min-height: 2.85rem;
+		line-height: 1.32;
 	}
 
 	.note-form-submit {
@@ -774,6 +954,105 @@
 
 	.note-form-submit:hover {
 		color: rgba(255, 255, 255, 0.94);
+	}
+
+	.note-form-precision {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.42rem;
+	}
+
+	.note-form-precision-input {
+		flex: 0 1 15rem;
+	}
+
+	.note-form-precision-meta {
+		font-size: 0.66rem;
+		color: rgba(255, 255, 255, 0.42);
+	}
+
+	.note-form-footer {
+		min-height: 0.8rem;
+	}
+
+	.server-card-note-shell {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.8rem;
+	}
+
+	.server-card-note-side {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 0.38rem;
+		flex: 0 0 auto;
+		padding-left: 0.2rem;
+	}
+
+	.server-card-note-password {
+		width: 4.4rem;
+	}
+
+	.server-card-note-delete-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.3rem;
+		min-width: 3rem;
+		height: 1.9rem;
+		border-radius: 0.68rem;
+		border: 1px solid rgba(248, 113, 113, 0.16);
+		background: rgba(248, 113, 113, 0.08);
+		padding: 0 0.7rem;
+		font-size: 0.72rem;
+		font-weight: 650;
+		color: rgba(252, 165, 165, 0.88);
+		transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, opacity 150ms ease, transform 150ms ease;
+	}
+
+	.server-card-note-delete-btn:hover {
+		border-color: rgba(248, 113, 113, 0.3);
+		background: rgba(248, 113, 113, 0.14);
+		color: rgba(254, 202, 202, 0.98);
+	}
+
+	.server-card-note-delete-btn:disabled {
+		opacity: 0.5;
+	}
+
+	@media (max-width: 640px) {
+		.note-form-identity-row {
+			grid-template-columns: 1fr;
+		}
+
+		.note-form-time-row {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			align-items: stretch;
+		}
+
+		.note-form-expiry-toggle,
+		.note-form-submit-primary {
+			width: 100%;
+		}
+		
+		.note-form-expiry-summary-row {
+			padding-left: 0;
+		}
+
+		.server-card-note-shell {
+			flex-direction: column;
+			gap: 0.55rem;
+		}
+
+		.server-card-note-side {
+			width: 100%;
+			justify-content: flex-start;
+			padding-left: 0;
+		}
 	}
 
 	.dashboard-tabs {
@@ -1281,6 +1560,24 @@ html.light .server-card-note-preview {
 	border-color: rgba(15, 23, 42, 0.08);
 }
 
+html.light .server-card-note-preview-expiry.is-fresh {
+	color: #0369a1;
+	background: rgba(14, 165, 233, 0.1);
+	border-color: rgba(14, 165, 233, 0.18);
+}
+
+html.light .server-card-note-preview-expiry.is-soon {
+	color: #b45309;
+	background: rgba(245, 158, 11, 0.12);
+	border-color: rgba(245, 158, 11, 0.2);
+}
+
+html.light .server-card-note-preview-expiry.is-urgent {
+	color: #b91c1c;
+	background: rgba(248, 113, 113, 0.12);
+	border-color: rgba(248, 113, 113, 0.22);
+}
+
 html.light .server-card-note-preview-user {
 	color: #0369a1;
 }
@@ -1315,6 +1612,35 @@ html.light .note-form {
 	border-color: rgba(15, 23, 42, 0.08);
 }
 
+html.light .note-form-expiry-summary {
+	color: rgba(180, 83, 9, 0.92);
+}
+
+html.light .note-form-expiry-label {
+	color: rgba(15, 23, 42, 0.38);
+}
+
+html.light .note-form-expiry-summary-label {
+	color: rgba(15, 23, 42, 0.34);
+}
+
+html.light .note-form-expiry-divider {
+	color: rgba(15, 23, 42, 0.24);
+}
+
+html.light .note-form-expiry-adjust,
+html.light .note-form-expiry-toggle {
+	background: rgba(15, 23, 42, 0.04);
+	border-color: rgba(15, 23, 42, 0.08);
+	color: rgba(15, 23, 42, 0.72);
+}
+
+html.light .note-form-expiry-adjust:hover,
+html.light .note-form-expiry-toggle:hover {
+	background: rgba(15, 23, 42, 0.08);
+	color: rgba(15, 23, 42, 0.88);
+}
+
 html.light .server-card-note-password,
 html.light .note-form-input,
 html.light .note-form-textarea {
@@ -1342,6 +1668,22 @@ html.light .note-form-submit {
 
 html.light .note-form-submit:hover {
 	color: rgba(15, 23, 42, 0.92);
+}
+
+html.light .note-form-precision-meta {
+	color: rgba(15, 23, 42, 0.46);
+}
+
+html.light .server-card-note-delete-btn {
+	border-color: rgba(220, 38, 38, 0.16);
+	background: rgba(254, 226, 226, 0.84);
+	color: rgba(185, 28, 28, 0.92);
+}
+
+html.light .server-card-note-delete-btn:hover {
+	border-color: rgba(220, 38, 38, 0.24);
+	background: rgba(254, 202, 202, 0.92);
+	color: rgba(153, 27, 27, 0.98);
 }
 
 html.light .log-row {
@@ -1593,6 +1935,24 @@ html.rose .server-card-note-preview {
 	border-color: rgba(84, 56, 71, 0.08);
 }
 
+html.rose .server-card-note-preview-expiry.is-fresh {
+	color: #0369a1;
+	background: rgba(14, 165, 233, 0.1);
+	border-color: rgba(14, 165, 233, 0.16);
+}
+
+html.rose .server-card-note-preview-expiry.is-soon {
+	color: #b45309;
+	background: rgba(245, 158, 11, 0.12);
+	border-color: rgba(245, 158, 11, 0.18);
+}
+
+html.rose .server-card-note-preview-expiry.is-urgent {
+	color: #be123c;
+	background: rgba(244, 114, 182, 0.12);
+	border-color: rgba(244, 114, 182, 0.2);
+}
+
 html.rose .server-card-note-preview-user {
 	color: #0369a1;
 }
@@ -1627,6 +1987,35 @@ html.rose .note-form {
 	border-color: rgba(84, 56, 71, 0.08);
 }
 
+html.rose .note-form-expiry-summary {
+	color: rgba(180, 83, 9, 0.9);
+}
+
+html.rose .note-form-expiry-label {
+	color: rgba(36, 28, 34, 0.4);
+}
+
+html.rose .note-form-expiry-summary-label {
+	color: rgba(36, 28, 34, 0.36);
+}
+
+html.rose .note-form-expiry-divider {
+	color: rgba(84, 56, 71, 0.26);
+}
+
+html.rose .note-form-expiry-adjust,
+html.rose .note-form-expiry-toggle {
+	background: rgba(84, 56, 71, 0.04);
+	border-color: rgba(84, 56, 71, 0.08);
+	color: rgba(36, 28, 34, 0.7);
+}
+
+html.rose .note-form-expiry-adjust:hover,
+html.rose .note-form-expiry-toggle:hover {
+	background: rgba(84, 56, 71, 0.08);
+	color: rgba(36, 28, 34, 0.9);
+}
+
 html.rose .server-card-note-password,
 html.rose .note-form-input,
 html.rose .note-form-textarea {
@@ -1654,6 +2043,22 @@ html.rose .note-form-submit {
 
 html.rose .note-form-submit:hover {
 	color: rgba(36, 28, 34, 0.92);
+}
+
+html.rose .note-form-precision-meta {
+	color: rgba(36, 28, 34, 0.44);
+}
+
+html.rose .server-card-note-delete-btn {
+	border-color: rgba(190, 24, 93, 0.16);
+	background: rgba(251, 207, 232, 0.62);
+	color: rgba(157, 23, 77, 0.9);
+}
+
+html.rose .server-card-note-delete-btn:hover {
+	border-color: rgba(190, 24, 93, 0.22);
+	background: rgba(251, 182, 214, 0.72);
+	color: rgba(131, 24, 67, 0.96);
 }
 
 html.rose .log-row {

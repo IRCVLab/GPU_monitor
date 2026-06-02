@@ -11,9 +11,11 @@ from sqlalchemy import delete
 try:
     from .database import AsyncSessionLocal, init_db
     from .models import EventLog
+    from .note_expiry import delete_expired_notes
 except ImportError:  # pragma: no cover - direct execution fallback
     from database import AsyncSessionLocal, init_db
     from models import EventLog
+    from note_expiry import delete_expired_notes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,11 +36,29 @@ async def cleanup_old_logs() -> None:
         logger.error("Event log cleanup failed: %s", exc)
 
 
+async def cleanup_expired_notes() -> None:
+    try:
+        async with AsyncSessionLocal() as db:
+            deleted = await delete_expired_notes(db)
+            await db.commit()
+        if deleted > 0:
+            logger.info("Expired note cleanup removed %d note(s)", deleted)
+    except Exception as exc:
+        logger.error("Expired note cleanup failed: %s", exc)
+
+
 async def _log_cleanup_loop() -> None:
     await cleanup_old_logs()
     while True:
         await asyncio.sleep(60)
         await cleanup_old_logs()
+
+
+async def _note_cleanup_loop() -> None:
+    await cleanup_expired_notes()
+    while True:
+        await asyncio.sleep(5)
+        await cleanup_expired_notes()
 
 
 @asynccontextmanager
@@ -77,11 +97,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Slack Socket Mode not available: %s", exc)
 
-    cleanup_task = asyncio.create_task(_log_cleanup_loop())
+    log_cleanup_task = asyncio.create_task(_log_cleanup_loop())
+    note_cleanup_task = asyncio.create_task(_note_cleanup_loop())
 
     yield
 
-    cleanup_task.cancel()
+    log_cleanup_task.cancel()
+    note_cleanup_task.cancel()
 
     logger.info("Shutting down — cancelling collector tasks")
     try:

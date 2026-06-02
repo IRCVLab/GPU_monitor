@@ -110,12 +110,18 @@ export async function createNote(
 	serverId: number,
 	username: string,
 	sshPassword: string,
-	content: string
+	content: string,
+	expiresAt: string
 ): Promise<Note> {
 	const res = await fetchWithTimeout(`${BASE}/servers/${serverId}/notes`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ username, ssh_password: sshPassword, content })
+		body: JSON.stringify({
+			username,
+			ssh_password: sshPassword,
+			content,
+			expires_at: expiresAt
+		})
 	});
 	return handleResponse<Note>(res);
 }

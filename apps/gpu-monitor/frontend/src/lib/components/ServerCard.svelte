@@ -21,10 +21,14 @@
   let notesLoading  = $state(false);
   let notesError    = $state('');
   let notesServerId = $state<number | null>(null);
+  let noteNowMs     = $state(Date.now());
 
   // Delete state per note id
   let deleteState    = $state<Record<number, { loading: boolean; error: string }>>({});
   let deletePassword = $state<Record<number, string>>({});
+  const ONE_MINUTE_MS = 60 * 1000;
+  const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
+  const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
   function formatStorage(bytes: number): string {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0B';
@@ -83,7 +87,92 @@
   const storageTotalText = $derived(storageSummary ? formatStorage(storageSummary.total) : '–');
   const storagePct = $derived(storageSummary?.percent ?? 0);
   const storageMounts = $derived([...(server.storage?.mounts ?? [])].sort((a, b) => b.percent - a.percent || a.mount.localeCompare(b.mount)));
-  const previewNotes = $derived(notes.slice(0, 2));
+
+  function parseNoteTime(iso: string | null): number | null {
+    if (!iso) return null;
+    const ms = Date.parse(iso);
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  function noteVisible(note: Note): boolean {
+    const expiresAtMs = parseNoteTime(note.expires_at);
+    return expiresAtMs === null || expiresAtMs > noteNowMs;
+  }
+
+  function noteRemainingMs(note: Note): number | null {
+    const expiresAtMs = parseNoteTime(note.expires_at);
+    if (expiresAtMs === null) return null;
+    return expiresAtMs - noteNowMs;
+  }
+
+  function noteRemainingText(note: Note): string {
+    const remainingMs = noteRemainingMs(note);
+    if (remainingMs === null) return '';
+    if (remainingMs <= 0) return '곧 만료';
+
+    const seconds = Math.ceil(remainingMs / 1000);
+    if (seconds < 60) return `${seconds}초 남음`;
+
+    const minutes = Math.ceil(seconds / 60);
+    if (minutes < 60) return `${minutes}분 남음`;
+
+    const hours = Math.ceil(minutes / 60);
+    if (hours < 48) return `${hours}시간 남음`;
+
+    const days = Math.ceil(hours / 24);
+    return `${days}일 남음`;
+  }
+
+  function noteExpiryColor(note: Note): string {
+    const remainingMs = noteRemainingMs(note);
+    if (remainingMs === null) return 'rgba(125, 211, 252, 0.78)';
+    if (remainingMs <= ONE_HOUR_MS) return 'rgba(248, 113, 113, 0.96)';
+    if (remainingMs <= 6 * ONE_HOUR_MS) return 'rgba(251, 191, 36, 0.96)';
+    return 'rgba(125, 211, 252, 0.92)';
+  }
+
+  function noteExpiryTextClass(note: Note): string {
+    const remainingMs = noteRemainingMs(note);
+    if (remainingMs !== null && remainingMs <= ONE_HOUR_MS) return 'text-red-300/78';
+    if (remainingMs !== null && remainingMs <= ONE_DAY_MS) return 'text-amber-200/80';
+    return 'text-sky-200/70';
+  }
+
+  function notePreviewCountdownText(note: Note): string {
+    const remainingMs = noteRemainingMs(note);
+    if (remainingMs === null) return '';
+    if (remainingMs <= 0) return 'NOW';
+
+    const totalMinutes = Math.ceil(remainingMs / ONE_MINUTE_MS);
+    const totalHours = Math.ceil(remainingMs / ONE_HOUR_MS);
+    const totalDays = Math.floor(remainingMs / ONE_DAY_MS);
+
+    if (remainingMs >= ONE_DAY_MS) {
+      const hours = Math.floor((remainingMs - totalDays * ONE_DAY_MS) / ONE_HOUR_MS);
+      return hours > 0 ? `${totalDays}D ${hours}H` : `${Math.max(1, totalDays)}D`;
+    }
+
+    if (remainingMs >= ONE_HOUR_MS) {
+      return `${totalHours}H`;
+    }
+
+    if (remainingMs >= ONE_MINUTE_MS) {
+      return `${totalMinutes}M`;
+    }
+
+    const totalSeconds = Math.ceil(remainingMs / 1000);
+    return `${totalSeconds}S`;
+  }
+
+  function notePreviewBadgeClass(note: Note): string {
+    const remainingMs = noteRemainingMs(note);
+    if (remainingMs !== null && remainingMs <= ONE_HOUR_MS) return 'is-urgent';
+    if (remainingMs !== null && remainingMs <= ONE_DAY_MS) return 'is-soon';
+    return 'is-fresh';
+  }
+
+  const visibleNotes = $derived.by(() => notes.filter((note) => noteVisible(note)));
+  const previewNotes = $derived(visibleNotes.slice(0, 2));
 
   // --- Notes ---
   async function loadNotes(force = false) {
@@ -157,6 +246,14 @@
     if (serverId) {
       void loadNotes();
     }
+  });
+
+  $effect(() => {
+    const timer = setInterval(() => {
+      noteNowMs = Date.now();
+    }, 1000);
+
+    return () => clearInterval(timer);
   });
 </script>
 
@@ -325,12 +422,19 @@
     >
       <span>{notesExpanded ? '▲' : '▼'}</span>
       <span>메모</span>
-      {#if notes.length > 0}
-        <span class="server-card-note-count bg-white/10 text-white/50 rounded px-1.5 py-0.5 font-mono">{notes.length}</span>
+      {#if visibleNotes.length > 0}
+        <span class="server-card-note-count bg-white/10 text-white/50 rounded px-1.5 py-0.5 font-mono">{visibleNotes.length}</span>
       {/if}
       {#if !notesExpanded}
         <span class="server-card-note-preview ml-auto flex min-w-0 items-center justify-end gap-1 text-[11px]">
           {#if previewNotes.length > 0}
+            {#if previewNotes[0].expires_at}
+              <span
+                class="server-card-note-preview-expiry shrink-0 font-mono {notePreviewBadgeClass(previewNotes[0])}"
+              >
+                {notePreviewCountdownText(previewNotes[0])}
+              </span>
+            {/if}
             <span class="server-card-note-preview-user shrink-0 text-sky-300/78">{previewNotes[0].username}</span>
             <span class="server-card-note-preview-separator shrink-0 text-white/12">·</span>
             <span class="server-card-note-preview-content min-w-0 max-w-[13rem] truncate sm:max-w-[16rem]">{previewNotes[0].content}</span>
@@ -359,28 +463,36 @@
             </button>
           </div>
         {:else}
-          {#each notes as note (note.id)}
+          {#each visibleNotes as note (note.id)}
             <div class="server-card-note-item py-2 border-b border-white/5 last:border-0">
-              <div class="min-w-0">
-                <div class="server-card-note-meta mb-0.5 flex items-center gap-2">
-                  <span class="server-card-note-user text-xs text-sky-300/78 font-medium">{note.username}</span>
-                  <span class="server-card-note-time text-xs text-white/25 font-mono">{noteDate(note.created_at)}</span>
+              <div class="server-card-note-shell">
+                <div class="min-w-0 flex-1">
+                  <div class="server-card-note-meta mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span class="server-card-note-user text-xs text-sky-300/78 font-medium">{note.username}</span>
+                    <span class="server-card-note-time text-xs text-white/25 font-mono">{noteDate(note.created_at)}</span>
+                    {#if note.expires_at}
+                      <span class="text-xs text-white/12">·</span>
+                      <span class="server-card-note-expiry text-[11px] font-mono {noteExpiryTextClass(note)}">
+                        {noteRemainingText(note)}
+                      </span>
+                    {/if}
+                  </div>
+                  <p class="server-card-note-content text-xs text-white/70 whitespace-pre-wrap break-words">{note.content}</p>
+                  {#if deleteState[note.id]?.error}
+                    <p class="mt-1 text-xs text-red-400">{deleteState[note.id].error}</p>
+                  {/if}
                 </div>
-                <p class="server-card-note-content text-xs text-white/70 whitespace-pre-wrap break-words">{note.content}</p>
-                {#if deleteState[note.id]?.error}
-                  <p class="mt-1 text-xs text-red-400">{deleteState[note.id].error}</p>
-                {/if}
-                <div class="server-card-note-actions mt-1.5 flex items-center justify-end gap-1">
+                <div class="server-card-note-side">
                   <input
                     type="password"
-                    placeholder="비밀번호"
+                    placeholder="pw"
                     bind:value={deletePassword[note.id]}
-                    class="server-card-note-password w-20 rounded border border-surface-border bg-white/5 px-1.5 py-0.5 text-xs text-white/60 placeholder:text-white/20 focus:outline-none focus:border-white/20"
+                    class="server-card-note-password rounded border border-surface-border bg-white/5 px-1.5 py-0.5 text-xs text-white/60 placeholder:text-white/20 focus:outline-none focus:border-white/20"
                   />
                   <button
                     onclick={() => handleDelete(note)}
                     disabled={deleteState[note.id]?.loading}
-                    class="server-card-note-delete text-xs text-red-400/60 hover:text-red-400 transition-colors active:scale-95 disabled:opacity-40"
+                    class="server-card-note-delete-btn"
                   >
                     {#if deleteState[note.id]?.loading}
                       <span class="inline-block w-3 h-3 border border-white/20 border-t-white/50 rounded-full animate-spin"></span>
