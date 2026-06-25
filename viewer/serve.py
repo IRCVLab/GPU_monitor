@@ -13,7 +13,6 @@ Environment:
   STORAGE_VIZ_SCAN_TARGETS shell-style target list (default: / /data /data1 /data3)
   STORAGE_VIZ_PORT or PORT listen port (default: 8088; CLI arg still works)
   STORAGE_VIZ_BIND or BIND listen address (default: 0.0.0.0)
-  STORAGE_VIZ_HOSTNAME     output host id (default: socket.gethostname())
 """
 
 from __future__ import annotations
@@ -38,7 +37,7 @@ VIEWER_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.environ.get("STORAGE_VIZ_ROOT", VIEWER_DIR.parent)).resolve()
 DATA_DIR = Path(os.environ.get("STORAGE_VIZ_DATA_DIR", PROJECT_ROOT / "data")).resolve()
 SCANNER = Path(os.environ.get("STORAGE_VIZ_SCANNER", PROJECT_ROOT / "scanner" / "hstscan")).resolve()
-HOSTNAME = os.environ.get("STORAGE_VIZ_HOSTNAME", socket.gethostname())
+HOSTNAME = socket.gethostname()
 DATA_FILE = DATA_DIR / f"{HOSTNAME}.json"
 TARGETS = shlex.split(os.environ.get("STORAGE_VIZ_SCAN_TARGETS", "/ /data /data1 /data3"))
 PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("STORAGE_VIZ_PORT", os.environ.get("PORT", "8088")))
