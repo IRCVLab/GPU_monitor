@@ -61,6 +61,8 @@ function loadViewer() {
   ], 'viewer code must be loaded from ordered external scripts');
   assert(!/<style\b/i.test(html), 'viewer stylesheet must be externalized');
   assert(html.includes('<link rel="stylesheet" href="styles.css">'), 'index must link styles.css');
+  assert(html.includes('data-tab="advisor"'), 'index must expose an AI Advisor tab');
+  assert(html.includes('id="panel-advisor"'), 'index must contain the AI Advisor panel');
   const elements = new Map();
   const getEl = (id) => {
     if (!elements.has(id)) elements.set(id, new FakeElement('div'));

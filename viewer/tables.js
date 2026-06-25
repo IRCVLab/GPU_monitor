@@ -147,10 +147,10 @@ function updateArrows(sel, sort) {
 function pathCellHtml(path) {
   const idx = path.lastIndexOf("/");
   const dir = idx >= 0 ? path.slice(0, idx + 1) : "", file = idx >= 0 ? path.slice(idx + 1) : path;
-  const badges = typeof advisorBadgesHtml === "function" ? advisorBadgesHtml(path) : "";
-  return '<div class="pathwrap" data-path="' + escapeHtml(path) + '"><span class="pathtext" title="' + escapeHtml(path) + '"><bdi>' +
+  const advisor = (typeof advisorBadgeHtmlForPath === "function") ? advisorBadgeHtmlForPath(path) : "";
+  return '<div class="pathwrap"><span class="pathtext" title="' + escapeHtml(path) + '"><bdi>' +
     '<span class="dir">' + escapeHtml(dir) + '</span><span class="file">' + escapeHtml(file) + '</span></bdi></span>' +
-    '<button class="copybtn" data-copy="' + escapeHtml(path) + '" title="Copy full path">Copy</button>' + badges + '</div>';
+    advisor + '<button class="copybtn" data-copy="' + escapeHtml(path) + '" title="Copy full path">Copy</button></div>';
 }
 function sizeCellHtml(bytes, maxBytes) {
   const w = maxBytes > 0 ? Math.max(2, bytes / maxBytes * 100) : 0;
