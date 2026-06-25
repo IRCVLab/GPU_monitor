@@ -920,6 +920,7 @@ function renderAll() {
   mountColor = {}; mountPaths.forEach((p, i) => mountColor[p] = MOUNT_PALETTE[i % MOUNT_PALETTE.length]);
   currentMountIdx = 0; userMountFilter = topMountFilter = staleMountFilter = "";
   topRowsCache = null; staleRowsCache = null;
+  cleanupSelected.clear(); renderCleanupPanel();
 
   // Fast first paint: header + hero + controls now.
   renderHeader();
@@ -1007,6 +1008,7 @@ function init() {
   bindSort("#topTbl", topSort, renderTopFiles);
   bindSort("#staleHead", staleSort, renderStale);
   bindCopy();
+  bindCleanupSelection();
 
   // Hover-highlight EXACTLY the topmost tile under the cursor (e.target is the
   // top element), so a parent group is never highlighted by mistake.
