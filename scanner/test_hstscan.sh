@@ -140,6 +140,21 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 PYEOF
 pass "--out-dir writes parseable data/<hostname>.json in requested directory"
 
+CWDRUN="$TMP/cwd-default"
+mkdir -p "$CWDRUN/data"
+( cd "$CWDRUN" && "$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 5 "$TREE" \
+    >/dev/null 2>"$TMP/cwd-default.err" )
+CWD_RC=$?
+[ "$CWD_RC" -eq 0 ] || fail "default CWD output scan exited non-zero ($CWD_RC): $(cat "$TMP/cwd-default.err")"
+CWD_OUT="$CWDRUN/data/$HOSTNAME.json"
+[ -f "$CWD_OUT" ] || fail "default output did not create $CWD_OUT"
+$PY - "$CWD_OUT" <<'PYEOF' || fail "default CWD output JSON did not parse"
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    json.load(fh)
+PYEOF
+pass "default output writes data/<hostname>.json relative to current working directory"
+
 # 4. blocked contains noaccess.
 if [ "$BLOCKED_HAS_NOACCESS" = "1" ]; then
     pass "chmod-000 dir present in 'blocked'"
