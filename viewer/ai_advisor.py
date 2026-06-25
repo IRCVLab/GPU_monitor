@@ -535,7 +535,7 @@ def rule_recommendations(evidence_pack: dict[str, Any]) -> dict[str, Any]:
         )
     for blocked in evidence_pack.get("blocked", []):
         path = str(blocked.get("path") or "")
-        if not path.startswith("/"):
+        if not is_safe_target_path(path, mount_roots=evidence_pack.get("mount_roots", [])):
             continue
         recommendations.append(
             _make_rec(
