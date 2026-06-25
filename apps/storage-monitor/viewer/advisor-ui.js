@@ -69,7 +69,7 @@ function advisorStatusLabel() {
   if (advisorState.running) return "running";
   if (advisorState.error) return "failed";
   if (!advisorState.status.enabled) return "disabled";
-  return advisorState.status.cached ? "cached" : (advisorState.status.mode || advisorState.status.provider || "ready");
+  return advisorState.status.cached ? "cached" : (advisorState.status.mode || "ready");
 }
 function advisorApplyFilteredPayload() {
   advisorState.payload = typeof normalizeAdvisorPayload === "function"
@@ -168,12 +168,6 @@ function renderAdvisorPanel() {
   const list = document.getElementById("advisorRecommendations");
   const details = document.getElementById("advisorDetails");
   const exclusions = document.getElementById("advisorExclusions");
-  document.addEventListener("change", e => {
-    const sel = e.target && e.target.closest ? e.target.closest("[data-advisor-filter]") : null;
-    if (!sel) return;
-    advisorState.filters[sel.dataset.advisorFilter] = sel.value || "";
-    renderAdvisorPanel();
-  });
   const run = document.getElementById("advisorRun");
   const refresh = document.getElementById("advisorRefresh");
   if (status) {
