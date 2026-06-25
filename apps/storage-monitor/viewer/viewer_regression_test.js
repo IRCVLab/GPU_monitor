@@ -52,12 +52,17 @@ function loadViewer() {
   assert.deepStrictEqual(scriptFiles, [
     'data-client.js',
     'selection.js',
+    'advisor-client.js',
+    'advisor-ui.js',
+    'advisor-badges.js',
     'treemap.js',
     'tables.js',
     'app.js',
   ], 'viewer code must be loaded from ordered external scripts');
   assert(!/<style\b/i.test(html), 'viewer stylesheet must be externalized');
   assert(html.includes('<link rel="stylesheet" href="styles.css">'), 'index must link styles.css');
+  assert(html.includes('data-tab="advisor"'), 'index must expose an AI Advisor tab');
+  assert(html.includes('id="panel-advisor"'), 'index must contain the AI Advisor panel');
   const elements = new Map();
   const getEl = (id) => {
     if (!elements.has(id)) elements.set(id, new FakeElement('div'));
