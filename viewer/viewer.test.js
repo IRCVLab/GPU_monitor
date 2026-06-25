@@ -66,6 +66,32 @@ function testTreemapFidelity() {
   assert(ratio > 900 && ratio < 1100, `600GB/600MB area ratio should remain ~1024, got ${ratio}`);
 }
 
+
+function testAdvisorClientFilteringAndBadges() {
+  const client = require("./advisor-client.js");
+  const badges = require("./advisor-badges.js");
+  const ui = require("./advisor-ui.js");
+  const payload = client.normalizeAdvisorPayload({
+    host_id: "hinton",
+    summary: { health: "warning", headline: "review", top_drivers: [] },
+    recommendations: [
+      { id: "delete-cache", action: "delete", category: "pip-cache", target_path: "/data/cache", bytes: 100, risk: "low", suggested_next_step: "review-delete-command", badge: "AI: cache" },
+      { id: "move-log", action: "move", category: "log", target_path: "/data/logs", bytes: 50, risk: "medium", suggested_next_step: "move-to-hdd", badge: "AI: move" },
+    ],
+  }, { items: [{ type: "action", action: "move" }] });
+  assert.deepStrictEqual(payload.recommendations.map(r => r.id), ["delete-cache"], "action exclusions must filter advisor payloads");
+
+  badges.advisorSetRecommendations(payload);
+  assert.strictEqual(badges.advisorRecommendationsForPath("/data/cache/wheel.whl").length, 1, "badges match descendant paths");
+  const html = badges.advisorBadgesHtml("/data/cache/wheel.whl");
+  assert(html.includes("AI: cache"), "badge HTML includes recommendation label");
+  assert(!html.includes("checkbox"), "advisor badges must not add checkbox clutter");
+
+  assert.strictEqual(ui.isAdvisorSafeDeleteRecommendation(payload.recommendations[0]), true, "safe delete rec can connect to cleanup selection");
+  assert.strictEqual(ui.isAdvisorSafeDeleteRecommendation({ action: "move", target_path: "/data/logs", suggested_next_step: "move-to-hdd" }), false, "move recs cannot become delete commands");
+  assert.strictEqual(ui.isAdvisorSafeDeleteRecommendation({ action: "delete", target_path: "/home", suggested_next_step: "review-delete-command" }), false, "top-level delete recs are guarded");
+}
+
 function testDeleteCommandGeneration() {
   const { shellQuote, buildDeleteCommands } = require("./selection.js");
   assert.strictEqual(shellQuote("/data/a b/it's.txt"), "'/data/a b/it'\"'\"'s.txt'");
@@ -88,4 +114,5 @@ testHostManifestHelpers();
 testAdvisorHelpers();
 testTreemapFidelity();
 testDeleteCommandGeneration();
+testAdvisorClientFilteringAndBadges();
 console.log("viewer regression tests passed");

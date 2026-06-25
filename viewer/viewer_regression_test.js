@@ -113,6 +113,9 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
   assert.strictEqual(typeof viewer.cleanupCheckboxHtml, 'function', 'cleanupCheckboxHtml must be exposed for table rows');
   assert.strictEqual(typeof viewer.renderCleanupPanel, 'function', 'renderCleanupPanel must be exposed for selection updates');
   assert.strictEqual(typeof viewer.bindCleanupSelection, 'function', 'bindCleanupSelection must be exposed before app init');
+  assert.strictEqual(typeof viewer.fetchAdvisorStatus, 'function', 'advisor client must be exposed before app init');
+  assert.strictEqual(typeof viewer.renderAdvisorPanel, 'function', 'advisor UI must be exposed before app init');
+  assert.strictEqual(typeof viewer.advisorBadgesHtml, 'function', 'advisor badges must be exposed before table/treemap renderers');
 
   assert.strictEqual(viewer.shellQuotePath('/data/simple file.bin'), "'/data/simple file.bin'");
   assert.strictEqual(viewer.shellQuotePath("/data/O'Hara/checkpoint.pt"), "'/data/O'\"'\"'Hara/checkpoint.pt'");
