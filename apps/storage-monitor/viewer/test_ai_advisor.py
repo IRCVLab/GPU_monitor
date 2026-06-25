@@ -1,151 +1,80 @@
 #!/usr/bin/env python3
-"""Tests for the optional local AI cleanup advisor."""
+"""Tests for AI advisor safety invariants."""
 
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
 from ai_advisor import (
-    AdvisorConfig,
-    AdvisorValidationError,
-    build_advisor_response,
-    collect_readonly_metadata,
-    filter_excluded,
-    is_safe_target_path,
-    validate_recommendations,
+    ReadOnlyInspectionConfig,
+    collect_readonly_evidence,
+    readonly_config_from_env,
 )
 
 
-GiB = 1024 ** 3
+class ReadOnlyInspectionSafetyTest(unittest.TestCase):
+    def test_inspection_is_disabled_by_default_and_does_not_touch_paths(self) -> None:
+        config = readonly_config_from_env({})
 
+        evidence = collect_readonly_evidence(["/definitely/missing"], config)
 
-def synthetic_snapshot() -> dict:
-    return {
-        "schema_version": 1,
-        "hostname": "hinton",
-        "scan_started_unix": 1719200000,
-        "mounts": [
-            {"path": "/", "df_use_pct": 64, "df_avail": 45 * GiB, "tree": {"name": "/", "bytes": 1, "children": []}},
-            {"path": "/ssd", "df_use_pct": 96, "df_avail": 8 * GiB, "tree": {"name": "/ssd", "bytes": 1, "children": []}},
-            {"path": "/data", "df_use_pct": 52, "df_avail": 500 * GiB, "tree": {"name": "/data", "bytes": 1, "children": []}},
-        ],
-        "top_files": [
-            {"path": "/home/alice/.cache/pip/wheels/pkg.whl", "bytes": 7 * GiB, "uid": 1000, "owner": "alice", "mtime": 1710000000},
-            {"path": "/home/alice/miniconda3/envs/nlp/lib/libtorch.so", "bytes": 12 * GiB, "uid": 1000, "owner": "alice", "mtime": 1700000000},
-            {"path": "/ssd/alice/runs/exp1/checkpoint_epoch_001.pt", "bytes": 40 * GiB, "uid": 1000, "owner": "alice", "mtime": 1711000000},
-            {"path": "/ssd/alice/runs/exp1/events.out.tfevents.1", "bytes": 2 * GiB, "uid": 1000, "owner": "alice", "mtime": 1711000000},
-            {"path": "/data/proj/a/model.safetensors", "bytes": 5 * GiB, "uid": 1001, "owner": "bob", "mtime": 1705000000},
-            {"path": "/data/proj/b/model.safetensors", "bytes": 5 * GiB, "uid": 1001, "owner": "bob", "mtime": 1705000001},
-        ],
-        "stale": [
-            {"path": "/data/archive/old-dataset.tar", "bytes": 100 * GiB, "uid": 1002, "owner": "carol", "mtime": 1600000000, "age_days": 900},
-        ],
-        "blocked": [{"path": "/home/private", "reason": "permission denied"}],
-    }
+        self.assertFalse(config.enabled)
+        self.assertEqual(evidence["enabled"], False)
+        self.assertEqual(evidence["items"], [])
+        self.assertEqual(evidence["rejected"], [])
 
-
-class AdvisorAnalyzerTest(unittest.TestCase):
-    def test_rule_only_recommendations_cover_cache_env_move_duplicate_and_blocked_scan(self) -> None:
-        payload = build_advisor_response(
-            synthetic_snapshot(),
-            host_id="hinton",
-            exclusions=[],
-            config=AdvisorConfig(enabled=False, provider="mock", model="qwen3.6:27b"),
-        )
-        self.assertEqual(payload["schema_version"], 1)
-        self.assertEqual(payload["host_id"], "hinton")
-        self.assertEqual(payload["mode"], "rule-only")
-        recs = payload["recommendations"]
-        by_category = {rec["category"]: rec for rec in recs}
-        self.assertEqual(by_category["pip-cache"]["action"], "delete")
-        self.assertEqual(by_category["pip-cache"]["suggested_next_step"], "review-delete-command")
-        self.assertEqual(by_category["env"]["action"], "investigate")
-        ssd_checkpoint = next(rec for rec in recs if rec["category"] == "checkpoint" and rec["target_path"].startswith("/ssd/"))
-        self.assertEqual(ssd_checkpoint["action"], "move")
-        self.assertEqual(ssd_checkpoint["suggested_next_step"], "move-to-hdd")
-        self.assertEqual(by_category["duplicate"]["action"], "dedupe")
-        self.assertEqual(by_category["blocked-scan"]["action"], "investigate")
-        self.assertTrue(all(rec["target_path"].startswith("/") for rec in recs))
-
-    def test_safety_filter_rejects_top_level_system_relative_and_mount_roots(self) -> None:
-        mount_roots = ["/", "/ssd", "/data"]
-        for bad in ["/", "/home", "/ssd", "/data", "relative/path", "/tmp/a\0b", "/etc/passwd", "/proc/cpuinfo"]:
-            self.assertFalse(is_safe_target_path(bad, mount_roots=mount_roots), bad)
-        self.assertTrue(is_safe_target_path("/home/alice/.cache/pip", mount_roots=mount_roots))
-        self.assertTrue(is_safe_target_path("/ssd/alice/run/checkpoint.pt", mount_roots=mount_roots))
-
-    def test_validate_recommendations_rejects_malformed_or_unsafe_model_output(self) -> None:
-        malformed = {"schema_version": 1, "host_id": "hinton", "recommendations": [{"target_path": "/"}]}
-        with self.assertRaises(AdvisorValidationError):
-            validate_recommendations(malformed, mount_roots=["/"])
-
-    def test_validate_recommendations_rejects_blocked_scan_root_target(self) -> None:
-        unsafe = {
-            "schema_version": 1,
-            "host_id": "hinton",
-            "summary": {"health": "warning", "headline": "blocked", "top_drivers": []},
-            "recommendations": [{
-                "id": "blocked-root", "action": "investigate", "category": "blocked-scan",
-                "target_path": "/", "related_paths": [], "mount": "/", "owner": "", "bytes": 0,
-                "priority": "low", "confidence": 0.2, "risk": "high", "badge": "AI: blocked scan",
-                "reason_short": "Blocked root", "reason_detail": "Root is unsafe",
-                "evidence": [{"type": "blocked_path", "label": "blocked path", "value": "/"}],
-                "suggested_next_step": "inspect-owner",
-            }],
-        }
-        with self.assertRaises(AdvisorValidationError):
-            validate_recommendations(unsafe, mount_roots=["/"])
-
-    def test_exclusions_filter_recommendation_path_pattern_and_action(self) -> None:
-        payload = build_advisor_response(synthetic_snapshot(), host_id="hinton", exclusions=[], config=AdvisorConfig(enabled=False))
-        filtered = filter_excluded(
-            payload,
-            [
-                {"type": "action", "action": "move"},
-                {"type": "path", "path": "/home/alice/.cache/pip"},
-                {"type": "pattern", "pattern": "/data/proj/**"},
-            ],
-        )
-        categories = {rec["category"] for rec in filtered["recommendations"]}
-        self.assertNotIn("checkpoint", categories)
-        self.assertNotIn("pip-cache", categories)
-        self.assertNotIn("duplicate", categories)
-
-
-class ReadonlyCollectorTest(unittest.TestCase):
-    def test_readonly_metadata_is_disabled_by_default(self) -> None:
-        with self.assertRaises(PermissionError):
-            collect_readonly_metadata(["/home/alice/project"], AdvisorConfig(readonly_inspection=False, allowed_roots=["/home"]))
-
-    def test_readonly_metadata_is_allowlisted_bounded_and_content_free(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="storage-viz-ai-ro.") as tmp:
-            root = Path(tmp).resolve()
-            inside = root / "project"
+    def test_rejects_paths_without_allowlisted_bounded_metadata_authority(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="storage-viz-ai-safe.") as root, tempfile.TemporaryDirectory(
+            prefix="storage-viz-ai-outside."
+        ) as outside:
+            allowed = Path(root).resolve()
+            inside = allowed / "project"
             inside.mkdir()
-            (inside / "notes.txt").write_text("secret contents must not be returned", encoding="utf-8")
-            cfg = AdvisorConfig(readonly_inspection=True, allowed_roots=[str(root)], max_inspect_paths=2, max_inspect_depth=1, max_inspect_entries=10)
-            evidence = collect_readonly_metadata([str(inside)], cfg)
-            self.assertEqual(len(evidence), 1)
-            item = evidence[0]
-            self.assertEqual(item["path"], str(inside))
-            self.assertIn("entry_count", item)
-            self.assertNotIn("secret", repr(item).lower())
-            with self.assertRaises(PermissionError):
-                collect_readonly_metadata(["/etc"], cfg)
-            if hasattr(Path, "symlink_to"):
-                link = root / "escape"
-                try:
-                    link.symlink_to("/etc")
-                except OSError:
-                    return
-                with self.assertRaises(PermissionError):
-                    collect_readonly_metadata([str(link)], cfg)
+            escape = inside / "escape"
+            escape.symlink_to(Path(outside).resolve(), target_is_directory=True)
+            config = ReadOnlyInspectionConfig(enabled=True, allowed_roots=(allowed,))
+
+            evidence = collect_readonly_evidence(
+                ["relative/path", "/", "/etc", "bad\x00path", str(Path(outside) / "x"), str(escape)],
+                config,
+            )
+
+        self.assertEqual(evidence["items"], [])
+        rejected = {item["path"]: item["reason"] for item in evidence["rejected"]}
+        self.assertEqual(rejected["relative/path"], "relative")
+        self.assertEqual(rejected["/"], "root")
+        self.assertEqual(rejected["/etc"], "system")
+        self.assertEqual(rejected["bad\x00path"], "null-byte")
+        self.assertEqual(rejected[str(Path(outside) / "x")], "outside-allowed-roots")
+        self.assertEqual(rejected[str(escape)], "symlink-escape")
+
+    def test_collects_metadata_only_without_file_contents_or_directory_walks(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="storage-viz-ai-evidence.") as root:
+            allowed = Path(root).resolve()
+            target = allowed / "run"
+            nested = target / "nested"
+            nested.mkdir(parents=True)
+            (target / "secret.txt").write_text("TOP_SECRET_CONTENT", encoding="utf-8")
+            (target / "model.ckpt").write_bytes(b"ckpt")
+            (nested / "ignored.log").write_text("should not be listed at depth zero", encoding="utf-8")
+            config = ReadOnlyInspectionConfig(enabled=True, allowed_roots=(allowed,), max_depth=0, max_entries=10)
+
+            evidence = collect_readonly_evidence([str(target)], config)
+
+        self.assertEqual(evidence["enabled"], True)
+        self.assertEqual(evidence["rejected"], [])
+        self.assertEqual(len(evidence["items"]), 1)
+        item = evidence["items"][0]
+        self.assertEqual(item["path"], str(target))
+        self.assertEqual(item["kind"], "directory")
+        self.assertEqual(item["entry_count"], 3)
+        self.assertEqual(item["extension_counts"], {".ckpt": 1, ".txt": 1, "<dir>": 1})
+        serialized = json.dumps(evidence, sort_keys=True)
+        self.assertNotIn("TOP_SECRET_CONTENT", serialized)
+        self.assertNotIn("ignored.log", serialized)
 
 
 if __name__ == "__main__":
