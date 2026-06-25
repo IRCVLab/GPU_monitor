@@ -6,7 +6,7 @@ Tree nodes carry other_bytes (sum of pruned small children) so the treemap
 stays size-accurate: a node's bytes == sum(child.bytes) + other_bytes.
 """
 import json
-import pathlib
+import os
 import random
 import sys
 
@@ -386,9 +386,8 @@ doc = {
     "blocked": blocked,
 }
 
-out = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parent / "hinton.sample.json"
-out.parent.mkdir(parents=True, exist_ok=True)
-with out.open("w", encoding="utf-8") as f:
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hinton.sample.json")
+with open(out, "w") as f:
     json.dump(doc, f, indent=2)
 
 # ---- sanity check: each node bytes == sum(children)+other_bytes ----
