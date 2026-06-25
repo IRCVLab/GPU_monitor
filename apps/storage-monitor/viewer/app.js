@@ -38,6 +38,7 @@ function showTab(name) {
     if (name === "treemap") renderTreemap();
     if (name === "users") { if (!usersInited) renderUsers(); else if (usersChart) usersChart.resize(); }
     if (name === "stale") renderStaleWindow();
+    if (name === "advisor" && typeof renderAdvisorPanel === "function") renderAdvisorPanel();
   });
 }
 
@@ -64,6 +65,7 @@ function renderAll() {
     renderTreemap();           // builds only the active mount's tree
     renderTopFiles();          // 200 rows
     prepStale();               // computes filtered set + caption; window paints on tab show
+    if (typeof advisorRefreshAnnotations === "function") advisorRefreshAnnotations();
     // users chart inits lazily on first Users-tab activation
   });
 }
@@ -80,6 +82,7 @@ async function selectHost(host) {
     return;
   }
   renderAll();
+  if (typeof onAdvisorHostChanged === "function") onAdvisorHostChanged(host, DATA);
 }
 
 /* ---- Last-updated label + optional server-side rescan ---- */
@@ -159,6 +162,7 @@ async function init() {
   bindCopy();
   bindCleanupSelection();
   if (typeof bindTreemapCleanupMode === "function") bindTreemapCleanupMode();
+  if (typeof initAdvisorUI === "function") initAdvisorUI();
 
   // Hover-highlight EXACTLY the topmost tile under the cursor (e.target is the
   // top element), so a parent group is never highlighted by mistake.
