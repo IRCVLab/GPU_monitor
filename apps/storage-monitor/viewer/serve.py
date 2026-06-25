@@ -21,6 +21,7 @@ Environment:
 from __future__ import annotations
 
 import contextlib
+from dataclasses import replace
 import http.server
 import json
 import os
@@ -179,6 +180,15 @@ def _ai_status() -> dict:
     }
 
 
+def _normalize_ai_language(value: object, fallback: str = "ko") -> str:
+    raw = str(value or fallback or "ko").strip().lower().replace("_", "-")
+    if raw.startswith("ko"):
+        return "ko"
+    if raw.startswith("en"):
+        return "en"
+    return fallback if fallback in {"ko", "en"} else "ko"
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(VIEWER_DIR), **kwargs)
@@ -261,13 +271,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except (TypeError, ValueError):
                 max_items = AI_CONFIG.max_recommendations
             max_items = max(1, min(max_items, AI_CONFIG.max_recommendations))
+            request_config = replace(
+                AI_CONFIG,
+                output_language=_normalize_ai_language(body.get("language"), AI_CONFIG.output_language),
+            )
             try:
                 snapshot = load_snapshot(snapshot_path)
                 payload = build_advisor_response(
                     snapshot,
                     host_id=host_id,
                     exclusions=exclusions,
-                    config=AI_CONFIG,
+                    config=request_config,
                     max_items=max_items,
                 )
             except Exception as exc:

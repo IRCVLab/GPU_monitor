@@ -22,6 +22,11 @@
       <div class="host-pick">
         <span class="head-meta" id="lastUpd" title="last scan time"></span>
         <button id="rescanBtn" class="rescan-btn" title="Run a fresh scan now">↻ Rescan</button>
+        <div class="advisor-global" id="advisorGlobal">
+          <button id="advisorGlobalRun" class="advisor-global-run" type="button" disabled>AI 분석</button>
+          <span id="advisorGlobalStatus" class="advisor-global-status disabled">AI 비활성</span>
+          <span id="advisorGlobalCount" class="advisor-global-count">대기</span>
+        </div>
         <label for="hostSel">Host</label><select id="hostSel"></select>
       </div>
     </div>
@@ -123,7 +128,7 @@
     <!-- AI ADVISOR -->
     <section class="panel" id="panel-advisor">
       <h2 class="panel-title">AI Cleanup Advisor</h2>
-      <p class="panel-sub">Optional local advisor: deterministic evidence first, local LLM second, no execution authority.</p>
+      <p class="panel-sub">AI 분석은 상단 어디서든 실행합니다. 결과는 treemap, Top files, Stale에 배지로 붙고 이 탭은 상세/제외 관리용입니다.</p>
       <div class="advisor-card">
         <div class="advisor-toolbar">
           <div id="advisorStatus" class="advisor-status disabled">AI Advisor not checked yet.</div>

@@ -1,7 +1,7 @@
 "use strict";
 
 function advisorBadgeEscape(value) {
-  if (typeof htmlEscape === "function") return advisorBadgeEscape(value);
+  if (typeof htmlEscape === "function") return htmlEscape(value);
   if (typeof escapeHtml === "function") return escapeHtml(value);
   return String(value == null ? "" : value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }

@@ -30,7 +30,8 @@ The advisor cannot execute filesystem mutations. The safe path is:
 schema-v1 snapshot
   -> deterministic analyzer builds compact evidence
   -> optional read-only metadata collector adds bounded metadata
-  -> optional local LLM summarizes/prioritizes that evidence
+  -> optional local LLM pass 1 analyzes/prioritizes that evidence in English
+  -> optional local LLM pass 2 translates the validated user-facing output to Korean
   -> schema validator and safety filters drop invalid advice
   -> viewer displays badges/details/exclusions
   -> humans copy/review commands when appropriate
@@ -51,6 +52,26 @@ inspection and returns sanitized metadata only.
 
 Tests and CI must pass in `rule-only` or `mock` mode. A live model server is not
 required for correctness checks.
+
+`mock` is for tests and UI demos only. Operator-facing deployments should use
+`ollama`, `openai-compatible`, or rule-only fallback so the UI does not pretend a
+real model ran when no model server is available.
+
+## Prompting contract
+
+The LLM path is intentionally two-pass:
+
+1. **Analyzer pass**: Think and write structured JSON in English. It must use
+   only the evidence pack, avoid delete-heavy guesses, and prefer actions such
+   as move/archive/dedupe/investigate when the evidence is not a rebuildable
+   cache.
+2. **Translator pass**: Translate the validated analyzer JSON into Korean
+   user-facing fields while preserving ids, paths, actions, risk, confidence,
+   evidence, and suggested next steps.
+
+The final dashboard output is Korean by default (`STORAGE_VIZ_AI_OUTPUT_LANGUAGE=ko`).
+Clients also send `language=ko` with `/ai/recommend`, and the server applies that
+request-level language before building the response.
 
 ## Local model default
 
@@ -102,8 +123,10 @@ Inspection rules:
 
 - Existing dashboard rendering must not wait for AI.
 - Static/offline viewer mode should show a disabled/non-blocking AI state.
-- Badges may annotate treemap tiles and Top/Stale rows but must not cover core
-  size labels or cleanup-selection markers.
+- AI analysis is launched from the global header control, not only from the AI
+  tab. The AI tab remains for compact grouped summaries, details, and exclusions.
+- Badges annotate treemap tiles and Top/Stale rows but must not cover core size
+  labels or cleanup-selection markers.
 - Badge clicks open details. They do not toggle cleanup selection directly.
 - Only safe delete recommendations with `suggested_next_step=review-delete-command`
   may call the existing cleanup command panel.

@@ -92,6 +92,74 @@ function testAdvisorClientFilteringAndBadges() {
   assert.strictEqual(ui.isAdvisorSafeDeleteRecommendation({ action: "delete", target_path: "/home", suggested_next_step: "review-delete-command" }), false, "top-level delete recs are guarded");
 }
 
+function testAdvisorBadgeEscapingUsesSharedEscaperWithoutRecursion() {
+  const badges = require("./advisor-badges.js");
+  const oldHtmlEscape = global.htmlEscape;
+  global.htmlEscape = value => "escaped:" + String(value).replace(/</g, "&lt;");
+  try {
+    badges.advisorSetRecommendations({
+      recommendations: [
+        { id: "x<1", action: "archive", target_path: "/data/archive.tar", badge: "AI: <archive>", reason_short: "큰 파일" },
+      ],
+    });
+    const html = badges.advisorBadgesHtml("/data/archive.tar");
+    assert(html.includes("escaped:x&lt;1"), "shared htmlEscape should be used for data attributes");
+    assert(html.includes("escaped:AI: &lt;archive>"), "shared htmlEscape should be used for labels");
+  } finally {
+    if (oldHtmlEscape === undefined) delete global.htmlEscape;
+    else global.htmlEscape = oldHtmlEscape;
+  }
+}
+
+
+
+function testAdvisorGlobalAndCrossSurfaceContracts() {
+  const client = require("./advisor-client.js");
+  const badges = require("./advisor-badges.js");
+  const payload = client.normalizeAdvisorPayload({
+    host_id: "hinton",
+    summary: { health: "critical", headline: "한국어 요약", top_drivers: ["AI: cache: /data/cache"] },
+    recommendations: [
+      { id: "cache", action: "delete", category: "pip-cache", target_path: "/data/cache", bytes: 100, risk: "low", suggested_next_step: "review-delete-command", badge: "AI: 캐시 정리", reason_short: "pip 캐시가 큽니다.", reason_detail: "다시 받을 수 있는 캐시입니다." },
+      { id: "move", action: "move", category: "checkpoint", target_path: "/data/logs/run.ckpt", bytes: 50, risk: "medium", suggested_next_step: "move-to-hdd", badge: "AI: HDD 이동", reason_short: "SSD 압박입니다.", reason_detail: "HDD로 옮기세요." },
+    ],
+  }, []);
+  assert.strictEqual(client.advisorOutputLanguage(payload), "ko", "final advisor output must be Korean-facing");
+  const grouped = client.groupAdvisorRecommendations(payload.recommendations);
+  assert.deepStrictEqual(grouped.map(g => g.action), ["delete", "move"], "recommendations should be grouped by action for compact UI");
+  badges.advisorSetRecommendations(payload);
+  assert.strictEqual(badges.advisorRecommendationsForPath("/data/cache/wheels/a.whl").length, 1, "top/stale descendant paths get AI badges");
+  assert.strictEqual(badges.advisorRecommendationsForPath("/data/logs/run.ckpt").length, 1, "file path rows get AI badges");
+}
+
+async function testAdvisorRunIsGlobalNotTabScoped() {
+  const client = require("./advisor-client.js");
+  const oldFetch = global.fetch;
+  const oldRender = global.renderAdvisorPanel;
+  const oldRefresh = global.refreshAdvisorBadges;
+  let rendered = 0, refreshed = 0;
+  global.renderAdvisorPanel = () => { rendered++; };
+  global.refreshAdvisorBadges = () => { refreshed++; };
+  global.fetch = async (url) => {
+    assert.strictEqual(String(url), "/ai/recommend");
+    return { ok: true, json: async () => ({
+      schema_version: 1, host_id: "hinton", mode: "rule+llm",
+      summary: { health: "warning", headline: "한국어", top_drivers: [] },
+      recommendations: [{ id: "x", action: "archive", category: "archive", target_path: "/data/x.tar", badge: "AI: 보관 검토", reason_short: "큰 압축 파일입니다.", suggested_next_step: "inspect-owner" }],
+    }) };
+  };
+  try {
+    const payload = await client.runAdvisor({ hostId: "hinton", max_items: 1 });
+    assert.strictEqual(payload.mode, "rule+llm");
+    assert.strictEqual(client.advisorState.recommendations.length, 1);
+    assert(rendered > 0, "global run should update compact advisor surfaces");
+    assert(refreshed > 0, "global run should refresh treemap/top/stale badges");
+  } finally {
+    global.fetch = oldFetch;
+    global.renderAdvisorPanel = oldRender;
+    global.refreshAdvisorBadges = oldRefresh;
+  }
+}
 
 async function testAdvisorStatusFallsBackToSidecarPort() {
   const client = require("./advisor-client.js");
@@ -141,6 +209,9 @@ async function main() {
   testTreemapFidelity();
   testDeleteCommandGeneration();
   testAdvisorClientFilteringAndBadges();
+  testAdvisorBadgeEscapingUsesSharedEscaperWithoutRecursion();
+  testAdvisorGlobalAndCrossSurfaceContracts();
+  await testAdvisorRunIsGlobalNotTabScoped();
   await testAdvisorStatusFallsBackToSidecarPort();
   console.log("viewer regression tests passed");
 }

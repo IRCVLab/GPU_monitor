@@ -14,10 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ai_advisor import (
     AdvisorConfig,
     AdvisorValidationError,
+    advisor_analysis_prompt,
+    advisor_translation_prompt,
     build_advisor_response,
+    build_evidence_pack,
     collect_readonly_metadata,
     filter_excluded,
     is_safe_target_path,
+    rule_recommendations,
     validate_recommendations,
 )
 
@@ -94,6 +98,18 @@ class AdvisorAnalyzerTest(unittest.TestCase):
         self.assertEqual(by_category["blocked-scan"]["action"], "investigate")
         self.assertTrue(all(rec["target_path"].startswith("/") for rec in recs))
 
+    def test_evidence_pack_deduplicates_repeated_candidate_evidence(self) -> None:
+        snapshot = synthetic_snapshot()
+        duplicate_item = {"path": "/data/archive/repeated.tar", "bytes": 10 * GiB, "uid": 1002, "owner": "carol", "mtime": 1600000000}
+        snapshot["top_files"].append(dict(duplicate_item))
+        snapshot["stale"].append(dict(duplicate_item))
+
+        pack = build_evidence_pack(snapshot, AdvisorConfig(max_context_items=50), [])
+        target = next(c for c in pack["candidates"] if c["target_path"] == "/data/archive/repeated.tar")
+        evidence_keys = [(ev.get("type"), ev.get("label"), ev.get("value")) for ev in target["evidence"]]
+
+        self.assertEqual(len(evidence_keys), len(set(evidence_keys)))
+
     def test_safety_filter_rejects_top_level_system_relative_and_mount_roots(self) -> None:
         mount_roots = ["/", "/ssd", "/data"]
         for bad in ["/", "/home", "/ssd", "/data", "relative/path", "/tmp/a\0b", "/etc/passwd", "/proc/cpuinfo"]:
@@ -142,6 +158,34 @@ class AdvisorAnalyzerTest(unittest.TestCase):
         blocked_scan_targets = [rec["target_path"] for rec in payload["recommendations"] if rec["category"] == "blocked-scan"]
         self.assertEqual(blocked_scan_targets, ["/home/private"])
         self.assertTrue(all(is_safe_target_path(target, mount_roots=["/", "/ssd", "/data"]) for target in blocked_scan_targets))
+
+
+    def test_rule_only_fallback_returns_korean_user_facing_output(self) -> None:
+        payload = build_advisor_response(
+            synthetic_snapshot(),
+            host_id="hinton",
+            exclusions=[],
+            config=AdvisorConfig(enabled=False, provider="ollama", model="qwen3.6:27b"),
+            max_items=3,
+        )
+        self.assertEqual(payload["output_language"], "ko")
+        self.assertIn("추천", payload["summary"]["headline"])
+        self.assertTrue(payload["recommendations"])
+        for rec in payload["recommendations"]:
+            self.assertRegex(rec["badge"], r"AI: ")
+            self.assertRegex(rec["reason_short"], r"[가-힣]")
+            self.assertRegex(rec["reason_detail"], r"[가-힣]")
+
+    def test_llm_prompt_pipeline_is_two_pass_english_analysis_then_korean_translation(self) -> None:
+        pack = build_evidence_pack(synthetic_snapshot(), AdvisorConfig(max_context_items=3), [])
+        rule_payload = rule_recommendations(pack)
+        analysis_prompt = advisor_analysis_prompt(pack, rule_payload)
+        translation_prompt = advisor_translation_prompt(rule_payload)
+        self.assertIn("Think in English", analysis_prompt)
+        self.assertIn("Do not translate", analysis_prompt)
+        self.assertIn("Translate", translation_prompt)
+        self.assertIn("Korean", translation_prompt)
+        self.assertNotEqual(analysis_prompt, translation_prompt)
 
     def test_exclusions_filter_recommendation_path_pattern_and_action(self) -> None:
         payload = build_advisor_response(synthetic_snapshot(), host_id="hinton", exclusions=[], config=AdvisorConfig(enabled=False))

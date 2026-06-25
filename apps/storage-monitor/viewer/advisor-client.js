@@ -83,6 +83,34 @@ function normalizeAdvisorPayload(payload, exclusions) {
   return out;
 }
 
+
+function advisorOutputLanguage(payload) {
+  if (payload && payload.output_language) return String(payload.output_language).toLowerCase();
+  const text = JSON.stringify([payload && payload.summary, payload && payload.recommendations]);
+  return /[가-힣]/.test(text) ? "ko" : "unknown";
+}
+
+function groupAdvisorRecommendations(recommendations) {
+  const order = ["delete", "move", "dedupe", "archive", "investigate", "keep"];
+  const map = new Map();
+  for (const rec of Array.isArray(recommendations) ? recommendations : []) {
+    const action = String(rec && rec.action || "investigate");
+    if (!map.has(action)) map.set(action, { action, recommendations: [], bytes: 0, priority: "low" });
+    const group = map.get(action);
+    group.recommendations.push(rec);
+    group.bytes += Number(rec && rec.bytes) || 0;
+    if (["critical", "high", "medium", "low"].indexOf(rec.priority) < ["critical", "high", "medium", "low"].indexOf(group.priority)) group.priority = rec.priority;
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    const ai = order.indexOf(a.action), bi = order.indexOf(b.action);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+  });
+}
+
+function advisorActionLabel(action) {
+  return { delete: "삭제 검토", move: "HDD 이동", dedupe: "중복 확인", archive: "보관 검토", investigate: "확인 필요", keep: "유지" }[action] || "검토";
+}
+
 function advisorPathDepth(path) {
   return String(path || "").split("/").filter(Boolean).length;
 }
@@ -169,7 +197,7 @@ async function runAdvisor(options) {
       body: JSON.stringify({
         host_id: hostId,
         exclusions: advisorState.exclusions,
-        language: opts.language || "en",
+        language: opts.language || "ko",
         max_items: opts.max_items || 50,
         force_refresh: !!opts.force_refresh,
       }),
@@ -227,6 +255,9 @@ if (typeof globalThis !== "undefined") {
     filterExcludedRecommendations,
     recommendationExcluded,
     normalizeAdvisorPayload,
+    advisorOutputLanguage,
+    groupAdvisorRecommendations,
+    advisorActionLabel,
     isDeleteSelectableRecommendation,
   });
 }
@@ -238,6 +269,9 @@ if (typeof module !== "undefined" && module.exports) {
     filterExcludedRecommendations,
     recommendationExcluded,
     normalizeAdvisorPayload,
+    advisorOutputLanguage,
+    groupAdvisorRecommendations,
+    advisorActionLabel,
     isDeleteSelectableRecommendation,
     loadAdvisorExclusions,
     saveAdvisorExclusions,
