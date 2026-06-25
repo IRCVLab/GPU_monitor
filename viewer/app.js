@@ -51,6 +51,7 @@ function renderAll() {
   mountColor = {}; mountPaths.forEach((p, i) => mountColor[p] = MOUNT_PALETTE[i % MOUNT_PALETTE.length]);
   currentMountIdx = 0; userMountFilter = topMountFilter = staleMountFilter = "";
   topRowsCache = null; staleRowsCache = null;
+  cleanupSelected.clear(); renderCleanupPanel();
 
   // Fast first paint: header + hero + controls now.
   renderHeader();
@@ -81,7 +82,7 @@ async function selectHost(host) {
   renderAll();
 }
 
-/* ---- Last-updated label + on-demand rescan (server runs the scan as root) ---- */
+/* ---- Last-updated label + optional server-side rescan ---- */
 function fmtRel(unix) {
   if (!unix) return "—";
   const s = Math.max(0, Math.floor(Date.now() / 1000) - unix);
@@ -98,11 +99,20 @@ function updateLastUpdated() {
   } else el.textContent = "";
 }
 let rescanTimer = null, sawScanRunning = false;
+function setRescanUnsupported(btn, message) {
+  btn.disabled = true;
+  btn.textContent = "Manual rescan";
+  btn.title = message || "Manual rescan only: run scanner separately and refresh.";
+}
 async function pollRescan() {
   let st;
   try { st = await (await fetch("/rescan-status", { cache: "no-store" })).json(); }
   catch (e) { return; }   // endpoint not available (e.g. plain static server)
   const btn = document.getElementById("rescanBtn"); if (!btn) return;
+  if (st.supported === false) {
+    setRescanUnsupported(btn, st.message);
+    return;
+  }
   if (st.scanning) {
     sawScanRunning = true;
     const secs = Math.max(0, Math.floor(Date.now() / 1000 - st.started));
@@ -122,14 +132,23 @@ async function pollRescan() {
 async function triggerRescan() {
   const btn = document.getElementById("rescanBtn");
   btn.disabled = true; btn.textContent = "⟳ Starting…";
-  try { await fetch("/rescan", { method: "POST" }); } catch (e) {}
+  try {
+    const r = await fetch("/rescan", { method: "POST" });
+    if (r.status === 503) {
+      const body = await r.json().catch(() => ({}));
+      setRescanUnsupported(btn, body.error || body.message);
+      return;
+    }
+  } catch (e) {}
   sawScanRunning = true;
   pollRescan();
 }
 
 let resizeTimer = null;
-function init() {
+async function init() {
+  await loadHostManifest();
   const sel = document.getElementById("hostSel");
+  sel.innerHTML = "";
   HOSTS.forEach(h => { const o = document.createElement("option"); o.value = h.id; o.textContent = h.label; sel.appendChild(o); });
   sel.onchange = () => { const h = HOSTS.find(x => x.id === sel.value); if (h) selectHost(h); };
 
@@ -138,6 +157,7 @@ function init() {
   bindSort("#topTbl", topSort, renderTopFiles);
   bindSort("#staleHead", staleSort, renderStale);
   bindCopy();
+  bindCleanupSelection();
 
   // Hover-highlight EXACTLY the topmost tile under the cursor (e.target is the
   // top element), so a parent group is never highlighted by mistake.

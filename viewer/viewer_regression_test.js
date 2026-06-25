@@ -46,7 +46,18 @@ class FakeElement {
 
 function loadViewer() {
   const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-  const script = html.match(/<script>\n([\s\S]*)<\/script>/)[1];
+  const scriptFiles = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)]
+    .map(m => m[1])
+    .filter(src => src !== 'echarts.min.js');
+  assert.deepStrictEqual(scriptFiles, [
+    'data-client.js',
+    'selection.js',
+    'treemap.js',
+    'tables.js',
+    'app.js',
+  ], 'viewer code must be loaded from ordered external scripts');
+  assert(!/<style\b/i.test(html), 'viewer stylesheet must be externalized');
+  assert(html.includes('<link rel="stylesheet" href="styles.css">'), 'index must link styles.css');
   const elements = new Map();
   const getEl = (id) => {
     if (!elements.has(id)) elements.set(id, new FakeElement('div'));
@@ -81,7 +92,10 @@ function loadViewer() {
   };
   context.global = context;
   vm.createContext(context);
-  vm.runInContext(script, context, { filename: 'viewer/index.html' });
+  for (const src of scriptFiles) {
+    const code = fs.readFileSync(path.join(__dirname, src), 'utf8');
+    vm.runInContext(code, context, { filename: 'viewer/' + src });
+  }
   return context;
 }
 
@@ -93,15 +107,15 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
   assert.strictEqual(typeof viewer.buildDeleteCommands, 'function', 'buildDeleteCommands must be exposed for command generation');
 
   assert.strictEqual(viewer.shellQuotePath('/data/simple file.bin'), "'/data/simple file.bin'");
-  assert.strictEqual(viewer.shellQuotePath("/data/O'Hara/checkpoint.pt"), "'/data/O'\\''Hara/checkpoint.pt'");
+  assert.strictEqual(viewer.shellQuotePath("/data/O'Hara/checkpoint.pt"), "'/data/O'\"'\"'Hara/checkpoint.pt'");
 
   const commands = viewer.buildDeleteCommands([
     { path: '/data/simple file.bin' },
     { path: "/data/O'Hara/checkpoint.pt" },
   ]);
-  assert.deepStrictEqual(commands.split('\n'), [
+  assert.deepStrictEqual(Array.from(commands.split('\n')), [
     "sudo rm -rf -- '/data/simple file.bin'",
-    "sudo rm -rf -- '/data/O'\\''Hara/checkpoint.pt'",
+    "sudo rm -rf -- '/data/O'\"'\"'Hara/checkpoint.pt'",
   ]);
 })();
 

@@ -11,8 +11,8 @@ PROJ="$(cd "$PROJ" && pwd)"
 
 PORT="${STORAGE_VIZ_PORT:-${PORT:-8088}}"
 BIND="${STORAGE_VIZ_BIND:-${BIND:-0.0.0.0}}"
-# serve.py runs scans directly for the Rescan button; root keeps installed rescans complete.
-SERVE_USER="${STORAGE_VIZ_SERVE_USER:-${SERVE_USER:-root}}"
+# serve.py is manual-only by default; scheduled/manual scans stay in the root scan service.
+SERVE_USER="${STORAGE_VIZ_SERVE_USER:-${SERVE_USER:-${SUDO_USER:-root}}}"
 DATA_DIR="${STORAGE_VIZ_DATA_DIR:-${DATA_DIR:-$PROJ/data}}"
 SCAN_TARGETS="${STORAGE_VIZ_SCAN_TARGETS:-${SCAN_TARGETS:-/ /data /data1 /data3}}"
 SCAN_TIME="${STORAGE_VIZ_SCAN_TIME:-${SCAN_TIME:-02:00}}"
@@ -32,7 +32,7 @@ Environment overrides:
   STORAGE_VIZ_SCAN_TARGETS='/ /data'        scanner targets (default: / /data /data1 /data3)
   STORAGE_VIZ_PORT=8088                    dashboard port
   STORAGE_VIZ_BIND=0.0.0.0                 dashboard bind address
-  STORAGE_VIZ_SERVE_USER=root              systemd HTTP service user; root gives complete on-demand rescans
+  STORAGE_VIZ_SERVE_USER=$SERVE_USER              systemd HTTP service user; rescan stays manual-only by default
   STORAGE_VIZ_SCAN_TIME=02:00              nightly timer time (HH:MM)
   UNIT_DIR=/etc/systemd/system             systemd unit output directory
 
@@ -80,7 +80,7 @@ echo "[*] writing systemd units..."
 
 cat > "$UNIT_DIR/storage-viz-http.service" <<EOF_UNIT
 [Unit]
-Description=storage-viz dashboard (static HTTP + on-demand rescan)
+Description=storage-viz dashboard (static HTTP + rescan status)
 After=network.target local-fs.target
 
 [Service]
@@ -163,5 +163,5 @@ echo "[✓] installed."
 echo "    dashboard : http://${IP:-<host>}:$PORT/"
 echo "    data dir  : $DATA_DIR"
 echo "    next scan  : $(systemctl show -p NextElapseUSecRealtime --value storage-viz-scan.timer 2>/dev/null || echo "nightly @ $SCAN_TIME")"
-echo "    rescan now : sudo systemctl start storage-viz-scan.service  # or use the dashboard Rescan button"
+echo "    rescan now : sudo systemctl start storage-viz-scan.service"
 echo "    logs       : journalctl -u storage-viz-scan.service -u storage-viz-http.service"

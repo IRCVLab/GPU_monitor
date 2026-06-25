@@ -1,12 +1,12 @@
 # Host manifest
 
-The viewer chooses which JSON file to load from its host manifest in
-`viewer/index.html`:
+The viewer chooses which JSON file to load from the tracked host manifest at
+`data/hosts.json`:
 
-```js
-const HOSTS = [
-  { id: "hinton", label: "hinton", file: "hinton" }
-];
+```json
+[
+  { "id": "hinton", "label": "hinton", "file": "hinton", "default": true }
+]
 ```
 
 Each entry maps to `data/<file>.json`, with `data/<file>.sample.json` as a
@@ -22,9 +22,10 @@ Recommended host entry fields:
 | `id` | yes | Stable DOM/select value. Use lowercase hostname-style text. |
 | `label` | yes | Human-readable label shown in the dropdown. |
 | `file` | yes | JSON basename without `.json`. |
+| `default` | no | If true, this host is shown first. |
 
 For a new host named `lecun`:
 
 1. Run or copy a scan to `$STORAGE_VIZ_DATA_DIR/lecun.json`.
-2. Add `{ id: "lecun", label: "lecun", file: "lecun" }` to `HOSTS`.
+2. Add `{ "id": "lecun", "label": "lecun", "file": "lecun" }` to `data/hosts.json`.
 3. Reload the dashboard and select the host.

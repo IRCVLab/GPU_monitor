@@ -308,6 +308,7 @@
   #cleanupCommands { width: 100%; min-height: 104px; resize: vertical; border: 1px solid var(--separator);
     border-radius: 10px; background: var(--surface2); color: var(--text); padding: 10px;
     font: 12px/1.45 var(--mono); white-space: pre; }
+  .delete-warnings { color: var(--warn); font-size: 12px; margin-top: 8px; max-height: 70px; overflow: auto; }
   .cleanup-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; }
   .cleanup-actions button { appearance: none; -webkit-appearance: none; border: 1px solid var(--separator);
     background: var(--surface); color: var(--text); border-radius: 8px; padding: 6px 11px; font: 600 12px var(--font); cursor: pointer; }
@@ -330,26 +331,3 @@
   }
   @media (max-width: 680px) { .caps { grid-template-columns: 1fr 1fr; } .hide-sm { display: none; } }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
-
-  /* ---- Cleanup command panel ---- */
-  .select-col { width: 52px; text-align: center; }
-  .select-check { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
-  .vrow .vc-select, .vhead .vc-select { width: 56px; flex: 0 0 auto; text-align: center; }
-  .delete-panel {
-    position: fixed; right: 22px; bottom: 22px; z-index: 50; width: min(620px, calc(100vw - 44px));
-    background: var(--surface); color: var(--text); border: 1px solid var(--separator);
-    border-radius: var(--r); box-shadow: var(--shadow-lg); padding: 15px;
-  }
-  .delete-panel[hidden] { display: none; }
-  .delete-panel h3 { margin: 0 0 4px; font-size: 15px; letter-spacing: -.01em; }
-  .delete-panel .danger { color: var(--crit); font-size: 12.5px; margin: 0 0 10px; }
-  .delete-panel textarea {
-    width: 100%; min-height: 118px; resize: vertical; border: 1px solid var(--separator);
-    border-radius: 10px; background: var(--surface2); color: var(--text); padding: 10px;
-    font: 12px/1.45 var(--mono); white-space: pre;
-  }
-  .delete-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
-  .delete-actions button { appearance: none; border: 1px solid var(--separator); background: var(--surface2); color: var(--text); border-radius: 9px; padding: 7px 11px; cursor: pointer; font: 13px var(--font); }
-  .delete-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
-  .delete-warnings { color: var(--warn); font-size: 12px; margin-top: 8px; max-height: 70px; overflow: auto; }
-

@@ -27,7 +27,7 @@ All deployment-specific values can be overridden without editing source:
 | `STORAGE_VIZ_SCAN_TARGETS` | `/ /data /data1 /data3` | Space-separated scanner target list. Quote it as one shell value. |
 | `STORAGE_VIZ_PORT` | `8088` | Dashboard port. |
 | `STORAGE_VIZ_BIND` | `0.0.0.0` | Dashboard bind address. |
-| `STORAGE_VIZ_SERVE_USER` | `root` | User for `storage-viz-http.service`; root gives complete on-demand rescans. |
+| `STORAGE_VIZ_SERVE_USER` | `$SUDO_USER` or `root` | User for `storage-viz-http.service`; HTTP serving is manual-rescan-only by default. |
 | `STORAGE_VIZ_SCAN_TIME` | `02:00` | Nightly timer time in `HH:MM`. |
 | `UNIT_DIR` | `/etc/systemd/system` | Unit output directory; dry-runs use a temp dir unless this is set. |
 
@@ -44,10 +44,12 @@ sudo STORAGE_VIZ_ROOT=/opt/storage-viz \
 ## Services
 
 `storage-viz-http.service` runs `viewer/serve.py` instead of plain
-`python -m http.server`. This keeps the dashboard's Rescan button truthful:
+`python -m http.server`. This keeps data routing and the Rescan button truthful:
 
-- `POST /rescan` starts `hstscan --out "$STORAGE_VIZ_DATA_DIR/<hostname>.json" ...`.
-- `GET /rescan-status` returns progress, targets, output path, and any scanner error.
+- `GET /capabilities` reports whether server-side rescan is supported.
+- `GET /rescan-status` returns progress/capability metadata, targets, output path, and any scanner error.
+- By default `POST /rescan` returns `503` with a manual-only message, so the HTTP
+  service never starts privileged scans accidentally.
 - `GET /data/<host>.json` is served from `STORAGE_VIZ_DATA_DIR`, so the data directory
   does not have to be inside `viewer/`.
 
@@ -64,6 +66,9 @@ journalctl -u storage-viz-http.service -u storage-viz-scan.service
 
 ## Privilege model
 
-Root scans are recommended for complete accounting. If `STORAGE_VIZ_SERVE_USER` is
-changed to a non-root user, the Rescan button still runs the scanner, but the JSON
-will reflect that user's readable subset and `run_as_root` will be `false`.
+Root scans are recommended for complete accounting. Keep scheduled/manual scans in
+`storage-viz-scan.service`; the HTTP service should normally stay unprivileged and
+manual-only. To expose server-side rescans intentionally, set either
+`STORAGE_VIZ_ENABLE_RESCAN=1` or `STORAGE_VIZ_RESCAN_COMMAND` in the HTTP service
+environment, then review the operational/security tradeoff before binding it to a
+shared network.
