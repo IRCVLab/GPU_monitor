@@ -14,7 +14,7 @@ var advisorState = (typeof globalThis !== "undefined" && globalThis.advisorState
 function advisorNowUnix() { return Math.floor(Date.now() / 1000); }
 
 function normalizeAdvisorExclusions(value) {
-  const rows = Array.isArray(value) ? value : [];
+  const rows = Array.isArray(value) ? value : (value && Array.isArray(value.items) ? value.items : []);
   return rows.filter(item => item && typeof item === "object" && typeof item.type === "string");
 }
 
@@ -75,8 +75,19 @@ function filterExcludedRecommendations(recommendations, exclusions) {
   return (Array.isArray(recommendations) ? recommendations : []).filter(rec => !recommendationExcluded(rec, exclusions));
 }
 
+
+function normalizeAdvisorPayload(payload, exclusions) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const out = Object.assign({ schema_version: 1, host_id: currentAdvisorHostId(), summary: null, recommendations: [] }, source);
+  out.recommendations = filterExcludedRecommendations(Array.isArray(source.recommendations) ? source.recommendations : [], normalizeAdvisorExclusions(exclusions));
+  return out;
+}
+
+function advisorPathDepth(path) {
+  return String(path || "").split("/").filter(Boolean).length;
+}
 function isDeleteSelectableRecommendation(rec) {
-  return !!rec && rec.action === "delete" && rec.suggested_next_step === "review-delete-command" && typeof rec.target_path === "string" && rec.target_path.startsWith("/");
+  return !!rec && rec.action === "delete" && rec.suggested_next_step === "review-delete-command" && typeof rec.target_path === "string" && rec.target_path.startsWith("/") && !rec.target_path.includes("\0") && advisorPathDepth(rec.target_path) > 1;
 }
 
 async function fetchAdvisorStatus() {
@@ -166,6 +177,7 @@ if (typeof globalThis !== "undefined") {
     clearAdvisorExclusions,
     filterExcludedRecommendations,
     recommendationExcluded,
+    normalizeAdvisorPayload,
     isDeleteSelectableRecommendation,
   });
 }
@@ -176,6 +188,7 @@ if (typeof module !== "undefined" && module.exports) {
     normalizeAdvisorExclusions,
     filterExcludedRecommendations,
     recommendationExcluded,
+    normalizeAdvisorPayload,
     isDeleteSelectableRecommendation,
     loadAdvisorExclusions,
     saveAdvisorExclusions,

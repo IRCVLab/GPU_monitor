@@ -542,7 +542,7 @@ def rule_recommendations(evidence_pack: dict[str, Any]) -> dict[str, Any]:
                 host_id=host_id,
                 action="investigate",
                 category="blocked-scan",
-                target_path=path if path_depth(path) > 1 else "/blocked-scan",
+                target_path=path,
                 mount="",
                 owner="unknown",
                 bytes_value=0,
@@ -645,9 +645,7 @@ def _validate_rec(rec: dict[str, Any], idx: int, mount_roots: list[str]) -> None
     if rec["risk"] not in RISKS:
         raise AdvisorValidationError(f"recommendation {idx} has invalid risk")
     if not is_safe_target_path(str(rec["target_path"]), mount_roots=mount_roots):
-        # blocked-scan may point to a blocked two-segment path; all other unsafe paths are rejected.
-        if rec.get("category") != "blocked-scan":
-            raise AdvisorValidationError(f"recommendation {idx} target_path is unsafe")
+        raise AdvisorValidationError(f"recommendation {idx} target_path is unsafe")
     try:
         confidence = float(rec["confidence"])
     except (TypeError, ValueError):

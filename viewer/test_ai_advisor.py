@@ -85,6 +85,23 @@ class AdvisorAnalyzerTest(unittest.TestCase):
         with self.assertRaises(AdvisorValidationError):
             validate_recommendations(malformed, mount_roots=["/"])
 
+    def test_validate_recommendations_rejects_blocked_scan_root_target(self) -> None:
+        unsafe = {
+            "schema_version": 1,
+            "host_id": "hinton",
+            "summary": {"health": "warning", "headline": "blocked", "top_drivers": []},
+            "recommendations": [{
+                "id": "blocked-root", "action": "investigate", "category": "blocked-scan",
+                "target_path": "/", "related_paths": [], "mount": "/", "owner": "", "bytes": 0,
+                "priority": "low", "confidence": 0.2, "risk": "high", "badge": "AI: blocked scan",
+                "reason_short": "Blocked root", "reason_detail": "Root is unsafe",
+                "evidence": [{"type": "blocked_path", "label": "blocked path", "value": "/"}],
+                "suggested_next_step": "inspect-owner",
+            }],
+        }
+        with self.assertRaises(AdvisorValidationError):
+            validate_recommendations(unsafe, mount_roots=["/"])
+
     def test_exclusions_filter_recommendation_path_pattern_and_action(self) -> None:
         payload = build_advisor_response(synthetic_snapshot(), host_id="hinton", exclusions=[], config=AdvisorConfig(enabled=False))
         filtered = filter_excluded(

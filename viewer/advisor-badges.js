@@ -1,5 +1,11 @@
 "use strict";
 
+function advisorBadgeEscape(value) {
+  if (typeof htmlEscape === "function") return advisorBadgeEscape(value);
+  if (typeof escapeHtml === "function") return escapeHtml(value);
+  return String(value == null ? "" : value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function recommendationMatchesPath(rec, path) {
   if (!rec || !path) return false;
   const target = String(rec.target_path || "").replace(/\/+$/g, "") || "/";
@@ -20,12 +26,21 @@ function advisorBadgeLabel(rec) {
   return rec.badge || ("AI: " + (rec.category || rec.action || "review"));
 }
 
+function advisorSetRecommendations(payload) {
+  if (typeof advisorState !== "undefined") {
+    advisorState.recommendations = Array.isArray(payload) ? payload : ((payload && payload.recommendations) || []);
+  }
+  return (typeof advisorState !== "undefined" && advisorState.recommendations) || [];
+}
+function advisorRecommendationsForPath(path) {
+  return recommendationsForPath((typeof advisorState !== "undefined" && advisorState.recommendations) || [], path);
+}
 function advisorBadgeHtmlForPath(path) {
-  const recs = recommendationsForPath((typeof advisorState !== "undefined" && advisorState.recommendations) || [], path).slice(0, 3);
+  const recs = advisorRecommendationsForPath(path).slice(0, 3);
   if (!recs.length) return "";
   return '<span class="ai-badges">' + recs.map(rec =>
-    '<button type="button" class="ai-badge" data-advisor-rec="' + htmlEscape(String(rec.id)) + '" title="' + htmlEscape(rec.reason_short || advisorBadgeLabel(rec)) + '">' +
-    htmlEscape(advisorBadgeLabel(rec)) + '</button>'
+    '<button type="button" class="ai-badge" data-advisor-rec="' + advisorBadgeEscape(String(rec.id)) + '" title="' + advisorBadgeEscape(rec.reason_short || advisorBadgeLabel(rec)) + '">' +
+    advisorBadgeEscape(advisorBadgeLabel(rec)) + '</button>'
   ).join("") + '</span>';
 }
 
@@ -67,12 +82,15 @@ if (typeof globalThis !== "undefined") {
   Object.assign(globalThis, {
     recommendationMatchesPath,
     recommendationsForPath,
+    advisorSetRecommendations,
+    advisorRecommendationsForPath,
     advisorBadgeHtmlForPath,
+    advisorBadgesHtml: advisorBadgeHtmlForPath,
     appendAdvisorBadges,
     refreshAdvisorBadges,
   });
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { recommendationMatchesPath, recommendationsForPath, advisorBadgeHtmlForPath };
+  module.exports = { recommendationMatchesPath, recommendationsForPath, advisorSetRecommendations, advisorRecommendationsForPath, advisorBadgeHtmlForPath, advisorBadgesHtml: advisorBadgeHtmlForPath };
 }
