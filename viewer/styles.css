@@ -378,6 +378,9 @@
   .advisor-health { display: inline-flex; text-transform: uppercase; letter-spacing: .06em; font: 800 11px var(--mono); color: var(--ok); }
   .advisor-summary.warning .advisor-health { color: var(--warn); }
   .advisor-summary.critical .advisor-health { color: var(--crit); }
+  .advisor-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0 0 14px; }
+  .advisor-filters label { display: inline-flex; align-items: center; gap: 6px; color: var(--text2); font-size: 12px; }
+  .advisor-filters select { padding-top: 5px; padding-bottom: 5px; font-size: 12px; }
   .advisor-rec-list { display: grid; gap: 8px; }
   .advisor-rec-main { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px;
     border: 1px solid var(--separator); background: var(--surface); color: var(--text); border-radius: 12px; padding: 10px; text-align: left; cursor: pointer; }
