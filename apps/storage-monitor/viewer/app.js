@@ -158,6 +158,7 @@ async function init() {
   bindSort("#staleHead", staleSort, renderStale);
   bindCopy();
   bindCleanupSelection();
+  if (typeof bindTreemapCleanupMode === "function") bindTreemapCleanupMode();
 
   // Hover-highlight EXACTLY the topmost tile under the cursor (e.target is the
   // top element), so a parent group is never highlighted by mistake.

@@ -8,6 +8,7 @@
    user's browser. DOM tiles are always fully rendered and fit the container
    exactly, so there is no canvas to mis-size or clip. */
 let treemapStack = [];   // drill path: [{node, name, mount}] from mount root to current
+let treemapModifierActive = false;
 
 function rectArea(r) {
   return Math.max(0, Number(r && r.w) || 0) * Math.max(0, Number(r && r.h) || 0);
@@ -91,8 +92,10 @@ function renderTreemapScaleNote(el) {
   if (!h || !h.count || h.bytes <= 0) return;
   const note = document.createElement("div");
   note.className = "tm-scale-note";
-  note.innerHTML = "Hidden at true scale: <b>" + humanBytes(h.bytes) + "</b> across " +
-    h.count.toLocaleString() + " tiny item" + (h.count === 1 ? "" : "s") + ". Drill in or use tables for exact paths.";
+  note.innerHTML =
+    "Tiny items too small to draw proportionally / 실제 비율을 지키기 위해 너무 작은 항목은 숨김: <b>" +
+    humanBytes(h.bytes) + "</b> across " + h.count.toLocaleString() + " item" + (h.count === 1 ? "" : "s") +
+    ". Drill in or use tables for exact paths. / 자세한 경로는 드릴인하거나 표에서 확인하세요.";
   el.appendChild(note);
 }
 /* Progressively darken the owner color with nesting depth so the hierarchy is
@@ -103,17 +106,139 @@ function shade(hex, level) {
   const v = i => Math.round(parseInt(hex.slice(i, i + 2), 16) * f).toString(16).padStart(2, "0");
   return "#" + v(1) + v(3) + v(5);
 }
+function treemapPath(crumbPath, name) {
+  return (String(crumbPath || "") + "/" + String(name || "")).replace(/\/+/g, "/");
+}
+function pathDepth(path) {
+  return String(path || "").split("/").filter(Boolean).length;
+}
+function isTopLevelCleanupPath(path) {
+  const normalized = String(path || "").replace(/\/+$/g, "") || "/";
+  return normalized === "/" || pathDepth(normalized) <= 1;
+}
+function isTreemapCleanupSelectablePath(path) {
+  if (typeof isAbsoluteCleanupPath === "function" && !isAbsoluteCleanupPath(path)) return false;
+  return !isTopLevelCleanupPath(path);
+}
+function isTreemapCleanupGesture(e) {
+  return !!(treemapModifierActive || (e && (e.ctrlKey || e.metaKey)));
+}
+function treemapShortcutCopy(active) {
+  return active
+    ? {
+        label: "Selecting… / 선택 중",
+        hint: "Release Ctrl/⌘ to leave selection mode · 키를 떼면 선택 모드 종료",
+      }
+    : {
+        label: "Ctrl/⌘ click: select",
+        hint: "Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택",
+      };
+}
+function treemapCleanupItem(c, path, owner) {
+  return {
+    path,
+    bytes: Number(c && c.bytes) || 0,
+    uid: c && c.uid,
+    owner,
+    source: "treemap",
+  };
+}
+function syncTreemapTileSelection(tile) {
+  if (!tile || !tile.dataset || !tile.dataset.cleanupPath) return;
+  const selected = typeof isCleanupSelectedPath === "function" && isCleanupSelectedPath(tile.dataset.cleanupPath);
+  tile.classList.toggle("cleanup-selected", selected);
+  tile.setAttribute("aria-selected", selected ? "true" : "false");
+}
+function syncTreemapCleanupTiles() {
+  if (typeof document === "undefined") return;
+  document.querySelectorAll(".tmtile[data-cleanup-path]").forEach(syncTreemapTileSelection);
+}
+function addTreemapCleanupMetadata(tile, c, path, owner) {
+  if (c._other || !isTreemapCleanupSelectablePath(path)) return;
+  tile.dataset.cleanupPath = path;
+  tile.dataset.cleanupBytes = String(Number(c.bytes) || 0);
+  tile.dataset.cleanupOwner = owner || "";
+  tile.dataset.cleanupSource = "treemap";
+  tile.setAttribute("role", "button");
+  tile.setAttribute("aria-label", "Select cleanup candidate " + path);
+  const badge = document.createElement("div");
+  badge.className = "tm-cleanup-badge";
+  badge.textContent = "✓";
+  badge.setAttribute("aria-hidden", "true");
+  tile.appendChild(badge);
+  syncTreemapTileSelection(tile);
+}
+function toggleTreemapCleanupTile(tile, c, path, owner) {
+  if (typeof toggleCleanupSelectedItem !== "function") return;
+  toggleCleanupSelectedItem(treemapCleanupItem(c, path, owner));
+  if (typeof renderCleanupPanel === "function") renderCleanupPanel();
+  syncTreemapTileSelection(tile);
+}
+function setTreemapModifierActive(active) {
+  treemapModifierActive = !!active;
+  if (typeof document !== "undefined") {
+    const el = document.getElementById("treemap");
+    if (el) el.classList.toggle("cleanup-select-mode", treemapModifierActive);
+    const btn = document.getElementById("treemapCleanupMode");
+    if (btn) {
+      const copy = treemapShortcutCopy(treemapModifierActive);
+      btn.classList.toggle("active", treemapModifierActive);
+      btn.setAttribute("aria-pressed", treemapModifierActive ? "true" : "false");
+      btn.textContent = copy.label;
+      btn.title = copy.hint;
+    }
+    const hint = document.getElementById("treemapCleanupHint");
+    if (hint) {
+      hint.textContent = treemapShortcutCopy(treemapModifierActive).hint;
+    }
+  }
+  syncTreemapCleanupTiles();
+  return treemapModifierActive;
+}
+function setTreemapCleanupMode(enabled) {
+  return setTreemapModifierActive(enabled);
+}
+function bindTreemapCleanupMode() {
+  if (typeof document === "undefined") return;
+  const btn = document.getElementById("treemapCleanupMode");
+  if (btn && !btn._cleanupModeBound) {
+    btn._cleanupModeBound = true;
+    btn.onclick = () => setTreemapModifierActive(false);
+  }
+  if (!document._treemapCleanupShortcutBound) {
+    document._treemapCleanupShortcutBound = true;
+    document.addEventListener("keydown", e => {
+      if (e.ctrlKey || e.metaKey || e.key === "Control" || e.key === "Meta" || e.key === "OS") {
+        setTreemapModifierActive(true);
+      }
+    });
+    document.addEventListener("keyup", e => {
+      if (!e.ctrlKey && !e.metaKey) setTreemapModifierActive(false);
+    });
+    if (typeof window !== "undefined") window.addEventListener("blur", () => setTreemapModifierActive(false));
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) setTreemapModifierActive(false);
+    });
+  }
+  document.addEventListener("cleanup-selection-rendered", syncTreemapCleanupTiles);
+  setTreemapModifierActive(false);
+}
 function tmTile(el, c, k, crumbPath, isGroup, level) {
   const base = c._other ? OTHER_COLOR : colorForUid(c.uid);
   const color = shade(base, level);
   const fg = labelColorForBg(color);
   const owner = ownerByUid.get(c.uid) || ("uid " + c.uid);
+  const path = treemapPath(crumbPath, c.name);
+  const hasKids = !c._other && c.children && c.children.length;
+  const selectable = !c._other && isTreemapCleanupSelectablePath(path) && typeof toggleCleanupSelectedItem === "function";
   const t = document.createElement("div");
   t.className = "tmtile" + (isGroup ? " tmgroup" : "");
+  t.style.zIndex = isGroup ? "1" : "2";
   t.style.left = k.x + "px"; t.style.top = k.y + "px";
   t.style.width = Math.max(0, k.w) + "px"; t.style.height = Math.max(0, k.h) + "px";
   t.style.background = color; if (c._other) t.style.opacity = ".55";
-  t._tip = { path: crumbPath + "/" + c.name, bytes: c.bytes, owner, files: c.files, mtime: c.mtime, color, other: !!c._other, level };
+  t._tip = { path, bytes: c.bytes, owner, files: c.files, mtime: c.mtime, color, other: !!c._other, level };
+  if (selectable) addTreemapCleanupMetadata(t, c, path, owner);
   if (k.w > 38 && k.h > 16) {
     const lab = document.createElement("div");
     lab.className = isGroup ? "tmhead" : "tmlabel";
@@ -125,9 +250,21 @@ function tmTile(el, c, k, crumbPath, isGroup, level) {
       : '<div class="tmname">' + escapeHtml(c.name) + '</div><div class="tmsize">' + humanBytes(c.bytes) + '</div>';
     t.appendChild(lab);
   }
-  if (!c._other && c.children && c.children.length) {
+  if (hasKids) {
     t.classList.add("drillable");
-    t.onclick = (e) => { e.stopPropagation(); treemapStack.push({ node: c, name: c.name }); renderTreemap(); };
+  }
+  if (selectable || hasKids) {
+    t.onclick = (e) => {
+      e.stopPropagation();
+      if (isTreemapCleanupGesture(e)) {
+        if (selectable) toggleTreemapCleanupTile(t, c, path, owner);
+        return;
+      }
+      if (hasKids) {
+        treemapStack.push({ node: c, name: c.name });
+        renderTreemap();
+      }
+    };
   }
   el.appendChild(t);
 }
@@ -178,6 +315,7 @@ function renderTreemap() {
   if (!tmChildren(cur).length) { const d = document.createElement("div"); d.className = "tm-note"; d.textContent = "No sub-items above the size threshold here."; el.appendChild(d); renderTreemapLegend(); return; }
   const P = 10, TOP = 38;
   layoutTreemap(el, cur, P, TOP, Math.max(0, W - 2 * P), Math.max(0, H - TOP - P), 0, crumbPath);
+  setTreemapModifierActive(treemapModifierActive);
   renderTreemapScaleNote(el);
   renderTreemapLegend();
 }
@@ -203,6 +341,13 @@ if (typeof module !== "undefined" && module.exports) {
     squarify,
     tmChildren,
     layoutTreemap,
+    renderTreemapScaleNote,
+    setTreemapCleanupMode,
+    setTreemapModifierActive,
+    isTreemapCleanupGesture,
+    isTopLevelCleanupPath,
+    isTreemapCleanupSelectablePath,
+    bindTreemapCleanupMode,
     TM_MAXLEVEL,
     TM_MIN_VISIBLE_SIDE,
     TM_MIN_VISIBLE_AREA,
