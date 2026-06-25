@@ -88,6 +88,7 @@ patterns, so the recommended path is a local model endpoint.
 | `STORAGE_VIZ_AI_PROVIDER` | `ollama` when enabled | `ollama`, `openai-compatible`, or `mock`. Tests should use `mock` or rule-only behavior. |
 | `STORAGE_VIZ_AI_ENDPOINT` | `http://127.0.0.1:11434` for Ollama | Local model server endpoint. Prefer loopback or a trusted internal gateway. |
 | `STORAGE_VIZ_AI_MODEL` | `qwen3.6:27b` | Recommended default local GPU advisor model; override per server. |
+| `STORAGE_VIZ_AI_OUTPUT_LANGUAGE` | `ko` | Final user-facing advisor language. The current UI sends `language=ko` per request. |
 | `STORAGE_VIZ_AI_TIMEOUT_SEC` | implementation default | Timeout for model requests. Keep bounded so the dashboard stays responsive. |
 | `STORAGE_VIZ_AI_CACHE_DIR` | implementation default | Cache for validated advisor results. Do not place generated cache files in tracked `data/`. |
 
@@ -124,6 +125,17 @@ Model tiers:
 
 The product must remain testable without a live model runtime. Use rule-only or
 mock mode for CI and development checks.
+
+For operator-facing deployments, do not run the dashboard with
+`STORAGE_VIZ_AI_PROVIDER=mock`; mock mode is only a deterministic fixture. If the
+local LLM service is down, run with the real provider anyway. The advisor will
+show a Korean rule-only fallback plus the model connection error instead of
+pretending that LLM analysis succeeded.
+
+The local LLM path is two-pass: an English analyzer pass produces structured
+recommendations from bounded evidence, then a Korean translator pass localizes
+only the user-facing text while preserving ids, paths, actions, risk, confidence,
+and evidence.
 
 ### Read-only inspection environment
 

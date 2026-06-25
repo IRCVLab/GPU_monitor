@@ -68,7 +68,9 @@ The AI Cleanup Advisor is optional and local-first. With no AI environment
 variables set, the dashboard continues to work normally and `/ai/status` should
 report a disabled, non-blocking state. When enabled, the advisor uses
 deterministic snapshot rules first and can optionally ask a local LLM to
-summarize/prioritize bounded evidence.
+summarize/prioritize bounded evidence. Run it from the global header control;
+recommendations then appear as badges in the treemap, Top files, and Stale
+views. The AI tab is for compact grouped summaries, details, and exclusions.
 
 Safety rules:
 
@@ -78,6 +80,8 @@ Safety rules:
   server-owned, read-only, metadata-only, allowlisted, and disabled by default.
 - Only low-risk delete recommendations may be staged into the existing
   copy-only cleanup command panel; move/dedupe/investigate advice opens details.
+- The LLM path is two-pass: an English analyzer creates structured advice, then
+  a Korean translator localizes the final user-facing text.
 
 Recommended local GPU default:
 

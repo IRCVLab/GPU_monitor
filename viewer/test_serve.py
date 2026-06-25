@@ -170,6 +170,21 @@ class ServeSafetyTest(unittest.TestCase):
             self.post_json("/ai/recommend", {"host_id": "../hinton"})
         self.assertEqual(ctx.exception.code, 400)
 
+    def test_ai_recommend_request_language_overrides_server_default(self) -> None:
+        self.start_server(
+            {
+                "STORAGE_VIZ_AI_ENABLED": "1",
+                "STORAGE_VIZ_AI_PROVIDER": "none",
+                "STORAGE_VIZ_AI_OUTPUT_LANGUAGE": "en",
+            }
+        )
+
+        payload = self.post_json("/ai/recommend", {"host_id": "hinton", "language": "ko", "max_items": 10})
+
+        self.assertEqual(payload["mode"], "rule-only")
+        self.assertEqual(payload["output_language"], "ko")
+        self.assertIn("추천", payload["summary"]["headline"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
