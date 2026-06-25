@@ -250,7 +250,7 @@ function tmTile(el, c, k, crumbPath, isGroup, level) {
       : '<div class="tmname">' + escapeHtml(c.name) + '</div><div class="tmsize">' + humanBytes(c.bytes) + '</div>';
     t.appendChild(lab);
   }
-  if (typeof appendAdvisorBadges === "function") appendAdvisorBadges(t, path);
+  if (typeof annotateTreemapTileWithAdvisor === "function") annotateTreemapTileWithAdvisor(t, path);
   if (hasKids) {
     t.classList.add("drillable");
   }
