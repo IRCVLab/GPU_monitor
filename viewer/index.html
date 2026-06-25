@@ -42,7 +42,8 @@
     <section class="panel active" id="panel-treemap">
       <div class="toolbar">
         <div class="grp"><label>Mount</label><div class="seg" id="mountSeg"></div></div>
-        <span class="hint">Click a tile to drill in · breadcrumb to go back · color = owner</span>
+        <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택">Ctrl/⌘ click: select</button>
+        <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택</span>
       </div>
       <div id="treemap"></div>
       <div class="legend" id="treemapLegend"></div>

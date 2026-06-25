@@ -174,6 +174,14 @@
   .seg button:hover { color: var(--text); }
   .seg button.active { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
   @media (prefers-color-scheme: dark) { .seg button.active { background: #48484a; color: var(--text); } }
+  .cleanup-mode-btn {
+    appearance: none; -webkit-appearance: none; border: 1px solid var(--separator);
+    background: var(--surface); color: var(--text); border-radius: 999px; padding: 6px 12px;
+    font: 700 12px var(--font); cursor: default; box-shadow: var(--shadow);
+    white-space: nowrap; line-height: 1.25;
+  }
+  .cleanup-mode-btn:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .cleanup-mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   /* ---- Treemap ---- */
   #treemap { position: relative; width: 100%; height: calc(100vh - 320px); min-height: 320px; border-radius: var(--r); overflow: hidden;
@@ -181,14 +189,25 @@
   /* tiles separated by the CARD SURFACE color (clean Apple gaps) — so even
      same-owner nested tiles are clearly delineated without harsh dark borders. */
   .tmtile { position: absolute; box-sizing: border-box; border: 1.5px solid var(--surface); border-radius: 7px; overflow: hidden; }
+  .tmtile.tmgroup { pointer-events: none; z-index: 1; }
+  .tmtile:not(.tmgroup) { z-index: 2; }
   .tmtile.drillable { cursor: pointer; }
   /* only the actual tile under the cursor highlights — not its parent group */
-  .tmtile.tmhover { outline: 2.5px solid var(--accent); outline-offset: -2.5px; z-index: 6; }
+  .tmtile:not(.tmgroup).tmhover { outline: 2.5px solid var(--accent); outline-offset: -2.5px; z-index: 6; }
   .tmlabel { padding: 6px 9px; pointer-events: none; }
   .tmname { font-size: 12.5px; font-weight: 600; line-height: 1.25; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tmsize { font-size: 11px; line-height: 1.35; opacity: .85; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  #treemap.cleanup-select-mode .tmtile[data-cleanup-path]:not(.tmgroup) { cursor: pointer; }
+  #treemap.cleanup-select-mode .tmtile[data-cleanup-path]:not(.tmgroup):hover { outline: 2.5px solid var(--accent); outline-offset: -2.5px; z-index: 6; }
+  .tmtile.cleanup-selected { outline: 3px solid var(--accent); outline-offset: -3px; z-index: 7; }
+  .tmtile.tmgroup.cleanup-selected { z-index: 1; }
+  .tm-cleanup-badge { position: absolute; right: 7px; top: 7px; z-index: 8; width: 22px; height: 22px; border-radius: 999px;
+    display: none; align-items: center; justify-content: center; background: var(--accent); color: #fff;
+    border: 1px solid rgba(255,255,255,.75); box-shadow: 0 4px 14px rgba(0,0,0,.26); font: 800 13px var(--font); }
+  .tmtile.cleanup-selected .tm-cleanup-badge { display: flex; }
   .tmhead { padding: 5px 9px 7px; pointer-events: none; font-size: 12px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             background: linear-gradient(to bottom, rgba(0,0,0,.32), rgba(0,0,0,0)); }
+  .tmgroup > .tmhead { pointer-events: auto; cursor: pointer; }
   .tmgname { font-weight: 600; } .tmgsize { opacity: .8; font-family: var(--mono); font-variant-numeric: tabular-nums; margin-left: 5px; font-size: 10.5px; }
   .tm-bc { position: absolute; top: 8px; left: 10px; right: 10px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; z-index: 3; }
   .tm-crumb { background: var(--surface2); border: 1px solid var(--separator); color: var(--text); border-radius: 7px; padding: 3px 9px; cursor: pointer; font: 12px var(--mono); }
