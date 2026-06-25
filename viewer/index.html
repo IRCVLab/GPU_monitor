@@ -265,6 +265,9 @@
   tr:hover .copybtn, .vrow:hover .copybtn { opacity: 1; }
   .copybtn:hover { color: var(--accent); border-color: var(--accent); }
   .copybtn.done { color: var(--ok); border-color: var(--ok); opacity: 1; }
+  .selectcell { width: 52px; text-align: center; }
+  td.selectcell { padding-left: 12px; padding-right: 8px; }
+  .cleanup-check { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
 
   .owner-chip { display: inline-flex; align-items: center; gap: 8px; }
   .owner-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
@@ -288,6 +291,7 @@
   .vrow { display: flex; align-items: center; border-bottom: 1px solid var(--separator); height: 41px; }
   .vrow:hover { background: var(--hover) !important; }
   .vrow .vc { padding: 0 16px; overflow: hidden; }
+  .vrow .vc-select { width: 52px; text-align: center; flex: 0 0 auto; padding: 0 12px; }
   .vrow .vc-size { width: 168px; text-align: right; position: relative; flex: 0 0 auto; }
   .vrow .vc-age  { width: 96px;  text-align: right; flex: 0 0 auto; }
   .vrow .vc-own  { width: 168px; flex: 0 0 auto; }
@@ -298,6 +302,7 @@
   .vhead .vc { padding: 0 16px; color: var(--text2); font-weight: 600; font-size: 12px; }
   .vhead .vc.sortable { cursor: pointer; user-select: none; }
   .vhead .vc.sortable:hover { color: var(--text); }
+  .vhead .vc-select { width: 52px; text-align: center; flex: 0 0 auto; padding: 0 12px; }
   .vhead .vc-size { width: 168px; flex: 0 0 auto; } .vhead .vc-age { width: 96px; flex: 0 0 auto; }
   .vhead .vc-own { width: 168px; flex: 0 0 auto; } .vhead .vc-mnt { width: 96px; flex: 0 0 auto; }
   .vhead .vc-path { flex: 1 1 auto; }
