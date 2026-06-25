@@ -14,7 +14,7 @@ Built for `hinton`, designed to be portable to any Linux lab server.
 | Scanner | `scanner/hstscan.c` | C11 + pthreads parallel directory walker → one JSON snapshot. Zero external deps. |
 | Viewer | `viewer/index.html` + `viewer/echarts.min.js` | Self-contained offline dashboard (treemap / users / top files / stale). |
 | Data | `data/<hostname>.json` | Scan output the viewer reads. Hostname-tagged for future multi-server. |
-| Install | `install.sh` | Build + install binary, nightly cron, LAN serving (needs root). |
+| Install | `install.sh` | Build + install binary, systemd timer, LAN serving, dry-run verification. |
 
 ## Quick start (this server)
 
@@ -26,13 +26,15 @@ cd scanner && make && cd ..
 sudo ./scanner/hstscan            # defaults: scan / /data /data1 /data3
 
 # 3. serve the dashboard on the LAN
-python3 -m http.server 8088       # run from the project root; open http://<host>:8088/viewer/
+python3 viewer/serve.py 8088      # run from the project root; open http://<host>:8088/
 ```
 
 ## Deploy on another server
 
-The tool hardcodes nothing — mounts are auto-discovered from `/proc/self/mountinfo` and users
-from the password database. To add a server:
+The deployment paths are configurable with environment variables (`STORAGE_VIZ_ROOT`,
+`STORAGE_VIZ_DATA_DIR`, `STORAGE_VIZ_SCAN_TARGETS`, `STORAGE_VIZ_PORT`, `STORAGE_VIZ_BIND`).
+Mount metadata is discovered from `/proc/self/mountinfo` and users from the password database.
+To add a server:
 
 ```bash
 git clone <repo> && cd storage-viz/scanner && make
@@ -51,12 +53,14 @@ nightly cron runs as root, so scheduled scans are always complete).
 
 ## Refresh
 
-`install.sh` sets up a nightly root cron that re-scans and atomically replaces the JSON. The
-dashboard fetches fresh JSON on each page load — no rebuild needed.
+`install.sh` sets up a systemd timer that re-scans and atomically replaces the JSON. The
+dashboard fetches fresh JSON on each page load, and installed deployments use `viewer/serve.py`
+so the Rescan button can trigger an on-demand scan. Run `./install.sh --dry-run` first to
+write and syntax-check units without privileged `systemctl` actions.
 
 ## Data format
 
-See `docs/` and the JSON schema in the scanner. Key idea: a pruned size **tree** per mount
+See `docs/schema-v1.md`, `docs/operations.md`, and `docs/host-manifest.md`. Key idea: a pruned size **tree** per mount
 (small entries collapsed into an `other_bytes` remainder so the treemap stays exact),
 plus **per-user totals by file owner**, a global **top-N largest files** list, and a
 **stale** (big + old) list of deletion candidates.
