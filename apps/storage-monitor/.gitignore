@@ -4,3 +4,6 @@ data/*.json
 scanner/hstscan
 scanner/*.o
 *.log
+
+__pycache__/
+*.pyc
