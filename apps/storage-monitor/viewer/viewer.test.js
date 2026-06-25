@@ -32,26 +32,6 @@ function testHostManifestHelpers() {
   assert.deepStrictEqual(normalizeHosts([]), [{ id: "hinton", label: "hinton", file: "hinton", default: true }]);
 }
 
-function testAdvisorHelpers() {
-  const client = require("./advisor-client.js");
-  const badges = require("./advisor-badges.js");
-  const recs = [
-    { id: "cache", action: "delete", category: "pip-cache", target_path: "/home/a/.cache/pip", suggested_next_step: "review-delete-command", badge: "AI: cache cleanup" },
-    { id: "move", action: "move", category: "checkpoint", target_path: "/ssd/a/run/ckpt.pt", suggested_next_step: "move-to-hdd", badge: "AI: move" },
-  ];
-  assert.strictEqual(client.isDeleteSelectableRecommendation(recs[0]), true, "delete review recommendations can enter cleanup selection");
-  assert.strictEqual(client.isDeleteSelectableRecommendation(recs[1]), false, "move recommendations must not generate rm commands");
-  const filtered = client.filterExcludedRecommendations(recs, [
-    { type: "action", action: "move" },
-    { type: "path", path: "/home/a/.cache/pip" },
-  ]);
-  assert.deepStrictEqual(filtered, [], "path and action exclusions should hide matching recommendations");
-  assert.strictEqual(badges.recommendationMatchesPath(recs[0], "/home/a/.cache/pip/wheels/pkg.whl"), true);
-  assert.strictEqual(badges.recommendationMatchesPath(recs[0], "/home/a/other"), false);
-  const byPath = badges.recommendationsForPath(recs, "/ssd/a/run/ckpt.pt");
-  assert.deepStrictEqual(byPath.map(r => r.id), ["move"]);
-}
-
 function testTreemapFidelity() {
   const { squarify, rectArea } = require("./treemap.js");
   const gib = 1024 ** 3;
@@ -111,7 +91,6 @@ function testDeleteCommandGeneration() {
 
 testHostManifest();
 testHostManifestHelpers();
-testAdvisorHelpers();
 testTreemapFidelity();
 testDeleteCommandGeneration();
 testAdvisorClientFilteringAndBadges();

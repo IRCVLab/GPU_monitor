@@ -53,9 +53,6 @@ function renderAll() {
   currentMountIdx = 0; userMountFilter = topMountFilter = staleMountFilter = "";
   topRowsCache = null; staleRowsCache = null;
   cleanupSelected.clear(); renderCleanupPanel();
-  if (typeof advisorState !== "undefined") { advisorState.payload = null; advisorState.recommendations = []; advisorState.error = null; }
-  if (typeof loadAdvisorExclusions === "function") loadAdvisorExclusions((document.getElementById("hostSel") || {}).value || (DATA && DATA.hostname) || "hinton");
-  if (typeof renderAdvisorPanel === "function") renderAdvisorPanel();
 
   // Fast first paint: header + hero + controls now.
   renderHeader();
@@ -164,7 +161,6 @@ async function init() {
   bindSort("#staleHead", staleSort, renderStale);
   bindCopy();
   bindCleanupSelection();
-  if (typeof bindAdvisorUi === "function") bindAdvisorUi();
   if (typeof bindTreemapCleanupMode === "function") bindTreemapCleanupMode();
   if (typeof initAdvisorUI === "function") initAdvisorUI();
 
@@ -242,7 +238,6 @@ async function init() {
 
   const rb = document.getElementById("rescanBtn");
   if (rb) rb.onclick = triggerRescan;
-  if (typeof fetchAdvisorStatus === "function") fetchAdvisorStatus();
   pollRescan();                          // reflect a scan already running (started by another viewer)
   setInterval(pollRescan, 5000);         // stay in sync with other viewers
   setInterval(updateLastUpdated, 30000); // keep "x min ago" fresh
