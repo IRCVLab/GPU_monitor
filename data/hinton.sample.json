@@ -1,0 +1,891 @@
+{
+  "schema_version": 1,
+  "hostname": "hinton",
+  "scanner_version": "0.1.0",
+  "scan_started_unix": 1719200000,
+  "scan_duration_sec": 42.1,
+  "run_as_root": true,
+  "mounts": [
+    {
+      "path": "/",
+      "fstype": "ext4",
+      "df_total": 135530139251,
+      "df_used": 87389833789,
+      "df_avail": 48140305462,
+      "df_use_pct": 64,
+      "scanned_bytes": 84028686336,
+      "scanned_files": 716680,
+      "scanned_dirs": 36921,
+      "errors": 6,
+      "tree": {
+        "name": "/",
+        "bytes": 84028686336,
+        "files": 716680,
+        "uid": 0,
+        "mtime": 1719200000,
+        "other_bytes": 1610612736,
+        "children": [
+          {
+            "name": "home",
+            "bytes": 51724156928,
+            "files": 174870,
+            "uid": 0,
+            "mtime": 1719113600,
+            "other_bytes": 314572800,
+            "children": [
+              {
+                "name": "shchoi",
+                "bytes": 44967133184,
+                "files": 169630,
+                "uid": 1008,
+                "mtime": 1718940800,
+                "other_bytes": 943718400,
+                "children": [
+                  {
+                    "name": ".cache",
+                    "bytes": 8589934592,
+                    "files": 40210,
+                    "uid": 1008,
+                    "mtime": 1719027200,
+                    "other_bytes": 0
+                  },
+                  {
+                    "name": "projects",
+                    "bytes": 23622320128,
+                    "files": 8800,
+                    "uid": 1008,
+                    "mtime": 1719113600,
+                    "other_bytes": 0
+                  },
+                  {
+                    "name": "miniconda3",
+                    "bytes": 11811160064,
+                    "files": 120400,
+                    "uid": 1008,
+                    "mtime": 1715744000,
+                    "other_bytes": 0
+                  }
+                ]
+              },
+              {
+                "name": "minseo",
+                "bytes": 6442450944,
+                "files": 5120,
+                "uid": 1010,
+                "mtime": 1711424000,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "usr",
+            "bytes": 15032385536,
+            "files": 412000,
+            "uid": 0,
+            "mtime": 1708832000,
+            "other_bytes": 0
+          },
+          {
+            "name": "var",
+            "bytes": 15661531136,
+            "files": 120810,
+            "uid": 0,
+            "mtime": 1719113600,
+            "other_bytes": 629145600,
+            "children": [
+              {
+                "name": "log",
+                "bytes": 3221225472,
+                "files": 2200,
+                "uid": 0,
+                "mtime": 1719200000,
+                "other_bytes": 0
+              },
+              {
+                "name": "lib",
+                "bytes": 9663676416,
+                "files": 88000,
+                "uid": 0,
+                "mtime": 1718768000,
+                "other_bytes": 0
+              },
+              {
+                "name": "cache",
+                "bytes": 2147483648,
+                "files": 30200,
+                "uid": 0,
+                "mtime": 1718595200,
+                "other_bytes": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "path": "/data",
+      "fstype": "xfs",
+      "df_total": 8758487087627,
+      "df_used": 7833590851174,
+      "df_avail": 924896236453,
+      "df_use_pct": 89,
+      "scanned_bytes": 7532298895360,
+      "scanned_files": 3211400,
+      "scanned_dirs": 21598,
+      "errors": 12,
+      "tree": {
+        "name": "/data",
+        "bytes": 7532298895360,
+        "files": 3211400,
+        "uid": 0,
+        "mtime": 1719200000,
+        "other_bytes": 32212254720,
+        "children": [
+          {
+            "name": "sungjin",
+            "bytes": 2222645575680,
+            "files": 126700,
+            "uid": 1002,
+            "mtime": 1719027200,
+            "other_bytes": 21474836480,
+            "children": [
+              {
+                "name": "datasets",
+                "bytes": 1288490188800,
+                "files": 88000,
+                "uid": 1002,
+                "mtime": 1716608000,
+                "other_bytes": 0
+              },
+              {
+                "name": "checkpoints",
+                "bytes": 687194767360,
+                "files": 4200,
+                "uid": 1002,
+                "mtime": 1718854400,
+                "other_bytes": 0
+              },
+              {
+                "name": "runs",
+                "bytes": 225485783040,
+                "files": 33000,
+                "uid": 1002,
+                "mtime": 1719113600,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "sungoh",
+            "bytes": 970662608896,
+            "files": 1315600,
+            "uid": 1003,
+            "mtime": 1719027200,
+            "other_bytes": 15032385536,
+            "children": [
+              {
+                "name": "imagenet",
+                "bytes": 515396075520,
+                "files": 1300000,
+                "uid": 1003,
+                "mtime": 1701920000,
+                "other_bytes": 0
+              },
+              {
+                "name": "models",
+                "bytes": 343597383680,
+                "files": 2100,
+                "uid": 1003,
+                "mtime": 1718336000,
+                "other_bytes": 0
+              },
+              {
+                "name": "tmp",
+                "bytes": 96636764160,
+                "files": 12000,
+                "uid": 1003,
+                "mtime": 1719200000,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "donguk",
+            "bytes": 1171452329984,
+            "files": 246900,
+            "uid": 1004,
+            "mtime": 1719027200,
+            "other_bytes": 11811160064,
+            "children": [
+              {
+                "name": "video_raw",
+                "bytes": 966367641600,
+                "files": 5400,
+                "uid": 1004,
+                "mtime": 1714016000,
+                "other_bytes": 0
+              },
+              {
+                "name": "features",
+                "bytes": 193273528320,
+                "files": 240000,
+                "uid": 1004,
+                "mtime": 1718163200,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "dohyun",
+            "bytes": 609885356032,
+            "files": 67300,
+            "uid": 1005,
+            "mtime": 1719027200,
+            "other_bytes": 8589934592,
+            "children": [
+              {
+                "name": "nerf_scenes",
+                "bytes": 440234147840,
+                "files": 64000,
+                "uid": 1005,
+                "mtime": 1718508800,
+                "other_bytes": 0
+              },
+              {
+                "name": "ckpt",
+                "bytes": 161061273600,
+                "files": 1800,
+                "uid": 1005,
+                "mtime": 1718940800,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "jaehyeon",
+            "bytes": 845034815488,
+            "files": 61700,
+            "uid": 1006,
+            "mtime": 1719027200,
+            "other_bytes": 7516192768,
+            "children": [
+              {
+                "name": "llm_corpus",
+                "bytes": 773094113280,
+                "files": 9200,
+                "uid": 1006,
+                "mtime": 1715312000,
+                "other_bytes": 0
+              },
+              {
+                "name": "eval",
+                "bytes": 64424509440,
+                "files": 51000,
+                "uid": 1006,
+                "mtime": 1719027200,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "shared",
+            "bytes": 1680405954560,
+            "files": 1393000,
+            "uid": 0,
+            "mtime": 1717904000,
+            "other_bytes": 26843545600,
+            "children": [
+              {
+                "name": "public_datasets",
+                "bytes": 1610612736000,
+                "files": 410000,
+                "uid": 0,
+                "mtime": 80,
+                "other_bytes": 0
+              },
+              {
+                "name": "conda_envs",
+                "bytes": 42949672960,
+                "files": 980000,
+                "uid": 0,
+                "mtime": 22,
+                "other_bytes": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "path": "/data1",
+      "fstype": "ext4",
+      "df_total": 1554023639870,
+      "df_used": 1195976593244,
+      "df_avail": 358047046626,
+      "df_use_pct": 77,
+      "scanned_bytes": 1149977493504,
+      "scanned_files": 376400,
+      "scanned_dirs": 11041,
+      "errors": 0,
+      "tree": {
+        "name": "/data1",
+        "bytes": 1149977493504,
+        "files": 376400,
+        "uid": 0,
+        "mtime": 1719200000,
+        "other_bytes": 12884901888,
+        "children": [
+          {
+            "name": "geonyeong",
+            "bytes": 707595862016,
+            "files": 318800,
+            "uid": 1007,
+            "mtime": 1719113600,
+            "other_bytes": 9663676416,
+            "children": [
+              {
+                "name": "diffusion",
+                "bytes": 558345748480,
+                "files": 78000,
+                "uid": 1007,
+                "mtime": 2,
+                "other_bytes": 0
+              },
+              {
+                "name": "samples",
+                "bytes": 139586437120,
+                "files": 240000,
+                "uid": 1007,
+                "mtime": 0,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "shchoi",
+            "bytes": 429496729600,
+            "files": 57500,
+            "uid": 1008,
+            "mtime": 1718681600,
+            "other_bytes": 5368709120,
+            "children": [
+              {
+                "name": "backups",
+                "bytes": 322122547200,
+                "files": 1200,
+                "uid": 1008,
+                "mtime": 20,
+                "other_bytes": 0
+              },
+              {
+                "name": "scratch",
+                "bytes": 102005473280,
+                "files": 56000,
+                "uid": 1008,
+                "mtime": 1,
+                "other_bytes": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "path": "/data3",
+      "fstype": "xfs",
+      "df_total": 5771958827235,
+      "df_used": 5402553462292,
+      "df_avail": 369405364943,
+      "df_use_pct": 94,
+      "scanned_bytes": 5194762944512,
+      "scanned_files": 1031290,
+      "scanned_dirs": 53808,
+      "errors": 2,
+      "tree": {
+        "name": "/data3",
+        "bytes": 5194762944512,
+        "files": 1031290,
+        "uid": 0,
+        "mtime": 1719200000,
+        "other_bytes": 19327352832,
+        "children": [
+          {
+            "name": "archive",
+            "bytes": 4767413698560,
+            "files": 1009200,
+            "uid": 0,
+            "mtime": 1712288000,
+            "other_bytes": 42949672960,
+            "children": [
+              {
+                "name": "2023_projects",
+                "bytes": 2254857830400,
+                "files": 520000,
+                "uid": 0,
+                "mtime": 400,
+                "other_bytes": 0
+              },
+              {
+                "name": "2024_projects",
+                "bytes": 1825361100800,
+                "files": 480000,
+                "uid": 0,
+                "mtime": 200,
+                "other_bytes": 0
+              },
+              {
+                "name": "old_checkpoints",
+                "bytes": 644245094400,
+                "files": 8000,
+                "uid": 1002,
+                "mtime": 300,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "donguk_archive",
+            "bytes": 408021893120,
+            "files": 22000,
+            "uid": 1004,
+            "mtime": 150,
+            "other_bytes": 0
+          }
+        ]
+      }
+    }
+  ],
+  "users": [
+    {
+      "uid": 0,
+      "name": "root",
+      "bytes": 5915650555904,
+      "files": 1885371,
+      "by_mount": {
+        "/": 47651487744,
+        "/data": 1712618209280,
+        "/data1": 12884901888,
+        "/data3": 4142495956992
+      }
+    },
+    {
+      "uid": 1002,
+      "name": "sungjin",
+      "bytes": 2866890670080,
+      "files": 912027,
+      "by_mount": {
+        "/data": 2222645575680,
+        "/data3": 644245094400
+      }
+    },
+    {
+      "uid": 1004,
+      "name": "donguk",
+      "bytes": 1579474223104,
+      "files": 504925,
+      "by_mount": {
+        "/data": 1171452329984,
+        "/data3": 408021893120
+      }
+    },
+    {
+      "uid": 1003,
+      "name": "sungoh",
+      "bytes": 970662608896,
+      "files": 312658,
+      "by_mount": {
+        "/data": 970662608896
+      }
+    },
+    {
+      "uid": 1006,
+      "name": "jaehyeon",
+      "bytes": 845034815488,
+      "files": 272044,
+      "by_mount": {
+        "/data": 845034815488
+      }
+    },
+    {
+      "uid": 1007,
+      "name": "geonyeong",
+      "bytes": 707595862016,
+      "files": 228003,
+      "by_mount": {
+        "/data1": 707595862016
+      }
+    },
+    {
+      "uid": 1005,
+      "name": "dohyun",
+      "bytes": 609885356032,
+      "files": 196892,
+      "by_mount": {
+        "/data": 609885356032
+      }
+    },
+    {
+      "uid": 1008,
+      "name": "shchoi",
+      "bytes": 518487277568,
+      "files": 166375,
+      "by_mount": {
+        "/": 88990547968,
+        "/data1": 429496729600
+      }
+    },
+    {
+      "uid": 1010,
+      "name": "minseo",
+      "bytes": 6442450944,
+      "files": 3477,
+      "by_mount": {
+        "/": 6442450944
+      }
+    }
+  ],
+  "top_files": [
+    {
+      "path": "/data3/archive/2023_projects/backup_full.img",
+      "bytes": 408242094080,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1683776000
+    },
+    {
+      "path": "/data/shared/public_datasets/laion_subset.tar",
+      "bytes": 343679172608,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1712115200
+    },
+    {
+      "path": "/data/sungjin/datasets/pile_dedup.bin",
+      "bytes": 279464378368,
+      "uid": 1002,
+      "owner": "sungjin",
+      "mtime": 1716521600
+    },
+    {
+      "path": "/data3/archive/2024_projects/dataset_v3.tar",
+      "bytes": 258450915328,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1701488000
+    },
+    {
+      "path": "/data/sungoh/imagenet/imagenet_full.tar",
+      "bytes": 225919893504,
+      "uid": 1003,
+      "owner": "sungoh",
+      "mtime": 1698464000
+    },
+    {
+      "path": "/data/jaehyeon/llm_corpus/c4_en.jsonl",
+      "bytes": 202800889856,
+      "uid": 1006,
+      "owner": "jaehyeon",
+      "mtime": 1715225600
+    },
+    {
+      "path": "/data3/donguk_archive/raw_capture_2023.tar",
+      "bytes": 139671371776,
+      "uid": 1004,
+      "owner": "donguk",
+      "mtime": 1706153600
+    },
+    {
+      "path": "/data1/shchoi/backups/home_snapshot_0601.tar.zst",
+      "bytes": 128967507968,
+      "uid": 1008,
+      "owner": "shchoi",
+      "mtime": 1717385600
+    },
+    {
+      "path": "/data/sungjin/datasets/audio_set.tar",
+      "bytes": 102941851648,
+      "uid": 1002,
+      "owner": "sungjin",
+      "mtime": 1716348800
+    },
+    {
+      "path": "/data/donguk/video_raw/session_4k_master.mov",
+      "bytes": 102280200192,
+      "uid": 1004,
+      "owner": "donguk",
+      "mtime": 1713929600
+    },
+    {
+      "path": "/data/donguk/video_raw/drone_flight_8k.mov",
+      "bytes": 82284904448,
+      "uid": 1004,
+      "owner": "donguk",
+      "mtime": 1713670400
+    },
+    {
+      "path": "/data/sungoh/imagenet/val_high_res.tar",
+      "bytes": 69081235456,
+      "uid": 1003,
+      "owner": "sungoh",
+      "mtime": 1701833600
+    },
+    {
+      "path": "/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt",
+      "bytes": 56743690240,
+      "uid": 1002,
+      "owner": "sungjin",
+      "mtime": 1692848000
+    },
+    {
+      "path": "/data/sungjin/checkpoints/run0421_final.pt",
+      "bytes": 51344572416,
+      "uid": 1002,
+      "owner": "sungjin",
+      "mtime": 1718854400
+    },
+    {
+      "path": "/data/dohyun/nerf_scenes/city_block_raw.zip",
+      "bytes": 44492128256,
+      "uid": 1005,
+      "owner": "dohyun",
+      "mtime": 1718422400
+    },
+    {
+      "path": "/data/sungoh/tmp/scratch_blob.bin",
+      "bytes": 43020976128,
+      "uid": 1003,
+      "owner": "sungoh",
+      "mtime": 1719200000
+    },
+    {
+      "path": "/data/donguk/features/clip_feats.npy",
+      "bytes": 36579573760,
+      "uid": 1004,
+      "owner": "donguk",
+      "mtime": 1718076800
+    },
+    {
+      "path": "/data3/archive/2023_projects/logs_archive.tar.gz",
+      "bytes": 29602349056,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1684467200
+    },
+    {
+      "path": "/data/shared/public_datasets/coco2017.zip",
+      "bytes": 27506245632,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1712201600
+    },
+    {
+      "path": "/data/jaehyeon/llm_corpus/wiki_dump.xml.bz2",
+      "bytes": 23657971712,
+      "uid": 1006,
+      "owner": "jaehyeon",
+      "mtime": 1714880000
+    },
+    {
+      "path": "/data1/shchoi/scratch/core.dump",
+      "bytes": 20182990848,
+      "uid": 1008,
+      "owner": "shchoi",
+      "mtime": 1719113600
+    },
+    {
+      "path": "/data1/geonyeong/diffusion/sd_xl_weights.safetensors",
+      "bytes": 14669578240,
+      "uid": 1007,
+      "owner": "geonyeong",
+      "mtime": 1718940800
+    },
+    {
+      "path": "/data/sungoh/models/vit_huge.bin",
+      "bytes": 12178161664,
+      "uid": 1003,
+      "owner": "sungoh",
+      "mtime": 1718249600
+    },
+    {
+      "path": "/data/dohyun/ckpt/nerf_big_080000.pth",
+      "bytes": 10331619328,
+      "uid": 1005,
+      "owner": "dohyun",
+      "mtime": 1718854400
+    },
+    {
+      "path": "/var/lib/docker/overlay2_blob.img",
+      "bytes": 9708765184,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1718768000
+    },
+    {
+      "path": "/data1/geonyeong/samples/grid_render.mp4",
+      "bytes": 8930721792,
+      "uid": 1007,
+      "owner": "geonyeong",
+      "mtime": 1719113600
+    },
+    {
+      "path": "/data/sungjin/runs/tensorboard_events.bin",
+      "bytes": 8442085376,
+      "uid": 1002,
+      "owner": "sungjin",
+      "mtime": 1719113600
+    },
+    {
+      "path": "/data/shared/conda_envs/env_torch.tar.gz",
+      "bytes": 6515851264,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1717299200
+    },
+    {
+      "path": "/data/jaehyeon/eval/results_dump.parquet",
+      "bytes": 6014631936,
+      "uid": 1006,
+      "owner": "jaehyeon",
+      "mtime": 1719027200
+    },
+    {
+      "path": "/home/shchoi/miniconda3/pkgs/cuda_toolkit.tar",
+      "bytes": 4798283776,
+      "uid": 1008,
+      "owner": "shchoi",
+      "mtime": 1715657600
+    }
+  ],
+  "stale": [
+    {
+      "path": "/data3/archive/2023_projects/backup_full.img",
+      "bytes": 408699273216,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1683776000,
+      "age_days": 410
+    },
+    {
+      "path": "/data3/archive/2024_projects/dataset_v3.tar",
+      "bytes": 257915092992,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1701488000,
+      "age_days": 205
+    },
+    {
+      "path": "/data/sungoh/imagenet/imagenet_full.tar",
+      "bytes": 226209300480,
+      "uid": 1003,
+      "owner": "sungoh",
+      "mtime": 1698464000,
+      "age_days": 240
+    },
+    {
+      "path": "/data3/donguk_archive/raw_capture_2023.tar",
+      "bytes": 140325683200,
+      "uid": 1004,
+      "owner": "donguk",
+      "mtime": 1656992000,
+      "age_days": 720
+    },
+    {
+      "path": "/data/donguk/video_raw/drone_flight_8k.mov",
+      "bytes": 81777393664,
+      "uid": 1004,
+      "owner": "donguk",
+      "mtime": 1686368000,
+      "age_days": 380
+    },
+    {
+      "path": "/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt",
+      "bytes": 55928946688,
+      "uid": 1002,
+      "owner": "sungjin",
+      "mtime": 1692848000,
+      "age_days": 305
+    },
+    {
+      "path": "/data/sungjin/checkpoints/run0119_obsolete.pt",
+      "bytes": 51032096768,
+      "uid": 1002,
+      "owner": "sungjin",
+      "mtime": 1702956800,
+      "age_days": 188
+    },
+    {
+      "path": "/data/dohyun/nerf_scenes/abandoned_scene.zip",
+      "bytes": 44042289152,
+      "uid": 1005,
+      "owner": "dohyun",
+      "mtime": 1706240000,
+      "age_days": 150
+    },
+    {
+      "path": "/data/sungoh/tmp/scratch_blob.bin",
+      "bytes": 43058724864,
+      "uid": 1003,
+      "owner": "sungoh",
+      "mtime": 1704080000,
+      "age_days": 175
+    },
+    {
+      "path": "/data3/archive/2023_projects/logs_archive.tar.gz",
+      "bytes": 29089595392,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1684467200,
+      "age_days": 402
+    },
+    {
+      "path": "/data1/shchoi/scratch/core.dump",
+      "bytes": 19876806656,
+      "uid": 1008,
+      "owner": "shchoi",
+      "mtime": 1696736000,
+      "age_days": 260
+    },
+    {
+      "path": "/data1/geonyeong/samples/grid_render.mp4",
+      "bytes": 8849981440,
+      "uid": 1007,
+      "owner": "geonyeong",
+      "mtime": 1707104000,
+      "age_days": 140
+    },
+    {
+      "path": "/home/minseo/old_env.tar.gz",
+      "bytes": 6835666944,
+      "uid": 1010,
+      "owner": "minseo",
+      "mtime": 1710992000,
+      "age_days": 95
+    },
+    {
+      "path": "/data/jaehyeon/eval/old_results.parquet",
+      "bytes": 6121586688,
+      "uid": 1006,
+      "owner": "jaehyeon",
+      "mtime": 1700192000,
+      "age_days": 220
+    },
+    {
+      "path": "/var/log/journal_archive.gz",
+      "bytes": 3673161728,
+      "uid": 0,
+      "owner": "root",
+      "mtime": 1707968000,
+      "age_days": 130
+    }
+  ],
+  "blocked": [
+    {
+      "path": "/home/jusung",
+      "reason": "EACCES"
+    },
+    {
+      "path": "/data/private_collab",
+      "reason": "EACCES"
+    }
+  ]
+}
