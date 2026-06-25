@@ -943,11 +943,13 @@ static void json_escape(FILE *f, const char *s) {
             default:
                 if (c < 0x20) {
                     fprintf(f, "\\u%04x", c);
+                } else if (c >= 0x80) {
+                    /* Keep generated JSON strictly UTF-8 parseable even when
+                     * filesystem names contain arbitrary non-UTF8 bytes.
+                     * Escaping every high byte as U+00XX preserves byte-level
+                     * observability without emitting invalid JSON text. */
+                    fprintf(f, "\\u%04x", c);
                 } else {
-                    /* Emit byte as-is. Valid UTF-8 passes through; lone bytes
-                     * are technically invalid JSON but we keep paths faithful.
-                     * To stay strictly valid we escape >=0x80 only if not part
-                     * of UTF-8; cheapest robust choice: pass through. */
                     fputc(c, f);
                 }
         }
@@ -1005,7 +1007,8 @@ static void fill_df(const char *path, struct mount_result *mr) {
 static void usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [--threads N] [--prune-home MB] [--prune-data MB]\n"
-        "          [--top N] [--stale-days D] [--out PATH] [PATH ...]\n",
+        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR] [PATH ...]\n"
+        "       default output: data/<hostname>.json relative to the current directory\n",
         prog);
 }
 
@@ -1035,6 +1038,7 @@ int main(int argc, char **argv) {
     int top_n = DEFAULT_TOP;
     int stale_days = DEFAULT_STALE_DAYS;
     const char *out_path = NULL;
+    const char *out_dir = "data";
 
     char *targets_buf[64];
     int ntargets = 0;
@@ -1053,6 +1057,8 @@ int main(int argc, char **argv) {
             stale_days = atoi(argv[++i]);
         } else if (strcmp(a, "--out") == 0 && i+1 < argc) {
             out_path = argv[++i];
+        } else if (strcmp(a, "--out-dir") == 0 && i+1 < argc) {
+            out_dir = argv[++i];
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
             usage(argv[0]); return 0;
         } else if (a[0] == '-') {
@@ -1132,8 +1138,7 @@ int main(int argc, char **argv) {
     /* ---- Build output path ---- */
     char default_out[1024];
     if (!out_path) {
-        snprintf(default_out, sizeof default_out,
-                 "/home/shchoi/storage-viz/data/%s.json", hostname);
+        snprintf(default_out, sizeof default_out, "%s/%s.json", out_dir, hostname);
         out_path = default_out;
     }
     char tmp_path[1100];
