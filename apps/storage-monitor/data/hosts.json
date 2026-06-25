@@ -1,0 +1,9 @@
+[
+  {
+    "id": "hinton",
+    "label": "hinton",
+    "file": "hinton",
+    "default": true,
+    "description": "Sample single-server fixture; generated snapshots use data/<hostname>.json and are intentionally ignored."
+  }
+]
