@@ -1,3 +1,5 @@
+"use strict";
+
 /* =========================================================================
    Treemap — build data ONLY for the selected mount, on demand
    ========================================================================= */
@@ -6,10 +8,9 @@
    user's browser. DOM tiles are always fully rendered and fit the container
    exactly, so there is no canvas to mis-size or clip. */
 let treemapStack = [];   // drill path: [{node, name, mount}] from mount root to current
-function rectArea(r) { return Math.max(0, r.w || 0) * Math.max(0, r.h || 0); }
 
 function squarify(items, x, y, w, h) {
-  const nodes = items.filter(d => d.value > 0).map(d => ({ ...d })).sort((a, b) => b.value - a.value);
+  const nodes = items.filter(d => d.value > 0).sort((a, b) => b.value - a.value);
   const total = nodes.reduce((s, d) => s + d.value, 0);
   if (total <= 0 || w <= 0 || h <= 0) return [];
   const scale = (w * h) / total;
@@ -43,8 +44,10 @@ function renderMountSeg() {
   });
 }
 
-/* Fit the DOM treemap to the viewport: labels may hide on tiny tiles, but tile
-   area stays proportional to raw byte values. */
+/* Fit the treemap to the viewport: from the chart's top down to the bottom, minus
+   the legend that sits below it. Sets an explicit px height and lets ECharts match
+   its canvas to it (same approach as the verified debug page). A floor keeps it
+   usable; the page can scroll on very short windows rather than clipping tiles. */
 function sizeTreemap() {
   const main = document.getElementById("main");
   const el = document.getElementById("treemap");
@@ -67,10 +70,26 @@ function sizeTreemap() {
 function isDark() { return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches); }
 
 const TM_MAXLEVEL = 3; // nest up to this many levels deep (drill for more); keeps tile area ∝ size
+const TM_MIN_VISIBLE_SIDE = 1;      // below this, border pixels would visually exaggerate size
+const TM_MIN_VISIBLE_AREA = 18;     // tiny labels/tiles are summarized instead of inflated
 function tmChildren(node) {
   const kids = (node.children || []).map(c => ({ c, value: c.bytes })).filter(k => k.value > 0);
   if (node.other_bytes > 0) kids.push({ c: { name: "(other small files)", bytes: node.other_bytes, uid: node.uid, _other: true }, value: node.other_bytes });
   return kids;
+}
+function addHiddenTreemapItem(el, c) {
+  if (!el._tmHiddenItems) el._tmHiddenItems = { bytes: 0, count: 0 };
+  el._tmHiddenItems.bytes += c.bytes || 0;
+  el._tmHiddenItems.count += 1;
+}
+function renderTreemapScaleNote(el) {
+  const h = el._tmHiddenItems;
+  if (!h || !h.count || h.bytes <= 0) return;
+  const note = document.createElement("div");
+  note.className = "tm-scale-note";
+  note.innerHTML = "Hidden at true scale: <b>" + humanBytes(h.bytes) + "</b> across " +
+    h.count.toLocaleString() + " tiny item" + (h.count === 1 ? "" : "s") + ". Drill in or use tables for exact paths.";
+  el.appendChild(note);
 }
 /* Progressively darken the owner color with nesting depth so the hierarchy is
    readable at a glance (top-level full color, each level deeper a bit darker). */
@@ -109,7 +128,7 @@ function tmTile(el, c, k, crumbPath, isGroup, level) {
   el.appendChild(t);
 }
 /* Recursive nested layout: each parent group renders a header band + its own
-   children squarified inside it, up to TM_MAXLEVEL levels (drill for deeper). */
+   children squarified inside it, up to TM_DEPTH levels (drill for deeper). */
 function layoutTreemap(el, node, x, y, w, h, level, crumbPath) {
   if (w < 8 || h < 8) return;
   const kids = tmChildren(node);
@@ -119,6 +138,10 @@ function layoutTreemap(el, node, x, y, w, h, level, crumbPath) {
   for (const k of rects) {
     const c = k.c;
     const ix = k.x + GAP / 2, iy = k.y + GAP / 2, iw = Math.max(0, k.w - GAP), ih = Math.max(0, k.h - GAP);
+    if ((k.w * k.h) < TM_MIN_VISIBLE_AREA || iw < TM_MIN_VISIBLE_SIDE || ih < TM_MIN_VISIBLE_SIDE) {
+      addHiddenTreemapItem(el, c);
+      continue;
+    }
     const hasKids = !c._other && c.children && c.children.length;
     // Cap nesting at TM_MAXLEVEL: each nested header steals area from its children,
     // so unbounded depth makes deep folders render far smaller than their size.
@@ -135,6 +158,7 @@ function renderTreemap() {
   if (!treemapStack.length || treemapStack[0].mount !== m.path) treemapStack = [{ node: m.tree, name: m.path, mount: m.path }];
   const H = sizeTreemap(), W = el.clientWidth;
   el.innerHTML = "";
+  el._tmHiddenItems = { bytes: 0, count: 0 };
 
   const bc = document.createElement("div"); bc.className = "tm-bc";
   treemapStack.forEach((s, idx) => {
@@ -150,6 +174,7 @@ function renderTreemap() {
   if (!tmChildren(cur).length) { const d = document.createElement("div"); d.className = "tm-note"; d.textContent = "No sub-items above the size threshold here."; el.appendChild(d); renderTreemapLegend(); return; }
   const P = 10, TOP = 38;
   layoutTreemap(el, cur, P, TOP, Math.max(0, W - 2 * P), Math.max(0, H - TOP - P), 0, crumbPath);
+  renderTreemapScaleNote(el);
   renderTreemapLegend();
 }
 
@@ -166,6 +191,3 @@ function renderTreemapLegend() {
   o.innerHTML = '<span class="swatch" style="background:' + OTHER_COLOR + '"></span>other owners / small-file remainder';
   wrap.appendChild(o);
 }
-
-
-if (typeof module !== "undefined" && module.exports) module.exports = { squarify, rectArea };
