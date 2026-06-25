@@ -9,6 +9,10 @@
    exactly, so there is no canvas to mis-size or clip. */
 let treemapStack = [];   // drill path: [{node, name, mount}] from mount root to current
 
+function rectArea(r) {
+  return Math.max(0, Number(r && r.w) || 0) * Math.max(0, Number(r && r.h) || 0);
+}
+
 function squarify(items, x, y, w, h) {
   const nodes = items.filter(d => d.value > 0).sort((a, b) => b.value - a.value);
   const total = nodes.reduce((s, d) => s + d.value, 0);
@@ -190,4 +194,17 @@ function renderTreemapLegend() {
   const o = document.createElement("div"); o.className = "legend-item";
   o.innerHTML = '<span class="swatch" style="background:' + OTHER_COLOR + '"></span>other owners / small-file remainder';
   wrap.appendChild(o);
+}
+
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    rectArea,
+    squarify,
+    tmChildren,
+    layoutTreemap,
+    TM_MAXLEVEL,
+    TM_MIN_VISIBLE_SIDE,
+    TM_MIN_VISIBLE_AREA,
+  };
 }

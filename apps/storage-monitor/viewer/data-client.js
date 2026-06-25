@@ -10,10 +10,10 @@
    - Fully offline; everything is JSON-driven.
    ========================================================================= */
 
-const HOSTS = [
-  { id: "hinton", label: "hinton", file: "hinton" }
-  // add hosts here: { id: "lecun", label: "lecun", file: "lecun" },
+const DEFAULT_HOSTS = [
+  { id: "hinton", label: "hinton", file: "hinton", default: true }
 ];
+var HOSTS = DEFAULT_HOSTS.slice();
 
 /* ---- Utilities ---- */
 function humanBytes(n) {
@@ -119,6 +119,39 @@ async function tryFetch(url) {
   if (!r.ok) throw new Error(url + " -> " + r.status);
   return r.json();
 }
+function isSafeHostToken(value) {
+  return typeof value === "string" && /^[A-Za-z0-9._-]+$/.test(value);
+}
+function normalizeHosts(input) {
+  const rows = Array.isArray(input) ? input : [];
+  const out = [];
+  for (const row of rows) {
+    const id = row && String(row.id || "").trim();
+    const file = row && String(row.file || id).trim();
+    if (!isSafeHostToken(id) || !isSafeHostToken(file)) continue;
+    out.push({
+      id,
+      label: String(row.label || id),
+      file,
+      default: row.default === true,
+      description: row.description ? String(row.description) : "",
+    });
+  }
+  if (!out.length) return DEFAULT_HOSTS.slice();
+  const preferred = out.findIndex(h => h.default);
+  if (preferred > 0) out.unshift(out.splice(preferred, 1)[0]);
+  return out;
+}
+async function loadHostManifest() {
+  try {
+    HOSTS = normalizeHosts(await tryFetch("data/hosts.json"));
+  } catch (e) {
+    console.warn("[storage-viz] data/hosts.json unavailable; using default host manifest", e);
+    HOSTS = DEFAULT_HOSTS.slice();
+  }
+  if (typeof globalThis !== "undefined") globalThis.HOSTS = HOSTS;
+  return HOSTS;
+}
 async function loadHost(host) {
   const candidates = ["data/" + host.file + ".json", "data/" + host.file + ".sample.json"];
   let lastErr = null;
@@ -127,6 +160,13 @@ async function loadHost(host) {
     catch (e) { lastErr = e; }
   }
   throw lastErr || new Error("no data file for " + host.id);
+}
+
+if (typeof globalThis !== "undefined") {
+  Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost });
+}
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { DEFAULT_HOSTS, normalizeHosts };
 }
 
 /* =========================================================================

@@ -18,6 +18,20 @@ function testHostManifest() {
   }
 }
 
+function testHostManifestHelpers() {
+  const { normalizeHosts } = require("./data-client.js");
+  const hosts = normalizeHosts([
+    { id: "hinton", label: "Hinton", file: "hinton", default: true },
+    { id: "../bad", label: "bad", file: "../bad" },
+    { id: "lecun", file: "lecun" },
+  ]);
+  assert.deepStrictEqual(hosts.map(h => h.id), ["hinton", "lecun"]);
+  assert.strictEqual(hosts[0].label, "Hinton");
+  assert.strictEqual(hosts[1].label, "lecun");
+  assert.strictEqual(hosts[0].default, true);
+  assert.deepStrictEqual(normalizeHosts([]), [{ id: "hinton", label: "hinton", file: "hinton", default: true }]);
+}
+
 function testTreemapFidelity() {
   const { squarify, rectArea } = require("./treemap.js");
   const gib = 1024 ** 3;
@@ -50,6 +64,7 @@ function testDeleteCommandGeneration() {
 }
 
 testHostManifest();
+testHostManifestHelpers();
 testTreemapFidelity();
 testDeleteCommandGeneration();
 console.log("viewer regression tests passed");

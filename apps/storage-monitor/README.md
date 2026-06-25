@@ -12,7 +12,7 @@ Built for `hinton`, designed to be portable to any Linux lab server.
 | Part | Path | What it is |
 |------|------|------------|
 | Scanner | `scanner/hstscan.c` | C11 + pthreads parallel directory walker → one JSON snapshot. Zero external deps. |
-| Viewer | `viewer/index.html` + `viewer/echarts.min.js` | Self-contained offline dashboard (treemap / users / top files / stale). |
+| Viewer | `viewer/index.html` + `viewer/*.js` + `viewer/echarts.min.js` | Offline dashboard (treemap / users / top files / stale). |
 | Data | `data/<hostname>.json` | Scan output the viewer reads. Hostname-tagged for future multi-server. |
 | Install | `install.sh` | Build + install binary, systemd timer, LAN serving, dry-run verification. |
 
@@ -43,7 +43,7 @@ cd scanner && make
 sudo ./hstscan --out ../data/$(hostname).json   # produces data/<that-host>.json
 ```
 
-Drop that host's JSON into the configured data directory and add it to the host dropdown —
+Drop that host's JSON into the configured data directory and add it to `data/hosts.json` —
 the same dashboard renders any server's snapshot.
 
 ## Root access
@@ -57,8 +57,9 @@ nightly systemd timer runs as root, so scheduled scans are always complete).
 
 `install.sh` sets up a systemd timer that re-scans and atomically replaces the JSON. The
 dashboard fetches fresh JSON on each page load, and installed deployments use `viewer/serve.py`
-so the Rescan button can trigger an on-demand scan. Run `./install.sh --dry-run` first to
-write and syntax-check units without privileged `systemctl` actions.
+so the Rescan button truthfully shows manual-only status unless server-side rescan is
+explicitly enabled. Run `./install.sh --dry-run` first to write and syntax-check units
+without privileged `systemctl` actions.
 
 ## Data format
 
