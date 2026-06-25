@@ -72,3 +72,91 @@ manual-only. To expose server-side rescans intentionally, set either
 `STORAGE_VIZ_ENABLE_RESCAN=1` or `STORAGE_VIZ_RESCAN_COMMAND` in the HTTP service
 environment, then review the operational/security tradeoff before binding it to a
 shared network.
+
+## Optional AI Cleanup Advisor
+
+The AI Cleanup Advisor is disabled by default. Enable it only on a trusted local
+deployment after reviewing privacy and latency expectations. Production scan
+snapshots can contain private paths, user names, project names, and activity
+patterns, so the recommended path is a local model endpoint.
+
+### Core AI environment
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `STORAGE_VIZ_AI_ENABLED` | unset/disabled | Enables `/ai/status` and `/ai/recommend` behavior. Without this, AI status should report disabled and the dashboard remains usable. |
+| `STORAGE_VIZ_AI_PROVIDER` | `ollama` when enabled | `ollama`, `openai-compatible`, or `mock`. Tests should use `mock` or rule-only behavior. |
+| `STORAGE_VIZ_AI_ENDPOINT` | `http://127.0.0.1:11434` for Ollama | Local model server endpoint. Prefer loopback or a trusted internal gateway. |
+| `STORAGE_VIZ_AI_MODEL` | `qwen3.6:27b` | Recommended default local GPU advisor model; override per server. |
+| `STORAGE_VIZ_AI_TIMEOUT_SEC` | implementation default | Timeout for model requests. Keep bounded so the dashboard stays responsive. |
+| `STORAGE_VIZ_AI_CACHE_DIR` | implementation default | Cache for validated advisor results. Do not place generated cache files in tracked `data/`. |
+
+Recommended Ollama setup:
+
+```bash
+ollama pull qwen3.6:27b
+
+STORAGE_VIZ_AI_ENABLED=1 \
+STORAGE_VIZ_AI_PROVIDER=ollama \
+STORAGE_VIZ_AI_ENDPOINT=http://127.0.0.1:11434 \
+STORAGE_VIZ_AI_MODEL=qwen3.6:27b \
+python3 viewer/serve.py 8088
+```
+
+OpenAI-compatible local endpoint example for vLLM, SGLang, llama.cpp server, or
+an internal gateway:
+
+```bash
+STORAGE_VIZ_AI_ENABLED=1 \
+STORAGE_VIZ_AI_PROVIDER=openai-compatible \
+STORAGE_VIZ_AI_ENDPOINT=http://127.0.0.1:8000/v1 \
+STORAGE_VIZ_AI_MODEL=qwen3.6:27b \
+python3 viewer/serve.py 8088
+```
+
+Model tiers:
+
+- Fast fallback: `qwen3.5:9b` or another 7B-9B instruct model when latency is
+  more important than explanation quality.
+- Default GPU advisor: `qwen3.6:27b`.
+- High-quality batch mode: `qwen3.5:35b` or `llama3.3:70b` only when VRAM and
+  latency budgets allow.
+
+The product must remain testable without a live model runtime. Use rule-only or
+mock mode for CI and development checks.
+
+### Read-only inspection environment
+
+Live filesystem evidence is separate from model enablement and remains disabled
+by default. Turn it on only when snapshot evidence is not enough and the server
+policy is clear.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `STORAGE_VIZ_AI_READONLY_INSPECTION` | unset/disabled | Enables server-owned live metadata inspection. |
+| `STORAGE_VIZ_AI_ALLOWED_ROOTS` | unset | Comma-separated roots eligible for inspection, for example `/home,/data,/data1`. |
+| `STORAGE_VIZ_AI_MAX_INSPECT_PATHS` | implementation default | Max paths inspected per request. |
+| `STORAGE_VIZ_AI_MAX_INSPECT_DEPTH` | implementation default | Max shallow traversal depth. |
+| `STORAGE_VIZ_AI_INSPECT_TIMEOUT_SEC` | implementation default | Hard timeout for inspection. |
+
+Inspection safety requirements:
+
+- Reject `/`, one-segment top-level paths such as `/home`, system-critical
+  paths, relative paths, NUL-byte paths, and symlinks that escape allowed roots.
+- Return metadata only by default: stat data, shallow entry counts, aggregate
+  size summaries, mtime ranges, and extension/type counts.
+- Do not read file contents, run shell strings, use `sudo`, write files, delete,
+  move, chmod/chown, or traverse unbounded symlink trees.
+- Enforce timeout, depth, path-count, entry-count, and returned-evidence limits.
+
+### Advisor troubleshooting
+
+- `/ai/status` disabled: verify `STORAGE_VIZ_AI_ENABLED=1` is present in the HTTP
+  service environment and restart the service.
+- Model timeout/error: keep the dashboard usable, fall back to rule-only results
+  where available, and check the local model server logs.
+- No badges: confirm `/ai/recommend` returns `schema_version: 1`
+  recommendations that pass `docs/ai-advisor-schema.md` validation and that
+  exclusions are not hiding them.
+- Unsafe recommendation dropped: inspect validation errors first; the validator
+  should reject root, mount, top-level, system, relative, and malformed paths.

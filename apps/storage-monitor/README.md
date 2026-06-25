@@ -13,6 +13,7 @@ Built for `hinton`, designed to be portable to any Linux lab server.
 |------|------|------------|
 | Scanner | `scanner/hstscan.c` | C11 + pthreads parallel directory walker → one JSON snapshot. Zero external deps. |
 | Viewer | `viewer/index.html` + `viewer/*.js` + `viewer/echarts.min.js` | Offline dashboard (treemap / users / top files / stale). |
+| AI Advisor | `docs/ai-cleanup-advisor.md`, `docs/ai-advisor-schema.md`, optional `/ai/*` runtime endpoints | Optional local-first cleanup advice: badges/details/exclusions from snapshot evidence. Disabled by default. |
 | Data | `data/<hostname>.json` | Scan output the viewer reads. Hostname-tagged for future multi-server. |
 | Install | `install.sh` | Build + install binary, systemd timer, LAN serving, dry-run verification. |
 
@@ -60,6 +61,35 @@ dashboard fetches fresh JSON on each page load, and installed deployments use `v
 so the Rescan button truthfully shows manual-only status unless server-side rescan is
 explicitly enabled. Run `./install.sh --dry-run` first to write and syntax-check units
 without privileged `systemctl` actions.
+
+## Optional AI Cleanup Advisor
+
+The AI Cleanup Advisor is optional and local-first. With no AI environment
+variables set, the dashboard continues to work normally and `/ai/status` should
+report a disabled, non-blocking state. When enabled, the advisor uses
+deterministic snapshot rules first and can optionally ask a local LLM to
+summarize/prioritize bounded evidence.
+
+Safety rules:
+
+- AI results are suggestions for humans to review; storage-viz does not execute
+  delete or move commands.
+- The LLM never receives shell/filesystem authority. Optional live inspection is
+  server-owned, read-only, metadata-only, allowlisted, and disabled by default.
+- Only low-risk delete recommendations may be staged into the existing
+  copy-only cleanup command panel; move/dedupe/investigate advice opens details.
+
+Recommended local GPU default:
+
+```bash
+STORAGE_VIZ_AI_ENABLED=1
+STORAGE_VIZ_AI_PROVIDER=ollama
+STORAGE_VIZ_AI_ENDPOINT=http://127.0.0.1:11434
+STORAGE_VIZ_AI_MODEL=qwen3.6:27b
+```
+
+See `docs/ai-cleanup-advisor.md`, `docs/ai-advisor-schema.md`, and
+`docs/operations.md` for the contract, privacy model, and runtime setup.
 
 ## Data format
 

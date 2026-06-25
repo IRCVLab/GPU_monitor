@@ -13,6 +13,7 @@ serve the viewer and data files.
 | Data fixtures | `data/hosts.json`, `data/*.sample.json`, `data/gen_sample.py` | Provide trackable host metadata and deterministic sample data for viewer development and smoke tests. | Generated production snapshots stay ignored; manifests and sample fixtures stay tracked. |
 | Viewer | `viewer/index.html`, `viewer/echarts.min.js`, future `viewer/*.js` modules | Render the snapshot offline: treemap, users, top files, stale candidates, and cleanup-assist UI. | Browser code must remain local/offline and tolerate additive schema-v1 fields. |
 | Runtime server | `viewer/serve.py`, `install.sh` | Serve static assets and, when explicitly configured, expose rescan status/control. | The UI must reflect actual runtime capabilities; static mode must not pretend rescan is available. |
+| AI Advisor | `viewer/ai_advisor.py`, optional `/ai/status` and `/ai/recommend`, `docs/ai-*.md` | Optional local-first cleanup advice from deterministic snapshot evidence plus a validated local LLM response. | Disabled by default; no destructive authority; LLM receives bounded evidence only, never shell/filesystem access. |
 | Operations docs | `docs/operations.md` | Deployment, systemd, logs, rescan, and operator runbooks. | Runtime specifics belong there rather than in code comments or viewer assumptions. |
 | Schema docs | `docs/schema-v1.md` | Snapshot field contract and compatibility notes. | Schema-v1 is additive-compatible: old viewers ignore unknown fields. |
 
@@ -32,6 +33,23 @@ data/<hostname>.sample.json           # tracked dev/test fixtures
 The scanner owns measurement. The viewer owns presentation. The runtime layer
 owns how often snapshots are refreshed. Keeping these boundaries separate makes
 another server a data/config change rather than a source edit.
+
+When enabled, the AI Advisor is a runtime-server extension over the same
+snapshot contract. It does not change scanner ownership of measurement and does
+not add browser-side delete/move authority:
+
+```text
+data/<hostname>.json
+  └─ deterministic advisor analyzer
+       ├─ optional bounded read-only metadata collector
+       ├─ optional local LLM provider
+       └─ strict recommendation schema + safety filters
+            └─ viewer badges/details/exclusions
+```
+
+The advisor can recommend delete, move, dedupe, archive, investigate, or keep,
+but recommendations are evidence-backed suggestions. Only safe delete-type
+recommendations may be staged into the existing copy-only cleanup command panel.
 
 ## Host manifest contract
 
@@ -80,6 +98,13 @@ python3 data/gen_sample.py /tmp/hinton.sample.json
   proportional to bytes at the same comparison level.
 - Cleanup-assist UI may generate shell-escaped commands for humans to review,
   but the browser must not execute deletion or add a delete endpoint.
+- AI Advisor endpoints are optional, disabled by default, and must not accept
+  arbitrary browser-supplied filesystem paths. Browser requests identify a host
+  id and exclusions; the server resolves host data through the manifest/data
+  directory safety model.
+- LLM providers receive compact advisor evidence only. Any live filesystem
+  evidence is collected by bounded server code that is read-only,
+  metadata-only by default, and allowlisted.
 
 ## Future split points
 
