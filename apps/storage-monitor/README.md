@@ -37,19 +37,21 @@ Mount metadata is discovered from `/proc/self/mountinfo` and users from the pass
 To add a server:
 
 ```bash
-git clone <repo> && cd storage-viz/scanner && make
-sudo ./hstscan                    # produces data/<that-host>.json
+git clone <repo> && cd storage-viz
+./install.sh --dry-run                # build + unit syntax check, no privileged systemctl actions
+cd scanner && make
+sudo ./hstscan --out ../data/$(hostname).json   # produces data/<that-host>.json
 ```
 
-Drop that host's JSON next to the viewer and add it to the host dropdown — the same dashboard
-renders any server's snapshot.
+Drop that host's JSON into the configured data directory and add it to the host dropdown —
+the same dashboard renders any server's snapshot.
 
 ## Root access
 
 The scanner runs fine as a normal user but can only measure what it can read; unreadable
 directories (other users' private homes, `/var/lib/docker`, etc.) are listed under `blocked[]`
 and the dashboard shows how much is hidden. For a **complete** picture run it as root (the
-nightly cron runs as root, so scheduled scans are always complete).
+nightly systemd timer runs as root, so scheduled scans are always complete).
 
 ## Refresh
 
@@ -64,4 +66,3 @@ See `docs/schema-v1.md`, `docs/operations.md`, and `docs/host-manifest.md`. Key 
 (small entries collapsed into an `other_bytes` remainder so the treemap stays exact),
 plus **per-user totals by file owner**, a global **top-N largest files** list, and a
 **stale** (big + old) list of deletion candidates.
-```
