@@ -1,4 +1,6 @@
 data/*.json
+!data/hosts.json
+!data/*.sample.json
 scanner/hstscan
 scanner/*.o
 *.log
