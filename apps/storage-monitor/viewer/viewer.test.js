@@ -92,6 +92,31 @@ function testAdvisorClientFilteringAndBadges() {
   assert.strictEqual(ui.isAdvisorSafeDeleteRecommendation({ action: "delete", target_path: "/home", suggested_next_step: "review-delete-command" }), false, "top-level delete recs are guarded");
 }
 
+
+async function testAdvisorStatusFallsBackToSidecarPort() {
+  const client = require("./advisor-client.js");
+  const oldFetch = global.fetch;
+  const oldLocation = global.location;
+  const calls = [];
+  global.location = { protocol: "http:", hostname: "127.0.0.1", port: "8088", origin: "http://127.0.0.1:8088" };
+  global.fetch = async (url) => {
+    calls.push(String(url));
+    if (String(url) === "/ai/status") return { ok: false, status: 404, json: async () => ({}) };
+    if (String(url) === "http://127.0.0.1:18089/ai/status") {
+      return { ok: true, json: async () => ({ enabled: true, provider: "mock", model: "qwen3.6:27b", message: "AI Advisor is enabled." }) };
+    }
+    throw new Error("unexpected URL " + url);
+  };
+  try {
+    const status = await client.fetchAdvisorStatus();
+    assert.strictEqual(status.enabled, true, "advisor status should fall back to sidecar AI server when current 8088 server lacks /ai/status");
+    assert.deepStrictEqual(calls, ["/ai/status", "http://127.0.0.1:18089/ai/status"]);
+  } finally {
+    global.fetch = oldFetch;
+    global.location = oldLocation;
+  }
+}
+
 function testDeleteCommandGeneration() {
   const { shellQuote, buildDeleteCommands } = require("./selection.js");
   assert.strictEqual(shellQuote("/data/a b/it's.txt"), "'/data/a b/it'\"'\"'s.txt'");
@@ -109,10 +134,18 @@ function testDeleteCommandGeneration() {
   assert(result.warnings.some(w => w.includes("/data/parent/child.bin")), "descendant duplicates are warned");
 }
 
-testHostManifest();
-testHostManifestHelpers();
-testAdvisorHelpers();
-testTreemapFidelity();
-testDeleteCommandGeneration();
-testAdvisorClientFilteringAndBadges();
-console.log("viewer regression tests passed");
+async function main() {
+  testHostManifest();
+  testHostManifestHelpers();
+  testAdvisorHelpers();
+  testTreemapFidelity();
+  testDeleteCommandGeneration();
+  testAdvisorClientFilteringAndBadges();
+  await testAdvisorStatusFallsBackToSidecarPort();
+  console.log("viewer regression tests passed");
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
