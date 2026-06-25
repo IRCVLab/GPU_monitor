@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>storage-viz — treemap DEBUG</title>
+<script src="echarts.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #f5f5f7; color: #1d1d1f; }
+  #wrap { padding: 12px 16px 24px; }
+  h3 { margin: 4px 0 10px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .controls button, .controls select { font: 13px system-ui; padding: 5px 10px; border-radius: 8px; border: 1px solid #c7c7cc; background: #fff; cursor: pointer; }
+  /* THE FRAME: blue border = the card. If tiles get cut, they are cut at this blue edge. */
+  #tmcard { border: 3px solid #0071e3; border-radius: 14px; overflow: hidden; background: #1c1c1e; }
+  #tm { width: 100%; height: 600px; }
+  /* a red dashed box drawn at the ECharts canvas size, to visualize canvas-vs-card mismatch */
+  #panel {
+    position: fixed; top: 10px; right: 10px; z-index: 99999;
+    background: #0b0b0c; color: #46d35f; font: 12px/1.6 ui-monospace, Menlo, monospace;
+    padding: 12px 14px; border-radius: 10px; max-width: 360px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.45); border: 1px solid #333;
+  }
+  #panel b { color: #fff; }
+  #panel .bad { color: #ff5f56; font-weight: 700; }
+  #panel .good { color: #46d35f; }
+  #panel pre { margin: 0; white-space: pre-wrap; }
+  #panel input[type=range] { width: 100%; margin: 6px 0; }
+  #panel label { color: #bbb; }
+  #panel .btns { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  #panel button { font: 11px ui-monospace, monospace; padding: 4px 7px; border-radius: 6px; border: 1px solid #444; background: #1c1c1e; color: #ddd; cursor: pointer; }
+  #copybox { width: 100%; margin-top: 8px; font: 11px ui-monospace, monospace; background: #000; color: #9f9; border: 1px solid #333; border-radius: 6px; padding: 6px; height: 70px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h3>storage-viz — treemap fit DEBUG</h3>
+  <div class="controls">
+    <label>Mount: <select id="mountSel"></select></label>
+    <button id="fitBtn">Fit to viewport</button>
+    <button id="ovfBtn">Toggle card overflow (hidden ⇄ visible)</button>
+    <span style="color:#6e6e73;font-size:12px">Blue border = the frame. Drag the height slider (top-right) and watch where tiles get cut.</span>
+  </div>
+  <div id="tmcard"><div id="tm"></div></div>
+</div>
+
+<div id="panel">
+  <pre id="readout">loading…</pre>
+  <hr style="border-color:#333">
+  <label>treemap height: <b id="hval">600</b> px</label>
+  <input type="range" id="hslider" min="160" max="2400" value="600" step="10">
+  <div class="btns">
+    <button data-h="400">400</button><button data-h="600">600</button>
+    <button data-h="800">800</button><button data-h="1000">1000</button>
+    <button data-h="1200">1200</button><button data-h="fit">FIT</button>
+  </div>
+  <textarea id="copybox" readonly></textarea>
+  <div class="btns"><button id="copyBtn">Copy these numbers</button></div>
+</div>
+
+<script>
+"use strict";
+let chart = null, DATA = null, mountIdx = 0;
+const PAL = ["#548fc9","#9d54c9","#54c980","#c98f54","#c9bb54","#c95480","#5470c6","#54c9c9","#a98fd0","#7ec97e","#d0a05a","#cf6f9b","#6fa8dc","#b6d07a","#e0879f","#82c9bf"];
+const OTHER = "#9aa0a6";
+const ucol = new Map(); let uc = 0;
+function colorFor(uid){ if(uid==null) return OTHER; if(ucol.has(uid)) return ucol.get(uid); const c = uc<PAL.length?PAL[uc++]:OTHER; ucol.set(uid,c); return c; }
+function human(n){ if(n==null||isNaN(n)) return "—"; if(n<1024) return n+" B"; const u=["KB","MB","GB","TB","PB"]; let i=-1,v=n; do{v/=1024;i++;}while(v>=1024&&i<u.length-1); return v.toFixed(v<10?2:(v<100?1:0))+" "+u[i]; }
+
+function node(n,parent){
+  const path=((parent==="/"?"":parent)+"/"+n.name).replace(/\/+/g,"/");
+  const it={name:n.name,value:n.bytes,_path:path,_files:n.files,itemStyle:{color:colorFor(n.uid)}};
+  const kids=[];
+  if(n.children) for(const c of n.children) kids.push(node(c,path));
+  if(n.other_bytes>0) kids.push({name:"(other)",value:n.other_bytes,itemStyle:{color:OTHER,opacity:.5}});
+  if(kids.length) it.children=kids;
+  return it;
+}
+
+function render(){
+  const m = DATA.mounts[mountIdx];
+  const el = document.getElementById("tm");
+  if(!chart) chart = echarts.init(el,null,{renderer:"canvas"});
+  const root = node(m.tree,"");
+  const data = (root.children&&root.children.length)?root.children:[root];
+  chart.setOption({
+    series:[{type:"treemap",roam:false,leafDepth:2,width:"100%",height:"100%",top:36,left:10,right:10,bottom:10,
+      breadcrumb:{show:true,top:8,left:10},
+      label:{show:true,color:"#fff",fontFamily:"monospace",formatter:p=>p.name+"\n"+human(p.value)},
+      upperLabel:{show:true,height:26,color:"#fff",fontFamily:"monospace"},
+      itemStyle:{borderColor:"#1c1c1e",borderWidth:2,gapWidth:2,borderRadius:8},
+      levels:[{itemStyle:{gapWidth:4,borderRadius:12}},{itemStyle:{gapWidth:2,borderRadius:9},upperLabel:{show:true}},{itemStyle:{gapWidth:1,borderRadius:7},upperLabel:{show:true}}],
+      data}]
+  },true);
+  chart.resize();
+}
+
+function setH(h){
+  document.getElementById("tm").style.height = h + "px";
+  document.getElementById("hslider").value = h;
+  document.getElementById("hval").textContent = h;
+  if(chart) chart.resize();
+  setTimeout(update, 30);
+}
+function fitH(){
+  const card = document.getElementById("tmcard");
+  const top = card.getBoundingClientRect().top;
+  const h = Math.max(160, Math.floor(window.innerHeight - top - 24));
+  setH(h);
+}
+
+function update(){
+  const card = document.getElementById("tmcard");
+  const tm = document.getElementById("tm");
+  const cv = tm.querySelector("canvas");
+  const r = card.getBoundingClientRect();
+  const cardClipsBelow = r.bottom > window.innerHeight + 1;
+  const canvasH = cv ? cv.clientHeight : 0;
+  const tmH = tm.clientHeight;
+  const mismatch = Math.abs(canvasH - tmH) > 1;
+  const lines = [
+    "window:    " + window.innerWidth + " x " + window.innerHeight + "  (CSS px)",
+    "devicePR:  " + window.devicePixelRatio + "   visualScale: " + (window.visualViewport? window.visualViewport.scale.toFixed(2):"?"),
+    "outer:     " + window.outerWidth + " x " + window.outerHeight,
+    "----",
+    "card top:    " + Math.round(r.top),
+    "card bottom: " + Math.round(r.bottom) + (cardClipsBelow ? "   <-- BELOW WINDOW! (you must scroll; bottom is cut)" : "   (inside window: OK)"),
+    "card height: " + Math.round(r.height),
+    "tm div H:    " + tmH,
+    "canvas H:    " + canvasH + (mismatch ? "   <-- != tm div (ECharts size mismatch!)" : "   (== tm div: OK)"),
+    "----",
+    "verdict: " + ((cardClipsBelow||mismatch) ? "PROBLEM (see above)" : "fits, no clip"),
+  ];
+  const ro = document.getElementById("readout");
+  ro.textContent = lines.join("\n");
+  ro.className = (cardClipsBelow||mismatch) ? "bad" : "good";
+  document.getElementById("copybox").value =
+    "win="+window.innerWidth+"x"+window.innerHeight+" dpr="+window.devicePixelRatio+
+    " cardTop="+Math.round(r.top)+" cardBottom="+Math.round(r.bottom)+" winH="+window.innerHeight+
+    " tmH="+tmH+" canvasH="+canvasH+" belowWindow="+cardClipsBelow+" mismatch="+mismatch+
+    " ua="+navigator.userAgent;
+}
+
+async function init(){
+  try { DATA = await (await fetch("data/hinton.json?_="+Math.random(),{cache:"no-store"})).json(); }
+  catch(e){ try { DATA = await (await fetch("data/hinton.sample.json")).json(); } catch(_){ document.getElementById("readout").textContent="failed to load data: "+e; return; } }
+  ucol.clear(); uc=0;
+  [...(DATA.users||[])].sort((a,b)=>b.bytes-a.bytes).forEach(u=>colorFor(u.uid));
+  const sel = document.getElementById("mountSel");
+  DATA.mounts.forEach((m,i)=>{ const o=document.createElement("option"); o.value=i; o.textContent=m.path+"  ("+human(m.scanned_bytes)+")"; sel.appendChild(o); });
+  sel.onchange = ()=>{ mountIdx=+sel.value; render(); setTimeout(update,50); };
+  render();
+  setH(600);
+  document.getElementById("hslider").oninput = e => setH(+e.target.value);
+  document.querySelectorAll("#panel button[data-h]").forEach(b=> b.onclick=()=> b.dataset.h==="fit"?fitH():setH(+b.dataset.h));
+  document.getElementById("fitBtn").onclick = fitH;
+  document.getElementById("ovfBtn").onclick = ()=>{ const c=document.getElementById("tmcard"); c.style.overflow = c.style.overflow==="visible"?"hidden":"visible"; setTimeout(update,20); };
+  document.getElementById("copyBtn").onclick = ()=>{ const t=document.getElementById("copybox"); t.select(); document.execCommand("copy"); };
+  window.addEventListener("resize", ()=>{ if(chart) chart.resize(); update(); });
+  window.addEventListener("scroll", update, {passive:true});
+  setInterval(update, 500);
+  update();
+}
+document.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>
