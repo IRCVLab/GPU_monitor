@@ -33,6 +33,7 @@
         <button class="tab" data-tab="users" role="tab">Users</button>
         <button class="tab" data-tab="topfiles" role="tab">Top files</button>
         <button class="tab" data-tab="stale" role="tab">Stale</button>
+        <button class="tab" data-tab="advisor" role="tab">AI Advisor</button>
       </div>
     </nav>
   </header>
@@ -118,6 +119,31 @@
       </div>
       <div class="rowcount" id="staleCount"></div>
     </section>
+
+    <!-- AI ADVISOR -->
+    <section class="panel" id="panel-advisor">
+      <div class="advisor-head">
+        <div>
+          <h2 class="panel-title">AI Cleanup Advisor</h2>
+          <p class="panel-sub">Opt-in local advisor for evidence-backed cleanup, move, dedupe, archive, investigate, and keep recommendations.</p>
+        </div>
+        <div class="advisor-actions">
+          <span id="advisorStatus" class="advisor-status disabled">AI Advisor: disabled</span>
+          <button type="button" id="advisorRefresh">Refresh status</button>
+          <button type="button" class="primary" id="advisorRun" disabled>Run advisor</button>
+        </div>
+      </div>
+      <div class="advisor-grid">
+        <div class="advisor-main card">
+          <div id="advisorSummary"></div>
+          <div id="advisorRecommendations"></div>
+        </div>
+        <aside class="advisor-side">
+          <div class="card advisor-card"><h3>Details</h3><div id="advisorDetails"></div></div>
+          <div class="card advisor-card"><div class="advisor-card-title"><h3>Exclusions</h3><button type="button" id="advisorClearExclusions" data-advisor-clear-exclusions="1">Clear</button></div><div id="advisorExclusions"></div></div>
+        </aside>
+      </div>
+    </section>
   </main>
 </div>
 <div id="tmtip"></div>
@@ -135,6 +161,9 @@
 </div>
 <script src="data-client.js"></script>
 <script src="selection.js"></script>
+<script src="advisor-client.js"></script>
+<script src="advisor-ui.js"></script>
+<script src="advisor-badges.js"></script>
 <script src="treemap.js"></script>
 <script src="tables.js"></script>
 <script src="app.js"></script>
