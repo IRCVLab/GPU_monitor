@@ -1,5 +1,3 @@
-"use strict";
-
 /* =========================================================================
    Treemap — build data ONLY for the selected mount, on demand
    ========================================================================= */
@@ -8,9 +6,10 @@
    user's browser. DOM tiles are always fully rendered and fit the container
    exactly, so there is no canvas to mis-size or clip. */
 let treemapStack = [];   // drill path: [{node, name, mount}] from mount root to current
+function rectArea(r) { return Math.max(0, r.w || 0) * Math.max(0, r.h || 0); }
 
 function squarify(items, x, y, w, h) {
-  const nodes = items.filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+  const nodes = items.filter(d => d.value > 0).map(d => ({ ...d })).sort((a, b) => b.value - a.value);
   const total = nodes.reduce((s, d) => s + d.value, 0);
   if (total <= 0 || w <= 0 || h <= 0) return [];
   const scale = (w * h) / total;
@@ -44,10 +43,8 @@ function renderMountSeg() {
   });
 }
 
-/* Fit the treemap to the viewport: from the chart's top down to the bottom, minus
-   the legend that sits below it. Sets an explicit px height and lets ECharts match
-   its canvas to it (same approach as the verified debug page). A floor keeps it
-   usable; the page can scroll on very short windows rather than clipping tiles. */
+/* Fit the DOM treemap to the viewport: labels may hide on tiny tiles, but tile
+   area stays proportional to raw byte values. */
 function sizeTreemap() {
   const main = document.getElementById("main");
   const el = document.getElementById("treemap");
@@ -112,7 +109,7 @@ function tmTile(el, c, k, crumbPath, isGroup, level) {
   el.appendChild(t);
 }
 /* Recursive nested layout: each parent group renders a header band + its own
-   children squarified inside it, up to TM_DEPTH levels (drill for deeper). */
+   children squarified inside it, up to TM_MAXLEVEL levels (drill for deeper). */
 function layoutTreemap(el, node, x, y, w, h, level, crumbPath) {
   if (w < 8 || h < 8) return;
   const kids = tmChildren(node);
@@ -169,3 +166,6 @@ function renderTreemapLegend() {
   o.innerHTML = '<span class="swatch" style="background:' + OTHER_COLOR + '"></span>other owners / small-file remainder';
   wrap.appendChild(o);
 }
+
+
+if (typeof module !== "undefined" && module.exports) module.exports = { squarify, rectArea };
