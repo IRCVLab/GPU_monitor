@@ -1,0 +1,46 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - text: storage
+        - generic [ref=e7]: ·
+        - text: viz
+        - generic [ref=e8]: — hinton
+        - generic [ref=e9]: BUILD B30
+      - generic [ref=e10]: Scanned 2026-06-25 · 1s
+      - generic [ref=e11]: scanner vsmoke · root scan
+      - generic [ref=e12]:
+        - 'generic "Last scan: 2026-06-25" [ref=e13]': Updated just now
+        - button "↻ Rescan" [ref=e14] [cursor=pointer]
+        - generic [ref=e15]: Host
+        - combobox "Host" [ref=e16] [cursor=pointer]:
+          - option "hinton" [selected]
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: /ext4
+        - generic [ref=e21]: 70%
+      - generic [ref=e24]: 700 GB used / 1000 GB · 300 GB free
+    - navigation [ref=e25]:
+      - tablist [ref=e26]:
+        - tab "Treemap" [ref=e27] [cursor=pointer]
+        - tab "Users" [ref=e28] [cursor=pointer]
+        - tab "Top files" [ref=e29] [cursor=pointer]
+        - tab "Stale" [ref=e30] [cursor=pointer]
+  - main [ref=e31]:
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - generic [ref=e34]:
+          - generic [ref=e35]: Mount
+          - button / [ref=e37] [cursor=pointer]
+        - generic [ref=e38]: Click a tile to drill in · breadcrumb to go back · color = owner
+      - generic [ref=e39]:
+        - button / [ref=e41] [cursor=pointer]
+        - generic [ref=e42]:
+          - generic:
+            - generic: big-600g
+            - generic: 600 GB
+      - generic [ref=e44]:
+        - generic [ref=e45]: alice
+        - generic [ref=e47]: bob
+        - generic [ref=e49]: uid 0
+        - generic [ref=e51]: other owners / small-file remainder
