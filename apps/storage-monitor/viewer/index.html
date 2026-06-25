@@ -122,25 +122,32 @@
 
     <!-- AI ADVISOR -->
     <section class="panel" id="panel-advisor">
-      <h2 class="panel-title">AI Cleanup Advisor</h2>
-      <p class="panel-sub">Optional local advisor: deterministic evidence first, local LLM second, no execution authority.</p>
-      <div class="advisor-card">
-        <div class="advisor-toolbar">
-          <div id="advisorStatus" class="advisor-status disabled">AI Advisor not checked yet.</div>
-          <button type="button" id="advisorRun" class="primary" disabled>Run advisor</button>
+      <div class="advisor-head">
+        <div>
+          <h2 class="panel-title">AI Cleanup Advisor</h2>
+          <p class="panel-sub">Opt-in local advisor for evidence-backed cleanup, move, dedupe, archive, investigate, and keep recommendations.</p>
         </div>
-        <div id="advisorSummary" class="advisor-summary"></div>
-        <div id="advisorList" class="advisor-list"></div>
-        <details class="advisor-exclusions-wrap">
-          <summary>Manage exclusions</summary>
-          <div id="advisorExclusions" class="advisor-exclusions"></div>
-        </details>
+        <div class="advisor-actions">
+          <span id="advisorStatus" class="advisor-status disabled">AI Advisor: disabled</span>
+          <button type="button" id="advisorRefresh">Refresh status</button>
+          <button type="button" class="primary" id="advisorRun" disabled>Run advisor</button>
+        </div>
+      </div>
+      <div class="advisor-grid">
+        <div class="advisor-main card">
+          <div id="advisorSummary"></div>
+          <div id="advisorFilters" class="advisor-filters"></div>
+          <div id="advisorRecommendations"></div>
+        </div>
+        <aside class="advisor-side">
+          <div class="card advisor-card"><h3>Details</h3><div id="advisorDetails"></div></div>
+          <div class="card advisor-card"><div class="advisor-card-title"><h3>Exclusions</h3><button type="button" id="advisorClearExclusions" data-advisor-clear-exclusions="1">Clear</button></div><div id="advisorExclusions"></div></div>
+        </aside>
       </div>
     </section>
   </main>
 </div>
 <div id="tmtip"></div>
-<div id="advisorDetail" class="advisor-detail" aria-hidden="true"></div>
 <div id="cleanupPanel" class="cleanup-panel" aria-hidden="true" aria-live="polite">
   <div class="cleanup-head">
     <div class="cleanup-title">Delete command builder</div>
