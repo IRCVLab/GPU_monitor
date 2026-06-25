@@ -90,14 +90,60 @@ function isDeleteSelectableRecommendation(rec) {
   return !!rec && rec.action === "delete" && rec.suggested_next_step === "review-delete-command" && typeof rec.target_path === "string" && rec.target_path.startsWith("/") && !rec.target_path.includes("\0") && advisorPathDepth(rec.target_path) > 1;
 }
 
+function advisorSidecarBaseUrl() {
+  if (typeof globalThis !== "undefined" && globalThis.STORAGE_VIZ_AI_BASE_URL) {
+    return String(globalThis.STORAGE_VIZ_AI_BASE_URL).replace(/\/+$/, "");
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      const configured = localStorage.getItem("storage-viz.aiAdvisor.baseUrl");
+      if (configured) return configured.replace(/\/+$/, "");
+    }
+  } catch (_) {}
+  if (typeof location !== "undefined" && location.protocol && location.hostname) {
+    const port = String(location.port || (location.protocol === "https:" ? "443" : "80"));
+    const fallbackPorts = ["18089", "18088"];
+    const urls = fallbackPorts.filter(p => p !== port).map(p => location.protocol + "//" + location.hostname + ":" + p);
+    return urls.join(",");
+  }
+  return "";
+}
+
+function advisorApiUrls(path) {
+  const urls = [path];
+  const sidecar = advisorSidecarBaseUrl();
+  if (sidecar) {
+    for (const base of sidecar.split(",").map(s => s.trim()).filter(Boolean)) urls.push(base + path);
+  }
+  return Array.from(new Set(urls));
+}
+
+async function fetchAdvisorJson(path, options) {
+  let lastError = null;
+  for (const url of advisorApiUrls(path)) {
+    try {
+      const response = await fetch(url, options);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        lastError = new Error((body && (body.error || body.message)) || (url + " -> " + response.status));
+        continue;
+      }
+      return { body, url };
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error("AI Advisor endpoint is unavailable");
+}
+
 async function fetchAdvisorStatus() {
   try {
-    const response = await fetch("/ai/status", { cache: "no-store" });
-    if (!response.ok) throw new Error("/ai/status -> " + response.status);
-    advisorState.status = await response.json();
+    const result = await fetchAdvisorJson("/ai/status", { cache: "no-store" });
+    advisorState.status = result.body;
     advisorState.error = null;
+    advisorState.apiBaseUrl = result.url.endsWith("/ai/status") ? result.url.slice(0, -"/ai/status".length) : "";
   } catch (e) {
-    advisorState.status = { enabled: false, provider: "static", model: "", message: "AI Advisor unavailable in static mode." };
+    advisorState.status = { enabled: false, provider: "static", model: "", message: "AI Advisor unavailable: " + String(e && e.message ? e.message : e) };
     advisorState.error = null;
   }
   if (typeof renderAdvisorPanel === "function") renderAdvisorPanel();
@@ -117,7 +163,7 @@ async function runAdvisor(options) {
   advisorState.error = null;
   if (typeof renderAdvisorPanel === "function") renderAdvisorPanel();
   try {
-    const response = await fetch("/ai/recommend", {
+    const result = await fetchAdvisorJson("/ai/recommend", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -128,8 +174,8 @@ async function runAdvisor(options) {
         force_refresh: !!opts.force_refresh,
       }),
     });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || ("/ai/recommend -> " + response.status));
+    const body = result.body;
+    advisorState.apiBaseUrl = result.url.endsWith("/ai/recommend") ? result.url.slice(0, -"/ai/recommend".length) : "";
     advisorState.payload = body;
     advisorState.recommendations = filterExcludedRecommendations(body.recommendations || [], advisorState.exclusions);
     advisorState.error = body.advisor_error || null;
@@ -169,6 +215,9 @@ function clearAdvisorExclusions(hostId) {
 if (typeof globalThis !== "undefined") {
   Object.assign(globalThis, {
     advisorState,
+    advisorSidecarBaseUrl,
+    advisorApiUrls,
+    fetchAdvisorJson,
     fetchAdvisorStatus,
     runAdvisor,
     loadAdvisorExclusions,
@@ -193,5 +242,10 @@ if (typeof module !== "undefined" && module.exports) {
     loadAdvisorExclusions,
     saveAdvisorExclusions,
     addAdvisorExclusion,
+    advisorSidecarBaseUrl,
+    advisorApiUrls,
+    fetchAdvisorJson,
+    fetchAdvisorStatus,
+    runAdvisor,
   };
 }
