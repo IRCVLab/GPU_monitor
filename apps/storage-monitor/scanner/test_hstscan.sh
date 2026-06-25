@@ -8,7 +8,8 @@
 #   2. hardlinked inode counted exactly once
 #   3. symlinks not descended / not double-counted
 #   4. chmod-000 dir appears in "blocked", scan still exits 0
-#   5. output JSON parses
+#   5. output JSON parses, including paths with non-UTF8 bytes
+#   6. configurable output directory is honored
 #
 set -u
 
@@ -52,6 +53,17 @@ mkdir -p "$TREE/noaccess"
 head -c 1048576 /dev/zero > "$TREE/noaccess/hidden.bin"
 chmod 000 "$TREE/noaccess"
 
+# Non-UTF8 filename regression: raw bytes such as 0xff must not make scanner
+# output invalid UTF-8 JSON.
+NONUTF8_DIR="$TREE/nonutf8"
+mkdir -p "$NONUTF8_DIR"
+$PY - "$NONUTF8_DIR" <<'PYEOF'
+import os, sys
+root = sys.argv[1].encode()
+with open(os.path.join(root, b"bad-\xff-name.bin"), "wb") as fh:
+    fh.write(b"\0" * 4096)
+PYEOF
+
 # Reference: du disk usage of the whole tree (one filesystem, block size 1).
 # du dedups hardlinks and does not follow symlinks, matching hstscan.
 # Run du with the dir readable but noaccess unreadable -> du also reports the
@@ -69,6 +81,13 @@ pass "scan completed with exit 0 (EACCES handled gracefully)"
 $PY -c 'import json,sys; json.load(open(sys.argv[1]))' "$OUT" \
     || fail "output JSON did not parse"
 pass "output JSON parses"
+
+$PY - "$OUT" <<'PYEOF' || fail "output JSON did not parse as explicit UTF-8"
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    json.load(fh)
+PYEOF
+pass "output JSON parses with explicit UTF-8 despite non-UTF8 filename bytes"
 
 # Pull figures out with python for robust assertions.
 read -r SCAN_BYTES BLOCKED_HAS_NOACCESS NODE_NAMES <<EOF
@@ -98,6 +117,28 @@ if [ "$DU_BYTES" = "$SCAN_BYTES" ]; then
 else
     fail "byte mismatch: du=$DU_BYTES scanner=$SCAN_BYTES"
 fi
+
+# 6. Portable output directory: --out-dir writes <hostname>.json under the
+# requested directory rather than relying on source-tree-specific paths.
+OUTDIR="$TMP/outdir"
+mkdir -p "$OUTDIR"
+"$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 5 --out-dir "$OUTDIR" "$TREE" \
+    >/dev/null 2>"$TMP/outdir.err"
+OUTDIR_RC=$?
+[ "$OUTDIR_RC" -eq 0 ] || fail "--out-dir scan exited non-zero ($OUTDIR_RC): $(cat "$TMP/outdir.err")"
+HOSTNAME="$($PY - <<'PYEOF'
+import socket
+print(socket.gethostname())
+PYEOF
+)"
+OUTDIR_FILE="$OUTDIR/$HOSTNAME.json"
+[ -f "$OUTDIR_FILE" ] || fail "--out-dir did not create $OUTDIR_FILE"
+$PY - "$OUTDIR_FILE" <<'PYEOF' || fail "--out-dir output JSON did not parse"
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    json.load(fh)
+PYEOF
+pass "--out-dir writes parseable data/<hostname>.json in requested directory"
 
 # 4. blocked contains noaccess.
 if [ "$BLOCKED_HAS_NOACCESS" = "1" ]; then
