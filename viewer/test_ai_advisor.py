@@ -14,11 +14,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ai_advisor import (
     AdvisorConfig,
     AdvisorValidationError,
+    DEFAULT_MAX_LLM_RECOMMENDATIONS,
+    DEFAULT_MODEL,
+    OllamaProvider,
+    TwoPassProviderMixin,
+    urlrequest as advisor_urlrequest,
     advisor_analysis_prompt,
     advisor_translation_prompt,
     build_advisor_response,
     build_evidence_pack,
     collect_readonly_metadata,
+    ensure_korean_user_text,
     filter_excluded,
     is_safe_target_path,
     rule_recommendations,
@@ -76,12 +82,49 @@ def valid_recommendation(*, category: str = "blocked-scan", target_path: str = "
 
 
 class AdvisorAnalyzerTest(unittest.TestCase):
+    def test_default_llm_timeout_allows_local_gpu_two_pass_startup(self) -> None:
+        payload = AdvisorConfig.from_env()
+
+        self.assertGreaterEqual(payload.timeout_sec, 120.0)
+        self.assertEqual(payload.model, DEFAULT_MODEL)
+        self.assertEqual(payload.max_llm_recommendations, DEFAULT_MAX_LLM_RECOMMENDATIONS)
+
+    def test_ollama_request_bounds_context_length_to_avoid_huge_server_default(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"response":"{\\"ok\\":true}"}'
+
+        def fake_urlopen(req: object, timeout: float) -> FakeResponse:
+            captured["timeout"] = timeout
+            captured["body"] = json.loads(getattr(req, "data").decode("utf-8"))
+            return FakeResponse()
+
+        old_urlopen = advisor_urlrequest.urlopen
+        advisor_urlrequest.urlopen = fake_urlopen  # type: ignore[assignment]
+        try:
+            out = OllamaProvider()._complete_json("{}", AdvisorConfig(context_length=4096, num_predict=777, timeout_sec=123))
+        finally:
+            advisor_urlrequest.urlopen = old_urlopen  # type: ignore[assignment]
+
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual(captured["timeout"], 123)
+        self.assertEqual(captured["body"]["options"]["num_ctx"], 4096)
+        self.assertEqual(captured["body"]["options"]["num_predict"], 777)
+
     def test_rule_only_recommendations_cover_cache_env_move_duplicate_and_blocked_scan(self) -> None:
         payload = build_advisor_response(
             synthetic_snapshot(),
             host_id="hinton",
             exclusions=[],
-            config=AdvisorConfig(enabled=False, provider="mock", model="qwen3.6:27b"),
+            config=AdvisorConfig(enabled=False, provider="mock", model="qwen2.5:14b"),
         )
         self.assertEqual(payload["schema_version"], 1)
         self.assertEqual(payload["host_id"], "hinton")
@@ -109,6 +152,12 @@ class AdvisorAnalyzerTest(unittest.TestCase):
         evidence_keys = [(ev.get("type"), ev.get("label"), ev.get("value")) for ev in target["evidence"]]
 
         self.assertEqual(len(evidence_keys), len(set(evidence_keys)))
+
+    def test_evidence_pack_strips_heavy_mount_trees_before_llm_prompting(self) -> None:
+        pack = build_evidence_pack(synthetic_snapshot(), AdvisorConfig(max_context_items=10), [])
+
+        self.assertTrue(pack["mounts"])
+        self.assertNotIn("tree", pack["mounts"][0])
 
     def test_safety_filter_rejects_top_level_system_relative_and_mount_roots(self) -> None:
         mount_roots = ["/", "/ssd", "/data"]
@@ -152,7 +201,7 @@ class AdvisorAnalyzerTest(unittest.TestCase):
             snapshot,
             host_id="hinton",
             exclusions=[],
-            config=AdvisorConfig(enabled=False, provider="mock", model="qwen3.6:27b"),
+            config=AdvisorConfig(enabled=False, provider="mock", model="qwen2.5:14b"),
         )
 
         blocked_scan_targets = [rec["target_path"] for rec in payload["recommendations"] if rec["category"] == "blocked-scan"]
@@ -165,7 +214,7 @@ class AdvisorAnalyzerTest(unittest.TestCase):
             synthetic_snapshot(),
             host_id="hinton",
             exclusions=[],
-            config=AdvisorConfig(enabled=False, provider="ollama", model="qwen3.6:27b"),
+            config=AdvisorConfig(enabled=False, provider="ollama", model="qwen2.5:14b"),
             max_items=3,
         )
         self.assertEqual(payload["output_language"], "ko")
@@ -176,6 +225,23 @@ class AdvisorAnalyzerTest(unittest.TestCase):
             self.assertRegex(rec["reason_short"], r"[가-힣]")
             self.assertRegex(rec["reason_detail"], r"[가-힣]")
 
+    def test_korean_output_guard_fills_untranslated_llm_badges(self) -> None:
+        payload = {
+            "schema_version": 1,
+            "host_id": "hinton",
+            "summary": {"health": "warning", "headline": "Advisor found review candidates", "top_drivers": []},
+            "recommendations": [valid_recommendation(category="stale-large", target_path="/data/archive/old.tar")],
+        }
+        payload["recommendations"][0]["badge"] = "AI: archive review"
+        payload["recommendations"][0]["reason_short"] = "Large archive may be worth review."
+        payload["recommendations"][0]["reason_detail"] = "Review owner before moving or deleting."
+
+        out = ensure_korean_user_text(payload)
+
+        self.assertRegex(out["summary"]["headline"], r"[가-힣]")
+        self.assertRegex(out["recommendations"][0]["badge"], r"[가-힣]")
+        self.assertRegex(out["recommendations"][0]["reason_short"], r"[가-힣]")
+
     def test_llm_prompt_pipeline_is_two_pass_english_analysis_then_korean_translation(self) -> None:
         pack = build_evidence_pack(synthetic_snapshot(), AdvisorConfig(max_context_items=3), [])
         rule_payload = rule_recommendations(pack)
@@ -183,9 +249,97 @@ class AdvisorAnalyzerTest(unittest.TestCase):
         translation_prompt = advisor_translation_prompt(rule_payload)
         self.assertIn("Think in English", analysis_prompt)
         self.assertIn("Do not translate", analysis_prompt)
+        self.assertIn("Do NOT return full recommendations", analysis_prompt)
+        self.assertIn("base_payload", analysis_prompt)
+        self.assertNotIn('"evidence_pack"', analysis_prompt)
         self.assertIn("Translate", translation_prompt)
         self.assertIn("Korean", translation_prompt)
         self.assertNotEqual(analysis_prompt, translation_prompt)
+
+    def test_two_pass_provider_limits_llm_work_and_marks_success_mode(self) -> None:
+        class EchoProvider(TwoPassProviderMixin):
+            def __init__(self) -> None:
+                self.prompts: list[dict] = []
+
+            def _complete_json(self, prompt: str, config: AdvisorConfig) -> dict:
+                parsed = json.loads(prompt)
+                self.prompts.append(parsed)
+                if "base_payload" in parsed:
+                    out = json.loads(json.dumps(parsed["base_payload"]))
+                    out["mode"] = "rule-only"
+                    return out
+                out = json.loads(json.dumps(parsed["analysis_payload"]))
+                out["mode"] = "rule-only"
+                return out
+
+        pack = build_evidence_pack(synthetic_snapshot(), AdvisorConfig(max_context_items=10), [])
+        rule_payload = rule_recommendations(pack)
+        provider = EchoProvider()
+
+        payload = provider.synthesize(pack, rule_payload, AdvisorConfig(max_llm_recommendations=2, max_recommendations=50))
+
+        self.assertEqual(payload["mode"], "rule+llm")
+        self.assertEqual(len(payload["recommendations"]), 2)
+        self.assertEqual(len(provider.prompts[0]["base_payload"]["recommendations"]), 2)
+
+    def test_two_pass_provider_accepts_compact_llm_patches_and_preserves_safe_schema(self) -> None:
+        class PatchProvider(TwoPassProviderMixin):
+            def _complete_json(self, prompt: str, config: AdvisorConfig) -> dict:
+                parsed = json.loads(prompt)
+                if "base_payload" in parsed:
+                    rec = parsed["base_payload"]["recommendations"][0]
+                    return {
+                        "schema_version": 1,
+                        "host_id": parsed["base_payload"]["host_id"],
+                        "summary": {"health": "warning", "headline": "English headline", "top_drivers": []},
+                        "items": [
+                            {
+                                "id": rec["id"],
+                                "action": "investigate",
+                                "priority": rec["priority"],
+                                "confidence": 0.91,
+                                "risk": rec["risk"],
+                                "badge": "AI: archive review",
+                                "reason_short": "English short reason.",
+                                "reason_detail": "English detailed reason.",
+                                "suggested_next_step": rec["suggested_next_step"],
+                            }
+                        ],
+                    }
+                return {
+                    "schema_version": 1,
+                    "host_id": parsed["analysis_payload"]["host_id"],
+                    "summary": {"headline": "한국어 제목", "top_drivers": []},
+                    "items": [
+                        {
+                            "id": parsed["analysis_payload"]["items"][0]["id"],
+                            "badge": "AI: 보관 검토",
+                            "reason_short": "한국어 짧은 이유입니다.",
+                            "reason_detail": "한국어 상세 이유입니다.",
+                        }
+                    ],
+                }
+
+        pack = build_evidence_pack(synthetic_snapshot(), AdvisorConfig(max_context_items=10), [])
+        rule_payload = rule_recommendations(pack)
+
+        payload = PatchProvider().synthesize(pack, rule_payload, AdvisorConfig(max_llm_recommendations=1))
+
+        rec = payload["recommendations"][0]
+        self.assertEqual(payload["mode"], "rule+llm")
+        self.assertEqual(rec["action"], "investigate")
+        self.assertEqual(rec["target_path"], rule_payload["recommendations"][0]["target_path"])
+        self.assertEqual(rec["evidence"], rule_payload["recommendations"][0]["evidence"])
+        self.assertRegex(rec["badge"], r"[가-힣]")
+        self.assertRegex(payload["summary"]["headline"], r"[가-힣]")
+
+    def test_analysis_prompt_requests_compact_items_not_full_schema_regeneration(self) -> None:
+        pack = build_evidence_pack(synthetic_snapshot(), AdvisorConfig(max_context_items=3), [])
+        prompt = advisor_analysis_prompt(pack, rule_recommendations(pack))
+
+        self.assertIn('"items"', prompt)
+        self.assertIn("compact", prompt.lower())
+        self.assertNotIn("recommendation_required_fields", prompt)
 
     def test_exclusions_filter_recommendation_path_pattern_and_action(self) -> None:
         payload = build_advisor_response(synthetic_snapshot(), host_id="hinton", exclusions=[], config=AdvisorConfig(enabled=False))

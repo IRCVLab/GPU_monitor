@@ -3,12 +3,13 @@
 /* Optional AI Advisor client/state. Static viewer safe: failed fetches become disabled UI. */
 const ADVISOR_EXCLUSIONS_KEY = "storage-viz.aiAdvisor.exclusions.v1";
 var advisorState = (typeof globalThis !== "undefined" && globalThis.advisorState) || {
-  status: { enabled: false, message: "AI Advisor not checked yet.", provider: "", model: "qwen3.6:27b" },
+  status: { enabled: false, message: "AI Advisor not checked yet.", provider: "", model: "qwen2.5:14b" },
   payload: null,
   recommendations: [],
   exclusions: [],
   running: false,
   error: null,
+  warning: null,
 };
 
 function advisorNowUnix() { return Math.floor(Date.now() / 1000); }
@@ -189,6 +190,7 @@ async function runAdvisor(options) {
   loadAdvisorExclusions(hostId);
   advisorState.running = true;
   advisorState.error = null;
+  advisorState.warning = null;
   if (typeof renderAdvisorPanel === "function") renderAdvisorPanel();
   try {
     const result = await fetchAdvisorJson("/ai/recommend", {
@@ -206,9 +208,12 @@ async function runAdvisor(options) {
     advisorState.apiBaseUrl = result.url.endsWith("/ai/recommend") ? result.url.slice(0, -"/ai/recommend".length) : "";
     advisorState.payload = body;
     advisorState.recommendations = filterExcludedRecommendations(body.recommendations || [], advisorState.exclusions);
-    advisorState.error = body.advisor_error || null;
+    const hasRecommendations = advisorState.recommendations.length > 0;
+    advisorState.warning = hasRecommendations ? (body.advisor_error || null) : null;
+    advisorState.error = hasRecommendations ? null : (body.advisor_error || null);
   } catch (e) {
     advisorState.error = String(e && e.message ? e.message : e);
+    advisorState.warning = null;
     advisorState.payload = null;
     advisorState.recommendations = [];
   } finally {

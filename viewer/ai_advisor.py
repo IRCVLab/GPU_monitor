@@ -20,7 +20,12 @@ from typing import Any
 from urllib import request as urlrequest
 from urllib.error import URLError
 
-DEFAULT_MODEL = "qwen3.6:27b"
+DEFAULT_MODEL = "qwen2.5:14b"
+DEFAULT_LLM_TIMEOUT_SEC = 120.0
+DEFAULT_LLM_CONTEXT_LENGTH = 8192
+DEFAULT_LLM_NUM_PREDICT = 4096
+DEFAULT_MAX_CONTEXT_ITEMS = 24
+DEFAULT_MAX_LLM_RECOMMENDATIONS = 12
 ANALYZER_VERSION = "ai-advisor-v1"
 GiB = 1024 ** 3
 
@@ -66,8 +71,10 @@ class AdvisorConfig:
     provider: str = "ollama"
     endpoint: str = "http://127.0.0.1:11434"
     model: str = DEFAULT_MODEL
-    timeout_sec: float = 20.0
-    max_context_items: int = 80
+    timeout_sec: float = DEFAULT_LLM_TIMEOUT_SEC
+    context_length: int = DEFAULT_LLM_CONTEXT_LENGTH
+    num_predict: int = DEFAULT_LLM_NUM_PREDICT
+    max_context_items: int = DEFAULT_MAX_CONTEXT_ITEMS
     cache_dir: str = ""
     readonly_inspection: bool = False
     allowed_roots: list[str] = field(default_factory=list)
@@ -76,6 +83,7 @@ class AdvisorConfig:
     max_inspect_entries: int = 200
     inspect_timeout_sec: float = 5.0
     max_recommendations: int = 50
+    max_llm_recommendations: int = DEFAULT_MAX_LLM_RECOMMENDATIONS
     output_language: str = "ko"
 
     @classmethod
@@ -85,8 +93,10 @@ class AdvisorConfig:
             provider=os.environ.get("STORAGE_VIZ_AI_PROVIDER", "ollama").strip().lower() or "ollama",
             endpoint=os.environ.get("STORAGE_VIZ_AI_ENDPOINT", "http://127.0.0.1:11434").strip(),
             model=os.environ.get("STORAGE_VIZ_AI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL,
-            timeout_sec=_float_env("STORAGE_VIZ_AI_TIMEOUT_SEC", 20.0),
-            max_context_items=_int_env("STORAGE_VIZ_AI_MAX_CONTEXT_ITEMS", 80),
+            timeout_sec=_float_env("STORAGE_VIZ_AI_TIMEOUT_SEC", DEFAULT_LLM_TIMEOUT_SEC),
+            context_length=_int_env("STORAGE_VIZ_AI_CONTEXT_LENGTH", DEFAULT_LLM_CONTEXT_LENGTH),
+            num_predict=_int_env("STORAGE_VIZ_AI_NUM_PREDICT", DEFAULT_LLM_NUM_PREDICT),
+            max_context_items=_int_env("STORAGE_VIZ_AI_MAX_CONTEXT_ITEMS", DEFAULT_MAX_CONTEXT_ITEMS),
             cache_dir=os.environ.get("STORAGE_VIZ_AI_CACHE_DIR", "").strip(),
             readonly_inspection=_truthy(os.environ.get("STORAGE_VIZ_AI_READONLY_INSPECTION")),
             allowed_roots=_split_csv(os.environ.get("STORAGE_VIZ_AI_ALLOWED_ROOTS", "")),
@@ -94,6 +104,8 @@ class AdvisorConfig:
             max_inspect_depth=_int_env("STORAGE_VIZ_AI_MAX_INSPECT_DEPTH", 1),
             max_inspect_entries=_int_env("STORAGE_VIZ_AI_MAX_INSPECT_ENTRIES", 200),
             inspect_timeout_sec=_float_env("STORAGE_VIZ_AI_INSPECT_TIMEOUT_SEC", 5.0),
+            max_recommendations=_int_env("STORAGE_VIZ_AI_MAX_RECOMMENDATIONS", 50),
+            max_llm_recommendations=_int_env("STORAGE_VIZ_AI_MAX_LLM_RECOMMENDATIONS", DEFAULT_MAX_LLM_RECOMMENDATIONS),
             output_language=os.environ.get("STORAGE_VIZ_AI_OUTPUT_LANGUAGE", "ko").strip().lower() or "ko",
         )
 
@@ -160,6 +172,14 @@ def is_safe_target_path(path: str, mount_roots: list[str] | None = None) -> bool
 
 def _mount_roots(snapshot: dict[str, Any]) -> list[str]:
     return [str(m.get("path")) for m in snapshot.get("mounts", []) if isinstance(m, dict) and m.get("path")]
+
+
+def _compact_mounts(mounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    keep = ("path", "fstype", "df_total", "df_used", "df_avail", "df_use_pct", "scanned_bytes", "scanned_files", "scanned_dirs", "error")
+    rows = []
+    for mount in mounts:
+        rows.append({key: mount.get(key) for key in keep if key in mount})
+    return rows
 
 
 def _mount_for(path: str, mounts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -312,7 +332,7 @@ def build_evidence_pack(snapshot: dict[str, Any], config: AdvisorConfig | None =
         "analyzer_version": ANALYZER_VERSION,
         "snapshot_fingerprint": snapshot_fingerprint(snapshot),
         "host_id": str(snapshot.get("hostname") or "unknown"),
-        "mounts": mounts,
+        "mounts": _compact_mounts(mounts),
         "mount_roots": mount_roots,
         "candidates": list(candidates_by_key.values())[: config.max_context_items],
         "duplicates": duplicates[:20],
@@ -768,6 +788,32 @@ def localize_payload_ko(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _has_korean(text: Any) -> bool:
+    return any("\uac00" <= ch <= "\ud7a3" for ch in str(text or ""))
+
+
+def ensure_korean_user_text(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fill any untranslated user-facing fields with deterministic Korean text."""
+    localized = localize_payload_ko(payload)
+    out = dict(payload)
+    recs = []
+    localized_recs = localized.get("recommendations", []) or []
+    for idx, rec in enumerate(payload.get("recommendations", []) or []):
+        row = dict(rec)
+        fallback = localized_recs[idx] if idx < len(localized_recs) and isinstance(localized_recs[idx], dict) else {}
+        for key in ("badge", "reason_short", "reason_detail"):
+            if not _has_korean(row.get(key)):
+                row[key] = fallback.get(key) or row.get(key)
+        recs.append(row)
+    out["recommendations"] = recs
+    out["summary"] = dict(payload.get("summary") or {})
+    if not _has_korean(out["summary"].get("headline")):
+        out["summary"]["headline"] = localized.get("summary", {}).get("headline", "AI 정리 추천이 있습니다")
+    out["summary"]["top_drivers"] = [f"{r.get('badge')}: {r.get('target_path')}" for r in recs[:3]]
+    out["output_language"] = "ko"
+    return out
+
+
 class MockProvider:
     def synthesize(self, evidence_pack: dict[str, Any], rule_payload: dict[str, Any], config: AdvisorConfig) -> dict[str, Any]:
         payload = localize_payload_ko(dict(rule_payload))
@@ -782,26 +828,155 @@ class TwoPassProviderMixin:
         raise NotImplementedError
 
     def synthesize(self, evidence_pack: dict[str, Any], rule_payload: dict[str, Any], config: AdvisorConfig) -> dict[str, Any]:
-        analysis = self._complete_json(advisor_analysis_prompt(evidence_pack, rule_payload), config)
-        analysis.setdefault("schema_version", 1)
-        analysis.setdefault("host_id", evidence_pack.get("host_id"))
-        analysis.setdefault("snapshot_fingerprint", evidence_pack.get("snapshot_fingerprint"))
-        analysis.setdefault("generated_at_unix", int(time.time()))
-        analysis.setdefault("mode", "rule+llm-analysis")
-        analysis = validate_recommendations(analysis, mount_roots=evidence_pack.get("mount_roots"), max_items=config.max_recommendations)
-        translated = self._complete_json(advisor_translation_prompt(analysis), config)
-        translated.setdefault("schema_version", 1)
-        translated.setdefault("host_id", analysis.get("host_id"))
-        translated.setdefault("snapshot_fingerprint", analysis.get("snapshot_fingerprint"))
-        translated.setdefault("generated_at_unix", int(time.time()))
-        translated.setdefault("mode", "rule+llm")
+        llm_limit = max(1, min(config.max_recommendations, config.max_llm_recommendations or DEFAULT_MAX_LLM_RECOMMENDATIONS))
+        analysis_base = _limit_payload_recommendations(rule_payload, llm_limit)
+        analysis_raw = self._complete_json(advisor_analysis_prompt(evidence_pack, analysis_base), config)
+        analysis = _coerce_llm_payload(analysis_raw, analysis_base, mode="rule+llm-analysis")
+        analysis = validate_recommendations(analysis, mount_roots=evidence_pack.get("mount_roots"), max_items=llm_limit)
+        translated_raw = self._complete_json(advisor_translation_prompt(_compact_translation_payload(analysis)), config)
+        translated = _apply_translation_payload(analysis, translated_raw)
+        translated["mode"] = "rule+llm"
         translated["output_language"] = "ko"
-        return validate_recommendations(translated, mount_roots=evidence_pack.get("mount_roots"), max_items=config.max_recommendations)
+        return validate_recommendations(translated, mount_roots=evidence_pack.get("mount_roots"), max_items=llm_limit)
+
+
+def _limit_payload_recommendations(payload: dict[str, Any], limit: int) -> dict[str, Any]:
+    out = dict(payload)
+    recs = list(payload.get("recommendations") or [])[: max(1, limit)]
+    out["recommendations"] = recs
+    out["summary"] = dict(payload.get("summary") or {})
+    out["summary"]["top_drivers"] = [f"{rec.get('badge')}: {rec.get('target_path')}" for rec in recs[:3]]
+    if recs:
+        out["summary"]["headline"] = out["summary"].get("headline") or "Advisor found review candidates"
+    return out
+
+
+def _coerce_llm_payload(raw: dict[str, Any], base_payload: dict[str, Any], *, mode: str) -> dict[str, Any]:
+    if isinstance(raw.get("recommendations"), list):
+        out = dict(raw)
+        out.setdefault("schema_version", base_payload.get("schema_version", 1))
+        out.setdefault("host_id", base_payload.get("host_id"))
+        out.setdefault("snapshot_fingerprint", base_payload.get("snapshot_fingerprint"))
+        out.setdefault("generated_at_unix", int(time.time()))
+        out.setdefault("summary", dict(base_payload.get("summary") or {}))
+        out["mode"] = mode
+        return out
+
+    items = raw.get("items")
+    if not isinstance(items, list):
+        raise AdvisorValidationError("LLM output must include recommendations or compact items")
+
+    out = dict(base_payload)
+    base_recs = [dict(rec) for rec in base_payload.get("recommendations", []) if isinstance(rec, dict)]
+    by_id = {str(rec.get("id")): rec for rec in base_recs}
+    patched = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rec_id = str(item.get("id") or "")
+        rec = by_id.get(rec_id)
+        if not rec or rec_id in seen:
+            continue
+        seen.add(rec_id)
+        row = dict(rec)
+        if item.get("action") in ACTIONS:
+            row["action"] = item.get("action")
+        if item.get("priority") in PRIORITIES:
+            row["priority"] = item.get("priority")
+        if item.get("risk") in RISKS:
+            row["risk"] = item.get("risk")
+        if isinstance(item.get("suggested_next_step"), str) and item.get("suggested_next_step"):
+            row["suggested_next_step"] = item.get("suggested_next_step")
+        if "confidence" in item:
+            try:
+                row["confidence"] = max(0, min(1, float(item.get("confidence"))))
+            except (TypeError, ValueError):
+                pass
+        for key in ("badge", "reason_short", "reason_detail"):
+            if isinstance(item.get(key), str) and item.get(key):
+                row[key] = item.get(key)
+        patched.append(row)
+    if not patched:
+        raise AdvisorValidationError("LLM compact items did not match base recommendations")
+
+    summary = dict(base_payload.get("summary") or {})
+    if isinstance(raw.get("summary"), dict):
+        raw_summary = raw["summary"]
+        if raw_summary.get("health") in {"ok", "warning", "critical"}:
+            summary["health"] = raw_summary.get("health")
+        if isinstance(raw_summary.get("headline"), str) and raw_summary.get("headline"):
+            summary["headline"] = raw_summary.get("headline")
+    summary["top_drivers"] = [f"{rec.get('badge')}: {rec.get('target_path')}" for rec in patched[:3]]
+
+    out["summary"] = summary
+    out["recommendations"] = patched
+    out["mode"] = mode
+    out.setdefault("schema_version", 1)
+    out.setdefault("host_id", base_payload.get("host_id"))
+    out.setdefault("snapshot_fingerprint", base_payload.get("snapshot_fingerprint"))
+    out.setdefault("generated_at_unix", int(time.time()))
+    return out
+
+
+def _compact_translation_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": payload.get("schema_version", 1),
+        "host_id": payload.get("host_id"),
+        "snapshot_fingerprint": payload.get("snapshot_fingerprint"),
+        "summary": {
+            "headline": (payload.get("summary") or {}).get("headline", ""),
+            "top_drivers": (payload.get("summary") or {}).get("top_drivers", []),
+        },
+        "items": [
+            {
+                "id": rec.get("id"),
+                "badge": rec.get("badge"),
+                "reason_short": rec.get("reason_short"),
+                "reason_detail": rec.get("reason_detail"),
+            }
+            for rec in payload.get("recommendations", [])
+            if isinstance(rec, dict)
+        ],
+    }
+
+
+def _apply_translation_payload(analysis_payload: dict[str, Any], translated_raw: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(translated_raw.get("recommendations"), list):
+        out = dict(translated_raw)
+        out.setdefault("schema_version", analysis_payload.get("schema_version", 1))
+        out.setdefault("host_id", analysis_payload.get("host_id"))
+        out.setdefault("snapshot_fingerprint", analysis_payload.get("snapshot_fingerprint"))
+        out.setdefault("generated_at_unix", int(time.time()))
+        return out
+
+    out = dict(analysis_payload)
+    recs = [dict(rec) for rec in analysis_payload.get("recommendations", []) if isinstance(rec, dict)]
+    translated_items = translated_raw.get("items")
+    translated_by_id = {}
+    if isinstance(translated_items, list):
+        translated_by_id = {str(item.get("id")): item for item in translated_items if isinstance(item, dict)}
+    for rec in recs:
+        item = translated_by_id.get(str(rec.get("id")))
+        if not item:
+            continue
+        for key in ("badge", "reason_short", "reason_detail"):
+            if isinstance(item.get(key), str) and item.get(key):
+                rec[key] = item.get(key)
+    out["recommendations"] = recs
+    out["summary"] = dict(analysis_payload.get("summary") or {})
+    if isinstance(translated_raw.get("summary"), dict):
+        raw_summary = translated_raw["summary"]
+        if isinstance(raw_summary.get("headline"), str) and raw_summary.get("headline"):
+            out["summary"]["headline"] = raw_summary.get("headline")
+    out["summary"]["top_drivers"] = [f"{rec.get('badge')}: {rec.get('target_path')}" for rec in recs[:3]]
+    return out
 
 
 class OllamaProvider(TwoPassProviderMixin):
     def _complete_json(self, prompt: str, config: AdvisorConfig) -> dict[str, Any]:
-        body = json.dumps({"model": config.model, "prompt": prompt, "stream": False, "format": "json"}).encode("utf-8")
+        options = {"temperature": 0, "num_ctx": config.context_length, "num_predict": config.num_predict}
+        body = json.dumps({"model": config.model, "prompt": prompt, "stream": False, "format": "json", "options": options}).encode("utf-8")
         req = urlrequest.Request(config.endpoint.rstrip("/") + "/api/generate", data=body, headers={"Content-Type": "application/json"}, method="POST")
         with urlrequest.urlopen(req, timeout=config.timeout_sec) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -834,18 +1009,56 @@ class OpenAICompatibleProvider(TwoPassProviderMixin):
 
 
 def advisor_analysis_prompt(evidence_pack: dict[str, Any], rule_payload: dict[str, Any]) -> str:
+    contract = {
+        "top_level_keys": ["schema_version", "host_id", "summary", "items"],
+        "summary_shape": {"health": "ok|warning|critical", "headline": "English sentence"},
+        "item_fields": [
+            "id",
+            "action",
+            "priority",
+            "confidence",
+            "risk",
+            "badge",
+            "reason_short",
+            "reason_detail",
+            "suggested_next_step",
+        ],
+        "allowed_actions": sorted(ACTIONS),
+        "forbidden_top_level_keys": ["recommendations", "candidates", "blocked", "exclusions", "analysis", "notes", "large_files", "duplicate_files"],
+    }
     compact = {
-        "task": "Think in English. Analyze storage cleanup recommendations from bounded evidence. Do not translate final user-facing text in this pass. Do not invent filesystem facts. Prefer move/archive/investigate over delete unless evidence is low-risk rebuildable cache.",
-        "schema": "Return storage-viz advisor schema_version 1 JSON only. Keep target_path/action/category/id stable when evidence is weak.",
-        "evidence_pack": evidence_pack,
-        "rule_payload": rule_payload,
+        "task": "Think in English. Improve the base storage cleanup recommendations using only bounded evidence. Do not translate final user-facing text in this pass. Do not invent filesystem facts. Prefer move/archive/investigate over delete unless evidence is low-risk rebuildable cache.",
+        "schema": "Return ONE compact JSON object only. It MUST include summary and items. Each item patches a base recommendation by id. Do NOT return full recommendations, candidates, blocked, exclusions, large_files, duplicate_files, markdown, or commentary. Preserve ids unless evidence strongly supports omitting the item.",
+        "output_contract": contract,
+        "base_payload": rule_payload,
+        "context_summary": _prompt_context_summary(evidence_pack),
     }
     return json.dumps(compact, ensure_ascii=False, separators=(",", ":"))
 
 
+def _prompt_context_summary(evidence_pack: dict[str, Any]) -> dict[str, Any]:
+    mounts = list(evidence_pack.get("mounts") or [])
+    high_pressure_mounts = [
+        {"path": m.get("path"), "df_use_pct": m.get("df_use_pct"), "df_avail": m.get("df_avail")}
+        for m in mounts
+        if int(m.get("df_use_pct") or 0) >= 85
+    ]
+    return {
+        "analyzer_version": evidence_pack.get("analyzer_version"),
+        "snapshot_fingerprint": evidence_pack.get("snapshot_fingerprint"),
+        "host_id": evidence_pack.get("host_id"),
+        "mounts": mounts,
+        "high_pressure_mounts": high_pressure_mounts,
+        "candidate_count": len(evidence_pack.get("candidates") or []),
+        "duplicate_group_count": len(evidence_pack.get("duplicates") or []),
+        "blocked_count": len(evidence_pack.get("blocked") or []),
+        "exclusion_count": len(evidence_pack.get("exclusions") or []),
+    }
+
+
 def advisor_translation_prompt(analysis_payload: dict[str, Any]) -> str:
     compact = {
-        "task": "Translate the final user-facing output to Korean. Preserve all ids, actions, categories, paths, byte counts, risk, confidence, evidence, and suggested_next_step exactly. Only translate badge, reason_short, reason_detail, summary.headline, and summary.top_drivers. Return strict JSON only.",
+        "task": "Translate the compact advisor output to Korean. Preserve ids exactly. Only translate badge, reason_short, reason_detail, summary.headline, and summary.top_drivers. Return compact JSON only with summary and items; do not return full recommendations.",
         "language": "Korean",
         "analysis_payload": analysis_payload,
     }
@@ -853,6 +1066,8 @@ def advisor_translation_prompt(analysis_payload: dict[str, Any]) -> str:
 
 
 def _provider(config: AdvisorConfig):
+    if config.provider in {"none", "rule-only", "disabled", "off"}:
+        return None
     if config.provider == "mock":
         return MockProvider()
     if config.provider == "openai-compatible":
@@ -876,12 +1091,16 @@ def build_advisor_response(
     payload = localize_payload_ko(rule_payload) if config.output_language == "ko" else rule_payload
     if config.enabled:
         try:
-            payload = _provider(config).synthesize(pack, rule_payload, config)
-            payload.setdefault("schema_version", 1)
-            payload.setdefault("host_id", pack.get("host_id"))
-            payload.setdefault("snapshot_fingerprint", pack.get("snapshot_fingerprint"))
-            payload.setdefault("generated_at_unix", int(time.time()))
-            payload = validate_recommendations(payload, mount_roots=pack.get("mount_roots"), max_items=max_items or config.max_recommendations)
+            provider = _provider(config)
+            if provider is not None:
+                payload = provider.synthesize(pack, rule_payload, config)
+                payload.setdefault("schema_version", 1)
+                payload.setdefault("host_id", pack.get("host_id"))
+                payload.setdefault("snapshot_fingerprint", pack.get("snapshot_fingerprint"))
+                payload.setdefault("generated_at_unix", int(time.time()))
+                payload = validate_recommendations(payload, mount_roots=pack.get("mount_roots"), max_items=max_items or config.max_recommendations)
+                if config.output_language == "ko":
+                    payload = ensure_korean_user_text(payload)
         except (AdvisorValidationError, json.JSONDecodeError, OSError, URLError, TimeoutError) as exc:
             payload = localize_payload_ko(rule_payload) if config.output_language == "ko" else dict(rule_payload)
             payload["advisor_error"] = f"LLM synthesis unavailable; rule-only recommendations shown: {exc}"
@@ -964,12 +1183,15 @@ __all__ = [
     "AdvisorConfig",
     "AdvisorValidationError",
     "DEFAULT_MODEL",
+    "DEFAULT_MAX_LLM_RECOMMENDATIONS",
+    "TwoPassProviderMixin",
     "advisor_analysis_prompt",
     "advisor_translation_prompt",
     "build_advisor_response",
     "build_evidence_pack",
     "classify_path",
     "collect_readonly_metadata",
+    "ensure_korean_user_text",
     "filter_excluded",
     "is_safe_target_path",
     "load_snapshot",
