@@ -161,6 +161,38 @@ async function testAdvisorRunIsGlobalNotTabScoped() {
   }
 }
 
+async function testAdvisorFallbackWarningIsNotHardError() {
+  const client = require("./advisor-client.js");
+  const oldFetch = global.fetch;
+  const oldRender = global.renderAdvisorPanel;
+  const oldRefresh = global.refreshAdvisorBadges;
+  global.renderAdvisorPanel = () => {};
+  global.refreshAdvisorBadges = () => {};
+  global.fetch = async (url) => {
+    assert.strictEqual(String(url), "/ai/recommend");
+    return { ok: true, json: async () => ({
+      schema_version: 1,
+      host_id: "hinton",
+      mode: "rule-only",
+      output_language: "ko",
+      advisor_error: "LLM synthesis unavailable; rule-only recommendations shown: connection refused",
+      summary: { health: "warning", headline: "AI 정리 추천이 있습니다", top_drivers: [] },
+      recommendations: [{ id: "x", action: "archive", category: "archive", target_path: "/data/x.tar", badge: "AI: 보관 검토", reason_short: "큰 압축 파일입니다.", suggested_next_step: "inspect-owner" }],
+    }) };
+  };
+  try {
+    await client.runAdvisor({ hostId: "hinton", max_items: 1 });
+    assert.strictEqual(client.advisorState.error, null, "rule-only fallback with recommendations must not render as hard AI error");
+    assert.match(client.advisorState.warning, /LLM synthesis unavailable/, "LLM connection issue should be a warning");
+    assert.strictEqual(client.advisorState.recommendations.length, 1);
+  } finally {
+    global.fetch = oldFetch;
+    global.renderAdvisorPanel = oldRender;
+    global.refreshAdvisorBadges = oldRefresh;
+    client.advisorState.warning = null;
+  }
+}
+
 async function testAdvisorStatusFallsBackToSidecarPort() {
   const client = require("./advisor-client.js");
   const oldFetch = global.fetch;
@@ -171,7 +203,7 @@ async function testAdvisorStatusFallsBackToSidecarPort() {
     calls.push(String(url));
     if (String(url) === "/ai/status") return { ok: false, status: 404, json: async () => ({}) };
     if (String(url) === "http://127.0.0.1:18089/ai/status") {
-      return { ok: true, json: async () => ({ enabled: true, provider: "mock", model: "qwen3.6:27b", message: "AI Advisor is enabled." }) };
+      return { ok: true, json: async () => ({ enabled: true, provider: "mock", model: "qwen2.5:14b", message: "AI Advisor is enabled." }) };
     }
     throw new Error("unexpected URL " + url);
   };
@@ -212,6 +244,7 @@ async function main() {
   testAdvisorBadgeEscapingUsesSharedEscaperWithoutRecursion();
   testAdvisorGlobalAndCrossSurfaceContracts();
   await testAdvisorRunIsGlobalNotTabScoped();
+  await testAdvisorFallbackWarningIsNotHardError();
   await testAdvisorStatusFallsBackToSidecarPort();
   console.log("viewer regression tests passed");
 }

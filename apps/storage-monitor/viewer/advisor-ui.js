@@ -33,9 +33,9 @@ function advisorHealthClass(health) {
 }
 function advisorStatusLabel() {
   if (advisorState && advisorState.running) return "분석 중";
-  if (advisorState && advisorState.error) return "오류";
   if (!advisorState || !advisorState.status || !advisorState.status.enabled) return "비활성";
   if (advisorState.payload && advisorState.payload.mode === "rule-only") return "규칙 기반";
+  if (advisorState && advisorState.error) return "오류";
   return "준비됨";
 }
 function advisorModeLabel() {
@@ -56,7 +56,7 @@ function renderAdvisorGlobalControls() {
   if (pill) {
     pill.className = "advisor-global-status " + (label === "비활성" ? "disabled" : label === "오류" ? "failed" : advisorState && advisorState.running ? "running" : "ready");
     pill.textContent = "AI " + label;
-    pill.title = (advisorState && (advisorState.error || (advisorState.status && advisorState.status.message))) || "";
+    pill.title = (advisorState && (advisorState.error || advisorState.warning || (advisorState.status && advisorState.status.message))) || "";
   }
   if (count) {
     const n = advisorRecommendationCount();
@@ -77,10 +77,11 @@ function renderAdvisorSummaryHtml() {
   const drivers = summary.top_drivers || [];
   const mode = advisorModeLabel();
   const error = advisorState && advisorState.error ? '<div class="advisor-error">' + advisorEscape(advisorState.error) + '</div>' : '';
+  const warning = advisorState && advisorState.warning ? '<div class="advisor-warning">' + advisorEscape(advisorState.warning) + '</div>' : '';
   return '<div class="advisor-health ' + advisorHealthClass(summary.health) + '">' + advisorEscape(summary.health || "ok") + '</div>' +
     '<div><b>' + advisorEscape(summary.headline || "AI 정리 추천") + '</b><br>' +
     '<span class="muted">모드: ' + advisorEscape(mode) + ' · 출력: 한국어 · 결과는 모든 탭에 배지로 표시됩니다.</span><br>' +
-    drivers.slice(0, 3).map(d => '<span class="advisor-driver">' + advisorEscape(d) + '</span>').join("") + '</div>' + error;
+    drivers.slice(0, 3).map(d => '<span class="advisor-driver">' + advisorEscape(d) + '</span>').join("") + '</div>' + warning + error;
 }
 function advisorRecommendationHtml(rec) {
   const canDelete = isAdvisorSafeDeleteRecommendation(rec);
@@ -125,7 +126,7 @@ function renderAdvisorPanel() {
     const label = advisorStatusLabel();
     status.className = "advisor-status " + (label === "비활성" ? "disabled" : "enabled");
     status.textContent = "AI Advisor: " + label;
-    status.title = (advisorState && (advisorState.error || (advisorState.status && advisorState.status.message))) || "";
+    status.title = (advisorState && (advisorState.error || advisorState.warning || (advisorState.status && advisorState.status.message))) || "";
   }
   if (run) run.disabled = !!(advisorState && advisorState.running) || !(advisorState && advisorState.status && advisorState.status.enabled);
   if (summary) summary.innerHTML = renderAdvisorSummaryHtml();
@@ -205,6 +206,7 @@ function onAdvisorHostChanged(host, data) {
     advisorState.payload = null;
     advisorState.recommendations = [];
     advisorState.error = null;
+    advisorState.warning = null;
     advisorState.host = host || null;
     advisorState.data = data || null;
     if (typeof loadAdvisorExclusions === "function") loadAdvisorExclusions((host && host.id) || advisorCurrentHostId());

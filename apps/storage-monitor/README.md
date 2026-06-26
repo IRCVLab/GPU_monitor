@@ -89,7 +89,7 @@ Recommended local GPU default:
 STORAGE_VIZ_AI_ENABLED=1
 STORAGE_VIZ_AI_PROVIDER=ollama
 STORAGE_VIZ_AI_ENDPOINT=http://127.0.0.1:11434
-STORAGE_VIZ_AI_MODEL=qwen3.6:27b
+STORAGE_VIZ_AI_MODEL=qwen2.5:14b
 ```
 
 See `docs/ai-cleanup-advisor.md`, `docs/ai-advisor-schema.md`, and

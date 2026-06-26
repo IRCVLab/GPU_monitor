@@ -82,18 +82,23 @@ recommendation for GPU servers is:
 STORAGE_VIZ_AI_ENABLED=1
 STORAGE_VIZ_AI_PROVIDER=ollama
 STORAGE_VIZ_AI_ENDPOINT=http://127.0.0.1:11434
-STORAGE_VIZ_AI_MODEL=qwen3.6:27b
+STORAGE_VIZ_AI_MODEL=qwen2.5:14b
 ```
 
-`qwen3.6:27b` is the documented default because cleanup advising is a structured
-evidence-to-JSON/explanation task: a 27B-class local instruct model gives better
-judgment and bilingual explanations than tiny models without requiring a 70B
-serving footprint. Operators can override it for latency or quality:
+`qwen2.5:14b` is the documented default because cleanup advising is a structured
+evidence-to-JSON/explanation task: it gives solid cleanup judgment and bilingual
+explanations while staying much easier to serve than 27B/70B-class models.
+Operators can override it for latency or quality:
 
-- Fast fallback: `qwen3.5:9b` or another 7B-9B instruct model.
-- Default GPU advisor: `qwen3.6:27b`.
-- High-quality batch mode: `qwen3.5:35b` or `llama3.3:70b` when VRAM/latency
+- Fast fallback: `qwen2.5:7b` or another 7B-9B instruct model.
+- Default GPU advisor: `qwen2.5:14b`.
+- High-quality batch mode: `qwen2.5:32b` or `llama3.3:70b` when VRAM/latency
   budgets allow.
+
+The runtime deliberately asks the LLM for compact patches instead of a full
+recommendation schema.  The server then merges those patches back into validated
+rule evidence, so path/byte/evidence fields stay deterministic and the two-pass
+analysis/translation path avoids long full-schema generations.
 
 ## Optional read-only inspection
 

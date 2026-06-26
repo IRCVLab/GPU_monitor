@@ -128,7 +128,7 @@ class ServeSafetyTest(unittest.TestCase):
 
         ai = self.get_json("/ai/status")
         self.assertEqual(ai["enabled"], False)
-        self.assertEqual(ai["model"], "qwen3.6:27b")
+        self.assertEqual(ai["model"], "qwen2.5:14b")
         self.assertIn("disabled", ai["message"].lower())
 
         status = self.get_json("/rescan-status")
@@ -152,7 +152,7 @@ class ServeSafetyTest(unittest.TestCase):
         status = self.get_json("/ai/status")
         self.assertEqual(status["enabled"], True)
         self.assertEqual(status["provider"], "mock")
-        self.assertEqual(status["model"], "qwen3.6:27b")
+        self.assertEqual(status["model"], "qwen2.5:14b")
         self.assertEqual(status["readonly_inspection"], False)
 
         payload = self.post_json("/ai/recommend", {"host_id": "hinton", "exclusions": [], "max_items": 10})

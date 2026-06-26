@@ -371,6 +371,7 @@
 .advisor-health.warn{background:var(--warn)}.advisor-health.crit{background:var(--crit)}
 .advisor-driver{display:inline-block;margin:5px 6px 0 0;padding:3px 8px;border-radius:999px;background:var(--surface2);font-size:12px;color:var(--text2)}
 .advisor-error{grid-column:1/-1;color:var(--crit);font-weight:700;margin-top:8px}
+.advisor-warning{grid-column:1/-1;color:var(--warn);font-weight:700;margin-top:8px}
 .advisor-empty{color:var(--text2);padding:12px;border:1px dashed var(--separator);border-radius:12px;background:var(--surface2)}
 .advisor-group-list{display:grid;gap:12px}
 .advisor-group{border:1px solid var(--separator);border-radius:16px;background:var(--surface);overflow:hidden}

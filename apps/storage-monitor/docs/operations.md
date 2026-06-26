@@ -87,20 +87,25 @@ patterns, so the recommended path is a local model endpoint.
 | `STORAGE_VIZ_AI_ENABLED` | unset/disabled | Enables `/ai/status` and `/ai/recommend` behavior. Without this, AI status should report disabled and the dashboard remains usable. |
 | `STORAGE_VIZ_AI_PROVIDER` | `ollama` when enabled | `ollama`, `openai-compatible`, or `mock`. Tests should use `mock` or rule-only behavior. |
 | `STORAGE_VIZ_AI_ENDPOINT` | `http://127.0.0.1:11434` for Ollama | Local model server endpoint. Prefer loopback or a trusted internal gateway. |
-| `STORAGE_VIZ_AI_MODEL` | `qwen3.6:27b` | Recommended default local GPU advisor model; override per server. |
+| `STORAGE_VIZ_AI_MODEL` | `qwen2.5:14b` | Recommended default local GPU advisor model; override per server. |
 | `STORAGE_VIZ_AI_OUTPUT_LANGUAGE` | `ko` | Final user-facing advisor language. The current UI sends `language=ko` per request. |
 | `STORAGE_VIZ_AI_TIMEOUT_SEC` | implementation default | Timeout for model requests. Keep bounded so the dashboard stays responsive. |
+| `STORAGE_VIZ_AI_CONTEXT_LENGTH` | `8192` | Ollama `num_ctx` override. This prevents very large server defaults on high-VRAM hosts. |
+| `STORAGE_VIZ_AI_NUM_PREDICT` | `4096` | Ollama output-token cap for the compact two-pass advisor. Lower this for stricter latency. |
+| `STORAGE_VIZ_AI_MAX_LLM_RECOMMENDATIONS` | `12` | Maximum recommendations the LLM may analyze/translate. Remaining rule findings stay deterministic. |
 | `STORAGE_VIZ_AI_CACHE_DIR` | implementation default | Cache for validated advisor results. Do not place generated cache files in tracked `data/`. |
 
 Recommended Ollama setup:
 
 ```bash
-ollama pull qwen3.6:27b
+ollama pull qwen2.5:14b
 
 STORAGE_VIZ_AI_ENABLED=1 \
 STORAGE_VIZ_AI_PROVIDER=ollama \
 STORAGE_VIZ_AI_ENDPOINT=http://127.0.0.1:11434 \
-STORAGE_VIZ_AI_MODEL=qwen3.6:27b \
+STORAGE_VIZ_AI_MODEL=qwen2.5:14b \
+STORAGE_VIZ_AI_CONTEXT_LENGTH=8192 \
+STORAGE_VIZ_AI_TIMEOUT_SEC=180 \
 python3 viewer/serve.py 8088
 ```
 
@@ -111,16 +116,16 @@ an internal gateway:
 STORAGE_VIZ_AI_ENABLED=1 \
 STORAGE_VIZ_AI_PROVIDER=openai-compatible \
 STORAGE_VIZ_AI_ENDPOINT=http://127.0.0.1:8000/v1 \
-STORAGE_VIZ_AI_MODEL=qwen3.6:27b \
+STORAGE_VIZ_AI_MODEL=qwen2.5:14b \
 python3 viewer/serve.py 8088
 ```
 
 Model tiers:
 
-- Fast fallback: `qwen3.5:9b` or another 7B-9B instruct model when latency is
+- Fast fallback: `qwen2.5:7b` or another 7B-9B instruct model when latency is
   more important than explanation quality.
-- Default GPU advisor: `qwen3.6:27b`.
-- High-quality batch mode: `qwen3.5:35b` or `llama3.3:70b` only when VRAM and
+- Default GPU advisor: `qwen2.5:14b`.
+- High-quality batch mode: `qwen2.5:32b` or `llama3.3:70b` only when VRAM and
   latency budgets allow.
 
 The product must remain testable without a live model runtime. Use rule-only or
