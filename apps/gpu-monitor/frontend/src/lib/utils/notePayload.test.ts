@@ -71,4 +71,34 @@ test('hold payload sorts unique indices and throws on empty, negative, or nonint
 			gpu_indices: [-1]
 		});
 	}, /gpu_indices must contain non-negative integers/);
+	assert.throws(() => {
+		buildNotePayload({
+			username: 'u',
+			ssh_password: 'pw',
+			content: 'hold',
+			expires_at: '2026-07-15T00:00:00Z',
+			kind: 'hold',
+			gpu_indices: [1.5]
+		});
+	}, /gpu_indices must contain non-negative integers/);
+	assert.throws(() => {
+		buildNotePayload({
+			username: 'u',
+			ssh_password: 'pw',
+			content: 'hold',
+			expires_at: '2026-07-15T00:00:00Z',
+			kind: 'hold',
+			gpu_indices: [true as unknown as number]
+		});
+	}, /gpu_indices must contain non-negative integers/);
+	assert.throws(() => {
+		buildNotePayload({
+			username: 'u',
+			ssh_password: 'pw',
+			content: 'hold',
+			expires_at: '2026-07-15T00:00:00Z',
+			kind: 'hold',
+			gpu_indices: ['2' as unknown as number]
+		});
+	}, /gpu_indices must contain non-negative integers/);
 });
