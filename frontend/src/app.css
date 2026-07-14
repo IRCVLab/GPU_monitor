@@ -2448,3 +2448,133 @@ html.rose .log-detail-json {
 		transform: scale(1);
 	}
 }
+
+/* ── Reference theme application: color preference is independent of mode. ── */
+html[data-color-theme='violet'] {
+	--ops-primary: #864ad2;
+	--ops-accent: #eee3fb;
+	--ops-focus: #9b61ea;
+}
+html.dark[data-color-theme='violet'] { --ops-primary: #9b61ea; --ops-accent: #2a1d45; --ops-focus: #b480ff; }
+html[data-color-theme='emerald'] {
+	--ops-primary: #00a381;
+	--ops-accent: #d9f2ea;
+	--ops-focus: #00a381;
+}
+html.dark[data-color-theme='emerald'] { --ops-primary: #00b793; --ops-accent: #103a31; --ops-focus: #43d9b7; }
+
+/* Shared surfaces intentionally use the same token family as the header. */
+html.dark .server-card {
+	box-shadow: 0 4px 40px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255,255,255,0.025);
+}
+html.light .server-card { box-shadow: 0 2px 28px rgba(78, 86, 97, 0.1); }
+.server-card-header { background: color-mix(in srgb, var(--ops-card) 88%, var(--ops-secondary)) !important; }
+.server-card-gpu-section,
+.server-card-toggle,
+.server-card-panel { background: color-mix(in srgb, var(--ops-card) 94%, var(--ops-muted)) !important; }
+.server-card-toggle:hover { background: var(--ops-secondary) !important; }
+.server-card-system-panel,
+.server-card-notes-panel { border-color: var(--ops-border) !important; }
+.server-card-network-chip,
+.server-card-note-count,
+.server-card-note-preview { border-color: var(--ops-border) !important; background: var(--ops-muted) !important; }
+.server-card-note-preview-user { color: var(--ops-primary) !important; }
+.server-card-note-preview-expiry.is-fresh { color: var(--ops-primary) !important; background: color-mix(in srgb, var(--ops-primary) 12%, transparent) !important; border-color: color-mix(in srgb, var(--ops-primary) 28%, transparent) !important; }
+.note-form-input,
+.note-form-textarea,
+.server-card-note-password { background: var(--ops-muted) !important; border-color: var(--ops-border) !important; }
+.note-form-input:focus,
+.note-form-textarea:focus,
+.server-card-note-password:focus { border-color: var(--ops-primary) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ops-primary) 16%, transparent); }
+
+/* Header: status is never hidden; scroll removes lower-priority controls instead. */
+.ops-header-inner { grid-template-columns: minmax(11rem, 1fr) auto minmax(20rem, 1fr); }
+.ops-status { font-weight: 560; color: var(--ops-fg); }
+.ops-status > span:last-child { color: var(--ops-muted-fg); }
+.ops-network {
+	display: inline-flex;
+	align-items: stretch;
+	gap: 0.08rem;
+	border-bottom: 1px solid var(--ops-border);
+}
+.ops-network button {
+	position: relative;
+	display: inline-flex;
+	align-items: baseline;
+	gap: 0.32rem;
+	min-height: 2rem;
+	padding: 0.18rem 0.54rem 0.34rem;
+	color: var(--ops-muted-fg);
+	font-size: 0.75rem;
+	font-weight: 540;
+	transition: color 140ms ease;
+}
+.ops-network button > span:last-child { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.64rem; opacity: .65; }
+.ops-network button::after { content: ''; position: absolute; right: .5rem; bottom: -1px; left: .5rem; height: 2px; border-radius: 99px; background: transparent; transition: background 140ms ease; }
+.ops-network button:hover { color: var(--ops-fg); }
+.ops-network button.active { color: var(--ops-fg); }
+.ops-network button.active::after { background: var(--ops-primary); }
+.ops-network-mobile { display: none; }
+
+.ops-utility-action,
+.ops-palette-action,
+.ops-mode-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 2rem;
+	border-radius: .55rem;
+	color: var(--ops-muted-fg);
+	font-size: .74rem;
+	font-weight: 560;
+	transition: color 140ms ease, background 140ms ease;
+}
+.ops-utility-action { gap: .25rem; padding: 0 .54rem; }
+.ops-palette-action,
+.ops-mode-action { width: 2rem; }
+.ops-utility-action:hover,
+.ops-utility-action.active,
+.ops-palette-action:hover,
+.ops-palette-action.active,
+.ops-mode-action:hover { color: var(--ops-fg); background: var(--ops-secondary); }
+.ops-palette-mark { display: inline-flex; gap: 2px; transform: rotate(-18deg); }
+.ops-palette-mark i { display: block; width: .34rem; height: .34rem; border-radius: 999px; background: var(--ops-primary); }
+.ops-palette-mark i:nth-child(2) { opacity: .72; }
+.ops-palette-mark i:nth-child(3) { opacity: .42; }
+.ops-mode-action { font-size: 1rem; }
+.ops-popover { position: absolute; top: calc(100% + .5rem); right: 0; z-index: 60; min-width: 12rem; padding: .42rem; border: 1px solid var(--ops-border); border-radius: .85rem; background: var(--ops-popover); box-shadow: var(--ops-shadow); }
+.ops-view-menu { min-width: 14rem; }
+.ops-color-menu { min-width: 10.6rem; }
+.ops-color-options { display: grid; gap: .18rem; }
+.ops-color-options button { display: flex; align-items: center; gap: .55rem; width: 100%; min-height: 2rem; padding: 0 .42rem; border-radius: .48rem; color: var(--ops-muted-fg); font-size: .72rem; text-align: left; }
+.ops-color-options button:hover,
+.ops-color-options button.active { color: var(--ops-fg); background: var(--ops-secondary); }
+.ops-color-options button > span { width: .72rem; height: .72rem; border-radius: 999px; background: var(--swatch); box-shadow: 0 0 0 2px color-mix(in srgb, var(--swatch) 18%, transparent); }
+.ops-color-options em { font-style: normal; }
+
+@media (min-width: 1200px) {
+	.ops-header-compact { height: 54px; }
+	.ops-header-compact .ops-status { max-height: none; margin-top: .12rem; opacity: 1; overflow: visible; }
+	.ops-header-compact .ops-network-desktop,
+	.ops-header-compact .ops-direct-control,
+	.ops-header-compact .ops-primary-action,
+	.ops-header-compact .ops-quiet-action { display: none; }
+	.ops-header-compact .ops-actions { gap: .3rem; }
+	.ops-header-compact .ops-admin-control { display: none; }
+}
+@media (min-width: 768px) and (max-width: 1199px) {
+	.ops-network-desktop { grid-area: scope; justify-self: start; }
+}
+@media (max-width: 767px) {
+	.ops-header-shell { height: 102px; }
+	.ops-network-desktop { display: none; }
+	.ops-network-mobile { display: inline-flex; grid-area: scope; width: 100%; }
+	.ops-network-mobile button { flex: 1; justify-content: center; }
+	.ops-direct-control,
+	.ops-quiet-action,
+	.ops-admin-control { display: none; }
+	.ops-actions { gap: .3rem; }
+}
+@media (min-width: 1200px) {
+	.ops-header-compact .ops-mode-action { display: none; }
+}

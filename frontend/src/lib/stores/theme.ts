@@ -2,66 +2,59 @@ import { writable } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 import { readCookie, writeCookie } from '$lib/utils/cookies';
 
-export const themeValues = ['dark', 'light', 'rose'] as const;
+export const themeModes = ['dark', 'light'] as const;
+export const colorThemes = ['blue', 'violet', 'emerald'] as const;
+export type ThemeMode = (typeof themeModes)[number];
+export type ColorTheme = (typeof colorThemes)[number];
 
-export type Theme = (typeof themeValues)[number];
+export const colorThemeOptions = [
+	{ value: 'blue', label: 'Blue', color: '#297cef' },
+	{ value: 'violet', label: 'Violet', color: '#864ad2' },
+	{ value: 'emerald', label: 'Emerald', color: '#00a381' }
+] as const satisfies ReadonlyArray<{ value: ColorTheme; label: string; color: string }>;
 
-const THEME_COOKIE = 'theme';
-const legacyThemeAliases: Record<string, Theme> = {
-	pink: 'rose'
-};
+const MODE_COOKIE = 'themeMode';
+const COLOR_COOKIE = 'colorTheme';
+const LEGACY_THEME_COOKIE = 'theme';
 
-function isTheme(value: string): value is Theme {
-	return themeValues.includes(value as Theme);
+function readMode(): ThemeMode {
+	const direct = (readCookie(MODE_COOKIE) ?? '').toLowerCase();
+	if (direct === 'light' || direct === 'dark') return direct;
+	const legacy = (readCookie(LEGACY_THEME_COOKIE) ?? '').toLowerCase();
+	return legacy === 'light' || legacy === 'rose' || legacy === 'pink' ? 'light' : 'dark';
 }
 
-function readThemeCookie(): { theme: Theme; persist: boolean } {
-	const rawValue = readCookie(THEME_COOKIE);
-	if (!rawValue) return { theme: 'dark', persist: false };
-
-	const value = rawValue.toLowerCase();
-	if (isTheme(value)) {
-		return { theme: value, persist: false };
-	}
-
-	const aliasedTheme = legacyThemeAliases[value];
-	if (aliasedTheme) {
-		return { theme: aliasedTheme, persist: true };
-	}
-
-	return { theme: 'dark', persist: false };
+function readColor(): ColorTheme {
+	const direct = (readCookie(COLOR_COOKIE) ?? '').toLowerCase();
+	if (colorThemes.includes(direct as ColorTheme)) return direct as ColorTheme;
+	const legacy = (readCookie(LEGACY_THEME_COOKIE) ?? '').toLowerCase();
+	return legacy === 'rose' || legacy === 'pink' ? 'violet' : 'blue';
 }
 
-function applyTheme(value: Theme, persist = true): void {
+function applyTheme(mode: ThemeMode, color: ColorTheme): void {
 	if (typeof document === 'undefined') return;
-
 	const classes = document.documentElement.classList;
-	classes.remove(...themeValues);
-	classes.add(value);
-
-	if (persist) {
-		writeCookie(THEME_COOKIE, value);
-	}
+	classes.remove(...themeModes, 'rose');
+	classes.add(mode);
+	document.documentElement.dataset.colorTheme = color;
 }
 
-const initial = readThemeCookie();
-let persistNextUpdate = initial.persist;
+export const themeMode: Writable<ThemeMode> = writable(readMode());
+export const colorTheme: Writable<ColorTheme> = writable(readColor());
 
-export const theme: Writable<Theme> = writable(initial.theme);
-
-theme.subscribe((value) => {
-	applyTheme(value, persistNextUpdate);
-	persistNextUpdate = true;
-});
-
-export function setTheme(value: Theme): void {
-	theme.set(value);
+function persistAndApply(): void {
+	let mode: ThemeMode = 'dark';
+	let color: ColorTheme = 'blue';
+	themeMode.subscribe((value) => (mode = value))();
+	colorTheme.subscribe((value) => (color = value))();
+	applyTheme(mode, color);
+	writeCookie(MODE_COOKIE, mode);
+	writeCookie(COLOR_COOKIE, color);
 }
 
-export function toggleTheme(): void {
-	theme.update((current) => {
-		const currentIndex = themeValues.indexOf(current);
-		const nextIndex = (currentIndex + 1) % themeValues.length;
-		return themeValues[nextIndex];
-	});
-}
+themeMode.subscribe(() => persistAndApply());
+colorTheme.subscribe(() => persistAndApply());
+
+export function setThemeMode(value: ThemeMode): void { themeMode.set(value); }
+export function toggleThemeMode(): void { themeMode.update((mode) => (mode === 'dark' ? 'light' : 'dark')); }
+export function setColorTheme(value: ColorTheme): void { colorTheme.set(value); }
