@@ -27,7 +27,7 @@ case "${1:-}" in
     require_dependencies
     start_session "$BACKEND_SESSION" "$BACKEND_CMD"
     start_session "$FRONTEND_SESSION" "$FRONTEND_CMD"
-    printf '\nDevelopment monitor: http://127.0.0.1:%s/debug\nAPI: http://127.0.0.1:%s/health\nSafety: collectors and Slack Socket Mode are disabled; no Slack bridge is started.\n' "$FRONTEND_PORT" "$BACKEND_PORT"
+    printf '\nDevelopment monitor: http://127.0.0.1:%s/debug\nAPI: http://127.0.0.1:%s/health\nSafety: collectors run against the development DB; Slack Socket Mode and the Slack bridge are disabled.\n' "$FRONTEND_PORT" "$BACKEND_PORT"
     ;;
   stop) stop_session "$FRONTEND_SESSION"; stop_session "$BACKEND_SESSION" ;;
   restart) "$0" stop; "$0" start ;;
