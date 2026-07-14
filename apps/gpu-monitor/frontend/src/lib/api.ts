@@ -1,4 +1,5 @@
-import type { EventLog, Note, ServerRecord, ServerState } from '$lib/types';
+import type { EventLog, Note, NoteKind, ServerRecord, ServerState } from '$lib/types';
+import { buildNotePayload, type CreateNoteInput } from '$lib/utils/notePayload';
 
 const BASE = '/api';
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -101,29 +102,32 @@ export async function getServerStatus(): Promise<Record<number, ServerState>> {
 	return handleResponse<Record<number, ServerState>>(res);
 }
 
-export async function getNotes(serverId: number): Promise<Note[]> {
-	const res = await fetchWithTimeout(`${BASE}/servers/${serverId}/notes`);
-	return handleResponse<Note[]>(res);
+interface NoteResponse extends Omit<Note, 'kind' | 'gpu_indices'> {
+	kind?: NoteKind;
+	gpu_indices?: number[];
 }
 
-export async function createNote(
-	serverId: number,
-	username: string,
-	sshPassword: string,
-	content: string,
-	expiresAt: string
-): Promise<Note> {
+function normalizeNoteResponse(note: NoteResponse): Note {
+	return {
+		...note,
+		kind: note.kind ?? 'memo',
+		gpu_indices: note.gpu_indices ?? []
+	};
+}
+
+export async function getNotes(serverId: number): Promise<Note[]> {
+	const res = await fetchWithTimeout(`${BASE}/servers/${serverId}/notes`);
+	const notes = await handleResponse<NoteResponse[]>(res);
+	return notes.map(normalizeNoteResponse);
+}
+
+export async function createNote(serverId: number, input: CreateNoteInput): Promise<Note> {
 	const res = await fetchWithTimeout(`${BASE}/servers/${serverId}/notes`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			username,
-			ssh_password: sshPassword,
-			content,
-			expires_at: expiresAt
-		})
+		body: JSON.stringify(buildNotePayload(input))
 	});
-	return handleResponse<Note>(res);
+	return normalizeNoteResponse(await handleResponse<NoteResponse>(res));
 }
 
 export async function deleteNote(

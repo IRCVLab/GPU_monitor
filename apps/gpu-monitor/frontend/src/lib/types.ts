@@ -79,6 +79,8 @@ export interface ServerRecord {
 	created_at: string;
 }
 
+export type NoteKind = 'memo' | 'hold';
+
 export interface Note {
 	id: number;
 	server_id: number;
@@ -86,6 +88,8 @@ export interface Note {
 	content: string;
 	created_at: string;
 	expires_at: string | null;
+	kind: NoteKind;
+	gpu_indices: number[];
 }
 
 // ─── 이벤트 로그 ─────────────────────────────────────────────────
