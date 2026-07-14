@@ -3,7 +3,7 @@
 ## Source of truth
 - Status: Active
 - Last refreshed: 2026-07-14
-- Primary product surfaces: Compact GPU dashboard as the active new surface, preserved default server-card dashboard, server administration, notes, event logs, development diagnostics, Slack channel notifications, `/gpu` Slack command.
+- Primary product surfaces: Compact GPU dashboard as the active new frontend-first surface, preserved default server-card dashboard, server administration, notes, event logs, and development diagnostics. Existing Slack channel notifications and `/gpu` command behavior remain preserved but are not part of the current Compact implementation scope.
 - Product purpose: help researchers choose which independent GPU server to enter for training. Servers are not high-speed-networked, so the decisive questions are which exact server has capacity, which exact GPU slots are occupied, and who is already using each GPU.
 - Evidence reviewed:
   - `DESIGN.md`
@@ -28,14 +28,13 @@
   - `backend/slack_socket.py`
   - `backend/collectors/gpu.py`
   - `backend/collectors/server_collector.py`
-  - Slack official docs: `https://docs.slack.dev/reference/methods/users.list/`
-  - Slack official docs: `https://docs.slack.dev/reference/scopes/users.read.email/`
+  - Deferred Slack profile rationale retained from prior design notes; Slack profile integration is explicitly non-blocking and outside the current Compact implementation scope.
 - Supersedes: earlier statements that Compact is deferred. Compact is now the active new surface, while the default card dashboard is preserved as a separate existing view.
 
 ## Brand
 - Personality: dense, exact, calm, technical, research-lab pragmatic, quietly premium.
-- Trust signals: manual server order is preserved, GPU slot numbers remain exact, users are tied to the GPU they occupy, freshness and network scope stay visible, Slack identity enrichment never blocks telemetry, and destructive/admin actions remain separated.
-- Avoid: giant hero areas, operations-command-center drama, decorative gradients, visible card-level free-count copy, hidden ownership, auto-sorting that overrides admin intent, sharing/export features, and Slack email matching unless explicitly chosen later.
+- Trust signals: manual server order is preserved, GPU slot numbers remain exact, Linux usernames are tied to the GPU they occupy, deterministic initials previews are stable, freshness and network scope stay visible, and destructive/admin actions remain separated.
+- Avoid: giant hero areas, operations-command-center drama, decorative gradients, visible card-level free-count copy, hidden ownership, auto-sorting (must not override admin intent), sharing/export features, and current-scope Slack profile work.
 
 ## Product goals
 - Goals:
@@ -44,31 +43,30 @@
   - Represent each server as one dense row in Compact.
   - Retain exact GPU slot labels (`G0`, `G1`, `G2`, ...); never renumber or compact slots visually.
   - Show compact user previews in the main list tied to each GPU slot.
-  - Use Slack profile photos first with deterministic initials fallback.
+  - Use deterministic initials derived from current Linux usernames for Compact previews: one user renders one initials circle, two users render two overlapping circles, and three or more render two circles plus `+N`.
   - Let users inspect a selected row in a desktop right detail panel or mobile bottom sheet.
   - Keep the existing header, network scope controls, Manage/actions, theme controls, live refresh, polling fallback, notes, logs, debug, CRUD, and default dashboard behavior intact.
 - Non-goals:
   - Replacing the default server-card dashboard.
   - Changing backend collector behavior, SSH credentials, authentication, notes, logs, debug, Slack channel alert semantics, or `/gpu` command semantics.
   - Adding sharing, export, public links, or card-level “free count” marketing copy.
-  - Introducing email-based Slack matching by default.
+  - Implementing Slack profile integration in the current scope, including Slack tokens, `users.list`, Linux-to-Slack mapping, Slack profile cache, backend/API enrichment, or email-based matching.
   - Editing or deploying the production repo at `~/workspace/monitoring_v2` as part of this design branch.
 - Success signals:
   - Researchers can scan all servers in Compact without opening cards and can still identify exact GPU ownership.
   - Manual order is visibly stable across Default, Compact, Internal, External, and All scopes.
   - A selected Compact row has subtle emphasis, not a modal takeover.
   - Detail panel shows all usernames without truncation plus per-GPU utilization and integer memory.
-  - Slack profile failures degrade to initials without slowing or blocking dashboard telemetry.
+  - User previews are deterministic from current Linux usernames and remain stable without any Slack dependency.
 
 ## Personas and jobs
-- Primary personas: researchers choosing compute for training jobs; administrators maintaining server metadata, order, and optional Linux-to-Slack mappings.
+- Primary personas: researchers choosing compute for training jobs; administrators maintaining server metadata and manual order.
 - User jobs:
   - Choose an independent server based on immediate GPU availability and current users.
   - Compare network scope, server identity, status, GPU model, exact GPU slots, utilization, memory, and user occupancy quickly.
   - Hover or focus a compact avatar preview to see full names before selecting a row.
   - Open a row detail panel when the compact preview is not enough.
   - Register, edit, reorder, or delete a server through existing administration flows.
-  - Confirm explicit Linux username to Slack user mappings when Slack suggestions are available.
 - Key contexts of use: frequent desktop lab checks, dark-room monitoring, phone-width checks, mixed Korean labels and technical metrics, and quick server selection before starting or moving training work.
 
 ## Information architecture
@@ -76,7 +74,7 @@
   - Keep the current header: identity/freshness on the left, Internal/External/All scope controls, View/Manage/theme controls.
   - Add Compact as a view option beside the preserved default dashboard view.
   - Network scope remains global and applies to Compact and Default.
-  - Manage remains the entry point for server administration and future mapping confirmation UI.
+  - Manage remains the entry point for server administration; Slack mapping confirmation UI is deferred and not part of the current Compact scope.
 - Core routes/screens:
   - Dashboard route hosts two views: Default cards and Compact rows.
   - Compact main list is the active new surface.
@@ -98,7 +96,7 @@
 - Slot identity is sacred: preserve exact `G#` labels from telemetry and backend contracts.
 - Users are attached to GPUs, not servers: avatar groups sit inside the relevant GPU slot cell.
 - Preview first, detail second: the row gives enough to scan; the side panel/bottom sheet gives complete names and metrics.
-- Slack enriches identity only: telemetry, dashboard rendering, and availability decisions do not wait for Slack.
+- Linux usernames are the current identity source: Compact previews derive deterministic initials directly from telemetry usernames without Slack profile enrichment.
 - Default remains preserved: card view keeps its refined server-card role and existing data/controls.
 - Calm density: use alignment, rhythm, and restrained emphasis instead of hero copy or noisy badges.
 
@@ -122,10 +120,10 @@
   - Mobile: bottom sheet with the same content and an explicit close control.
   - Shows all usernames without truncation.
   - Shows per-GPU utilization as integer percent and memory as integer `used/total GB`.
-  - Shows exact slot labels, GPU model/name, user avatar/initials, and fallback reason when Slack profile is unavailable if useful for admins.
+  - Shows exact slot labels, GPU model/name, deterministic initials circles, and full Linux usernames.
 - Existing controls/data preserved:
   - Current header, network filters, View menu, Manage menu, theme mode, color theme, layout width preference, WebSocket/polling refresh, initial load/retry/empty states, server CRUD, delete modal, notes, logs, debug, and manual reorder semantics remain available.
-  - Compact must read the same `ServerState`/`GpuInfo` data contract unless a future plan defines a narrow enrichment endpoint for Slack profiles.
+  - Compact must read the same `ServerState`/`GpuInfo` data contract; no new Slack profile, mapping, cache, backend, or API contract is required for the current implementation.
 
 ## Default dashboard preservation
 - The default server-card dashboard remains a first-class view.
@@ -133,16 +131,26 @@
 - Default may continue to refine card visual quality, but Compact acceptance must not require Default replacement.
 - Manual reorder behavior must have one source of truth and must not diverge between Default and Compact.
 
-## Slack identity architecture
-- Existing Slack backend token policy remains: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`, and `SLACK_LOG_CHANNEL` stay backend-only.
-- Slack profile enrichment uses `users.list` with `users:read` for workspace members and profile image fields.
-- Use Slack `image_*` profile fields for avatars when available; prefer a small dashboard-appropriate image size and retain larger URLs only if needed for high-density screens.
-- Persist explicit mappings from `linux_username` to `slack_user_id`.
-- Exact-name auto-suggestions may be generated from Slack names/display names but require admin confirmation before becoming mappings.
+## Current Compact identity scope
+- Current implementation is frontend-first and uses Linux usernames already present in `GpuInfo.users`.
+- Initials are deterministic from the current Linux username string.
+- One user renders one initials circle; two users render two overlapping circles; three or more users render two circles plus `+N`, where `N` is hidden additional users.
+- Hover and keyboard focus reveal full Linux usernames for each GPU preview.
+- Desktop detail panel and mobile bottom sheet show every username plus per-GPU utilization and integer memory.
+- No Slack token, `users.list`, mapping table, cache refresh, backend enrichment service, or frontend API for Slack profiles is part of the current implementation boundary.
+
+## Deferred future enhancement: Slack profile identity
+- Status: deferred, non-blocking, and excluded from current Compact acceptance criteria. Slack profile integration is not a priority for this implementation.
+- Rationale retained: Slack avatars could later make identity recognition faster, but telemetry correctness and Linux username clarity are more important for the first Compact release.
+- Existing Slack backend token policy would remain backend-only if this enhancement is later approved: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`, and `SLACK_LOG_CHANNEL` stay backend-only.
+- A future Slack profile enhancement may use `users.list` with `users:read` for workspace members and profile image fields.
+- A future implementation may use Slack `image_*` profile fields for avatars when available; prefer a small dashboard-appropriate image size and retain larger URLs only if needed for high-density screens.
+- A future implementation may persist explicit mappings from `linux_username` to `slack_user_id`.
+- Exact-name auto-suggestions may be generated from Slack names/display names in that future scope, but would require admin confirmation before becoming mappings.
 - Avoid email matching by default. If email matching is later chosen, request `users:read.email` only for that explicit feature because Slack requires it for email fields.
-- Cache Slack profiles periodically on the backend; include deactivated/deleted handling and stale-cache timestamps.
-- If Slack is unavailable, the token lacks scope, a user is deactivated, a profile image is missing, or no mapping exists, the dashboard falls back to stable initials and full Linux username text.
-- Dashboard telemetry must not block on Slack profile fetches, cache refreshes, or mapping suggestion generation.
+- A future backend cache may refresh Slack profiles periodically; include deactivated/deleted handling and stale-cache timestamps.
+- If Slack is unavailable in a future enhancement, the token lacks scope, a user is deactivated, a profile image is missing, or no mapping exists, the dashboard must still fall back to stable Linux-username initials and full Linux username text.
+- Dashboard telemetry must not block on future Slack profile fetches, cache refreshes, or mapping suggestion generation.
 
 ## Visual language
 - Color:
@@ -161,10 +169,11 @@
 - Motion:
   - 140-220ms for row hover, selection, panel entry, and tooltip/focus reveal.
   - Mobile sheet uses a short slide/fade that respects reduced motion.
-  - No animated reordering or availability drama that implies auto-sort.
+  - No animated reordering or availability drama that could imply forbidden auto-sort behavior.
 - Imagery/iconography:
-  - Slack avatars are functional identity marks, not decorative imagery.
-  - Initials fallback must remain legible at small sizes and deterministic per user.
+  - Current initials circles are functional identity marks, not decorative imagery.
+  - Initials must remain legible at small sizes and deterministic per Linux username.
+  - Future Slack avatars, if later approved, remain deferred profile enrichment and must not change telemetry identity rules.
 
 ## Components
 - Existing components to reuse:
@@ -176,13 +185,13 @@
   - GPU slot strip and avatar group primitive.
   - Desktop compact detail panel.
   - Mobile compact bottom sheet.
-  - Slack profile/initials presentation primitive.
-  - Admin-confirmed mapping surface or workflow entry point.
+  - Linux username initials/avatar-group presentation primitive.
+  - Deferred future Slack mapping surface or workflow entry point only if a later scope approves Slack profile integration.
 - Variants and states:
   - View: Default cards, Compact rows.
   - Server: online, degraded, offline, unknown/stale.
   - GPU: available, one user, two users, three-plus users, high utilization, high memory, unknown metrics.
-  - Profile: mapped photo, mapped initials fallback, unmapped Linux username, deactivated Slack user, Slack unavailable/stale cache.
+  - Profile: deterministic Linux-username initials, one-user/two-user/three-plus avatar groups, unknown or empty user list. Future mapped photo/cache states are deferred.
   - Detail: none selected, selected, stale data, mobile sheet open/closed.
 - Token/component ownership:
   - Global surfaces, typography, radius, shadow, semantic color, and motion tokens live in `app.css`.
@@ -231,9 +240,9 @@
   - Selecting a row updates subtle emphasis and opens/updates detail.
   - Selecting another row replaces panel content without reordering the list.
   - Escape closes the panel/sheet where appropriate.
-- Slack failures:
-  - Missing mapping, missing profile image, deactivated Slack member, missing scope, rate limiting, and Slack outage all render stable initials and usernames.
-  - Slack cache status may be shown only in admin/detail contexts, not as noisy row-level warnings.
+- Identity fallback:
+  - Current Compact identity uses stable initials from Linux usernames, so missing Slack mapping, profile image, scope, cache, or token states are not current runtime failures.
+  - Future Slack cache/status information may be shown only in admin/detail contexts if that deferred enhancement is approved, not as noisy row-level warnings.
 
 ## Content voice
 - Tone: terse, research-lab practical, calm.
@@ -241,11 +250,11 @@
   - Keep existing Korean labels for scope and status: `내부망`, `외부망`, `전체`, `사용 가능`, `사용 중`, `공유`, `정상`, `지연`, `오프라인`, `확인 중`, `마지막 업데이트`.
   - GPU slot labels are exact `G#` labels.
   - GPU memory uses integer `21/24 GB`; utilization uses integer `78%`.
-  - Use `Slack profile` and `Linux username` in admin-facing copy when disambiguation is needed.
+  - Use `Linux username` in current Compact copy; reserve `Slack profile` terminology for deferred/future admin-facing profile integration copy only.
 - Microcopy rules:
   - Avoid visible card-level free-count copy in Compact.
   - Use direct stale/fallback reasons in detail/admin contexts.
-  - Do not imply email matching is active unless that feature is explicitly selected later.
+  - Do not imply Slack profile matching, mapping, cache refresh, or email matching is active in the current Compact implementation.
 
 ## Behavior preservation
 - Preserve:
@@ -255,10 +264,10 @@
   - Existing Slack channel notification and `/gpu` command architecture.
   - Existing production isolation: do not edit `~/workspace/monitoring_v2` for this branch.
 - Compact must not:
-  - Auto-sort rows.
+  - Auto-sort rows; this is forbidden because manual order is admin intent.
   - Renumber GPU slots.
   - Hide all usernames behind truncated row text.
-  - Depend on Slack for telemetry rendering.
+  - Depend on Slack for telemetry rendering; this must remain outside current scope.
   - Replace Default.
 
 ## Implementation constraints
@@ -269,11 +278,11 @@
 - Data/API constraints:
   - Existing `ServerState` includes `server_id`, `server_name`, `host`, `port`, `network`, `status`, `status_reason`, `last_seen`, `gpus`, `system`, `storage`, and `display_order`.
   - Existing `GpuInfo` includes `index`, `name`, `utilization`, `memory_used`, `memory_total`, `temperature`, `power_draw`, and `users`.
-  - Slack profile/mapping data should be additive and optional; absence must not change telemetry shape or block rendering.
+  - Current Compact uses only existing telemetry usernames for identity previews; Slack profile/mapping data is deferred future enhancement work and must not be required by this scope.
 - Performance constraints:
   - No new frontend dependency for density, avatar grouping, or panel motion unless explicitly approved later.
-  - Slack profile cache refresh must be periodic/background and separate from collector loops.
   - Compact list must remain responsive when multiple servers have many GPUs/users.
+  - Future Slack profile cache refresh, if approved later, must be periodic/background and separate from collector loops.
 - Compatibility constraints:
   - Do not use CSS zoom.
   - Do not push or deploy as part of design documentation.
@@ -281,7 +290,7 @@
   - Svelte diagnostics and production build.
   - Desktop dark/light at 1440x1000.
   - Mobile dark/light at 390x844.
-  - Compact row density, manual order, exact `G#`, avatar grouping, hover/focus names, selected row, right panel, bottom sheet, Slack fallback states, and default-view preservation.
+  - Compact row density, manual order, exact `G#`, deterministic Linux-username avatar grouping, hover/focus names, selected row, right panel, bottom sheet, and default-view preservation.
 
 ## Open questions
 - [x] Compact scope: separate active new surface, not replacement.
@@ -289,6 +298,6 @@
 - [x] Row model: one dense row per server.
 - [x] GPU labels: retain exact `G0`/`G1`/`G#` telemetry numbers.
 - [x] User previews: per-GPU compact avatars in main list.
-- [x] Avatar rules: Slack photo first, initials fallback; one/two/three-plus grouping as specified.
+- [x] Avatar rules: deterministic initials from Linux usernames; one/two/three-plus grouping as specified.
 - [x] Detail: desktop right panel, mobile bottom sheet; all names untruncated; integer utilization/memory.
-- [x] Slack architecture: backend-only token, `users:read` for `users.list`, no default email matching, admin-confirmed mappings, non-blocking cache/fallback behavior.
+- [x] Slack profile integration: explicitly deferred as a non-blocking future enhancement; backend-only token, `users.list`, mapping, cache, and API work are outside current acceptance criteria and implementation boundaries.
