@@ -133,6 +133,11 @@
     return `${totalSeconds}S`;
   }
 
+
+  function holdGpuIndices(note: Note): number[] {
+    return [...new Set(note.gpu_indices.filter((value) => Number.isInteger(value) && value >= 0))].sort((a, b) => a - b);
+  }
+
   function notePreviewBadgeClass(note: Note): string {
     const remainingMs = noteRemainingMs(note);
     if (remainingMs !== null && remainingMs <= ONE_HOUR_MS) return 'is-urgent';
@@ -442,6 +447,14 @@
                 </span>
               {/if}
               <span class="monitor-card__note-preview-user">{previewNotes[0].username}</span>
+              {#if previewNotes[0].kind === 'hold'}
+                <span class="monitor-note-item__kind">advisory soft hold</span>
+                <span class="monitor-note-item__gpu-chips" aria-label="Selected GPUs">
+                  {#each holdGpuIndices(previewNotes[0]) as gpuIndex (gpuIndex)}
+                    <span class="monitor-note-item__gpu-chip">G{gpuIndex}</span>
+                  {/each}
+                </span>
+              {/if}
               <span class="monitor-card__meta-separator" aria-hidden="true">·</span>
               <span class="monitor-card__note-preview-content">{previewNotes[0].content}</span>
             {:else if notesLoaded}
@@ -478,6 +491,16 @@
                         </span>
                       {/if}
                     </div>
+                    {#if note.kind === 'hold'}
+                      <div class="monitor-note-item__hold">
+                        <span class="monitor-note-item__kind">advisory soft hold</span>
+                        <span class="monitor-note-item__gpu-chips" aria-label="Selected GPUs">
+                          {#each holdGpuIndices(note) as gpuIndex (gpuIndex)}
+                            <span class="monitor-note-item__gpu-chip">G{gpuIndex}</span>
+                          {/each}
+                        </span>
+                      </div>
+                    {/if}
                     <p class="monitor-note-item__content">{note.content}</p>
                     {#if deleteState[note.id]?.error}
                       <p class="monitor-card__error-text">{deleteState[note.id].error}</p>
@@ -507,7 +530,13 @@
               {/each}
             </div>
 
-            <NoteForm serverId={server.server_id} onCreated={onNoteCreated} />
+            <NoteForm
+              serverId={server.server_id}
+              gpus={server.gpus}
+              serverStatus={server.status}
+              lastSeen={server.last_seen}
+              onCreated={onNoteCreated}
+            />
           {/if}
         </div>
       {/if}
