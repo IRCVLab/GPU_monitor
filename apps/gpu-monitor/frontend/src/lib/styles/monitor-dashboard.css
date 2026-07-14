@@ -92,7 +92,7 @@
 }
 
 .ops-indicator-dot {
-	animation: ops-indicator-breathe 4.2s ease-in-out infinite;
+	animation: ops-indicator-breathe 6.4s ease-in-out infinite;
 }
 
 .ops-status-attention,
@@ -425,6 +425,17 @@
 	}
 }
 
+
+
+@media (min-width: 921px) {
+	.ops-header-inner,
+	.ops-header-compact .ops-header-inner {
+		box-sizing: border-box;
+		min-height: 4rem;
+		height: 4rem;
+		padding-block: 0.45rem;
+	}
+}
 
 @media (max-width: 1199px) {
 	.ops-indicator-anchor {

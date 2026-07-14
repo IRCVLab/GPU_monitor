@@ -25,6 +25,20 @@ function declarationBlock(css, selectorPart, property) {
 	return block.declarations;
 }
 
+
+function mediaBlock(css, query) {
+	const start = css.indexOf(`@media ${query}`);
+	assert.notEqual(start, -1, `missing @media ${query}`);
+	const open = css.indexOf('{', start);
+	let depth = 0;
+	for (let index = open; index < css.length; index += 1) {
+		if (css[index] === '{') depth += 1;
+		if (css[index] === '}') depth -= 1;
+		if (depth === 0) return css.slice(open + 1, index);
+	}
+	assert.fail(`unterminated @media ${query}`);
+}
+
 test('app.css does not define component-owned header selectors', () => {
 	const componentHeaderSelectors = [
 		'.ops-header-shell',
@@ -88,6 +102,18 @@ test('app.css does not hide the compact header implementation', () => {
 	);
 });
 
+test('monitor-dashboard.css keeps desktop expanded header inside a 64px border-box rhythm', () => {
+	const desktop = mediaBlock(dashboardCss, '(min-width: 921px)');
+	const headerInner = declarationBlock(desktop, '.ops-header-inner', 'box-sizing');
+	assert.match(headerInner, /box-sizing\s*:\s*border-box(?:;|\s)/, 'desktop header includes padding inside its 64px rhythm');
+	assert.match(headerInner, /min-height\s*:\s*4rem(?:;|\s)/, 'desktop expanded header minimum remains 64px-class');
+	assert.match(headerInner, /height\s*:\s*4rem(?:;|\s)/, 'desktop expanded header measures as the 64px rhythm, not 64px plus padding');
+	assert.match(headerInner, /padding-block\s*:\s*0\.[0-5][0-9]*rem(?:;|\s)/, 'desktop header uses restrained in-box vertical padding');
+
+	const compactShell = declarationBlock(dashboardCss, '.ops-header-shell.ops-header-compact', 'grid-template-rows');
+	assert.match(compactShell, /grid-template-rows\s*:\s*0fr(?:;|\s)/, 'compact shell still reserves zero row height');
+});
+
 test('monitor-dashboard.css owns compact header rhythm and absolute indicator placement', () => {
 	const headerInner = declarationBlock(dashboardCss, '.ops-header-inner', 'min-height');
 	assert.match(headerInner, /min-height\s*:\s*4rem\b/, 'expanded header rhythm stays in the 64px class');
@@ -120,7 +146,7 @@ test('monitor-dashboard.css owns header menu positioning and stacking', () => {
 
 test('monitor-dashboard.css owns slow indicator breathing and reduced motion', () => {
 	const dot = declarationBlock(dashboardCss, '.ops-indicator-dot', 'animation');
-	assert.match(dot, /animation\s*:\s*ops-indicator-breathe\s+4\.2s\s+ease-in-out\s+infinite\b/);
+	assert.match(dot, /animation\s*:\s*ops-indicator-breathe\s+6(?:\.[0-9]+)?s\s+ease-in-out\s+infinite\b/);
 	assert.match(dashboardCss, /@keyframes\s+ops-indicator-breathe\b/, 'component stylesheet defines breathing keyframes');
 	assert.match(
 		dashboardCss,

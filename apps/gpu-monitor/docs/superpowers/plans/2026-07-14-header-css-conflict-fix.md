@@ -15,6 +15,12 @@ At 1440x1000 after intentional downward scroll:
 ## Root cause
 
 
+### Final rhythm contract measurement
+
+After duplicate global header owners were removed, browser measurement at 1440px showed expanded shell height at `79px`, not the locked compact 64px-class rhythm. The active component stylesheet used `min-height: 4rem` plus `padding-block: 0.65rem` with default content-box sizing, so padding was added outside the 64px minimum. The desktop expanded header inner must own a border-box 4rem height/min-height with restrained in-box padding while preserving tablet/mobile natural height and the compact zero-reserved row.
+
+
+
 ### Second browser verification round
 
 After the first tail-block removal and reload at 1440px with intentional down-scroll:
