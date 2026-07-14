@@ -17,12 +17,13 @@
 		themeMode
 	} from '$lib/stores/theme';
 	import { serverOrder, saveOrder } from '$lib/stores/order';
-	import { dashboardLayoutWidth, setDashboardLayoutWidth } from '$lib/stores/dashboardPrefs';
+	import { dashboardView, setDashboardView } from '$lib/stores/dashboardPrefs';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
 	import { getServerStatus, getServers } from '$lib/api';
 	import type { ServerRecord, ServerState } from '$lib/types';
 	import { wsConnected } from '$lib/ws';
 	import ServerCard from '$lib/components/ServerCard.svelte';
+	import CompactDashboard from '$lib/components/CompactDashboard.svelte';
 	import ServerForm from '$lib/components/ServerForm.svelte';
 	import ServerDeleteModal from '$lib/components/ServerDeleteModal.svelte';
 
@@ -594,24 +595,14 @@
 		}
 	}
 
-	const pageShellClass = $derived(
-		$dashboardLayoutWidth === 'full' ? 'w-full' : 'max-w-7xl mx-auto'
-	);
-	const pageMainClass = $derived(
-		$dashboardLayoutWidth === 'full' ? 'w-full px-4 py-4 sm:px-6' : 'max-w-7xl mx-auto px-4 py-4 sm:px-6'
-	);
-	const serverGridMinWidth = $derived(
-		$dashboardLayoutWidth === 'full' ? '23.5rem' : '24rem'
-	);
-	const serverGridStyle = $derived(`--monitor-dashboard-card-min: ${serverGridMinWidth};`);
+	const pageShellClass = 'max-w-7xl mx-auto';
+	const pageMainClass = 'max-w-7xl mx-auto px-4 py-4 sm:px-6';
+	const serverGridStyle = '--monitor-dashboard-card-min: 24rem;';
 </script>
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
 
-<div
-	class="dashboard-page min-h-screen bg-surface"
-	class:dashboard-layout-full={$dashboardLayoutWidth === 'full'}
->
+<div class="dashboard-page min-h-screen bg-surface">
 	<div class="ops-header-shell" class:ops-header-compact={headerCompact}>
 		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerCompact}>
 			<div class="ops-indicator">
@@ -657,10 +648,10 @@
 						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen}>보기 <span aria-hidden="true">⌄</span></button>
 						{#if viewMenuOpen}
 							<div class="ops-popover ops-view-menu">
-								<div class="ops-menu-row" role="group" aria-label="레이아웃 폭">
-									<span>폭</span>
-									<button class:active={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); viewMenuOpen = false; }}>기본</button>
-									<button class:active={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); viewMenuOpen = false; }}>전체</button>
+								<div class="ops-menu-row" role="group" aria-label="대시보드 보기">
+									<span>보기</span>
+									<button class:active={$dashboardView === 'default'} onclick={() => { setDashboardView('default'); viewMenuOpen = false; }}>Default</button>
+									<button class:active={$dashboardView === 'compact'} onclick={() => { setDashboardView('compact'); viewMenuOpen = false; }}>Compact</button>
 								</div>
 								<div class="ops-view-divider"></div>
 								<span class="ops-menu-label">색상 테마</span>
@@ -731,6 +722,8 @@
 			<section class="monitor-dashboard-state" aria-live="polite">
 				<p>{$activeTab === 'all' ? '표시할 서버가 없습니다' : '이 네트워크에 서버 없음'}</p>
 			</section>
+		{:else if $dashboardView === 'compact'}
+			<CompactDashboard servers={$currentServers} showNetwork={$activeTab === 'all'} {nowMs} />
 		{:else}
 			<div class="monitor-dashboard-grid" style={serverGridStyle} use:masonry role="list">
 				{#each $currentServers as server (server.server_id)}

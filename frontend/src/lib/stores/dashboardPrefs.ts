@@ -2,21 +2,21 @@ import { writable } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 import { readCookie, writeCookie } from '$lib/utils/cookies';
 
-export type DashboardLayoutWidth = 'framed' | 'full';
+export type DashboardView = 'default' | 'compact';
 
-const LAYOUT_WIDTH_COOKIE = 'dashboardLayoutWidth';
+const DASHBOARD_VIEW_COOKIE = 'dashboardView';
 
-function readLayoutWidth(): DashboardLayoutWidth {
-	const value = readCookie(LAYOUT_WIDTH_COOKIE);
-	return value === 'full' ? 'full' : 'framed';
+function readDashboardView(): DashboardView {
+	const value = readCookie(DASHBOARD_VIEW_COOKIE);
+	return value === 'compact' ? 'compact' : 'default';
 }
 
-export const dashboardLayoutWidth: Writable<DashboardLayoutWidth> = writable(readLayoutWidth());
+export const dashboardView: Writable<DashboardView> = writable(readDashboardView());
 
-dashboardLayoutWidth.subscribe((value) => {
-	writeCookie(LAYOUT_WIDTH_COOKIE, value);
+dashboardView.subscribe((value) => {
+	writeCookie(DASHBOARD_VIEW_COOKIE, value);
 });
 
-export function setDashboardLayoutWidth(value: DashboardLayoutWidth): void {
-	dashboardLayoutWidth.set(value);
+export function setDashboardView(value: DashboardView): void {
+	dashboardView.set(value);
 }
