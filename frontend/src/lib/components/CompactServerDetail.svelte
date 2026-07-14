@@ -5,17 +5,15 @@
 
 	let {
 		server,
-		showNetwork = false,
 		onClose = () => {},
 		titleId = 'compact-detail-title',
-		mode = 'panel',
+		mode = 'overlay',
 		autofocusClose = false
 	}: {
 		server: ServerState | null;
-		showNetwork?: boolean;
 		onClose?: () => void;
 		titleId?: string;
-		mode?: 'panel' | 'sheet';
+		mode?: 'overlay' | 'sheet';
 		autofocusClose?: boolean;
 	} = $props();
 
@@ -29,10 +27,6 @@
 	};
 
 	const sortedGpus = $derived(server ? [...server.gpus].sort((a, b) => a.index - b.index) : []);
-
-	function formatNetwork(target: ServerState): string {
-		return target.network === 'external' ? '외부망' : '내부망';
-	}
 
 
 	function occupancyText(gpu: GpuInfo): string {
@@ -48,8 +42,8 @@
 	});
 </script>
 
-<section class={`compact-detail compact-detail--${mode}`} aria-labelledby={titleId}>
-	{#if server}
+{#if server}
+	<section class={`compact-detail compact-detail--${mode}`} aria-labelledby={titleId}>
 		<div class="compact-detail__header">
 			<div class="compact-detail__identity">
 				<div class="compact-detail__title-line">
@@ -58,9 +52,6 @@
 						<span class="compact-detail__status-dot" aria-hidden="true"></span>
 						<span>{statusConfig[server.status]?.label ?? statusConfig.unknown.label}</span>
 					</span>
-					{#if showNetwork}
-						<span class="compact-detail__network">{formatNetwork(server)}</span>
-					{/if}
 				</div>
 			</div>
 
@@ -77,10 +68,5 @@
 				</div>
 			{/each}
 		</div>
-	{:else}
-		<div class="compact-detail__placeholder">
-			<h2 id={titleId} class="compact-detail__title">Compact occupancy</h2>
-			<p>서버를 선택하면 점유 사용자만 빠르게 확인할 수 있습니다.</p>
-		</div>
-	{/if}
-</section>
+	</section>
+{/if}
