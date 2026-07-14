@@ -1,12 +1,15 @@
 """Note CRUD endpoints — SSH-credential-based auth (no account system)."""
+from __future__ import annotations
+
 import asyncio
+import json
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 import paramiko
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 from sqlalchemy import or_, select
 
 try:
@@ -23,6 +26,33 @@ except ImportError:  # pragma: no cover - direct execution fallback
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["notes"])
 
+NoteKind = Literal["memo", "hold"]
+
+
+def parse_gpu_indices(raw: str | None) -> list[int]:
+    if raw in (None, ""):
+        return []
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("gpu_indices must be valid JSON") from exc
+    if not isinstance(payload, list):
+        raise ValueError("gpu_indices must be a JSON array")
+    return _canonical_gpu_indices(payload)
+
+
+def serialize_gpu_indices(indices: list[int]) -> str:
+    return json.dumps(_canonical_gpu_indices(indices))
+
+
+def _canonical_gpu_indices(indices) -> list[int]:
+    normalized: list[int] = []
+    for value in indices:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("gpu_indices must contain only non-negative integers")
+        normalized.append(value)
+    return sorted(dict.fromkeys(normalized))
+
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas
@@ -35,6 +65,29 @@ class NoteOut(BaseModel):
     content: str
     created_at: str
     expires_at: Optional[str] = None
+    kind: NoteKind
+    gpu_indices: list[int] = Field(default_factory=list)
+
+    @field_validator("gpu_indices", mode="before")
+    @classmethod
+    def _coerce_gpu_indices(cls, value):
+        if isinstance(value, str) or value is None:
+            return parse_gpu_indices(value)
+        if isinstance(value, tuple):
+            value = list(value)
+        if isinstance(value, list):
+            return _canonical_gpu_indices(value)
+        return value
+
+    @model_validator(mode="after")
+    def _validate_note_out(self):
+        gpu_indices = _canonical_gpu_indices(self.gpu_indices)
+        if self.kind == "memo" and gpu_indices:
+            raise ValueError("memo notes cannot include gpu_indices")
+        if self.kind == "hold" and not gpu_indices:
+            raise ValueError("hold notes require at least one gpu index")
+        self.gpu_indices = gpu_indices
+        return self
 
 
 class NoteCreate(BaseModel):
@@ -42,6 +95,27 @@ class NoteCreate(BaseModel):
     ssh_password: str
     content: str
     expires_at: datetime
+    kind: NoteKind = "memo"
+    gpu_indices: list[StrictInt] = Field(default_factory=list)
+
+    @field_validator("gpu_indices", mode="before")
+    @classmethod
+    def _coerce_gpu_indices(cls, value):
+        if value in (None, ""):
+            return []
+        if isinstance(value, tuple):
+            return list(value)
+        return value
+
+    @model_validator(mode="after")
+    def _validate_hold_contract(self):
+        gpu_indices = _canonical_gpu_indices(self.gpu_indices)
+        if self.kind == "memo" and gpu_indices:
+            raise ValueError("memo notes cannot include gpu_indices")
+        if self.kind == "hold" and not gpu_indices:
+            raise ValueError("hold notes require at least one gpu index")
+        self.gpu_indices = gpu_indices
+        return self
 
 
 class NoteDelete(BaseModel):
@@ -59,6 +133,7 @@ def _matches_admin_password(secret: Optional[str]) -> bool:
         return False
     settings = get_settings()
     return secret == settings.admin_password
+
 
 def _try_ssh(host: str, port: int, user: str, password: str) -> bool:
     """Return True if SSH login succeeds."""
@@ -102,6 +177,8 @@ def _note_to_out(n: Note) -> NoteOut:
         content=n.content,
         created_at=serialize_datetime(n.created_at) if isinstance(n.created_at, datetime) else str(n.created_at),
         expires_at=serialize_datetime(n.expires_at) if isinstance(n.expires_at, datetime) else None,
+        kind=n.kind or "memo",
+        gpu_indices=n.gpu_indices,
     )
 
 
@@ -149,6 +226,8 @@ async def create_note(server_id: int, body: NoteCreate):
             username=body.username,
             content=body.content,
             expires_at=expires_at,
+            kind=body.kind,
+            gpu_indices=serialize_gpu_indices(body.gpu_indices),
         )
         db.add(note)
         await db.commit()
