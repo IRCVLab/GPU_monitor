@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     archive_interval: int = 60   # seconds, history save
     history_days: int = 7        # days to keep history
 
+    # Development-safe switches. They default to false so production behavior is unchanged.
+    monitoring_disable_collectors: bool = False
+    monitoring_disable_slack: bool = False
+
     @field_validator("secret_key")
     @classmethod
     def secret_key_must_be_set(cls, v: str) -> str:

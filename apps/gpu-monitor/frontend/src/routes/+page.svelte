@@ -541,6 +541,10 @@
 					로그
 				</a>
 
+				<a href="/debug" class="btn-ghost text-xs px-3 py-1.5 rounded-lg">
+					개발 진단
+				</a>
+
 				<div class="relative" bind:this={viewMenuEl}>
 					<button
 						class={`btn-ghost text-xs ${viewMenuOpen ? 'bg-white/10' : ''}`}
