@@ -5,9 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_SESSION="monitoring_v2_backend"
 FRONTEND_SESSION="monitoring_v2_frontend"
 BRIDGE_SESSION="monitoring_v2_slack_bridge"
+FRONTEND_BUILD_DIR="$ROOT_DIR/frontend/build"
 
 BACKEND_CMD="cd \"$ROOT_DIR\" && ./.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8001"
-FRONTEND_CMD="cd \"$ROOT_DIR/frontend\" && npm run dev -- --host 0.0.0.0"
+FRONTEND_CMD="cd \"$ROOT_DIR/frontend\" && npm run preview -- --host 0.0.0.0 --port 5173 --strictPort"
 BRIDGE_CMD="cd \"$ROOT_DIR\" && ./.venv/bin/uvicorn backend.slack_bridge:app --host 0.0.0.0 --port 8000"
 
 usage() {
@@ -15,7 +16,7 @@ usage() {
 Usage: ./run_monitoring.sh <command>
 
 Commands:
-  start      Start backend, frontend, and slack bridge in tmux
+  start      Start backend, built frontend preview, and slack bridge in tmux
   stop       Stop all tmux sessions for the monitoring stack
   restart    Restart the full monitoring stack
   status     Show whether each tmux session is running
@@ -44,6 +45,15 @@ require_frontend_deps() {
     echo "Missing frontend dependencies at $ROOT_DIR/frontend/node_modules" >&2
     echo "Install them first, e.g.:" >&2
     echo "  cd $ROOT_DIR/frontend && npm ci" >&2
+    exit 1
+  fi
+}
+
+require_frontend_build() {
+  if [[ ! -f "$FRONTEND_BUILD_DIR/index.js" ]]; then
+    echo "Missing frontend production build at $FRONTEND_BUILD_DIR" >&2
+    echo "Create a frozen build first:" >&2
+    echo "  cd $ROOT_DIR/frontend && npm run build" >&2
     exit 1
   fi
 }
@@ -103,6 +113,7 @@ start_stack() {
   require_tmux
   require_backend_venv
   require_frontend_deps
+  require_frontend_build
 
   start_session "$BACKEND_SESSION" "$BACKEND_CMD"
   start_session "$BRIDGE_SESSION" "$BRIDGE_CMD"
