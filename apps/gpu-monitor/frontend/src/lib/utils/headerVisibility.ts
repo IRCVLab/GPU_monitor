@@ -25,6 +25,22 @@ export interface HeaderVisibilityResult {
 	nextAccumulatedDelta: number;
 }
 
+export function compensateHeaderScrollPosition(
+	scrollY: number,
+	expandedHeight: number,
+	renderedHeight: number
+): number {
+	return Math.max(0, scrollY + Math.max(0, expandedHeight - renderedHeight));
+}
+
+export function shouldRevealSettledHeaderAtTop(
+	scrollY: number,
+	currentCompact: boolean,
+	renderedHeight: number
+): boolean {
+	return currentCompact && scrollY <= HEADER_TOP_RESET_PX && renderedHeight <= 1.5;
+}
+
 export function updateHeaderVisibility(input: HeaderVisibilityInput): HeaderVisibilityResult {
 	const delta = input.currentY - input.previousY;
 	const nextDirection: HeaderScrollDirection = delta > 0 ? 'down' : delta < 0 ? 'up' : input.direction;
