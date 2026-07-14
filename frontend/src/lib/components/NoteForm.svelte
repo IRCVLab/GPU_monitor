@@ -120,13 +120,12 @@
 		loading = true;
 		error   = '';
 		try {
-			const note = await createNote(
-				serverId,
-				username.trim(),
-				sshPassword.trim(),
-				content.trim(),
-				expiresAtDate.toISOString()
-			);
+			const note = await createNote(serverId, {
+				username: username.trim(),
+				ssh_password: sshPassword.trim(),
+				content: content.trim(),
+				expires_at: expiresAtDate.toISOString()
+			});
 			onCreated(note);
 			content = '';
 			expiresAtLocal = defaultExpiryLocal();
