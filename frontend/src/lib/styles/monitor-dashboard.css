@@ -1,0 +1,464 @@
+.dashboard-page {
+	color: var(--ops-fg);
+}
+
+.ops-header-shell {
+	position: sticky;
+	top: 0;
+	z-index: 30;
+	backdrop-filter: blur(18px);
+	background: color-mix(in srgb, var(--ops-bg) 78%, transparent);
+}
+
+.ops-header {
+	background: color-mix(in srgb, var(--ops-bg) 84%, transparent);
+}
+
+.ops-header-inner {
+	display: grid;
+	grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 1rem;
+	min-height: 5.25rem;
+	padding-block: 0.85rem;
+	transition: min-height 160ms ease, padding-block 160ms ease;
+}
+
+.ops-header-compact .ops-header-inner {
+	min-height: 4.4rem;
+	padding-block: 0.65rem;
+}
+
+.ops-identity {
+	min-width: 0;
+}
+
+.ops-identity h1 {
+	margin: 0;
+	font-size: clamp(1.1rem, 1rem + 0.4vw, 1.35rem);
+	font-weight: 650;
+	letter-spacing: -0.02em;
+	color: var(--ops-fg);
+}
+
+.ops-status {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.45rem;
+	margin-top: 0.35rem;
+	font-size: 0.82rem;
+	color: color-mix(in srgb, var(--ops-fg) 68%, transparent);
+}
+
+.ops-status-dot,
+.ops-indicator-dot {
+	width: 0.55rem;
+	height: 0.55rem;
+	border-radius: 999px;
+	background: #2fb36f;
+	box-shadow: 0 0 0 0.18rem color-mix(in srgb, #2fb36f 16%, transparent);
+}
+
+.ops-status-attention,
+.ops-indicator-dot.attention {
+	background: #f2ae43;
+	box-shadow: 0 0 0 0.18rem color-mix(in srgb, #f2ae43 16%, transparent);
+}
+
+.ops-status-separator,
+.ops-indicator-divider {
+	color: color-mix(in srgb, var(--ops-fg) 30%, transparent);
+}
+
+.ops-network {
+	display: flex;
+	align-items: center;
+	gap: 0.55rem;
+	min-width: 0;
+}
+
+.ops-network button,
+.ops-indicator-network button,
+.ops-menu-row button,
+.ops-utility-action,
+.ops-mode-action,
+.monitor-dashboard-button {
+	appearance: none;
+	border: 1px solid color-mix(in srgb, var(--ops-border) 80%, transparent);
+	background: color-mix(in srgb, var(--ops-card) 88%, transparent);
+	color: var(--ops-fg);
+	border-radius: 999px;
+	font: inherit;
+	line-height: 1;
+	transition:
+		background-color 160ms ease,
+		border-color 160ms ease,
+		color 160ms ease,
+		transform 160ms ease,
+		box-shadow 160ms ease;
+}
+
+.ops-network button,
+.ops-indicator-network button {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.62rem 0.92rem;
+	font-size: 0.84rem;
+	white-space: nowrap;
+}
+
+.ops-network button span:last-child,
+.ops-indicator-network button span:last-child {
+	color: color-mix(in srgb, var(--ops-fg) 54%, transparent);
+	font-variant-numeric: tabular-nums;
+}
+
+.ops-network button.active,
+.ops-indicator-network button.active,
+.ops-menu-row button.active,
+.ops-utility-action.active {
+	background: var(--ops-primary);
+	border-color: color-mix(in srgb, var(--ops-primary) 70%, transparent);
+	color: var(--ops-primary-fg);
+	box-shadow: 0 0.8rem 1.8rem color-mix(in srgb, var(--ops-primary) 18%, transparent);
+}
+
+.ops-network button:focus-visible,
+.ops-indicator-network button:focus-visible,
+.ops-menu-row button:focus-visible,
+.ops-utility-action:focus-visible,
+.ops-mode-action:focus-visible,
+.monitor-dashboard-button:focus-visible,
+.ops-menu-link:focus-visible,
+.ops-menu-danger:focus-visible,
+.ops-indicator-trigger:focus-visible {
+	outline: 2px solid color-mix(in srgb, var(--ops-primary) 72%, white 0%);
+	outline-offset: 2px;
+}
+
+.ops-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.75rem;
+	flex-wrap: wrap;
+}
+
+.ops-utility-action,
+.ops-mode-action,
+.monitor-dashboard-button {
+	padding: 0.7rem 0.95rem;
+	font-size: 0.84rem;
+	font-weight: 600;
+}
+
+.ops-mode-action {
+	min-width: 2.85rem;
+	justify-content: center;
+}
+
+.ops-view-menu,
+.ops-overflow-menu,
+.ops-indicator-panel {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 0.6rem);
+	min-width: 15rem;
+	padding: 0.8rem;
+	border-radius: 1rem;
+	border: 1px solid color-mix(in srgb, var(--ops-border) 84%, transparent);
+	background: color-mix(in srgb, var(--ops-popover) 92%, transparent);
+	box-shadow: var(--ops-shadow);
+	backdrop-filter: blur(18px);
+}
+
+.ops-indicator-anchor {
+	position: absolute;
+	inset-inline: 0;
+	top: 0.55rem;
+	pointer-events: none;
+}
+
+.ops-indicator {
+	position: relative;
+	display: flex;
+	justify-content: flex-end;
+}
+
+.ops-indicator-trigger {
+	pointer-events: auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 2.5rem;
+	height: 2.5rem;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--ops-border) 80%, transparent);
+	background: color-mix(in srgb, var(--ops-card) 88%, transparent);
+}
+
+.ops-indicator-panel {
+	pointer-events: none;
+	display: none;
+	align-items: center;
+	gap: 0.75rem;
+	width: max-content;
+	max-width: min(92vw, 34rem);
+}
+
+.ops-indicator:hover .ops-indicator-panel,
+.ops-indicator:focus-within .ops-indicator-panel {
+	display: flex;
+}
+
+.ops-indicator-status {
+	font-size: 0.82rem;
+	white-space: nowrap;
+	color: color-mix(in srgb, var(--ops-fg) 72%, transparent);
+}
+
+.ops-indicator-network {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.45rem;
+}
+
+.ops-menu-row {
+	display: flex;
+	align-items: center;
+	gap: 0.55rem;
+	flex-wrap: wrap;
+}
+
+.ops-menu-row {
+	justify-content: space-between;
+}
+
+.ops-menu-row > span,
+.ops-menu-label {
+	font-size: 0.76rem;
+	font-weight: 650;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--ops-fg) 48%, transparent);
+}
+
+
+
+.ops-menu-row button {
+	padding: 0.68rem 0.9rem;
+	font-size: 0.82rem;
+	font-weight: 600;
+}
+
+
+.ops-view-divider {
+	height: 1px;
+	margin-block: 0.8rem;
+	background: color-mix(in srgb, var(--ops-border) 84%, transparent);
+}
+
+.ops-color-options {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 0.6rem;
+	margin-top: 0.6rem;
+}
+
+.ops-color-options button {
+	display: grid;
+	justify-items: center;
+	gap: 0.4rem;
+	padding: 0.7rem 0.55rem;
+	border-radius: 0.95rem;
+	border: 1px solid color-mix(in srgb, var(--ops-border) 84%, transparent);
+	background: color-mix(in srgb, var(--ops-card) 88%, transparent);
+	color: var(--ops-fg);
+}
+
+.ops-color-options button span {
+	width: 1rem;
+	height: 1rem;
+	border-radius: 999px;
+	background: var(--swatch);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.ops-color-options button em {
+	font-style: normal;
+	font-size: 0.75rem;
+}
+
+.ops-color-options button.active {
+	border-color: color-mix(in srgb, var(--ops-primary) 74%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--ops-primary) 34%, transparent);
+}
+
+.ops-overflow-menu {
+	display: grid;
+	gap: 0.45rem;
+	min-width: 12rem;
+}
+
+.ops-menu-link,
+.ops-menu-danger {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-start;
+	width: 100%;
+	padding: 0.72rem 0.85rem;
+	border-radius: 0.85rem;
+	border: 1px solid transparent;
+	background: transparent;
+	color: var(--ops-fg);
+	font: inherit;
+	font-size: 0.84rem;
+	text-decoration: none;
+}
+
+.ops-menu-link:hover,
+.ops-menu-link:focus-visible {
+	background: color-mix(in srgb, var(--ops-muted) 76%, transparent);
+}
+
+.ops-menu-danger {
+	color: var(--ops-danger);
+}
+
+.ops-menu-danger:hover,
+.ops-menu-danger:focus-visible {
+	background: color-mix(in srgb, var(--ops-danger) 10%, transparent);
+}
+
+.monitor-dashboard-grid {
+	--monitor-dashboard-card-min: 24rem;
+	--monitor-dashboard-masonry-row: 8px;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--monitor-dashboard-card-min)), 1fr));
+	grid-auto-rows: var(--monitor-dashboard-masonry-row);
+	gap: 1rem;
+	align-items: start;
+}
+
+.monitor-dashboard-card-item {
+	min-width: 0;
+	align-self: start;
+}
+
+.monitor-dashboard-state {
+	border: 1px solid color-mix(in srgb, var(--ops-border) 84%, transparent);
+	border-radius: 1.5rem;
+	background: color-mix(in srgb, var(--ops-card) 92%, transparent);
+	box-shadow: var(--ops-shadow);
+
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 0.9rem;
+	min-height: 16rem;
+	padding: 1.5rem;
+	text-align: center;
+	color: color-mix(in srgb, var(--ops-fg) 76%, transparent);
+}
+
+.monitor-dashboard-spinner {
+	width: 1.75rem;
+	height: 1.75rem;
+	border-radius: 999px;
+	border: 2px solid color-mix(in srgb, var(--ops-border) 84%, transparent);
+	border-top-color: var(--ops-primary);
+	animation: monitor-dashboard-spin 0.9s linear infinite;
+}
+
+
+@keyframes monitor-dashboard-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (max-width: 920px) {
+	.ops-header-inner {
+		grid-template-columns: 1fr;
+		align-items: stretch;
+	}
+
+	.ops-network-desktop {
+		display: none;
+	}
+
+	.ops-network-mobile {
+		display: flex;
+		overflow-x: auto;
+		padding-bottom: 0.2rem;
+		scrollbar-width: none;
+	}
+
+	.ops-network-mobile::-webkit-scrollbar {
+		display: none;
+	}
+
+	.ops-actions {
+		justify-content: flex-start;
+	}
+
+	.ops-indicator-anchor {
+		display: none;
+	}
+}
+
+@media (min-width: 921px) {
+	.ops-network-mobile {
+		display: none;
+	}
+}
+
+@media (max-width: 640px) {
+	.ops-header,
+	main[class] {
+		padding-inline: 1rem !important;
+	}
+
+	.ops-actions {
+		gap: 0.55rem;
+	}
+
+	.ops-utility-action,
+	.ops-mode-action,
+	.monitor-dashboard-button {
+		padding: 0.66rem 0.82rem;
+	}
+
+	.ops-view-menu,
+	.ops-overflow-menu,
+	.ops-indicator-panel {
+		left: 0;
+		right: auto;
+		max-width: min(92vw, 20rem);
+	}
+
+	.monitor-dashboard-grid {
+		gap: 0.9rem;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ops-header-inner,
+	.ops-network button,
+	.ops-indicator-network button,
+	.ops-menu-row button,
+	.ops-utility-action,
+	.ops-mode-action,
+	.monitor-dashboard-button,
+	.monitor-dashboard-spinner {
+		transition: none;
+		animation: none;
+	}
+
+	.monitor-dashboard-spinner {
+		border-top-color: color-mix(in srgb, var(--ops-primary) 55%, transparent);
+	}
+}

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { writable, derived, get } from 'svelte/store';
+	import '$lib/styles/monitor-dashboard.css';
 	import {
 		serverStates,
 		internalServers,
@@ -8,14 +9,15 @@
 		isServerStateEqual,
 		normalizeServerState
 	} from '$lib/stores/servers';
-	import { colorTheme, colorThemeOptions, setColorTheme, setThemeMode, themeMode } from '$lib/stores/theme';
-	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import {
-		dashboardTextScale,
-		dashboardLayoutWidth,
-		setDashboardTextScale,
-		setDashboardLayoutWidth
-	} from '$lib/stores/dashboardPrefs';
+		colorTheme,
+		colorThemeOptions,
+		setColorTheme,
+		setThemeMode,
+		themeMode
+	} from '$lib/stores/theme';
+	import { serverOrder, saveOrder } from '$lib/stores/order';
+	import { dashboardLayoutWidth, setDashboardLayoutWidth } from '$lib/stores/dashboardPrefs';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
 	import { getServerStatus, getServers } from '$lib/api';
 	import type { ServerRecord, ServerState } from '$lib/types';
@@ -30,7 +32,72 @@
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
 
-	// ── Tab state (persisted in cookie) ────────────────────────────
+	function masonry(node: HTMLDivElement) {
+		let frame = 0;
+		let itemObserver: ResizeObserver | null = null;
+		const containerObserver = new ResizeObserver(() => schedule());
+		const mutationObserver = new MutationObserver(() => observeItems());
+
+		function schedule(): void {
+			if (frame !== 0) return;
+			frame = requestAnimationFrame(layout);
+		}
+
+		function rowSize(): number {
+			const value = Number.parseFloat(
+				getComputedStyle(node).getPropertyValue('--monitor-dashboard-masonry-row')
+			);
+			return Number.isFinite(value) && value > 0 ? value : 8;
+		}
+
+		function rowGap(): number {
+			const value = Number.parseFloat(getComputedStyle(node).rowGap);
+			return Number.isFinite(value) && value >= 0 ? value : 16;
+		}
+
+		function layout(): void {
+			frame = 0;
+			const currentRowSize = rowSize();
+			const currentGap = rowGap();
+
+			for (const child of Array.from(node.children)) {
+				if (!(child instanceof HTMLElement)) continue;
+				child.style.gridRowEnd = 'span 1';
+				const height = child.getBoundingClientRect().height;
+				const span = Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
+				child.style.gridRowEnd = `span ${span}`;
+			}
+		}
+
+		function observeItems(): void {
+			itemObserver?.disconnect();
+			itemObserver = new ResizeObserver(() => schedule());
+			for (const child of Array.from(node.children)) {
+				if (!(child instanceof HTMLElement)) continue;
+				itemObserver.observe(child);
+			}
+			schedule();
+		}
+
+		containerObserver.observe(node);
+		mutationObserver.observe(node, { childList: true });
+		observeItems();
+
+		return {
+			destroy() {
+				if (frame !== 0) cancelAnimationFrame(frame);
+				itemObserver?.disconnect();
+				containerObserver.disconnect();
+				mutationObserver.disconnect();
+				for (const child of Array.from(node.children)) {
+					if (child instanceof HTMLElement) {
+						child.style.removeProperty('grid-row-end');
+					}
+				}
+			}
+		};
+	}
+
 	function readTab(): Tab {
 		const value = readCookie(TAB_COOKIE);
 		return tabOrder.includes(value as Tab) ? (value as Tab) : 'internal';
@@ -353,6 +420,7 @@
 
 	initPageRuntime();
 
+
 	function relativeTime(ms: number): string {
 		if (ms === 0) return '–';
 		const diff = Math.max(0, Math.floor((nowMs - ms) / 1000));
@@ -417,7 +485,6 @@
 		{ value: 'all' as Tab, label: '전체', count: $all.length }
 	]);
 
-	// ── Derived current tab servers ─────────────────────────────────
 	const currentServers = derived(
 		[activeTab, allServers, internalServers, externalServers, serverOrder],
 		([$tab, $all, $int, $ext, $order]) => {
@@ -430,7 +497,6 @@
 		orderServers($servers, $order).map((server) => server.server_id)
 	);
 
-	// ── Drag-to-reorder state ───────────────────────────────────────
 	let dragging = $state<number | null>(null);
 	let dragTarget = $state<number | null>(null);
 
@@ -467,9 +533,8 @@
 		dragTarget = null;
 	}
 
-	// ── Admin panel ─────────────────────────────────────────────────
-	let adminOpen    = $state(false);
-	let deleteOpen   = $state(false);
+	let adminOpen = $state(false);
+	let deleteOpen = $state(false);
 	let editingServer = $state<ServerRecord | null>(null);
 	let viewMenuOpen = $state(false);
 	let viewMenuEl = $state<HTMLDivElement | null>(null);
@@ -505,7 +570,6 @@
 		if (viewMenuOpen) revealHeader();
 	}
 
-
 	function toggleActionsMenu() {
 		actionsMenuOpen = !actionsMenuOpen;
 		if (actionsMenuOpen) revealHeader();
@@ -514,6 +578,7 @@
 	function selectNetwork(tab: Tab) {
 		activeTab.set(tab);
 	}
+
 
 	function handleWindowClick(event: MouseEvent) {
 		const target = event.target;
@@ -533,44 +598,27 @@
 		$dashboardLayoutWidth === 'full' ? 'w-full' : 'max-w-7xl mx-auto'
 	);
 	const pageMainClass = $derived(
-		$dashboardLayoutWidth === 'full' ? 'w-full px-6 py-4' : 'max-w-7xl mx-auto px-6 py-4'
+		$dashboardLayoutWidth === 'full' ? 'w-full px-4 py-4 sm:px-6' : 'max-w-7xl mx-auto px-4 py-4 sm:px-6'
 	);
-	const serverGridMinWidth = $derived.by(() => {
-		if ($dashboardTextScale === 'large') {
-			return $dashboardLayoutWidth === 'full' ? '29rem' : '30rem';
-		}
-		if ($dashboardTextScale === 'default') {
-			return $dashboardLayoutWidth === 'full' ? '23rem' : '23.25rem';
-		}
-		return $dashboardLayoutWidth === 'full' ? '21.5rem' : '22rem';
-	});
-	const serverGridClass = $derived(
-		'grid gap-4'
+	const serverGridMinWidth = $derived(
+		$dashboardLayoutWidth === 'full' ? '23.5rem' : '24rem'
 	);
-	const serverGridStyle = $derived(
-		`grid-template-columns: repeat(auto-fit, minmax(min(100%, ${serverGridMinWidth}), 1fr));`
-	);
+	const serverGridStyle = $derived(`--monitor-dashboard-card-min: ${serverGridMinWidth};`);
 </script>
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
 
 <div
-	class="dashboard-page min-h-screen bg-surface text-white"
+	class="dashboard-page min-h-screen bg-surface"
 	class:dashboard-layout-full={$dashboardLayoutWidth === 'full'}
 >
-	<div
-		class="dashboard-scale-viewport"
-		class:scale-small={$dashboardTextScale === 'small'}
-		class:scale-default={$dashboardTextScale === 'default'}
-		class:scale-large={$dashboardTextScale === 'large'}
-		class:layout-full={$dashboardLayoutWidth === 'full'}
-		class:layout-framed={$dashboardLayoutWidth === 'framed'}
-	>
-	<!-- Header -->
 	<div class="ops-header-shell" class:ops-header-compact={headerCompact}>
 		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerCompact}>
 			<div class="ops-indicator">
-				<button class="ops-indicator-trigger" aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)}. 상세 상태 보기`}>
+				<button
+					class="ops-indicator-trigger"
+					aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)}. 상세 상태 보기`}
+				>
 					<span class:attention={!$wsConnected || refreshFailed} class="ops-indicator-dot" aria-hidden="true"></span>
 				</button>
 				<div class="ops-indicator-panel">
@@ -591,6 +639,8 @@
 					<p class="ops-status" aria-live="polite">
 						<span class:ops-status-attention={!$wsConnected || refreshFailed} class="ops-status-dot"></span>
 						<span>{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
+						<span class="ops-status-separator" aria-hidden="true">•</span>
+						<span>{nextRefreshText()}</span>
 					</p>
 				</div>
 
@@ -607,11 +657,30 @@
 						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen}>보기 <span aria-hidden="true">⌄</span></button>
 						{#if viewMenuOpen}
 							<div class="ops-popover ops-view-menu">
-								<div class="ops-menu-row" role="group" aria-label="레이아웃 폭"><span>폭</span><button class:active={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); viewMenuOpen = false; }}>기본</button><button class:active={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); viewMenuOpen = false; }}>전체</button></div>
-								<div class="ops-menu-row" role="group" aria-label="화면 배율"><span>배율</span>{#each ['small', 'default', 'large'] as scale}<button class:active={$dashboardTextScale === scale} onclick={() => { setDashboardTextScale(scale as 'small' | 'default' | 'large'); viewMenuOpen = false; }}>{scale === 'small' ? '작게' : scale === 'default' ? '기본' : '크게'}</button>{/each}</div>
+								<div class="ops-menu-row" role="group" aria-label="레이아웃 폭">
+									<span>폭</span>
+									<button class:active={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); viewMenuOpen = false; }}>기본</button>
+									<button class:active={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); viewMenuOpen = false; }}>전체</button>
+								</div>
 								<div class="ops-view-divider"></div>
 								<span class="ops-menu-label">색상 테마</span>
-								<div class="ops-color-options" role="group" aria-label="색상 테마">{#each colorThemeOptions as option}<button class:active={$colorTheme === option.value} type="button" aria-label={option.label} aria-pressed={$colorTheme === option.value} style={`--swatch: ${option.color}`} onclick={() => { setColorTheme(option.value); viewMenuOpen = false; }}><span></span><em>{option.label}</em></button>{/each}</div>
+								<div class="ops-color-options" role="group" aria-label="색상 테마">
+									{#each colorThemeOptions as option}
+										<button
+											class:active={$colorTheme === option.value}
+											type="button"
+											aria-label={option.label}
+											aria-pressed={$colorTheme === option.value}
+											style={`--swatch: ${option.color}`}
+											onclick={() => {
+												setColorTheme(option.value);
+												viewMenuOpen = false;
+											}}
+										>
+											<span></span><em>{option.label}</em>
+										</button>
+									{/each}
+								</div>
 							</div>
 						{/if}
 					</div>
@@ -625,61 +694,45 @@
 				</div>
 
 				<nav class="ops-network ops-network-mobile" aria-label="네트워크 필터">
-					{#each $tabOptions as tab}<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>{/each}
+					{#each $tabOptions as tab}
+						<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>
+					{/each}
 				</nav>
 			</div>
 		</header>
 	</div>
 
-	<!-- Main content -->
 	<main class={pageMainClass}>
 		{#if !loaded}
-			<!-- 초기 로딩 -->
-			<div class="flex items-center justify-center h-64 text-white/30 text-sm">
-				<div class="text-center">
-					<div class="w-6 h-6 border border-white/20 border-t-white/60 rounded-full animate-spin mx-auto mb-3"></div>
-					불러오는 중...
-				</div>
-			</div>
+			<section class="monitor-dashboard-state" role="status" aria-live="polite">
+				<div class="monitor-dashboard-spinner" aria-hidden="true"></div>
+				<p>불러오는 중...</p>
+			</section>
 		{:else if retryingInitialLoad && $serverStates.size === 0}
-			<div class="flex items-center justify-center h-64 text-white/30 text-sm">
-				<div class="text-center">
-					<div class="w-6 h-6 border border-white/20 border-t-white/60 rounded-full animate-spin mx-auto mb-3"></div>
-					다시 불러오는 중...
-				</div>
-			</div>
+			<section class="monitor-dashboard-state" role="status" aria-live="polite">
+				<div class="monitor-dashboard-spinner" aria-hidden="true"></div>
+				<p>다시 불러오는 중...</p>
+			</section>
 		{:else if loadError && $serverStates.size === 0}
-			<div class="flex flex-col items-center justify-center h-64 gap-3 text-white/40 text-sm">
-				<span>{loadError}</span>
-				<button
-					class="btn-ghost text-xs border border-white/10 rounded-lg px-3 py-1.5"
-					disabled={retryingInitialLoad}
-					onclick={() => void retryInitialLoad()}
-				>
+			<section class="monitor-dashboard-state" aria-live="polite">
+				<p>{loadError}</p>
+				<button class="monitor-dashboard-button" disabled={retryingInitialLoad} onclick={() => void retryInitialLoad()}>
 					{retryingInitialLoad ? '다시 불러오는 중...' : '다시 시도'}
 				</button>
-			</div>
+			</section>
 		{:else if $serverStates.size === 0}
-			<!-- 서버 없음 -->
-			<div class="flex flex-col items-center justify-center h-64 gap-3 text-white/30 text-sm">
-				<span>등록된 서버가 없습니다</span>
-				<button class="btn-ghost text-xs border border-white/10 rounded-lg px-3 py-1.5"
-					onclick={() => (adminOpen = true)}>
+			<section class="monitor-dashboard-state" aria-live="polite">
+				<p>등록된 서버가 없습니다</p>
+				<button class="monitor-dashboard-button" onclick={() => (adminOpen = true)}>
 					+ 서버 등록하기
 				</button>
-			</div>
+			</section>
 		{:else if $currentServers.length === 0}
-			<!-- 현재 탭에 서버 없음 -->
-			<div class="flex items-center justify-center h-64 text-white/30 text-sm">
-				{$activeTab === 'all' ? '표시할 서버가 없습니다' : '이 네트워크에 서버 없음'}
-			</div>
+			<section class="monitor-dashboard-state" aria-live="polite">
+				<p>{$activeTab === 'all' ? '표시할 서버가 없습니다' : '이 네트워크에 서버 없음'}</p>
+			</section>
 		{:else}
-			<!-- Server grid: drag-to-reorder, 1 col / 2 col tablet / 3 col desktop -->
-			<div
-				class={serverGridClass}
-				style={serverGridStyle}
-				role="list"
-			>
+			<div class="monitor-dashboard-grid" style={serverGridStyle} use:masonry role="list">
 				{#each $currentServers as server (server.server_id)}
 					<div
 						role="listitem"
@@ -688,24 +741,26 @@
 						ondragover={(event) => handleDragOver(event, server.server_id)}
 						ondrop={() => drop()}
 						ondragend={() => dragEnd()}
-						class="cursor-grab active:cursor-grabbing"
+						class="monitor-dashboard-card-item cursor-grab active:cursor-grabbing"
 						class:opacity-40={dragging === server.server_id}
 						class:ring-1={dragTarget === server.server_id && dragTarget !== dragging}
 						class:ring-blue-500={dragTarget === server.server_id && dragTarget !== dragging}
 					>
-							<ServerCard {server} onEdit={handleEditServer} />
-						</div>
-					{/each}
-				</div>
+						<ServerCard {server} onEdit={handleEditServer} showNetwork={$activeTab === 'all'} />
+					</div>
+				{/each}
+			</div>
 		{/if}
 	</main>
-	</div>
 </div>
 
 <ServerForm
 	bind:open={adminOpen}
 	bind:editServer={editingServer}
-	onClose={() => { adminOpen = false; editingServer = null; }}
+	onClose={() => {
+		adminOpen = false;
+		editingServer = null;
+	}}
 	onSaved={handleSaved}
 />
 

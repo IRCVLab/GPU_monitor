@@ -10,112 +10,164 @@
 
 	:root {
 		color-scheme: dark;
+		--surface: #0b1016;
+		--elevated: #151b23;
+		--text: #eef2f7;
+		--muted: #98a4b4;
+		--border: rgba(148, 163, 184, 0.12);
+		--shadow: 0 12px 30px rgba(2, 6, 23, 0.18);
+		--primary: #4b8dff;
+		--success: #14b87a;
+		--warning: #e6a23c;
+		--danger: #ef6073;
+		--radius-outer: 1.25rem;
+		--radius-inner: 0.9rem;
 	}
 
 	html.dark {
 		color-scheme: dark;
-		--ops-bg: #090b0f;
-		--ops-fg: #f0f2f4;
-		--ops-card: #13161b;
-		--ops-popover: #1a1d22;
-		--ops-primary: #3a8cff;
-		--ops-primary-fg: #040609;
-		--ops-secondary: #1c2024;
-		--ops-muted: #181b1f;
-		--ops-muted-fg: #8f9aa4;
-		--ops-border: #26292e;
-		--ops-accent: #152946;
-		--ops-danger: #ff515a;
-		--ops-shadow: 0 4px 40px rgba(0, 0, 0, 0.45);
+		--surface: #0b1016;
+		--elevated: #151b23;
+		--text: #eef2f7;
+		--muted: #98a4b4;
+		--border: rgba(148, 163, 184, 0.12);
+		--shadow: 0 12px 30px rgba(2, 6, 23, 0.18);
+		--primary: #4b8dff;
+		--success: #14b87a;
+		--warning: #e6a23c;
+		--danger: #ef6073;
+		--ops-bg: var(--surface);
+		--ops-fg: var(--text);
+		--ops-card: var(--elevated);
+		--ops-popover: color-mix(in srgb, var(--elevated) 92%, black 8%);
+		--ops-primary: var(--primary);
+		--ops-primary-fg: #081018;
+		--ops-secondary: color-mix(in srgb, var(--surface) 84%, white 16%);
+		--ops-muted: color-mix(in srgb, var(--surface) 90%, white 10%);
+		--ops-muted-fg: var(--muted);
+		--ops-border: var(--border);
+		--ops-accent: color-mix(in srgb, var(--primary) 16%, transparent);
+		--ops-danger: var(--danger);
+		--ops-shadow: var(--shadow);
 	}
 
 	html.light {
 		color-scheme: light;
-		--ops-bg: #f4f5f7;
-		--ops-fg: #0c121a;
-		--ops-card: #ffffff;
-		--ops-popover: #ffffff;
-		--ops-primary: #297cef;
+		--surface: #f5f7fa;
+		--elevated: #ffffff;
+		--text: #111927;
+		--muted: #5f6c7d;
+		--border: rgba(15, 23, 42, 0.08);
+		--shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+		--primary: #297cef;
+		--success: #169c6a;
+		--warning: #cf8a16;
+		--danger: #e05666;
+		--ops-bg: var(--surface);
+		--ops-fg: var(--text);
+		--ops-card: var(--elevated);
+		--ops-popover: var(--elevated);
+		--ops-primary: var(--primary);
 		--ops-primary-fg: #ffffff;
-		--ops-secondary: #e9ebee;
-		--ops-muted: #eceff1;
-		--ops-muted-fg: #565e69;
-		--ops-border: #dbdee2;
-		--ops-accent: #d9e6f9;
-		--ops-danger: #ee343b;
-		--ops-shadow: 0 2px 28px rgba(78, 86, 97, 0.1);
+		--ops-secondary: color-mix(in srgb, var(--surface) 90%, black 10%);
+		--ops-muted: color-mix(in srgb, var(--surface) 96%, black 4%);
+		--ops-muted-fg: var(--muted);
+		--ops-border: var(--border);
+		--ops-accent: color-mix(in srgb, var(--primary) 14%, transparent);
+		--ops-danger: var(--danger);
+		--ops-shadow: var(--shadow);
 	}
 
 	html.rose {
 		color-scheme: light;
-		--ops-bg: #f6f2f5;
-		--ops-fg: #241c22;
-		--ops-card: #fff9fb;
-		--ops-popover: #fff9fb;
-		--ops-primary: #b86c87;
+		--surface: #f6f2f5;
+		--elevated: #fffafb;
+		--text: #251f24;
+		--muted: #746973;
+		--border: rgba(84, 56, 71, 0.08);
+		--shadow: 0 10px 24px rgba(79, 40, 59, 0.06);
+		--primary: #a06bdc;
+		--success: #169c6a;
+		--warning: #cf8a16;
+		--danger: #d85b71;
+		--ops-bg: var(--surface);
+		--ops-fg: var(--text);
+		--ops-card: var(--elevated);
+		--ops-popover: var(--elevated);
+		--ops-primary: var(--primary);
 		--ops-primary-fg: #ffffff;
-		--ops-secondary: #f0e7ec;
-		--ops-muted: #f5edf1;
-		--ops-muted-fg: #735d69;
-		--ops-border: #e3d6dd;
-		--ops-accent: #f4dce6;
-		--ops-danger: #d84b5b;
-		--ops-shadow: 0 2px 28px rgba(79, 40, 59, 0.1);
+		--ops-secondary: color-mix(in srgb, var(--surface) 92%, black 8%);
+		--ops-muted: color-mix(in srgb, var(--surface) 96%, black 4%);
+		--ops-muted-fg: var(--muted);
+		--ops-border: var(--border);
+		--ops-accent: color-mix(in srgb, var(--primary) 14%, transparent);
+		--ops-danger: var(--danger);
+		--ops-shadow: var(--shadow);
 	}
 
 	body {
 		font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	}
 
+
+@media (prefers-reduced-motion: reduce) {
+	html:focus-within {
+		scroll-behavior: auto;
+	}
+
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
+
 	html.dark body,
 	html.dark .bg-surface {
-		background: #090b0f !important;
+		background: var(--surface) !important;
 	}
 
 	html.dark .bg-surface-card {
-		background: #13161b !important;
-		box-shadow: var(--ops-shadow);
+		background: var(--elevated) !important;
+		box-shadow: var(--shadow);
 	}
 
 	html.dark .border-surface-border {
-		border-color: #26292e !important;
+		border-color: var(--border) !important;
 	}
 
-	html.dark .bar-track { background-color: #26292e !important; }
+	html.dark .bar-track { background-color: color-mix(in srgb, var(--border) 92%, transparent) !important; }
 
 	html.light body,
-	html.light .bg-surface { background: #f4f5f7 !important; }
+	html.light .bg-surface { background: var(--surface) !important; }
 
 	html.light .bg-surface-card {
-		background-color: #ffffff !important;
-		box-shadow: var(--ops-shadow);
+		background-color: var(--elevated) !important;
+		box-shadow: var(--shadow);
 	}
 
-	html.light .border-surface-border { border-color: #dbdee2 !important; }
-	html.light .bar-track { background-color: #e2e5e8 !important; }
+	html.light .border-surface-border { border-color: var(--border) !important; }
+	html.light .bar-track { background-color: color-mix(in srgb, var(--border) 94%, transparent) !important; }
 
 	html.rose body,
 	html.rose .bg-surface {
-		background:
-			radial-gradient(circle at top left, rgba(184, 108, 135, 0.16), transparent 26%),
-			radial-gradient(circle at top right, rgba(244, 114, 182, 0.08), transparent 24%),
-			linear-gradient(180deg, #f6f2f5 0%, #efe7ec 100%) !important;
+		background: var(--surface) !important;
 	}
 
 	html.rose .bg-surface-card {
-		background:
-			linear-gradient(180deg, rgba(255, 249, 251, 0.98), rgba(252, 245, 248, 0.98)) !important;
-		box-shadow:
-			0 14px 34px rgba(79, 40, 59, 0.06),
-			inset 0 1px 0 rgba(255, 255, 255, 0.72);
+		background: var(--elevated) !important;
+		box-shadow: var(--shadow);
 	}
 
 	html.rose .border-surface-border {
-		border-color: rgba(84, 56, 71, 0.1) !important;
+		border-color: var(--border) !important;
 	}
 
 	html.rose .bar-track {
-		background-color: rgba(84, 56, 71, 0.08) !important;
+		background-color: color-mix(in srgb, var(--border) 94%, transparent) !important;
 	}
 
 	html.rose .btn-ghost {
@@ -636,27 +688,6 @@
 	.dashboard-scale-viewport {
 		width: 100%;
 		margin-inline: auto;
-		transform-origin: top center;
-	}
-
-	.dashboard-scale-viewport.scale-default {
-		width: 80%;
-	}
-
-	.dashboard-scale-viewport.scale-large {
-		width: 70%;
-	}
-
-	.dashboard-scale-viewport.layout-full.scale-small {
-		width: 94%;
-	}
-
-	.dashboard-scale-viewport.layout-full.scale-default {
-		width: 82%;
-	}
-
-	.dashboard-scale-viewport.layout-full.scale-large {
-		width: 70%;
 	}
 
 	.server-card {
@@ -1053,12 +1084,7 @@
 	}
 
 	@media (max-width: 640px) {
-		.dashboard-scale-viewport,
-		.dashboard-scale-viewport.scale-default,
-		.dashboard-scale-viewport.scale-large,
-		.dashboard-scale-viewport.layout-full.scale-small,
-		.dashboard-scale-viewport.layout-full.scale-default,
-		.dashboard-scale-viewport.layout-full.scale-large {
+		.dashboard-scale-viewport {
 			width: 100%;
 		}
 
@@ -1616,27 +1642,6 @@
 	}
 }
 
-@supports (zoom: 1) {
-	.dashboard-scale-viewport.scale-default {
-		zoom: 1.25;
-	}
-
-	.dashboard-scale-viewport.scale-large {
-		zoom: 1.5;
-	}
-}
-
-@supports not (zoom: 1) {
-	.dashboard-scale-viewport.scale-default {
-		transform: scale(1.25);
-		margin-bottom: 24vh;
-	}
-
-	.dashboard-scale-viewport.scale-large {
-		transform: scale(1.5);
-		margin-bottom: 52vh;
-	}
-}
 
 html.dark .dashboard-header {
 	background: linear-gradient(180deg, rgba(9, 15, 24, 0.84), rgba(11, 18, 28, 0.96));
@@ -2449,19 +2454,27 @@ html.rose .log-detail-json {
 	}
 }
 
-/* ── Reference theme application: color preference is independent of mode. ── */
+/* ── Reference theme application: palette only shifts accent/selection affordances. ── */
 html[data-color-theme='violet'] {
-	--ops-primary: #864ad2;
-	--ops-accent: #eee3fb;
+	--primary: #864ad2;
+	--ops-accent: color-mix(in srgb, var(--primary) 14%, transparent);
 	--ops-focus: #9b61ea;
 }
-html.dark[data-color-theme='violet'] { --ops-primary: #9b61ea; --ops-accent: #2a1d45; --ops-focus: #b480ff; }
+html.dark[data-color-theme='violet'] {
+	--primary: #9b61ea;
+	--ops-accent: color-mix(in srgb, var(--primary) 18%, transparent);
+	--ops-focus: #b480ff;
+}
 html[data-color-theme='emerald'] {
-	--ops-primary: #00a381;
-	--ops-accent: #d9f2ea;
+	--primary: #00a381;
+	--ops-accent: color-mix(in srgb, var(--primary) 14%, transparent);
 	--ops-focus: #00a381;
 }
-html.dark[data-color-theme='emerald'] { --ops-primary: #00b793; --ops-accent: #103a31; --ops-focus: #43d9b7; }
+html.dark[data-color-theme='emerald'] {
+	--primary: #00b793;
+	--ops-accent: color-mix(in srgb, var(--primary) 18%, transparent);
+	--ops-focus: #43d9b7;
+}
 
 /* Shared surfaces intentionally use the same token family as the header. */
 html.dark .server-card {
