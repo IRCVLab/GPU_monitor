@@ -333,12 +333,12 @@
 }
 
 .monitor-dashboard-grid {
-	--monitor-dashboard-card-min: 24rem;
+	--monitor-dashboard-card-min: 22rem;
 	--monitor-dashboard-masonry-row: 8px;
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--monitor-dashboard-card-min)), 1fr));
 	grid-auto-rows: var(--monitor-dashboard-masonry-row);
-	gap: 1rem;
+	gap: 0.9rem;
 	align-items: start;
 }
 

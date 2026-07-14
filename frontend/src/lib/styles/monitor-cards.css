@@ -1,5 +1,6 @@
 .monitor-card {
   position: relative;
+  min-width: 22rem;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -209,8 +210,8 @@
 .monitor-card__gpu-list {
   display: flex;
   flex-direction: column;
-  gap: 0.8rem;
-  padding: 0 1rem 1rem;
+  gap: 0.55rem;
+  padding: 0 0.9rem 0.9rem;
   border-top: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
 }
 
@@ -305,23 +306,30 @@
   transition: width 180ms ease;
 }
 
-.monitor-gpu-metric__fill--util,
-.monitor-meter__fill--util {
-  background: color-mix(in srgb, var(--ops-fg) 42%, transparent);
+.monitor-gpu-metric__fill--util {
+  background: var(--chart-2);
 }
 
-.monitor-gpu-metric__fill--memory,
+.monitor-meter__fill--util {
+  background: var(--chart-2);
+}
+
+.monitor-gpu-metric__fill--memory {
+  background: var(--chart-1);
+}
+
 .monitor-meter__fill--memory {
-  background: color-mix(in srgb, var(--ops-primary) 46%, transparent);
+  background: var(--chart-1);
 }
 
 .monitor-meter__fill--storage {
   background: color-mix(in srgb, var(--ops-fg) 28%, var(--ops-primary));
 }
 
-.monitor-gpu-row[data-active='false'] .monitor-gpu-metric__fill--util,
-.monitor-gpu-row[data-active='false'] .monitor-gpu-metric__fill--memory {
-  background: color-mix(in srgb, var(--ops-fg) 22%, transparent);
+.monitor-gpu-row[data-active='true'] .monitor-gpu-row__index {
+  background: var(--chart-2);
+  border-color: var(--chart-2);
+  color: #040609;
 }
 
 .monitor-gpu-metric__value {
@@ -338,13 +346,17 @@
 }
 
 .monitor-card__footer {
+  display: grid;
+  gap: 0.5rem;
   margin-top: auto;
+  padding: 0.75rem 0.9rem 0.9rem;
   border-top: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
   background: color-mix(in srgb, var(--ops-card) 92%, var(--ops-muted));
 }
 
 .monitor-card__footer-section + .monitor-card__footer-section {
   border-top: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
+  padding-top: 0.5rem;
 }
 
 .monitor-card__footer-toggle {
@@ -352,8 +364,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.7rem;
-  padding: 0.78rem 1rem;
+  gap: 0.5rem;
+  padding: 0;
   background: transparent;
   color: color-mix(in srgb, var(--ops-fg) 62%, transparent);
   transition: background 160ms ease, color 160ms ease;
@@ -448,7 +460,7 @@
 }
 
 .monitor-card__footer-panel {
-  padding: 0 1rem 1rem;
+  padding: 0;
 }
 
 .monitor-card__metric-stack,
