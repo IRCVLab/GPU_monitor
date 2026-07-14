@@ -2578,3 +2578,93 @@ html.light .server-card { box-shadow: 0 2px 28px rgba(78, 86, 97, 0.1); }
 @media (min-width: 1200px) {
 	.ops-header-compact .ops-mode-action { display: none; }
 }
+
+.ops-view-divider {
+	height: 1px;
+	margin: .34rem .2rem .42rem;
+	background: var(--ops-border);
+}
+.ops-view-menu .ops-menu-label { padding-top: .08rem; }
+
+@media (min-width: 1200px) {
+	.ops-header-compact { height: 48px; }
+	.ops-header-compact .ops-header-inner {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: .75rem;
+	}
+	.ops-header-compact .ops-identity {
+		display: flex;
+		align-items: center;
+		order: 1;
+	}
+	.ops-header-compact .ops-identity h1 { display: none; }
+	.ops-header-compact .ops-status {
+		margin: 0;
+		font-size: .69rem;
+		white-space: nowrap;
+	}
+	.ops-header-compact .ops-status-dot {
+		width: .38rem;
+		height: .38rem;
+		box-shadow: 0 0 0 2px color-mix(in srgb, #00b793 14%, transparent);
+	}
+	.ops-header-compact .ops-network-desktop {
+		display: inline-flex;
+		order: 2;
+		border-bottom-color: color-mix(in srgb, var(--ops-border) 75%, transparent);
+	}
+	.ops-header-compact .ops-network button {
+		min-height: 1.7rem;
+		padding: .12rem .45rem .26rem;
+		font-size: .69rem;
+	}
+	.ops-header-compact .ops-network button > span:last-child { font-size: .59rem; }
+	.ops-header-compact .ops-actions { display: none; }
+}
+@media (min-width: 1200px) {
+	.ops-header-compact .ops-header-inner {
+		justify-content: space-between;
+		width: 100%;
+	}
+	.ops-header-compact .ops-identity { margin-right: auto; }
+	.ops-header-compact .ops-network-desktop { margin-left: auto; }
+}
+@media (min-width: 1200px) {
+	.ops-header-compact {
+		height: 64px;
+		background: transparent;
+		box-shadow: none;
+		backdrop-filter: none;
+	}
+	.ops-header-compact .ops-header {
+		height: 48px;
+		border-color: transparent !important;
+		background: transparent;
+	}
+	.ops-header-compact .ops-header-inner {
+		height: 48px;
+		padding-top: .32rem;
+	}
+	.ops-header-compact .ops-identity,
+	.ops-header-compact .ops-network-desktop {
+		border: 1px solid var(--ops-border);
+		background: color-mix(in srgb, var(--ops-popover) 92%, transparent);
+		box-shadow: 0 4px 18px color-mix(in srgb, #000 16%, transparent);
+		backdrop-filter: blur(16px) saturate(1.05);
+	}
+	.ops-header-compact .ops-identity {
+		min-height: 1.85rem;
+		padding: 0 .62rem;
+		border-radius: .62rem;
+	}
+	.ops-header-compact .ops-network-desktop {
+		padding: 0 .12rem;
+		border-radius: .62rem;
+	}
+}
+html.dark .ops-header-compact .ops-header,
+html.light .ops-header-compact .ops-header {
+	border-color: transparent !important;
+}
