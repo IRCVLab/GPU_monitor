@@ -2687,7 +2687,7 @@ html.light .ops-header-compact .ops-header {
 	.ops-indicator {
 		position: absolute;
 		top: .85rem;
-		left: 1.5rem;
+		left: .35rem;
 		width: 1.8rem;
 		height: 1.8rem;
 		pointer-events: auto;
@@ -2716,7 +2716,7 @@ html.light .ops-header-compact .ops-header {
 		height: .46rem;
 		border-radius: 999px;
 		background: var(--indicator-color);
-		animation: ops-indicator-breathe 2.4s ease-in-out infinite;
+		animation: ops-indicator-breathe 4.2s ease-in-out infinite;
 	}
 	.ops-indicator-dot.attention { --indicator-color: #ffb020; }
 	.ops-indicator-panel {
