@@ -9,3 +9,61 @@ test('page menu uses the helper and never renders Default', () => {
 	assert.match(pageSource, /dashboardViewLabel/);
 	assert.doesNotMatch(pageSource, /\bDefault\b/);
 });
+
+
+const dashboardCss = readFileSync(new URL('../lib/styles/monitor-dashboard.css', import.meta.url), 'utf8');
+const cardCss = readFileSync(new URL('../lib/styles/monitor-cards.css', import.meta.url), 'utf8');
+
+function cssRule(source, selector) {
+	const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const match = source.match(new RegExp(`${escaped}\\s*\\{(?<body>[^}]*)\\}`, 'm'));
+	assert.ok(match?.groups?.body, `Missing CSS rule for ${selector}`);
+	return match.groups.body;
+}
+
+function assertDeclaration(rule, property, value) {
+	const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	assert.match(rule, new RegExp(`${escapedProperty}\\s*:\\s*${escapedValue}\\s*;`));
+}
+
+test('task 2 full cards use 22rem density on the page shell and grid', () => {
+	assert.match(pageSource, /const serverGridStyle = '--monitor-dashboard-card-min: 22rem;';/);
+
+	const gridRule = cssRule(dashboardCss, '.monitor-dashboard-grid');
+	assertDeclaration(gridRule, '--monitor-dashboard-card-min', '22rem');
+	assertDeclaration(gridRule, 'gap', '0.9rem');
+
+	const cardRule = cssRule(cardCss, '.monitor-card');
+	assertDeclaration(cardRule, 'min-width', '22rem');
+});
+
+test('task 2 gpu fills and active G cue use exact chart tokens', () => {
+	const activeIndexRule = cssRule(cardCss, ".monitor-gpu-row[data-active='true'] .monitor-gpu-row__index");
+	assertDeclaration(activeIndexRule, 'background', 'var(--chart-2)');
+	assertDeclaration(activeIndexRule, 'border-color', 'var(--chart-2)');
+	assertDeclaration(activeIndexRule, 'color', '#040609');
+
+	const utilRule = cssRule(cardCss, '.monitor-gpu-metric__fill--util');
+	assertDeclaration(utilRule, 'background', 'var(--chart-2)');
+	assert.doesNotMatch(utilRule, /color-mix/);
+
+	const memoryRule = cssRule(cardCss, '.monitor-gpu-metric__fill--memory');
+	assertDeclaration(memoryRule, 'background', 'var(--chart-1)');
+	assert.doesNotMatch(memoryRule, /color-mix/);
+
+	assert.doesNotMatch(
+		cardCss,
+		/\.monitor-gpu-row\[data-active='false'\][^{]*\.monitor-gpu-metric__fill--util[\s\S]*?background\s*:/
+	);
+});
+
+test('task 2 card gpu list and footer use compact spacing', () => {
+	const listRule = cssRule(cardCss, '.monitor-card__gpu-list');
+	assertDeclaration(listRule, 'gap', '0.55rem');
+	assertDeclaration(listRule, 'padding', '0 0.9rem 0.9rem');
+
+	const footerRule = cssRule(cardCss, '.monitor-card__footer');
+	assertDeclaration(footerRule, 'gap', '0.5rem');
+	assertDeclaration(footerRule, 'padding', '0.75rem 0.9rem 0.9rem');
+});

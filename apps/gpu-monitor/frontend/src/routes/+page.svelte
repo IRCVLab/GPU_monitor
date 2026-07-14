@@ -598,7 +598,7 @@
 
 	const pageShellClass = 'max-w-7xl mx-auto';
 	const pageMainClass = 'max-w-7xl mx-auto px-4 py-4 sm:px-6';
-	const serverGridStyle = '--monitor-dashboard-card-min: 24rem;';
+	const serverGridStyle = '--monitor-dashboard-card-min: 22rem;';
 </script>
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
