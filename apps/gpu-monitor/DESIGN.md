@@ -3,295 +3,292 @@
 ## Source of truth
 - Status: Active
 - Last refreshed: 2026-07-14
-- Primary product surfaces: default server-card GPU selection dashboard, server details, notes, event logs, development diagnostics, server administration
-- Product purpose: help researchers choose which independent GPU server to enter for training. Servers are not high-speed-networked, so the decisive questions are which exact server has immediately available GPU capacity, what GPU model/VRAM it offers, and who is already using each GPU.
+- Primary product surfaces: Compact GPU dashboard as the active new surface, preserved default server-card dashboard, server administration, notes, event logs, development diagnostics, Slack channel notifications, `/gpu` Slack command.
+- Product purpose: help researchers choose which independent GPU server to enter for training. Servers are not high-speed-networked, so the decisive questions are which exact server has capacity, which exact GPU slots are occupied, and who is already using each GPU.
 - Evidence reviewed:
-  - frontend/src/routes/+page.svelte
-  - frontend/src/lib/components/ServerCard.svelte
-  - frontend/src/lib/components/GpuBar.svelte
-  - frontend/src/lib/components/StatusBadge.svelte
-  - frontend/src/routes/logs/+page.svelte
-  - frontend/src/routes/debug/+page.svelte
-  - frontend/src/lib/stores/servers.ts
-  - frontend/src/lib/ws.ts
-  - backend/collectors/server_collector.py
-  - baseline screenshots captured at 1440x1000 in dark and light mode
-  - TweakCN reference: https://tweakcn.com/themes/cmr2flrsp000304ih46yj4y1b
-  - TweakCN registry source: https://tweakcn.com/r/themes/cmr2flrsp000304ih46yj4y1b
-- Supersedes: docs/superpowers/specs/2026-07-14-apple-dashboard-refinement-design.md and its narrow implementation plan where they conflict with this product clarification
+  - `DESIGN.md`
+  - `feature/slack.md`
+  - `frontend/package.json` (SvelteKit 5, Tailwind, Vite)
+  - `frontend/src/routes/+page.svelte`
+  - `frontend/src/lib/components/ServerCard.svelte`
+  - `frontend/src/lib/components/GpuBar.svelte`
+  - `frontend/src/lib/components/StatusBadge.svelte`
+  - `frontend/src/lib/stores/order.ts`
+  - `frontend/src/lib/stores/dashboardPrefs.ts`
+  - `frontend/src/lib/stores/servers.ts`
+  - `frontend/src/lib/types.ts`
+  - `frontend/src/lib/api.ts`
+  - `backend/config.py`
+  - `backend/models.py`
+  - `backend/routers/metrics.py`
+  - `backend/routers/servers.py`
+  - `backend/routers/slack.py`
+  - `backend/slack_client.py`
+  - `backend/slack_gpu.py`
+  - `backend/slack_socket.py`
+  - `backend/collectors/gpu.py`
+  - `backend/collectors/server_collector.py`
+  - Slack official docs: `https://docs.slack.dev/reference/methods/users.list/`
+  - Slack official docs: `https://docs.slack.dev/reference/scopes/users.read.email/`
+- Supersedes: earlier statements that Compact is deferred. Compact is now the active new surface, while the default card dashboard is preserved as a separate existing view.
 
 ## Brand
-- Personality: calm, precise, trustworthy, technical, native-feeling, quietly premium, research-lab pragmatic
-- Trust signals: available capacity is prominent, server identity is unambiguous, data freshness is explicit, user names are complete, semantic colors are consistent, numbers align, destructive actions are separated
-- Avoid: fleet-operations/incident-dashboard framing, decorative gradients, neon glow, purple-first branding, oversized KPI hero cards, shared metric/badge, repeated labels, hidden critical state, arbitrary CSS zoom, dense rows that truncate users, heavy nested panels, giant/nested GPU cards
+- Personality: dense, exact, calm, technical, research-lab pragmatic, quietly premium.
+- Trust signals: manual server order is preserved, GPU slot numbers remain exact, users are tied to the GPU they occupy, freshness and network scope stay visible, Slack identity enrichment never blocks telemetry, and destructive/admin actions remain separated.
+- Avoid: giant hero areas, operations-command-center drama, decorative gradients, visible card-level free-count copy, hidden ownership, auto-sorting that overrides admin intent, sharing/export features, and Slack email matching unless explicitly chosen later.
 
 ## Product goals
 - Goals:
-  - Improve the existing original/default server-card dashboard first; do not replace it with a compact availability table in this scope.
-  - Let researchers answer “Which server can I use right now?” without scanning every GPU row.
-  - Preserve complete per-GPU ownership: every user name remains visible and wraps rather than truncating into misleading ownership.
-  - Surface GPU model, integer VRAM capacity, free/total GPU count, utilization, memory use, scope, and freshness at the level where they aid server choice.
-  - Keep internal/external/all scope, manual ordering, server CRUD, notes, logs, debug, filters, and live refresh behavior intact.
+  - Add Compact as a separate view for dense server-by-server GPU selection; do not replace or degrade the existing default card dashboard.
+  - Preserve admin-controlled manual server order in every dashboard view; no automatic sorting by availability, status, or name.
+  - Represent each server as one dense row in Compact.
+  - Retain exact GPU slot labels (`G0`, `G1`, `G2`, ...); never renumber or compact slots visually.
+  - Show compact user previews in the main list tied to each GPU slot.
+  - Use Slack profile photos first with deterministic initials fallback.
+  - Let users inspect a selected row in a desktop right detail panel or mobile bottom sheet.
+  - Keep the existing header, network scope controls, Manage/actions, theme controls, live refresh, polling fallback, notes, logs, debug, CRUD, and default dashboard behavior intact.
 - Non-goals:
-  - Turning this into a fleet operations center, incident command dashboard, or general analytics product.
-  - Replacing backend collector, authentication, WebSocket/polling, notes, logs, debug, or server administration behavior.
-  - Introducing operations-first KPIs, decorative charts, summary badges that compete with server choice, or Compact availability-board implementation.
-  - Changing the live production deployment or touching `~/workspace/monitoring_v2` while the redesign is developed in `~/workspace/monitoring_v2_dev`.
+  - Replacing the default server-card dashboard.
+  - Changing backend collector behavior, SSH credentials, authentication, notes, logs, debug, Slack channel alert semantics, or `/gpu` command semantics.
+  - Adding sharing, export, public links, or card-level “free count” marketing copy.
+  - Introducing email-based Slack matching by default.
+  - Editing or deploying the production repo at `~/workspace/monitoring_v2` as part of this design branch.
 - Success signals:
-  - Default view: researchers can identify usable servers from refined server cards, with no masonry blank-space gaps caused by unequal GPU counts.
-  - Free servers visually rise above full servers without turning full servers into alarms.
-  - Multi-user GPUs wrap cleanly and expose every name in the default card rows.
-  - Memory capacities and usage labels are integer GB.
-  - Dark and light surfaces use the same token system and restrained semantic color.
+  - Researchers can scan all servers in Compact without opening cards and can still identify exact GPU ownership.
+  - Manual order is visibly stable across Default, Compact, Internal, External, and All scopes.
+  - A selected Compact row has subtle emphasis, not a modal takeover.
+  - Detail panel shows all usernames without truncation plus per-GPU utilization and integer memory.
+  - Slack profile failures degrade to initials without slowing or blocking dashboard telemetry.
 
 ## Personas and jobs
-- Primary personas: researchers choosing compute for training jobs; administrators maintaining server metadata and availability context
+- Primary personas: researchers choosing compute for training jobs; administrators maintaining server metadata, order, and optional Linux-to-Slack mappings.
 - User jobs:
-  - Choose an independent server to enter based on immediate available GPU capacity.
-  - Compare free/total GPU count, GPU model, VRAM, network scope, users, and freshness before starting work.
-  - Identify single-user and shared-GPU occupancy without hidden names.
-  - Check per-GPU utilization and memory when a server is a candidate.
-  - Read notes that affect server choice, such as reservation, maintenance, or lab usage expectations.
-  - Register, edit, reorder, or delete a server safely when administering the inventory.
-  - Reach server-filtered logs and development diagnostics when needed, without those tools dominating the dashboard.
-- Key contexts of use: frequent desktop lab use, dark rooms, phone-width checks, mixed Korean labels and technical metrics, server selection before launching or moving training work
+  - Choose an independent server based on immediate GPU availability and current users.
+  - Compare network scope, server identity, status, GPU model, exact GPU slots, utilization, memory, and user occupancy quickly.
+  - Hover or focus a compact avatar preview to see full names before selecting a row.
+  - Open a row detail panel when the compact preview is not enough.
+  - Register, edit, reorder, or delete a server through existing administration flows.
+  - Confirm explicit Linux username to Slack user mappings when Slack suggestions are available.
+- Key contexts of use: frequent desktop lab checks, dark-room monitoring, phone-width checks, mixed Korean labels and technical metrics, and quick server selection before starting or moving training work.
 
 ## Information architecture
 - Primary navigation:
-  - Header left: product identity and concise live/freshness state.
-  - Header center: integrated Internal / External / All scope.
-  - Header right: search when present, Manage/settings, far-right light/dark toggle.
-  - Do not add a Compact View-menu mode in this scope.
-  - Mobile: freshness first, scope second, one overflow control for Manage actions, theme toggle.
+  - Keep the current header: identity/freshness on the left, Internal/External/All scope controls, View/Manage/theme controls.
+  - Add Compact as a view option beside the preserved default dashboard view.
+  - Network scope remains global and applies to Compact and Default.
+  - Manage remains the entry point for server administration and future mapping confirmation UI.
 - Core routes/screens:
-  - Dashboard default is the refined server-card dashboard.
-  - Compact availability-board research/reference is deferred future work only, not current acceptance scope.
-  - Event logs are a diagnostic drill-down and accept server context.
-  - Development diagnostics remain clearly development-only.
-  - Server administration opens from Manage/settings or a contextual card action.
-- Content hierarchy:
-  1. Server choice and immediately available GPU capacity.
-  2. Scope and server identity.
-  3. GPU model, VRAM, and free/total count.
-  4. Per-GPU users, utilization, and memory.
-  5. System/storage and notes.
-  6. Administration and diagnostics.
+  - Dashboard route hosts two views: Default cards and Compact rows.
+  - Compact main list is the active new surface.
+  - Compact desktop detail appears in a right-side panel; mobile detail appears as a bottom sheet.
+  - Event logs and debug remain secondary diagnostic routes.
+  - Slack channel notifications and `/gpu` stay backend/Slack surfaces, not dashboard replacement flows.
+- Content hierarchy for Compact:
+  1. Header controls, network scope, and freshness.
+  2. Dense server rows in manual order.
+  3. Per-server identity/status/network when relevant.
+  4. Exact GPU slots with avatar previews tied to each slot.
+  5. Selected-row detail: all usernames, utilization, integer memory, slot state, GPU model.
+  6. Secondary system/storage/notes/admin affordances only where they support server choice.
 
 ## Design principles
-- Server selection before operations: every layout answers where to train before it answers how to operate a fleet.
-- Availability before telemetry: free/occupied/shared state is more important than decorative charts or operational aggregates.
-- Default remains card-based: server cards are refined, not replaced, and continue to carry notes/system context.
-- Compact availability-board work is deferred: keep references as future research only and do not implement or commit Compact now.
-- Users are first-class data: every GPU reserves space for complete wrapping user names; truncation must not hide ownership.
-- One surface, clear layers: cards read as single objects; dividers, borders, bars, and fills are quiet.
-- Progressive disclosure: system, storage, notes, edit, delete, logs, and diagnostics stay reachable but secondary to selection.
-- Stable order: visual order, DOM order, and drag/save order must not diverge in the default view.
-- Theme as a system: the TweakCN reference applies to every route and component, not only the header.
-- Motion explains change: transitions signal filtering, expansion, hover/focus, refresh, and state; they are never ornamental.
-- Tradeoffs: preserve readable cards/rows, user visibility, and server identity before maximizing density.
+- Compact is a separate surface: optimize density without breaking the default card dashboard.
+- Order is admin intent: never auto-sort Compact rows by availability or status.
+- One server, one row: each server receives a single dense row regardless of GPU count.
+- Slot identity is sacred: preserve exact `G#` labels from telemetry and backend contracts.
+- Users are attached to GPUs, not servers: avatar groups sit inside the relevant GPU slot cell.
+- Preview first, detail second: the row gives enough to scan; the side panel/bottom sheet gives complete names and metrics.
+- Slack enriches identity only: telemetry, dashboard rendering, and availability decisions do not wait for Slack.
+- Default remains preserved: card view keeps its refined server-card role and existing data/controls.
+- Calm density: use alignment, rhythm, and restrained emphasis instead of hero copy or noisy badges.
 
-## Default view: refined server-card dashboard
-- Role: the default dashboard experience. It must remain the existing server-card dashboard refined for GPU selection, not an availability table replacement.
-- Layout:
-  - Use masonry or masonry-equivalent placement so cards with unequal GPU counts do not leave large blank vertical gaps.
-  - Desktop keeps readable card widths before maximizing column count; tablet and mobile preserve full GPU row readability.
-  - No CSS zoom. Density preferences adjust card width, spacing, and disclosure—not browser-scale typography.
-- Server header:
-  - Simplify to server name, small health dot/text, and essential availability/model context.
-  - Show network only in All scope; omit it in Internal/External scopes because the scope already provides context.
-  - Put IP address and refreshed time on one secondary line.
-  - Edit/admin affordance appears on hover and focus-within, not as persistent header chrome; it must remain reachable on touch through an explicit menu/action.
-- GPU row hierarchy:
-  - Users are emphasized as the key occupancy signal and remain visible/wrapping.
-  - Utilization and memory align in fixed-width numeric columns with tabular numerals.
-  - GPU index is a small, flat, quiet `G#`; avoid pill clutter.
-  - Bars, borders, and row fills are quieter than user names and availability state.
-  - Shared occupancy may be indicated textually where helpful, but never as a global shared metric/badge competing with availability.
-  - Memory capacities and usage are integer GB.
-- Footer/system/notes:
-  - System telemetry, storage, notes, and related secondary details use one unified quiet footer/disclosure region.
-  - Footer content supports wrapping notes and avoids stacked glass panels.
-- Visual treatment:
-  - Semantic restrained color: green for available/healthy, amber for delayed/degraded, red for offline/destructive, muted neutrals for full/occupied.
-  - Larger outer radii, weak shadows, fewer pills, lower-contrast nested borders, and no glow/glass excess.
-  - Subtle 1px hover/expand/bar motion only; reduce under prefers-reduced-motion.
-- Default success criteria:
-  - Researchers can choose a candidate server from cards without opening every card.
-  - Unequal GPU counts do not create distracting layout holes.
-  - Every user name is visible, utilization/memory columns align, and capacity labels are integer GB.
-  - Header chrome is calmer while health, IP, network-in-All, and freshness remain discoverable.
+## Compact dashboard surface
+- Role: active new high-density availability surface for users who need an at-a-glance lab-wide scan.
+- Row model:
+  - One row per server, rendered in the same manual order used by the default dashboard.
+  - Row left: server name, status dot/text, host/port, network label only when scope is All, freshness.
+  - Row center: fixed sequence of GPU slot cells labeled `G0`, `G1`, `G2`, etc. using backend `GpuInfo.index` exactly.
+  - Row right: compact status/action area for detail affordance; no visible card-level free-count copy.
+  - Selected row receives subtle background/border emphasis and keeps layout position.
+- GPU slot cell:
+  - Shows slot label, quiet utilization/memory micro-bars or numbers only as density permits, and avatar preview.
+  - No users: show an empty/available state with calm green or neutral availability mark.
+  - One user: one small avatar.
+  - Two users: two overlapping avatars.
+  - Three or more users: two overlapping avatars plus `+N`, where `N` is the number of hidden additional users.
+  - Hover and keyboard focus expose full names for that GPU.
+- Detail panel:
+  - Desktop: right panel anchored to the dashboard, not a modal, with selected server summary and all GPU rows.
+  - Mobile: bottom sheet with the same content and an explicit close control.
+  - Shows all usernames without truncation.
+  - Shows per-GPU utilization as integer percent and memory as integer `used/total GB`.
+  - Shows exact slot labels, GPU model/name, user avatar/initials, and fallback reason when Slack profile is unavailable if useful for admins.
+- Existing controls/data preserved:
+  - Current header, network filters, View menu, Manage menu, theme mode, color theme, layout width preference, WebSocket/polling refresh, initial load/retry/empty states, server CRUD, delete modal, notes, logs, debug, and manual reorder semantics remain available.
+  - Compact must read the same `ServerState`/`GpuInfo` data contract unless a future plan defines a narrow enrichment endpoint for Slack profiles.
 
-## Deferred future work: availability board
-- Compact availability-board research/reference is deferred future work only.
-- Do not implement, wire, commit, or require Compact availability-board behavior in the current default-card pass.
-- Do not use a Compact Visual Ralph verdict, Compact implementation files, or a compact reference artifact as current acceptance criteria.
-- Future work may revisit an availability board after the original/default card dashboard meets this design contract.
+## Default dashboard preservation
+- The default server-card dashboard remains a first-class view.
+- Keep existing card semantics: server cards, per-GPU `GpuBar` rows, system/storage/notes disclosure, edit access, network label in All scope, and current live data behavior.
+- Default may continue to refine card visual quality, but Compact acceptance must not require Default replacement.
+- Manual reorder behavior must have one source of truth and must not diverge between Default and Compact.
+
+## Slack identity architecture
+- Existing Slack backend token policy remains: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_SIGNING_SECRET`, and `SLACK_LOG_CHANNEL` stay backend-only.
+- Slack profile enrichment uses `users.list` with `users:read` for workspace members and profile image fields.
+- Use Slack `image_*` profile fields for avatars when available; prefer a small dashboard-appropriate image size and retain larger URLs only if needed for high-density screens.
+- Persist explicit mappings from `linux_username` to `slack_user_id`.
+- Exact-name auto-suggestions may be generated from Slack names/display names but require admin confirmation before becoming mappings.
+- Avoid email matching by default. If email matching is later chosen, request `users:read.email` only for that explicit feature because Slack requires it for email fields.
+- Cache Slack profiles periodically on the backend; include deactivated/deleted handling and stale-cache timestamps.
+- If Slack is unavailable, the token lacks scope, a user is deactivated, a profile image is missing, or no mapping exists, the dashboard falls back to stable initials and full Linux username text.
+- Dashboard telemetry must not block on Slack profile fetches, cache refreshes, or mapping suggestion generation.
 
 ## Visual language
 - Color:
-  - Base theme is TweakCN "Apple Liquid Glass."
-  - Light: background oklch(0.9700 0.0029 264.5420), card/popover white, foreground oklch(0.1801 0.0191 255.7673), border oklch(0.8994 0.0064 255.4779).
-  - Dark: background oklch(0.1492 0.0093 263.9667), card oklch(0.1993 0.0111 260.6610), popover oklch(0.2298 0.0107 260.6838), foreground oklch(0.9602 0.0034 247.8587), border oklch(0.2800 0.0102 260.7048).
-  - Primary blue: light oklch(0.6007 0.1903 257.9419), dark oklch(0.6496 0.1885 257.7207).
-  - Availability/healthy: semantic green. Delayed/degraded: amber. Offline/destructive: red. Occupied/full: muted neutral. User identity and memory accent: selected palette primary.
-  - Color palette choices may swap primary/chart accents, never base surface contrast or health/availability semantics.
+  - Continue the restrained Apple Liquid Glass-inspired token direction already documented for light/dark surfaces.
+  - Availability/healthy: semantic green. Delayed/degraded: amber. Offline/destructive: red. Occupied/full: muted neutral. Selected row: subtle primary-tinted border or surface wash.
+  - Do not use purple-first gradients or glowing availability effects.
 - Typography:
-  - UI follows the reference system font stack: Segoe UI, Helvetica Neue, Helvetica, Lucida Grande, Arial, Ubuntu, Cantarell, Fira Sans, sans-serif.
-  - Metrics use SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace.
-  - Tabular numerals are mandatory for aligned telemetry.
-  - Server names and available capacity are strongest; host, timestamps, and labels are quieter.
+  - Preserve readable Korean/English UI labels and tabular numerals for telemetry.
+  - Compact rows rely on numeric alignment and weight contrast; do not increase density by shrinking below readable sizes.
 - Spacing/layout rhythm:
-  - 4px base unit.
-  - Default main shell supports readable 360–400px cards and masonry flow.
-  - Overview/header content is concise and decision-oriented, not marketing or operations KPI tiles.
+  - Compact uses a tight 4px-based rhythm with enough row height for avatar groups and focus rings.
+  - No giant hero. Header height and controls should remain close to the current dashboard.
 - Shape/radius/elevation:
-  - Default card outer radius 24px (1.5rem) with weak shadows.
-  - Controls 12–16px; chips/pills full radius only when semantically appropriate.
-  - Light shadow: soft 28px at low opacity. Dark shadow: soft 40px at low opacity.
-  - Use translucent/backdrop surfaces selectively for header, popovers, and board/card shells; do not stack glass inside glass.
+  - Compact row shell uses shallow radius and low-contrast borders; detail panel uses a clearer surface boundary.
+  - Avoid nested glass panels inside every GPU slot.
 - Motion:
-  - 140–220ms ease-out for controls, bars, rows, and panels.
-  - 280–360ms for initial card/filter entry with small stagger when helpful.
-  - Card/row hover lift is at most 1px.
-  - Status dot breathes slowly with low amplitude only when it improves freshness perception.
-  - Disable breathing, stagger, hover lift, width interpolation, and panel animation under prefers-reduced-motion.
+  - 140-220ms for row hover, selection, panel entry, and tooltip/focus reveal.
+  - Mobile sheet uses a short slide/fade that respects reduced motion.
+  - No animated reordering or availability drama that implies auto-sort.
 - Imagery/iconography:
-  - No decorative imagery or brand logos.
-  - Use simple line icons with consistent stroke; text remains primary for critical state.
+  - Slack avatars are functional identity marks, not decorative imagery.
+  - Initials fallback must remain legible at small sizes and deterministic per user.
 
 ## Components
 - Existing components to reuse:
-  - ServerCard business logic and system/storage/notes content.
-  - StatusBadge state semantics.
-  - ServerForm, ServerDeleteModal, logs, and debug routes.
-  - Theme, dashboard preference, tab, server, and order stores.
-- New/changed components:
-  - DefaultDashboardMasonry: masonry/equivalent card layout that preserves manual order semantics and avoids blank gaps.
-  - ServerCard shell: simplified header, health dot/text, summary counts, network only in All scope, contextual actions on hover/focus.
-  - GpuRow/GpuBar default rows: user-first row, fixed-width utilization/memory columns, flat `G#` index, wrapping users, integer memory labels, quiet bars.
-  - QuietServerFooter: unified system/storage/notes region.
-  - MobileOverflowMenu: Manage entry points without crowding the header.
-  - Deferred future work only: Compact availability-board component work is not current implementation scope.
+  - Header controls and stores in `+page.svelte`.
+  - `ServerCard`, `GpuBar`, `StatusBadge`, `ServerForm`, `ServerDeleteModal`, logs, debug route, theme store, order store, server stores, API wrappers.
+- New/changed components anticipated by the design contract:
+  - Compact view selector state alongside Default.
+  - Compact server row shell.
+  - GPU slot strip and avatar group primitive.
+  - Desktop compact detail panel.
+  - Mobile compact bottom sheet.
+  - Slack profile/initials presentation primitive.
+  - Admin-confirmed mapping surface or workflow entry point.
 - Variants and states:
+  - View: Default cards, Compact rows.
   - Server: online, degraded, offline, unknown/stale.
-  - GPU: available, occupied, shared, high memory, high temperature.
-  - View: Default cards only in this scope; Compact availability board is deferred.
-  - Refresh: live socket, polling fallback, delayed, failed with last-known data.
-  - Notes: none, active, expiring soon, urgent.
+  - GPU: available, one user, two users, three-plus users, high utilization, high memory, unknown metrics.
+  - Profile: mapped photo, mapped initials fallback, unmapped Linux username, deactivated Slack user, Slack unavailable/stale cache.
+  - Detail: none selected, selected, stale data, mobile sheet open/closed.
 - Token/component ownership:
-  - Global surfaces, typography, radius, shadow, semantic color, and motion tokens live in app.css.
-  - Components consume tokens; route-specific CSS must not redefine the theme.
+  - Global surfaces, typography, radius, shadow, semantic color, and motion tokens live in `app.css`.
+  - Component CSS consumes existing tokens; route-specific CSS must not create a competing theme system.
 
 ## Accessibility
 - Target standard: WCAG 2.2 AA where practical.
 - Keyboard/focus behavior:
-  - Scope, Manage, theme, search, card actions, disclosure panels, notes, and server actions are keyboard reachable.
-  - Hover-only actions also appear on focus-within.
-  - Touch users can reach edit/manage actions without relying on hover.
+  - View selector, scope controls, Manage, theme, compact rows, GPU avatar groups, detail close, and default card actions are keyboard reachable.
+  - Hover-only full-name reveals must also appear on focus.
+  - Selected row state is visible and announced.
+  - Mobile sheet traps focus only while open and returns focus to the selected row on close.
 - Contrast/readability:
-  - Muted text must remain readable in light and dark mode.
-  - Availability/health is communicated by text/icon plus color.
-  - Telemetry uses minimum readable sizes and tabular alignment.
+  - Row text, avatar initials, `+N`, status, utilization, and memory must meet contrast expectations in light and dark modes.
+  - Availability/status is communicated by text/icon plus color, never color alone.
 - Screen-reader semantics:
-  - Dashboard summary uses live regions only for meaningful availability/freshness transitions.
-  - Default cards announce server name, status, free/total GPU count, model, freshness, and scope as applicable.
-  - GPU rows announce index, availability, utilization, memory, and all users.
-  - Shared occupancy is explicit in GPU row text, not only badge color.
+  - Compact list announces server name, status, network when relevant, freshness, and GPU count.
+  - Each GPU slot announces exact slot label, state, utilization, integer memory, and all users.
+  - Detail panel/bottom sheet has an accessible name tied to the selected server.
 - Reduced motion and sensory considerations:
-  - Respect prefers-reduced-motion for card entry, masonry movement, bar transitions, breathing dots, and hover lift.
-  - Avoid flashing or fast pulses.
+  - Respect `prefers-reduced-motion` for row transitions, panel animation, bottom-sheet movement, avatar hover effects, and loading shimmer.
 
 ## Responsive behavior
 - Supported breakpoints/devices:
-  - Desktop >=1200px, tablet 768–1199px, mobile <768px.
-- Default layout adaptations:
-  - Desktop: masonry/equivalent multi-column cards when width permits.
-  - Tablet: two readable columns or masonry columns based on available width.
-  - Mobile: one column, freshness first, scope scrollable, actions in one overflow menu.
-  - GPU metrics remain row one and users remain visible/wrapping at every width.
-- Deferred future layout:
-  - Compact availability-board responsive behavior is out of current scope and must not drive acceptance now.
+  - Desktop >=1200px: compact list plus right detail panel.
+  - Tablet 768-1199px: compact list with collapsible or overlay detail panel if needed by width.
+  - Mobile <768px: compact list plus bottom sheet.
+- Layout adaptations:
+  - Desktop row should keep server identity and GPU slots visible without horizontal page scroll where practical.
+  - If GPU count exceeds available width, the GPU strip may scroll horizontally inside the row while preserving slot order and labels.
+  - Mobile rows prioritize server name/status and a horizontally scrollable GPU strip; detail moves to bottom sheet.
 - Touch/hover differences:
-  - Drag reorder is Default desktop-only unless a touch-safe reorder control is added.
-  - Edit and management remain explicitly reachable on touch.
+  - Hover full-name reveals have focus and tap equivalents.
+  - Drag reorder remains Default behavior unless a future plan defines touch-safe Compact reorder controls.
 
 ## Interaction states
-- Loading: quiet skeletons preserving final card/row geometry; no full-page spinner after first data.
-- Empty: distinguish no registered servers, no servers in scope, no free GPUs in current scope, and no search matches.
-- Error: retain last-known data, label it stale, show retry, and distinguish socket failure from API failure.
-- Success: refresh timestamp updates without celebratory motion.
-- Disabled: preserve readable reason and do not rely on opacity alone.
+- Loading: compact skeleton rows preserve final row geometry and slot rhythm.
+- Empty: distinguish no registered servers, no servers in scope, and no telemetry for registered servers.
+- Error: retain last-known data when available, label stale state, and show retry without clearing manual order.
+- Success: refresh timestamp updates quietly.
+- Disabled: controls explain why they are unavailable; opacity is not the only cue.
 - Offline/slow network:
   - Header identifies polling fallback, delayed refresh, or failed refresh.
   - Server collector status remains distinct from dashboard transport state.
-  - Full/offline servers stay quiet unless action is needed; do not turn the screen into an incident wall.
-- Expansion:
-  - Default card expansion preserves scroll position and avoids layout jumps where practical.
+- Selection:
+  - Selecting a row updates subtle emphasis and opens/updates detail.
+  - Selecting another row replaces panel content without reordering the list.
+  - Escape closes the panel/sheet where appropriate.
+- Slack failures:
+  - Missing mapping, missing profile image, deactivated Slack member, missing scope, rate limiting, and Slack outage all render stable initials and usernames.
+  - Slack cache status may be shown only in admin/detail contexts, not as noisy row-level warnings.
 
 ## Content voice
 - Tone: terse, research-lab practical, calm.
 - Terminology:
-  - "사용 가능", "사용 중", "공유", "정상", "지연", "오프라인", "확인 중", "마지막 업데이트".
-  - Use "내부망", "외부망", "전체" consistently.
-  - GPU memory is formatted as integer "21/24 GB" and capacity as integer "80 GB".
+  - Keep existing Korean labels for scope and status: `내부망`, `외부망`, `전체`, `사용 가능`, `사용 중`, `공유`, `정상`, `지연`, `오프라인`, `확인 중`, `마지막 업데이트`.
+  - GPU slot labels are exact `G#` labels.
+  - GPU memory uses integer `21/24 GB`; utilization uses integer `78%`.
+  - Use `Slack profile` and `Linux username` in admin-facing copy when disambiguation is needed.
 - Microcopy rules:
-  - Prefer direct availability/status plus timestamp.
-  - Avoid vague "문제 있음" when a reason exists.
-  - Destructive actions state the affected server.
-  - Development diagnostics are labeled development-only.
+  - Avoid visible card-level free-count copy in Compact.
+  - Use direct stale/fallback reasons in detail/admin contexts.
+  - Do not imply email matching is active unless that feature is explicitly selected later.
 
 ## Behavior preservation
 - Preserve:
-  - SvelteKit app behavior, existing data contracts, live WebSocket/polling behavior, collector behavior, and auth behavior.
+  - SvelteKit app behavior, existing `ServerState`/`GpuInfo` telemetry contracts, WebSocket/polling behavior, collector behavior, and auth behavior.
   - Internal/External/All scope semantics.
-  - Server CRUD, delete confirmation, notes behavior, logs, debug route, filters/search where present, and drag/manual order behavior.
-  - Existing production isolation: do not edit `~/workspace/monitoring_v2` for this redesign.
-- Default view:
-  - Remains default and respects existing manual server order.
-  - Masonry layout must not mutate persisted server order.
-  - Header simplification must not remove edit/manage access.
-- Deferred future work:
-  - Compact availability-board research/reference may be retained as future work only.
-  - Do not implement, wire, commit, or require Compact behavior in this scope.
+  - Server CRUD, delete confirmation, notes behavior, logs, debug route, filters/search where present, layout/theme preferences, and manual order behavior.
+  - Existing Slack channel notification and `/gpu` command architecture.
+  - Existing production isolation: do not edit `~/workspace/monitoring_v2` for this branch.
+- Compact must not:
+  - Auto-sort rows.
+  - Renumber GPU slots.
+  - Hide all usernames behind truncated row text.
+  - Depend on Slack for telemetry rendering.
+  - Replace Default.
 
 ## Implementation constraints
-- Framework/styling system: SvelteKit 5, Tailwind, existing global app.css tokens.
+- Framework/styling system: SvelteKit 5, Tailwind, existing global `app.css`/dashboard CSS tokens.
 - Design-token constraints:
-  - Map exact Apple Liquid Glass base tokens first.
-  - Remove legacy rose/pink surface rules and broad conflicting overrides during implementation.
-  - Keep selectable blue/violet/emerald accents independent from light/dark mode.
+  - Extend current tokens for compact row, selected row, avatar fallback, and detail panel states.
+  - Keep selectable color themes independent from light/dark mode.
+- Data/API constraints:
+  - Existing `ServerState` includes `server_id`, `server_name`, `host`, `port`, `network`, `status`, `status_reason`, `last_seen`, `gpus`, `system`, `storage`, and `display_order`.
+  - Existing `GpuInfo` includes `index`, `name`, `utilization`, `memory_used`, `memory_total`, `temperature`, `power_draw`, and `users`.
+  - Slack profile/mapping data should be additive and optional; absence must not change telemetry shape or block rendering.
 - Performance constraints:
-  - No new frontend dependency for layout or animation unless explicitly approved.
-  - Masonry/resize/layout work must be batched with requestAnimationFrame and observed only where needed.
-  - WebSocket/polling behavior and live collector must remain unchanged.
+  - No new frontend dependency for density, avatar grouping, or panel motion unless explicitly approved later.
+  - Slack profile cache refresh must be periodic/background and separate from collector loops.
+  - Compact list must remain responsive when multiple servers have many GPUs/users.
 - Compatibility constraints:
-  - Production project `~/workspace/monitoring_v2` is not edited.
-  - Development project and tmux services remain isolated.
   - Do not use CSS zoom.
-- Test/screenshot expectations:
-  - Svelte diagnostics and production build for implementation work.
-  - Default dark desktop at 1440x1000 and light desktop at 1440x1000.
-  - Default dark mobile at 390x844 and light mobile at 390x844.
-  - Default: masonry gaps, simplified headers, network only in All scope, hover/focus edit access, GPU row alignment, flat `G#` index, all-user wrapping, quiet bars, quiet footer, integer memory, restrained semantic color, fewer pills, weak borders/shadows, no glow/glass excess, and no CSS zoom.
-  - Reduced motion checks for hover, expansion, bar motion, and initial entry.
-
-## Visual QA expectations
-- Default view QA:
-  - Compare desktop and mobile screenshots against this contract, not the compact reference.
-  - Verify masonry/equivalent layout removes large blank space across unequal GPU counts.
-  - Verify server header is simpler and calmer while preserving health, IP, refreshed time, and network-in-All behavior.
-  - Verify all user names wrap and remain visible; no ellipsis hides ownership.
-  - Verify utilization/memory columns align and memory capacities are integer GB.
-  - Verify footer combines system/notes into one quiet area without nested glass clutter.
-  - Verify semantic colors are restrained and pills/borders are reduced.
-- Deferred future QA:
-  - Availability-board research/reference may be noted for future work only. Do not require Compact Visual Ralph, Compact screenshots, Compact implementation files, or Compact acceptance verdicts for this current default-card pass.
+  - Do not push or deploy as part of design documentation.
+- Test/screenshot expectations for future implementation:
+  - Svelte diagnostics and production build.
+  - Desktop dark/light at 1440x1000.
+  - Mobile dark/light at 390x844.
+  - Compact row density, manual order, exact `G#`, avatar grouping, hover/focus names, selected row, right panel, bottom sheet, Slack fallback states, and default-view preservation.
 
 ## Open questions
-- [x] Product purpose: researchers choose an independent GPU server for training; server selection and immediate availability dominate.
-- [x] Current scope: original/default card dashboard improvement first.
-- [x] Compact scope: deferred future work only; no Compact implementation, commit scope, Visual Ralph requirement, implementation-file scope, or acceptance verdict now.
-- [x] Manual order scope: preserve current default-card behavior; masonry must not mutate persisted order.
-- [x] Threshold policy: preserve existing collector/display thresholds unless a separate change is requested.
-- [x] Notes semantics: remain free text with current expiry/auth behavior.
-- [x] Debug exposure: remain under Manage/settings and clearly development-only.
+- [x] Compact scope: separate active new surface, not replacement.
+- [x] Ordering: preserve admin manual server order; no auto-sort.
+- [x] Row model: one dense row per server.
+- [x] GPU labels: retain exact `G0`/`G1`/`G#` telemetry numbers.
+- [x] User previews: per-GPU compact avatars in main list.
+- [x] Avatar rules: Slack photo first, initials fallback; one/two/three-plus grouping as specified.
+- [x] Detail: desktop right panel, mobile bottom sheet; all names untruncated; integer utilization/memory.
+- [x] Slack architecture: backend-only token, `users:read` for `users.list`, no default email matching, admin-confirmed mappings, non-blocking cache/fallback behavior.
