@@ -1,29 +1,22 @@
 <!doctype html>
-<html lang="ko" class="dark">
+<html lang="ko" class="dark" data-color-theme="blue">
 	<head>
 		<meta charset="utf-8" />
 		<link rel="icon" href="%sveltekit.assets%/favicon.svg" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<script>
 			(() => {
-				const match = document.cookie.match(/(?:^|;\s*)theme=([^;]+)/);
-				if (!match) return;
-
-				let value = match[1];
-				try {
-					value = decodeURIComponent(value);
-				} catch {}
-
-				const normalized = value.toLowerCase();
-				const theme =
-					normalized === 'light' || normalized === 'rose'
-						? normalized
-						: normalized === 'pink'
-							? 'rose'
-							: 'dark';
-
+				const read = (name) => {
+					const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+					if (!match) return '';
+					try { return decodeURIComponent(match[1]).toLowerCase(); } catch { return ''; }
+				};
+				const legacy = read('theme');
+				const mode = read('themeMode') || (legacy === 'light' || legacy === 'rose' || legacy === 'pink' ? 'light' : 'dark');
+				const color = read('colorTheme') || (legacy === 'rose' || legacy === 'pink' ? 'violet' : 'blue');
 				document.documentElement.classList.remove('dark', 'light', 'rose');
-				document.documentElement.classList.add(theme);
+				document.documentElement.classList.add(mode === 'light' ? 'light' : 'dark');
+				document.documentElement.dataset.colorTheme = ['blue', 'violet', 'emerald'].includes(color) ? color : 'blue';
 			})();
 		</script>
 		%sveltekit.head%

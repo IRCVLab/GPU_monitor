@@ -8,7 +8,7 @@
 		isServerStateEqual,
 		normalizeServerState
 	} from '$lib/stores/servers';
-	import { theme, setTheme } from '$lib/stores/theme';
+	import { colorTheme, colorThemeOptions, setColorTheme, setThemeMode, themeMode } from '$lib/stores/theme';
 	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import {
 		dashboardTextScale,
@@ -28,11 +28,6 @@
 	const HEADER_SCROLL_DELTA = 10;
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
-	const themeOptions = [
-		{ value: 'dark', label: 'Dark' },
-		{ value: 'light', label: 'Light' },
-		{ value: 'rose', label: 'Rose' }
-	] as const;
 
 	// ── Tab state (persisted in cookie) ────────────────────────────
 	function readTab(): Tab {
@@ -461,6 +456,10 @@
 	let adminOpen    = $state(false);
 	let deleteOpen   = $state(false);
 	let editingServer = $state<ServerRecord | null>(null);
+	let viewMenuOpen = $state(false);
+	let viewMenuEl = $state<HTMLDivElement | null>(null);
+	let colorMenuOpen = $state(false);
+	let colorMenuEl = $state<HTMLDivElement | null>(null);
 	let actionsMenuOpen = $state(false);
 	let actionsMenuEl = $state<HTMLDivElement | null>(null);
 
@@ -488,6 +487,16 @@
 		adminOpen = true;
 	}
 
+	function toggleViewMenu() {
+		viewMenuOpen = !viewMenuOpen;
+		if (viewMenuOpen) revealHeader();
+	}
+
+	function toggleColorMenu() {
+		colorMenuOpen = !colorMenuOpen;
+		if (colorMenuOpen) revealHeader();
+	}
+
 	function toggleActionsMenu() {
 		actionsMenuOpen = !actionsMenuOpen;
 		if (actionsMenuOpen) revealHeader();
@@ -500,11 +509,17 @@
 	function handleWindowClick(event: MouseEvent) {
 		const target = event.target;
 		if (!(target instanceof Node)) return;
+		if (viewMenuOpen && viewMenuEl && !viewMenuEl.contains(target)) viewMenuOpen = false;
+		if (colorMenuOpen && colorMenuEl && !colorMenuEl.contains(target)) colorMenuOpen = false;
 		if (actionsMenuOpen && actionsMenuEl && !actionsMenuEl.contains(target)) actionsMenuOpen = false;
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') actionsMenuOpen = false;
+		if (event.key === 'Escape') {
+			viewMenuOpen = false;
+			colorMenuOpen = false;
+			actionsMenuOpen = false;
+		}
 	}
 
 	const pageShellClass = $derived(
@@ -556,65 +571,47 @@
 					</p>
 				</div>
 
-				<div class="ops-scope ops-scope-desktop" role="group" aria-label="네트워크 필터">
+				<nav class="ops-network ops-network-desktop" aria-label="네트워크 필터">
 					{#each $tabOptions as tab}
-						<button
-							class:active={$activeTab === tab.value}
-							aria-pressed={$activeTab === tab.value}
-							onclick={() => selectNetwork(tab.value)}
-						>
-							<span>{tab.label}</span><span class="ops-scope-count">{tab.count}</span>
+						<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}>
+							<span>{tab.label}</span><span>{tab.count}</span>
 						</button>
 					{/each}
-				</div>
+				</nav>
 
 				<div class="ops-actions">
-					<button class="ops-primary-action" onclick={() => { adminOpen = true; revealHeader(); }}>서버 등록</button>
-					<a href="/logs" class="ops-quiet-action">로그</a>
-					<div class="ops-overflow-anchor relative" bind:this={actionsMenuEl}>
-						<button class:active={actionsMenuOpen} class="ops-icon-action" onclick={toggleActionsMenu} aria-label="대시보드 옵션" aria-haspopup="true" aria-expanded={actionsMenuOpen}>•••</button>
-						{#if actionsMenuOpen}
-							<div class="ops-overflow-menu">
-								<div class="ops-menu-group">
-									<span class="ops-menu-label">화면</span>
-									<div class="ops-menu-row" role="group" aria-label="레이아웃 폭">
-										<span>폭</span>
-										<button class:active={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); actionsMenuOpen = false; }}>기본</button>
-										<button class:active={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); actionsMenuOpen = false; }}>전체</button>
-									</div>
-									<div class="ops-menu-row" role="group" aria-label="화면 배율">
-										<span>배율</span>
-										{#each ['small', 'default', 'large'] as scale}
-											<button class:active={$dashboardTextScale === scale} onclick={() => { setDashboardTextScale(scale as 'small' | 'default' | 'large'); actionsMenuOpen = false; }}>{scale === 'small' ? '작게' : scale === 'default' ? '기본' : '크게'}</button>
-										{/each}
-									</div>
-								</div>
-								<div class="ops-menu-group">
-									<span class="ops-menu-label">테마</span>
-									<div class="ops-menu-row ops-theme-row" role="group" aria-label="테마 선택">
-										{#each themeOptions as option}
-											<button class:active={$theme === option.value} type="button" aria-pressed={$theme === option.value} onclick={() => { setTheme(option.value); actionsMenuOpen = false; }}>{option.label}</button>
-										{/each}
-									</div>
-								</div>
-								<a class="ops-menu-link" href="/debug">개발 진단</a>
-								<button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button>
+					<div class="relative ops-direct-control" bind:this={viewMenuEl}>
+						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen}>보기 <span aria-hidden="true">⌄</span></button>
+						{#if viewMenuOpen}
+							<div class="ops-popover ops-view-menu">
+								<div class="ops-menu-row" role="group" aria-label="레이아웃 폭"><span>폭</span><button class:active={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); viewMenuOpen = false; }}>기본</button><button class:active={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); viewMenuOpen = false; }}>전체</button></div>
+								<div class="ops-menu-row" role="group" aria-label="화면 배율"><span>배율</span>{#each ['small', 'default', 'large'] as scale}<button class:active={$dashboardTextScale === scale} onclick={() => { setDashboardTextScale(scale as 'small' | 'default' | 'large'); viewMenuOpen = false; }}>{scale === 'small' ? '작게' : scale === 'default' ? '기본' : '크게'}</button>{/each}</div>
 							</div>
 						{/if}
 					</div>
+					<div class="relative ops-direct-control" bind:this={colorMenuEl}>
+						<button class:active={colorMenuOpen} class="ops-palette-action" onclick={toggleColorMenu} aria-label="색상 테마" aria-haspopup="true" aria-expanded={colorMenuOpen}><span class="ops-palette-mark"><i></i><i></i><i></i></span></button>
+						{#if colorMenuOpen}
+							<div class="ops-popover ops-color-menu" role="group" aria-label="색상 테마">
+								<span class="ops-menu-label">색상 테마</span>
+								<div class="ops-color-options">{#each colorThemeOptions as option}<button class:active={$colorTheme === option.value} type="button" aria-label={option.label} aria-pressed={$colorTheme === option.value} style={`--swatch: ${option.color}`} onclick={() => { setColorTheme(option.value); colorMenuOpen = false; }}><span></span><em>{option.label}</em></button>{/each}</div>
+							</div>
+						{/if}
+					</div>
+					<button class="ops-mode-action" onclick={() => setThemeMode($themeMode === 'dark' ? 'light' : 'dark')} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}>
+						{#if $themeMode === 'dark'}<span aria-hidden="true">☀</span>{:else}<span aria-hidden="true">☾</span>{/if}
+					</button>
+					<button class="ops-primary-action" onclick={() => { adminOpen = true; revealHeader(); }}>서버 등록</button>
+					<a href="/logs" class="ops-quiet-action">로그</a>
+					<div class="relative ops-admin-control" bind:this={actionsMenuEl}>
+						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
+						{#if actionsMenuOpen}<div class="ops-overflow-menu"><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
+					</div>
 				</div>
 
-				<div class="ops-scope ops-scope-mobile" role="group" aria-label="네트워크 필터">
-					{#each $tabOptions as tab}
-						<button
-							class:active={$activeTab === tab.value}
-							aria-pressed={$activeTab === tab.value}
-							onclick={() => selectNetwork(tab.value)}
-						>
-							<span>{tab.label}</span><span class="ops-scope-count">{tab.count}</span>
-						</button>
-					{/each}
-				</div>
+				<nav class="ops-network ops-network-mobile" aria-label="네트워크 필터">
+					{#each $tabOptions as tab}<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>{/each}
+				</nav>
 			</div>
 		</header>
 	</div>
