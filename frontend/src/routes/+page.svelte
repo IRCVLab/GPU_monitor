@@ -348,6 +348,11 @@
 	function revealHeader(): void {
 		headerCompact = false;
 		headerIndicatorVisible = false;
+		headerScrollDirection = null;
+		headerScrollDistance = 0;
+		if (browser) {
+			headerPreviousY = Math.max(0, window.scrollY);
+		}
 	}
 
 	function headerHasOuterGutter(viewportWidth: number): boolean {
@@ -383,6 +388,26 @@
 		headerScrollFrame = requestAnimationFrame(updateHeaderFromScroll);
 	}
 
+	function handleHeaderResize(): void {
+		const currentY = Math.max(0, window.scrollY);
+		const result = updateHeaderVisibility({
+			currentY,
+			previousY: currentY,
+			direction: headerScrollDirection,
+			accumulatedDelta: 0,
+			currentCompact: headerCompact,
+			reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+			hasOuterGutter: headerHasOuterGutter(window.innerWidth),
+			viewportWidth: window.innerWidth
+		});
+
+		headerCompact = result.compact;
+		headerIndicatorVisible = result.indicatorVisible;
+		headerPreviousY = result.nextPreviousY;
+		headerScrollDirection = result.nextDirection;
+		headerScrollDistance = result.nextAccumulatedDelta;
+	}
+
 	function initPageRuntime() {
 		if (!browser) return;
 
@@ -407,8 +432,9 @@
 			}
 		};
 		document.addEventListener('visibilitychange', handleVisibilityChange);
-		headerPreviousY = window.scrollY;
+		headerPreviousY = Math.max(0, window.scrollY);
 		window.addEventListener('scroll', handleHeaderScroll, { passive: true });
+		window.addEventListener('resize', handleHeaderResize, { passive: true });
 
 		void reloadDashboard(true).finally(() => {
 			scheduleNextRefresh();
@@ -418,6 +444,7 @@
 			unsubscribeTab();
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('scroll', handleHeaderScroll);
+			window.removeEventListener('resize', handleHeaderResize);
 			if (headerScrollFrame !== null) {
 				cancelAnimationFrame(headerScrollFrame);
 				headerScrollFrame = null;

@@ -416,6 +416,13 @@
 	}
 }
 
+
+@media (max-width: 1199px) {
+	.ops-indicator-anchor {
+		display: none !important;
+	}
+}
+
 @media (max-width: 920px) {
 	.ops-header-inner {
 		grid-template-columns: 1fr;
