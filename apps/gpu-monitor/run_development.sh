@@ -9,7 +9,7 @@ FRONTEND_SESSION="monitoring_v2_dev_frontend"
 BACKEND_PORT="8101"
 FRONTEND_PORT="5175"
 BACKEND_CMD="cd \"$ROOT_DIR\" && ./.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port $BACKEND_PORT"
-FRONTEND_CMD="cd \"$ROOT_DIR/frontend\" && MONITORING_API_TARGET=http://127.0.0.1:$BACKEND_PORT npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT --strictPort"
+FRONTEND_CMD="cd \"$ROOT_DIR/frontend\" && if [[ -s \"$HOME/.nvm/nvm.sh\" ]]; then source \"$HOME/.nvm/nvm.sh\"; fi && MONITORING_API_TARGET=http://127.0.0.1:$BACKEND_PORT npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT --strictPort"
 
 session_exists() { tmux has-session -t "$1" 2>/dev/null; }
 start_session() {
