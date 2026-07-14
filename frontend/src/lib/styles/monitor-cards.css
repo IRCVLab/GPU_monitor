@@ -311,7 +311,7 @@
 }
 
 .monitor-meter__fill--util {
-  background: var(--chart-2);
+  background: color-mix(in srgb, var(--ops-fg) 42%, transparent);
 }
 
 .monitor-gpu-metric__fill--memory {
@@ -319,7 +319,7 @@
 }
 
 .monitor-meter__fill--memory {
-  background: var(--chart-1);
+  background: color-mix(in srgb, var(--ops-primary) 46%, transparent);
 }
 
 .monitor-meter__fill--storage {

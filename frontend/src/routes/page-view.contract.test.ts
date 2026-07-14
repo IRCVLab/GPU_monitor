@@ -67,3 +67,48 @@ test('task 2 card gpu list and footer use compact spacing', () => {
 	assertDeclaration(footerRule, 'gap', '0.5rem');
 	assertDeclaration(footerRule, 'padding', '0.75rem 0.9rem 0.9rem');
 });
+
+
+function cssRuleBody(source, selector) {
+	return cssRule(source, selector).replace(/\s+/g, ' ').trim();
+}
+
+test('task 2 has no css zoom or dashboard scale wrappers in page dashboard card scope', () => {
+	const scopedSources = [pageSource, dashboardCss, cardCss].join('\n');
+	assert.doesNotMatch(scopedSources, /\bzoom\s*:/i);
+	assert.doesNotMatch(pageSource, /scale\s*\(/i);
+	assert.doesNotMatch(dashboardCss, /scale\s*\(/i);
+	assert.doesNotMatch(cardCss, /\.monitor-dashboard[^{}]*\{[^}]*scale\s*\(/i);
+});
+
+test('task 2 preserves masonry grid behavior', () => {
+	assert.match(pageSource, /class="monitor-dashboard-grid"[^>]*use:masonry/);
+	const gridRule = cssRule(dashboardCss, '.monitor-dashboard-grid');
+	assertDeclaration(gridRule, 'grid-auto-rows', 'var(--monitor-dashboard-masonry-row)');
+});
+
+test('task 2 preserves manual current server order in Full view', () => {
+	assert.match(pageSource, /const currentServers = derived\([\s\S]*return orderServers\(selected, \$order\);[\s\S]*\);/);
+	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
+});
+
+test('task 2 leaves inactive gpu fills without desaturation overrides', () => {
+	assert.doesNotMatch(
+		cardCss,
+		/\.monitor-gpu-row\[data-active='false'\][^{]*\.monitor-gpu-metric__fill--util[\s\S]*?background\s*:/
+	);
+	assert.doesNotMatch(
+		cardCss,
+		/\.monitor-gpu-row\[data-active='false'\][^{]*\.monitor-gpu-metric__fill--memory[\s\S]*?background\s*:/
+	);
+});
+
+test('task 2 does not change system meter fill semantics to exact chart tokens', () => {
+	const systemUtilRule = cssRuleBody(cardCss, '.monitor-meter__fill--util');
+	assert.match(systemUtilRule, /background:\s*color-mix\(in srgb, var\(--ops-fg\) 42%, transparent\);/);
+	assert.doesNotMatch(systemUtilRule, /var\(--chart-2\)/);
+
+	const systemMemoryRule = cssRuleBody(cardCss, '.monitor-meter__fill--memory');
+	assert.match(systemMemoryRule, /background:\s*color-mix\(in srgb, var\(--ops-primary\) 46%, transparent\);/);
+	assert.doesNotMatch(systemMemoryRule, /var\(--chart-1\)/);
+});
