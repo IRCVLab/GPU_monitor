@@ -1,6 +1,6 @@
 # Header CSS Conflict Fix Plan
 
-**Date:** 2026-07-14  
+**Date:** 2026-07-14
 **Scope:** development branch only (`feature/compact-gpu-dashboard`)
 
 ## Browser evidence
