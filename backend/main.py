@@ -9,10 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import delete
 
 try:
+    from .config import get_settings
     from .database import AsyncSessionLocal, init_db
     from .models import EventLog
     from .note_expiry import delete_expired_notes
 except ImportError:  # pragma: no cover - direct execution fallback
+    from config import get_settings
     from database import AsyncSessionLocal, init_db
     from models import EventLog
     from note_expiry import delete_expired_notes
@@ -67,35 +69,42 @@ async def lifespan(app: FastAPI):
     await init_db()
     slack_socket_service = None
 
-    try:
-        from sqlalchemy import select
+    settings = get_settings()
+    if settings.monitoring_disable_collectors:
+        logger.info("Collector manager disabled by MONITORING_DISABLE_COLLECTORS")
+    else:
         try:
-            from .database import AsyncSessionLocal
-            from .models import Server
-            from .collectors import manager
-        except ImportError:  # pragma: no cover - direct execution fallback
-            from database import AsyncSessionLocal
-            from models import Server
-            import collectors.manager as manager
+            from sqlalchemy import select
+            try:
+                from .database import AsyncSessionLocal
+                from .models import Server
+                from .collectors import manager
+            except ImportError:  # pragma: no cover - direct execution fallback
+                from database import AsyncSessionLocal
+                from models import Server
+                import collectors.manager as manager
 
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Server))
-            servers = result.scalars().all()
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(Server))
+                servers = result.scalars().all()
 
-        await manager.start_all(servers)
-        logger.info("Collector manager started for %d server(s)", len(servers))
-    except Exception as exc:
-        logger.warning("Collector manager not available: %s", exc)
+            await manager.start_all(servers)
+            logger.info("Collector manager started for %d server(s)", len(servers))
+        except Exception as exc:
+            logger.warning("Collector manager not available: %s", exc)
 
-    try:
+    if settings.monitoring_disable_slack:
+        logger.info("Slack Socket Mode disabled by MONITORING_DISABLE_SLACK")
+    else:
         try:
-            from .slack_socket import slack_socket_service as _slack_socket_service
-        except ImportError:  # pragma: no cover - direct execution fallback
-            from slack_socket import slack_socket_service as _slack_socket_service
-        slack_socket_service = _slack_socket_service
-        slack_socket_service.start()
-    except Exception as exc:
-        logger.warning("Slack Socket Mode not available: %s", exc)
+            try:
+                from .slack_socket import slack_socket_service as _slack_socket_service
+            except ImportError:  # pragma: no cover - direct execution fallback
+                from slack_socket import slack_socket_service as _slack_socket_service
+            slack_socket_service = _slack_socket_service
+            slack_socket_service.start()
+        except Exception as exc:
+            logger.warning("Slack Socket Mode not available: %s", exc)
 
     log_cleanup_task = asyncio.create_task(_log_cleanup_loop())
     note_cleanup_task = asyncio.create_task(_note_cleanup_loop())
