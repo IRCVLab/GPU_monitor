@@ -473,7 +473,7 @@
 		$dashboardLayoutWidth === 'full' ? 'w-full' : 'max-w-7xl mx-auto'
 	);
 	const pageMainClass = $derived(
-		$dashboardLayoutWidth === 'full' ? 'w-full px-6 py-6' : 'max-w-7xl mx-auto px-6 py-6'
+		$dashboardLayoutWidth === 'full' ? 'w-full px-6 py-4' : 'max-w-7xl mx-auto px-6 py-4'
 	);
 	const serverGridMinWidth = $derived.by(() => {
 		if ($dashboardTextScale === 'large') {
@@ -507,12 +507,12 @@
 		class:layout-framed={$dashboardLayoutWidth === 'framed'}
 	>
 	<!-- Header -->
-	<header class="dashboard-header border-b border-surface-border px-6 py-4">
-		<div class={`${pageShellClass} flex items-center justify-between gap-4`}>
-			<div class="flex items-center gap-4 min-w-0">
+	<header class="dashboard-header border-b border-surface-border px-6 py-2.5">
+		<div class={`dashboard-header-inner ${pageShellClass} flex items-center justify-between gap-4`}>
+			<div class="dashboard-header-identity flex items-center gap-4 min-w-0">
 				<div class="dashboard-title-block min-w-0">
 					<h1 class="dashboard-title text-lg font-semibold tracking-tight">GPU Monitor</h1>
-					<div class="dashboard-title-meta mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+					<div class="dashboard-title-meta mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
 						<span class="dashboard-meta-text">전체 {relativeTime(lastRefreshAtMs)}</span>
 						<span class="dashboard-meta-separator">·</span>
 						<span class="dashboard-live-pill inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[11px]">
@@ -528,7 +528,7 @@
 				</div>
 			</div>
 
-			<div class="flex items-center gap-2 flex-wrap justify-end">
+			<div class="dashboard-header-actions flex items-center gap-2 flex-wrap justify-end">
 				<button class="btn-ghost text-xs" onclick={() => (adminOpen = true)}>
 					+ 서버 등록
 				</button>
@@ -633,7 +633,7 @@
 
 	<!-- Tab bar -->
 	<nav class="border-b border-surface-border px-6">
-		<div class={`${pageShellClass} flex items-center pt-2 pb-2`}>
+		<div class={`${pageShellClass} flex items-center pt-1.5 pb-1.5`}>
 			<div class="dashboard-tabs">
 				{#each $tabOptions as tab}
 					<button

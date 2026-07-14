@@ -514,7 +514,7 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: flex-start;
-		min-width: 9.25rem;
+		min-width: 8.5rem;
 		max-width: 100%;
 		white-space: nowrap;
 		font-variant-numeric: tabular-nums;
@@ -530,7 +530,7 @@
 
 	.dashboard-live-health {
 		display: inline-flex;
-		min-width: 2.5rem;
+		min-width: 2.35rem;
 	}
 
 	.dashboard-live-separator {
@@ -541,7 +541,7 @@
 		@apply text-white/60;
 		display: inline-flex;
 		justify-content: flex-end;
-		min-width: 2.9rem;
+		min-width: 2.65rem;
 	}
 
 	.dashboard-live-dot {
@@ -563,7 +563,7 @@
 	}
 
 	.dashboard-theme-button {
-		@apply rounded-xl px-2.5 py-1.5 text-[11px] font-medium text-white/40 transition-colors duration-150;
+		@apply rounded-xl px-2.5 py-1 text-[11px] font-medium text-white/40 transition-colors duration-150;
 	}
 
 	.dashboard-theme-button:hover {
@@ -1025,6 +1025,45 @@
 	}
 
 	@media (max-width: 640px) {
+		.dashboard-scale-viewport,
+		.dashboard-scale-viewport.scale-default,
+		.dashboard-scale-viewport.scale-large,
+		.dashboard-scale-viewport.layout-full.scale-small,
+		.dashboard-scale-viewport.layout-full.scale-default,
+		.dashboard-scale-viewport.layout-full.scale-large {
+			width: 100%;
+		}
+
+		.dashboard-header-inner {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 0.65rem;
+		}
+
+		.dashboard-header-identity,
+		.dashboard-header-actions {
+			width: 100%;
+		}
+
+		.dashboard-header-actions {
+			justify-content: flex-start;
+			gap: 0.4rem 0.5rem;
+		}
+
+		.dashboard-title-block {
+			width: 100%;
+			min-width: 0;
+		}
+
+		.dashboard-title-meta {
+			gap: 0.35rem 0.5rem;
+		}
+
+		.dashboard-tabs {
+			max-width: 100%;
+			overflow-x: auto;
+		}
+
 		.note-form-identity-row {
 			grid-template-columns: 1fr;
 		}
@@ -1056,11 +1095,11 @@
 	}
 
 	.dashboard-tabs {
-		@apply inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.04] p-1;
+		@apply inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.04] px-0.5 py-0.5;
 	}
 
 	.dashboard-tab {
-		@apply inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-white/40 transition-colors duration-150;
+		@apply inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium text-white/40 transition-colors duration-150;
 	}
 
 	.dashboard-tab:hover {
@@ -1332,12 +1371,12 @@ html.dark .dashboard-header {
 }
 
 html.dark .dashboard-title-block {
-	padding: 0.7rem 0.95rem;
-	border-radius: 1rem;
+	padding: 0.5rem 0.8rem;
+	border-radius: 0.85rem;
 	background: linear-gradient(180deg, rgba(29, 40, 56, 0.84), rgba(15, 22, 33, 0.92));
 	border: 1px solid rgba(148, 163, 184, 0.12);
 	box-shadow:
-		0 12px 30px rgba(2, 6, 23, 0.24),
+		0 8px 20px rgba(2, 6, 23, 0.2),
 		inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
@@ -1397,7 +1436,7 @@ html.dark .dashboard-theme-button.active {
 	background: linear-gradient(180deg, rgba(40, 53, 73, 0.92), rgba(17, 25, 38, 0.88));
 	color: rgba(248, 250, 252, 0.96);
 	box-shadow:
-		0 10px 22px rgba(2, 6, 23, 0.26),
+		0 6px 14px rgba(2, 6, 23, 0.22),
 		inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
@@ -1448,11 +1487,11 @@ html.light .dashboard-header {
 }
 
 html.light .dashboard-title-block {
-	padding: 0.7rem 0.95rem;
-	border-radius: 1rem;
+	padding: 0.5rem 0.8rem;
+	border-radius: 0.85rem;
 	background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.72));
 	border: 1px solid rgba(15, 23, 42, 0.06);
-	box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+	box-shadow: 0 6px 18px rgba(15, 23, 42, 0.045);
 }
 
 html.light .dashboard-title {
@@ -1767,7 +1806,7 @@ html.light .dashboard-tab:hover {
 html.light .dashboard-tab.active {
 	background: #ffffff;
 	color: #0f172a;
-	box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 10px 24px rgba(15, 23, 42, 0.06);
+	box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 6px 16px rgba(15, 23, 42, 0.05);
 }
 
 html.light .dashboard-tab-count {
@@ -1809,11 +1848,11 @@ html.rose .dashboard-title {
 }
 
 html.rose .dashboard-title-block {
-	padding: 0.7rem 0.95rem;
-	border-radius: 1rem;
+	padding: 0.5rem 0.8rem;
+	border-radius: 0.85rem;
 	background: linear-gradient(180deg, rgba(255, 252, 253, 0.88), rgba(252, 245, 248, 0.78));
 	border: 1px solid rgba(84, 56, 71, 0.08);
-	box-shadow: 0 12px 28px rgba(79, 40, 59, 0.06);
+	box-shadow: 0 6px 18px rgba(79, 40, 59, 0.05);
 }
 
 html.rose .dashboard-meta-text {
