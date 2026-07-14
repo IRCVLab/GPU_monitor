@@ -18,6 +18,7 @@
 	} from '$lib/stores/theme';
 	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import { dashboardView, setDashboardView } from '$lib/stores/dashboardPrefs';
+	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
 	import { getServerStatus, getServers } from '$lib/api';
 	import type { ServerRecord, ServerState } from '$lib/types';
@@ -650,8 +651,8 @@
 							<div class="ops-popover ops-view-menu">
 								<div class="ops-menu-row" role="group" aria-label="대시보드 보기">
 									<span>보기</span>
-									<button class:active={$dashboardView === 'default'} onclick={() => { setDashboardView('default'); viewMenuOpen = false; }}>Default</button>
-									<button class:active={$dashboardView === 'compact'} onclick={() => { setDashboardView('compact'); viewMenuOpen = false; }}>Compact</button>
+									<button class:active={$dashboardView === 'default'} onclick={() => { setDashboardView('default'); viewMenuOpen = false; }}>{dashboardViewLabel('default')}</button>
+									<button class:active={$dashboardView === 'compact'} onclick={() => { setDashboardView('compact'); viewMenuOpen = false; }}>{dashboardViewLabel('compact')}</button>
 								</div>
 								<div class="ops-view-divider"></div>
 								<span class="ops-menu-label">색상 테마</span>
