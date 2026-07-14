@@ -66,3 +66,18 @@ Those legacy rules override the active design contract and keep occupying layout
 - Do not edit the live repository.
 - Do not push or deploy.
 - Do not change collector or WebSocket payload contracts.
+
+## Follow-up: scroll anchoring stabilization
+
+Final browser evidence exposed an interaction between the in-flow shell collapse and browser scroll anchoring. A single 80px downward wheel gesture first set the compact class, then the animated 65px-to-1px shell collapse generated reverse scroll events (80 -> 77 -> 66 -> ... -> 16). The direction detector could misclassify those layout-generated events as user upward intent and briefly reopen the header.
+
+The fix keeps the layout-collapsing contract and derives direction from a compensated content position:
+
+- effective position = scrollY + (expanded header height - rendered shell height);
+- the expanded height comes from the intrinsic header surface and the rendered height from the shell rectangle;
+- wheel, touch, and keyboard upward intent can reveal a fully settled compact header when browser anchoring has clamped scrollY to zero;
+- transition-time zero positions do not trigger the top reset until the shell has settled;
+- all added global listeners are passive where applicable and removed by the existing page cleanup.
+- grid-row transition completion resynchronizes the direction baseline after scroll anchoring has settled, so a reveal can be followed immediately by another downward gesture.
+
+Regression coverage locks the compensation sequence, settled-top boundary, DOM bindings, listener cleanup, and input parity. Browser verification must cover both an 80px collapse followed by top reveal and a 50px collapse that clamps to zero followed by an upward wheel gesture.

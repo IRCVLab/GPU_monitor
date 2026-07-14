@@ -5,11 +5,40 @@ import assert from 'node:assert/strict';
 // @ts-expect-error node built-in types are not installed for these stripped Node tests.
 import { readFileSync } from 'node:fs';
 import {
+	compensateHeaderScrollPosition,
 	HEADER_SCROLL_DIRECTION_THRESHOLD_PX,
 	HEADER_TOP_RESET_PX,
+	shouldRevealSettledHeaderAtTop,
 	updateHeaderVisibility
 // @ts-expect-error Node strip-types executes the .ts helper directly.
 } from './headerVisibility.ts';
+
+test('compensates in-flow header collapse so layout anchoring does not reverse scroll direction', () => {
+	const effectivePositions = [
+		{ scrollY: 80, renderedHeight: 65 },
+		{ scrollY: 75, renderedHeight: 60 },
+		{ scrollY: 63, renderedHeight: 48 },
+		{ scrollY: 50, renderedHeight: 35 },
+		{ scrollY: 16, renderedHeight: 1 }
+	].map(({ scrollY, renderedHeight }) =>
+		compensateHeaderScrollPosition(scrollY, 65, renderedHeight)
+	);
+
+	assert.deepEqual(effectivePositions, [80, 80, 80, 80, 80]);
+});
+
+test('preserves real user scroll distance when the header height is stable', () => {
+	assert.equal(compensateHeaderScrollPosition(0, 65, 65), 0);
+	assert.equal(compensateHeaderScrollPosition(48, 65, 65), 48);
+	assert.equal(compensateHeaderScrollPosition(144, 65, 1), 208);
+});
+
+test('reveals at the real page top only after the compact transition has settled', () => {
+	assert.equal(shouldRevealSettledHeaderAtTop(0, true, 1), true);
+	assert.equal(shouldRevealSettledHeaderAtTop(HEADER_TOP_RESET_PX, true, 1), true);
+	assert.equal(shouldRevealSettledHeaderAtTop(0, true, 24), false);
+	assert.equal(shouldRevealSettledHeaderAtTop(0, false, 65), false);
+});
 
 test('keeps a compact header compact on subthreshold downward motion', () => {
 	const result = updateHeaderVisibility({
@@ -150,6 +179,20 @@ function functionBody(source: string, name: string): string {
 	throw new Error(`Could not parse function ${name}`);
 }
 
+test('page derives header direction from a layout-compensated scroll position', () => {
+	assert.match(pageSource, /bind:this=\{headerShellElement\}/);
+	assert.match(pageSource, /bind:this=\{headerSurfaceElement\}/);
+
+	const positionBody = functionBody(pageSource, 'currentHeaderScrollPosition');
+	assert.match(positionBody, /compensateHeaderScrollPosition/);
+	assert.match(positionBody, /shouldRevealSettledHeaderAtTop/);
+	assert.match(positionBody, /headerSurfaceElement\.scrollHeight/);
+	assert.match(positionBody, /headerShellElement\.getBoundingClientRect\(\)\.height/);
+
+	const scrollBody = functionBody(pageSource, 'updateHeaderFromScroll');
+	assert.match(scrollBody, /currentY\s*=\s*currentHeaderScrollPosition\(\)/);
+});
+
 test('manual header reveal resets accumulated scroll state to the current viewport position', () => {
 	const body = functionBody(pageSource, 'revealHeader');
 
@@ -157,8 +200,8 @@ test('manual header reveal resets accumulated scroll state to the current viewpo
 	assert.match(body, /headerIndicatorVisible\s*=\s*false/);
 	assert.match(body, /headerScrollDirection\s*=\s*null/);
 	assert.match(body, /headerScrollDistance\s*=\s*0/);
-	assert.match(body, /browser[\s\S]*window\.scrollY/);
-	assert.match(body, /headerPreviousY\s*=\s*Math\.max\(0,\s*window\.scrollY\)/);
+	assert.match(body, /browser[\s\S]*currentHeaderScrollPosition\(\)/);
+	assert.match(body, /headerPreviousY\s*=\s*currentHeaderScrollPosition\(\)/);
 });
 
 test('header resize recomputes indicator visibility and unregisters the passive listener', () => {
@@ -170,6 +213,39 @@ test('header resize recomputes indicator visibility and unregisters the passive 
 	assert.match(resizeBody, /headerHasOuterGutter\(window\.innerWidth\)/);
 	assert.match(resizeBody, /viewportWidth:\s*window\.innerWidth/);
 	assert.match(resizeBody, /headerIndicatorVisible\s*=\s*result\.indicatorVisible/);
+});
+
+test('upward wheel, touch, and keyboard intent can reveal a settled compact header at scroll zero', () => {
+	const wheelBody = functionBody(pageSource, 'handleHeaderWheel');
+	assert.match(wheelBody, /event\.deltaY\s*<\s*0/);
+	assert.match(wheelBody, /shouldRevealHeaderForUpwardIntent\(\)/);
+	assert.match(wheelBody, /revealHeader\(\)/);
+
+	const touchBody = functionBody(pageSource, 'handleHeaderTouchMove');
+	assert.match(touchBody, /nextY\s*>\s*headerTouchY/);
+	assert.match(touchBody, /shouldRevealHeaderForUpwardIntent\(\)/);
+	assert.match(touchBody, /revealHeader\(\)/);
+
+	const keyboardBody = functionBody(pageSource, 'handleWindowKeydown');
+	assert.match(keyboardBody, /'Home'/);
+	assert.match(keyboardBody, /'ArrowUp'/);
+	assert.match(keyboardBody, /'PageUp'/);
+	assert.match(keyboardBody, /shouldRevealHeaderForUpwardIntent\(\)/);
+
+	for (const eventName of ['wheel', 'touchstart', 'touchmove', 'touchend']) {
+		assert.match(pageSource, new RegExp(`window\\.addEventListener\\(\\s*'${eventName}'`));
+		assert.match(pageSource, new RegExp(`window\\.removeEventListener\\(\\s*'${eventName}'`));
+	}
+});
+
+test('header transition completion resynchronizes direction baseline after layout anchoring settles', () => {
+	assert.match(pageSource, /ontransitionend=\{handleHeaderTransitionEnd\}/);
+	const body = functionBody(pageSource, 'handleHeaderTransitionEnd');
+	assert.match(body, /event\.target\s*!==\s*headerShellElement/);
+	assert.match(body, /event\.propertyName\s*!==\s*'grid-template-rows'/);
+	assert.match(body, /headerPreviousY\s*=\s*currentHeaderScrollPosition\(\)/);
+	assert.match(body, /headerScrollDirection\s*=\s*null/);
+	assert.match(body, /headerScrollDistance\s*=\s*0/);
 });
 
 test('desktop indicator has a defensive CSS cutoff below 1200px', () => {

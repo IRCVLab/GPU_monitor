@@ -20,9 +20,11 @@
 	import { dashboardView, setDashboardView } from '$lib/stores/dashboardPrefs';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
 	import {
+		compensateHeaderScrollPosition,
 		HEADER_INDICATOR_TOP_MAX_PX,
 		HEADER_INDICATOR_TOP_MIN_PX,
 		HEADER_OUTER_GUTTER_MIN_PX,
+		shouldRevealSettledHeaderAtTop,
 		type HeaderScrollDirection,
 		updateHeaderVisibility
 	} from '$lib/utils/headerVisibility';
@@ -125,10 +127,13 @@
 	let refreshFailed = $state(false);
 	let headerCompact = $state(false);
 	let headerIndicatorVisible = $state(false);
+	let headerShellElement = $state<HTMLDivElement | null>(null);
+	let headerSurfaceElement = $state<HTMLElement | null>(null);
 	let headerScrollFrame: number | null = null;
 	let headerPreviousY = 0;
 	let headerScrollDirection: HeaderScrollDirection = null;
 	let headerScrollDistance = 0;
+	let headerTouchY: number | null = null;
 	let retryingInitialLoad = $state(false);
 	const POLL_REFRESH_MS = 10_000;
 	const HIDDEN_REFRESH_MS = 60_000;
@@ -345,13 +350,63 @@
 		scheduleNextRefresh();
 	}
 
+	function currentHeaderScrollPosition(): number {
+		const scrollY = Math.max(0, window.scrollY);
+		if (!headerShellElement || !headerSurfaceElement) return scrollY;
+		const renderedHeight = headerShellElement.getBoundingClientRect().height;
+
+		if (shouldRevealSettledHeaderAtTop(scrollY, headerCompact, renderedHeight)) return 0;
+
+		return compensateHeaderScrollPosition(
+			scrollY,
+			headerSurfaceElement.scrollHeight,
+			renderedHeight
+		);
+	}
+
+	function shouldRevealHeaderForUpwardIntent(): boolean {
+		if (!headerShellElement) return false;
+		return shouldRevealSettledHeaderAtTop(
+			Math.max(0, window.scrollY),
+			headerCompact,
+			headerShellElement.getBoundingClientRect().height
+		);
+	}
+
+	function handleHeaderWheel(event: WheelEvent): void {
+		if (event.deltaY < 0 && shouldRevealHeaderForUpwardIntent()) revealHeader();
+	}
+
+	function handleHeaderTouchStart(event: TouchEvent): void {
+		headerTouchY = event.touches[0]?.clientY ?? null;
+	}
+
+	function handleHeaderTouchMove(event: TouchEvent): void {
+		const nextY = event.touches[0]?.clientY;
+		if (nextY === undefined) return;
+		const upwardIntent = headerTouchY !== null && nextY > headerTouchY;
+		headerTouchY = nextY;
+		if (upwardIntent && shouldRevealHeaderForUpwardIntent()) revealHeader();
+	}
+
+	function handleHeaderTouchEnd(): void {
+		headerTouchY = null;
+	}
+
+	function handleHeaderTransitionEnd(event: TransitionEvent): void {
+		if (event.target !== headerShellElement || event.propertyName !== 'grid-template-rows') return;
+		headerPreviousY = currentHeaderScrollPosition();
+		headerScrollDirection = null;
+		headerScrollDistance = 0;
+	}
+
 	function revealHeader(): void {
 		headerCompact = false;
 		headerIndicatorVisible = false;
 		headerScrollDirection = null;
 		headerScrollDistance = 0;
 		if (browser) {
-			headerPreviousY = Math.max(0, window.scrollY);
+			headerPreviousY = currentHeaderScrollPosition();
 		}
 	}
 
@@ -364,7 +419,7 @@
 
 	function updateHeaderFromScroll(): void {
 		headerScrollFrame = null;
-		const currentY = Math.max(0, window.scrollY);
+		const currentY = currentHeaderScrollPosition();
 		const result = updateHeaderVisibility({
 			currentY,
 			previousY: headerPreviousY,
@@ -389,7 +444,7 @@
 	}
 
 	function handleHeaderResize(): void {
-		const currentY = Math.max(0, window.scrollY);
+		const currentY = currentHeaderScrollPosition();
 		const result = updateHeaderVisibility({
 			currentY,
 			previousY: currentY,
@@ -432,9 +487,13 @@
 			}
 		};
 		document.addEventListener('visibilitychange', handleVisibilityChange);
-		headerPreviousY = Math.max(0, window.scrollY);
+		headerPreviousY = currentHeaderScrollPosition();
 		window.addEventListener('scroll', handleHeaderScroll, { passive: true });
 		window.addEventListener('resize', handleHeaderResize, { passive: true });
+		window.addEventListener('wheel', handleHeaderWheel, { passive: true });
+		window.addEventListener('touchstart', handleHeaderTouchStart, { passive: true });
+		window.addEventListener('touchmove', handleHeaderTouchMove, { passive: true });
+		window.addEventListener('touchend', handleHeaderTouchEnd, { passive: true });
 
 		void reloadDashboard(true).finally(() => {
 			scheduleNextRefresh();
@@ -445,6 +504,11 @@
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('scroll', handleHeaderScroll);
 			window.removeEventListener('resize', handleHeaderResize);
+			window.removeEventListener('wheel', handleHeaderWheel);
+			window.removeEventListener('touchstart', handleHeaderTouchStart);
+			window.removeEventListener('touchmove', handleHeaderTouchMove);
+			window.removeEventListener('touchend', handleHeaderTouchEnd);
+			headerTouchY = null;
 			if (headerScrollFrame !== null) {
 				cancelAnimationFrame(headerScrollFrame);
 				headerScrollFrame = null;
@@ -627,6 +691,12 @@
 			viewMenuOpen = false;
 			actionsMenuOpen = false;
 		}
+		if (
+			(event.key === 'Home' || event.key === 'ArrowUp' || event.key === 'PageUp') &&
+			shouldRevealHeaderForUpwardIntent()
+		) {
+			revealHeader();
+		}
 	}
 
 	const pageShellClass = 'max-w-7xl mx-auto';
@@ -638,7 +708,7 @@
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
 
 <div class="dashboard-page min-h-screen bg-surface">
-	<div class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible}>
+	<div bind:this={headerShellElement} ontransitionend={handleHeaderTransitionEnd} class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible}>
 		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerIndicatorVisible} style={headerIndicatorStyle}>
 			<div class="ops-indicator">
 				<button
@@ -658,7 +728,7 @@
 				</div>
 			</div>
 		</div>
-		<header class="ops-header border-b border-surface-border px-4 sm:px-6">
+		<header bind:this={headerSurfaceElement} class="ops-header border-b border-surface-border px-4 sm:px-6">
 			<div class={`ops-header-inner ${pageShellClass}`}>
 				<div class="ops-identity">
 					<h1>GPU Monitor</h1>
