@@ -1018,3 +1018,10 @@
   outline: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ops-primary) 12%, transparent);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .monitor-card .note-form-kind-toggle:hover,
+  .monitor-card .note-form-hold-chip:hover {
+    transform: none;
+  }
+}
