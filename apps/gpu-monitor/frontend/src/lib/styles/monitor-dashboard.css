@@ -49,14 +49,14 @@
 	grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
 	align-items: center;
 	gap: 1rem;
-	min-height: 5.25rem;
-	padding-block: 0.85rem;
+	min-height: 4rem;
+	padding-block: 0.65rem;
 	transition: min-height 160ms ease, padding-block 160ms ease;
 }
 
 .ops-header-compact .ops-header-inner {
-	min-height: 5.25rem;
-	padding-block: 0.85rem;
+	min-height: 4rem;
+	padding-block: 0.65rem;
 }
 
 .ops-identity {
@@ -83,17 +83,23 @@
 
 .ops-status-dot,
 .ops-indicator-dot {
+	--indicator-color: #2fb36f;
 	width: 0.55rem;
 	height: 0.55rem;
 	border-radius: 999px;
-	background: #2fb36f;
-	box-shadow: 0 0 0 0.18rem color-mix(in srgb, #2fb36f 16%, transparent);
+	background: var(--indicator-color);
+	box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--indicator-color) 16%, transparent);
+}
+
+.ops-indicator-dot {
+	animation: ops-indicator-breathe 4.2s ease-in-out infinite;
 }
 
 .ops-status-attention,
 .ops-indicator-dot.attention {
-	background: #f2ae43;
-	box-shadow: 0 0 0 0.18rem color-mix(in srgb, #f2ae43 16%, transparent);
+	--indicator-color: #f2ae43;
+	background: var(--indicator-color);
+	box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--indicator-color) 16%, transparent);
 }
 
 .ops-status-separator,
@@ -490,6 +496,18 @@
 	}
 }
 
+
+@keyframes ops-indicator-breathe {
+	0%, 100% {
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--indicator-color) 34%, transparent);
+		opacity: 0.78;
+	}
+	50% {
+		box-shadow: 0 0 0 0.34rem color-mix(in srgb, var(--indicator-color) 0%, transparent);
+		opacity: 1;
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.ops-header-shell,
 	.ops-header,
@@ -500,7 +518,8 @@
 	.ops-utility-action,
 	.ops-mode-action,
 	.monitor-dashboard-button,
-	.monitor-dashboard-spinner {
+	.monitor-dashboard-spinner,
+	.ops-indicator-dot {
 		transition: none;
 		animation: none;
 	}
