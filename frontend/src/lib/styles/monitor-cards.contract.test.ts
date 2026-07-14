@@ -15,3 +15,8 @@ test('hold footer remains chip-based and compact', () => {
 	assert.match(css, /\.monitor-note-item__gpu-chips/);
 	assert.match(css, /\.monitor-note-item__gpu-chip/);
 });
+
+
+test('reduced motion disables hover translation for hold composer controls', () => {
+	assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.note-form-kind-toggle:hover[\s\S]*\.note-form-hold-chip:hover[\s\S]*transform:\s*none/);
+});
