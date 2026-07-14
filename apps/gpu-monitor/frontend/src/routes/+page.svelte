@@ -51,6 +51,8 @@
 	let headerCompact = $state(false);
 	let headerScrollFrame: number | null = null;
 	let headerPreviousY = 0;
+	let headerScrollDirection: 'up' | 'down' | null = null;
+	let headerScrollDistance = 0;
 	let retryingInitialLoad = $state(false);
 	const POLL_REFRESH_MS = 10_000;
 	const HIDDEN_REFRESH_MS = 60_000;
@@ -277,15 +279,27 @@
 		const delta = currentY - headerPreviousY;
 		headerPreviousY = currentY;
 
-		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || currentY <= 12) {
-			headerCompact = false;
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+			headerCompact = currentY > 56;
 			return;
 		}
-		if (delta <= -HEADER_SCROLL_DELTA) {
+		if (currentY <= 12) {
 			headerCompact = false;
-		} else if (delta >= HEADER_SCROLL_DELTA && currentY > 56) {
-			headerCompact = true;
+			headerScrollDirection = null;
+			headerScrollDistance = 0;
+			return;
 		}
+		if (Math.abs(delta) < 1) return;
+		const direction = delta > 0 ? 'down' : 'up';
+		if (direction !== headerScrollDirection) {
+			headerScrollDirection = direction;
+			headerScrollDistance = 0;
+		}
+		headerScrollDistance += Math.abs(delta);
+		if (headerScrollDistance < HEADER_SCROLL_DELTA) return;
+
+		headerCompact = direction === 'down' && currentY > 56;
+		headerScrollDistance = 0;
 	}
 
 	function handleHeaderScroll(): void {
@@ -458,8 +472,6 @@
 	let editingServer = $state<ServerRecord | null>(null);
 	let viewMenuOpen = $state(false);
 	let viewMenuEl = $state<HTMLDivElement | null>(null);
-	let colorMenuOpen = $state(false);
-	let colorMenuEl = $state<HTMLDivElement | null>(null);
 	let actionsMenuOpen = $state(false);
 	let actionsMenuEl = $state<HTMLDivElement | null>(null);
 
@@ -492,10 +504,6 @@
 		if (viewMenuOpen) revealHeader();
 	}
 
-	function toggleColorMenu() {
-		colorMenuOpen = !colorMenuOpen;
-		if (colorMenuOpen) revealHeader();
-	}
 
 	function toggleActionsMenu() {
 		actionsMenuOpen = !actionsMenuOpen;
@@ -510,14 +518,12 @@
 		const target = event.target;
 		if (!(target instanceof Node)) return;
 		if (viewMenuOpen && viewMenuEl && !viewMenuEl.contains(target)) viewMenuOpen = false;
-		if (colorMenuOpen && colorMenuEl && !colorMenuEl.contains(target)) colorMenuOpen = false;
 		if (actionsMenuOpen && actionsMenuEl && !actionsMenuEl.contains(target)) actionsMenuOpen = false;
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			viewMenuOpen = false;
-			colorMenuOpen = false;
 			actionsMenuOpen = false;
 		}
 	}
@@ -586,27 +592,20 @@
 							<div class="ops-popover ops-view-menu">
 								<div class="ops-menu-row" role="group" aria-label="레이아웃 폭"><span>폭</span><button class:active={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); viewMenuOpen = false; }}>기본</button><button class:active={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); viewMenuOpen = false; }}>전체</button></div>
 								<div class="ops-menu-row" role="group" aria-label="화면 배율"><span>배율</span>{#each ['small', 'default', 'large'] as scale}<button class:active={$dashboardTextScale === scale} onclick={() => { setDashboardTextScale(scale as 'small' | 'default' | 'large'); viewMenuOpen = false; }}>{scale === 'small' ? '작게' : scale === 'default' ? '기본' : '크게'}</button>{/each}</div>
+								<div class="ops-view-divider"></div>
+								<span class="ops-menu-label">색상 테마</span>
+								<div class="ops-color-options" role="group" aria-label="색상 테마">{#each colorThemeOptions as option}<button class:active={$colorTheme === option.value} type="button" aria-label={option.label} aria-pressed={$colorTheme === option.value} style={`--swatch: ${option.color}`} onclick={() => { setColorTheme(option.value); viewMenuOpen = false; }}><span></span><em>{option.label}</em></button>{/each}</div>
 							</div>
 						{/if}
 					</div>
-					<div class="relative ops-direct-control" bind:this={colorMenuEl}>
-						<button class:active={colorMenuOpen} class="ops-palette-action" onclick={toggleColorMenu} aria-label="색상 테마" aria-haspopup="true" aria-expanded={colorMenuOpen}><span class="ops-palette-mark"><i></i><i></i><i></i></span></button>
-						{#if colorMenuOpen}
-							<div class="ops-popover ops-color-menu" role="group" aria-label="색상 테마">
-								<span class="ops-menu-label">색상 테마</span>
-								<div class="ops-color-options">{#each colorThemeOptions as option}<button class:active={$colorTheme === option.value} type="button" aria-label={option.label} aria-pressed={$colorTheme === option.value} style={`--swatch: ${option.color}`} onclick={() => { setColorTheme(option.value); colorMenuOpen = false; }}><span></span><em>{option.label}</em></button>{/each}</div>
-							</div>
-						{/if}
+					<button class="ops-primary-action" onclick={() => { adminOpen = true; revealHeader(); }}>서버 등록</button>
+					<div class="relative ops-admin-control" bind:this={actionsMenuEl}>
+						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
+						{#if actionsMenuOpen}<div class="ops-overflow-menu"><a class="ops-menu-link" href="/logs">이벤트 로그</a><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
 					</div>
 					<button class="ops-mode-action" onclick={() => setThemeMode($themeMode === 'dark' ? 'light' : 'dark')} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}>
 						{#if $themeMode === 'dark'}<span aria-hidden="true">☀</span>{:else}<span aria-hidden="true">☾</span>{/if}
 					</button>
-					<button class="ops-primary-action" onclick={() => { adminOpen = true; revealHeader(); }}>서버 등록</button>
-					<a href="/logs" class="ops-quiet-action">로그</a>
-					<div class="relative ops-admin-control" bind:this={actionsMenuEl}>
-						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
-						{#if actionsMenuOpen}<div class="ops-overflow-menu"><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
-					</div>
 				</div>
 
 				<nav class="ops-network ops-network-mobile" aria-label="네트워크 필터">
