@@ -175,3 +175,13 @@ test('header resize recomputes indicator visibility and unregisters the passive 
 test('desktop indicator has a defensive CSS cutoff below 1200px', () => {
 	assert.match(dashboardCss, /@media\s*\(max-width:\s*1199px\)[\s\S]*\.ops-indicator-anchor\s*\{[\s\S]*display:\s*none\s*!important\s*;/);
 });
+
+
+test('desktop indicator is shrink-wrapped and uses a fixed gutter shift instead of full-width translation', () => {
+	const indicatorRule = dashboardCss.match(/\.ops-indicator\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
+
+	assert.match(indicatorRule, /width:\s*max-content\s*;/);
+	assert.match(indicatorRule, /margin-left:\s*auto\s*;/);
+	assert.doesNotMatch(indicatorRule, /translateX\(\s*calc\(\s*100%/);
+	assert.match(indicatorRule, /transform:\s*translateX\(\s*calc\(\s*2\.5rem\s*\+\s*0\.5rem\s*\)\s*\)\s*;/);
+});
