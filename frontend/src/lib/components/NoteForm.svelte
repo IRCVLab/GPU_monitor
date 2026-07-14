@@ -1,14 +1,18 @@
 <script lang="ts">
-  import type { Note } from '$lib/types';
-  import { createNote } from '$lib/api';
+	import type { GpuInfo, Note, ServerStatus } from '$lib/types';
+	import { createNote } from '$lib/api';
+	import { buildNotePayload, type NoteKind } from '$lib/utils/notePayload';
+	import { isTelemetryStale } from '$lib/utils/telemetryFreshness';
 
-	let {
-		serverId,
-		onCreated
-	}: {
+	interface NoteFormProps {
 		serverId: number;
+		gpus: GpuInfo[];
+		serverStatus: ServerStatus;
+		lastSeen: string | null;
 		onCreated: (note: Note) => void;
-	} = $props();
+	}
+
+	let { serverId, gpus, serverStatus, lastSeen, onCreated }: NoteFormProps = $props();
 
 	const DEFAULT_EXPIRY_MS = 24 * 60 * 60 * 1000;
 	const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -17,23 +21,26 @@
 
 	let username = $state('');
 	let sshPassword = $state('');
-	let content  = $state('');
-	let loading  = $state(false);
-	let error    = $state('');
+	let content = $state('');
+	let loading = $state(false);
+	let error = $state('');
 	let showPrecisePicker = $state(false);
 	let nowMs = $state(Date.now());
 	let expiresAtLocal = $state(defaultExpiryLocal());
+	let kind = $state<NoteKind>('memo');
+	let selectedGpuIndices = $state<number[]>([]);
+
+	const telemetryStale = $derived(isTelemetryStale(lastSeen, nowMs, 60000));
+	const statusWarning = $derived(serverStatus !== 'online');
+	const sortedGpus = $derived([...gpus].sort((a, b) => a.index - b.index));
 
 	function pad(value: number): string {
 		return String(value).padStart(2, '0');
 	}
 
 	function toLocalDateTimeValue(date: Date): string {
-		return [
-			date.getFullYear(),
-			pad(date.getMonth() + 1),
-			pad(date.getDate())
-		].join('-') + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+		return [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join('-') +
+			`T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 	}
 
 	function defaultExpiryLocal(baseMs = Date.now()): string {
@@ -57,6 +64,18 @@
 		expiresAtLocal = toLocalDateTimeValue(next);
 	}
 
+	function setKind(nextKind: NoteKind): void {
+		kind = nextKind;
+		if (kind === 'memo') selectedGpuIndices = [];
+	}
+
+	function toggleGpu(gpuIndex: number): void {
+		const next = selectedGpuIndices.includes(gpuIndex)
+			? selectedGpuIndices.filter((value) => value !== gpuIndex)
+			: [...selectedGpuIndices, gpuIndex];
+		selectedGpuIndices = [...new Set(next)].sort((a, b) => a - b);
+	}
+
 	function formatExpiryAbsolute(date: Date): string {
 		return new Intl.DateTimeFormat('ko-KR', {
 			month: 'numeric',
@@ -65,10 +84,6 @@
 			minute: '2-digit',
 			hour12: false
 		}).format(date);
-	}
-
-	function formatExpiryCompact(date: Date): string {
-		return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 	}
 
 	function formatRemaining(ms: number): string {
@@ -87,14 +102,6 @@
 
 	const expiresAtDate = $derived(parseLocalDateTimeValue(expiresAtLocal));
 	const minExpiryLocal = $derived(toLocalDateTimeValue(new Date(nowMs + MIN_FUTURE_MS)));
-	const expiryCompactText = $derived.by(() => {
-		if (!expiresAtDate) return '시간 선택';
-
-		const diffMs = expiresAtDate.getTime() - nowMs;
-		if (diffMs <= 0) return '시간 다시 선택';
-
-		return `${formatRemaining(diffMs)} · ${formatExpiryCompact(expiresAtDate)}`;
-	});
 	const expirySummaryText = $derived.by(() => {
 		if (!expiresAtDate) return '자동 삭제 시간을 확인하세요.';
 
@@ -118,24 +125,30 @@
 		}
 
 		loading = true;
-		error   = '';
+		error = '';
 		try {
-			const note = await createNote(serverId, {
-				username: username.trim(),
-				ssh_password: sshPassword.trim(),
-				content: content.trim(),
-				expires_at: expiresAtDate.toISOString()
-			});
+			const note = await createNote(
+				serverId,
+				buildNotePayload({
+					username: username.trim(),
+					ssh_password: sshPassword.trim(),
+					content: content.trim(),
+					expires_at: expiresAtDate.toISOString(),
+					kind,
+					gpu_indices: kind === 'hold' ? selectedGpuIndices : []
+				})
+			);
 			onCreated(note);
 			content = '';
 			expiresAtLocal = defaultExpiryLocal();
 			showPrecisePicker = false;
+			selectedGpuIndices = [];
 		} catch (e) {
-      error = e instanceof Error ? e.message : '작성 실패';
-    } finally {
-      loading = false;
-    }
-  }
+			error = e instanceof Error ? e.message : '작성 실패';
+		} finally {
+			loading = false;
+		}
+	}
 
 	$effect(() => {
 		const timer = setInterval(() => {
@@ -147,110 +160,135 @@
 </script>
 
 <div class="note-form flex flex-col gap-1.5 pt-1.5">
-  <div class="note-form-identity-row">
-    <input
-      type="text"
-      placeholder="이름"
-      bind:value={username}
-      class="note-form-input note-form-input-half min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20"
-    />
-    <input
-      type="password"
-      placeholder="비밀번호"
-      bind:value={sshPassword}
-      class="note-form-input note-form-input-half min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20"
-    />
-  </div>
+	<div class="note-form-kind-row" role="group" aria-label="메모 종류">
+		<button
+			type="button"
+			class="note-form-kind-toggle"
+			aria-pressed={kind === 'memo'}
+			onclick={() => { kind = 'memo'; selectedGpuIndices = []; }}
+		>
+			메모
+		</button>
+		<button
+			type="button"
+			class="note-form-kind-toggle"
+			aria-pressed={kind === 'hold'}
+			onclick={() => setKind('hold')}
+		>
+			advisory soft hold
+		</button>
+	</div>
 
-  <textarea
-    placeholder="내용"
-    bind:value={content}
-    rows="2"
-    class="note-form-textarea w-full rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20 resize-none"
-  ></textarea>
+	{#if kind === 'hold'}
+		<div class="note-form-hold-block" aria-live="polite">
+			<p class="note-form-hold-copy">advisory soft hold only; telemetry remains the source of truth.</p>
+			{#if telemetryStale || statusWarning}
+				<p class="note-form-hold-warning">
+					{#if statusWarning && telemetryStale}
+						Server is {serverStatus} and telemetry is stale; treat this advisory soft hold as guidance only.
+					{:else if statusWarning}
+						Server is {serverStatus}; treat this advisory soft hold as guidance only.
+					{:else}
+						Telemetry is stale; treat this advisory soft hold as guidance only.
+					{/if}
+				</p>
+			{/if}
+			<div class="note-form-hold-chip-row" role="group" aria-label="GPU 선택">
+				{#each sortedGpus as gpu (gpu.index)}
+					<button
+						type="button"
+						class="note-form-hold-chip"
+						aria-pressed={selectedGpuIndices.includes(gpu.index)}
+						onclick={() => toggleGpu(gpu.index)}
+					>
+						G{gpu.index}
+					</button>
+				{/each}
+			</div>
+		</div>
+	{/if}
 
-  <div class="note-form-time-block">
-    <div class="note-form-time-row">
-      <span class="note-form-expiry-label">자동 삭제</span>
+	<div class="note-form-identity-row">
+		<input
+			type="text"
+			placeholder="이름"
+			bind:value={username}
+			class="note-form-input note-form-input-half min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20"
+		/>
+		<input
+			type="password"
+			placeholder="비밀번호"
+			bind:value={sshPassword}
+			class="note-form-input note-form-input-half min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20"
+		/>
+	</div>
 
-      <div class="note-form-expiry-controls">
-        <button
-          onclick={() => shiftExpiry(-ONE_HOUR_MS)}
-          class="note-form-expiry-adjust"
-          title="-1시간"
-        >
-          -1h
-        </button>
-        <button
-          onclick={() => shiftExpiry(ONE_HOUR_MS)}
-          class="note-form-expiry-adjust"
-          title="+1시간"
-        >
-          +1h
-        </button>
-      </div>
+	<textarea
+		placeholder="내용"
+		bind:value={content}
+		rows="2"
+		class="note-form-textarea w-full rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20 resize-none"
+	></textarea>
 
-      <span class="note-form-expiry-divider" aria-hidden="true">|</span>
+	<div class="note-form-time-block">
+		<div class="note-form-time-row">
+			<span class="note-form-expiry-label">자동 삭제</span>
 
-      <div class="note-form-expiry-controls">
-        <button
-          onclick={() => shiftExpiry(-ONE_DAY_MS)}
-          class="note-form-expiry-adjust"
-          title="-1일"
-        >
-          -1d
-        </button>
-        <button
-          onclick={() => shiftExpiry(ONE_DAY_MS)}
-          class="note-form-expiry-adjust"
-          title="+1일"
-        >
-          +1d
-        </button>
-      </div>
+			<div class="note-form-expiry-controls">
+				<button type="button" onclick={() => shiftExpiry(-ONE_HOUR_MS)} class="note-form-expiry-adjust" title="-1시간">
+					-1h
+				</button>
+				<button type="button" onclick={() => shiftExpiry(ONE_HOUR_MS)} class="note-form-expiry-adjust" title="+1시간">
+					+1h
+				</button>
+			</div>
 
-      <button
-        onclick={() => { showPrecisePicker = !showPrecisePicker; }}
-        class="note-form-expiry-toggle"
-      >
-        {showPrecisePicker ? '직접 설정 닫기' : '시간 직접 설정'}
-      </button>
-      <button
-        onclick={handleSubmit}
-        disabled={loading}
-        class="note-form-submit-primary"
-      >
-        {#if loading}
-          <span class="inline-block h-3.5 w-3.5 rounded-full border border-white/30 border-t-white/90 animate-spin"></span>
-        {:else}
-          작성
-        {/if}
-      </button>
-    </div>
+			<span class="note-form-expiry-divider" aria-hidden="true">|</span>
 
-    <div class="note-form-expiry-summary-row">
-      <span class="note-form-expiry-summary-label">삭제 예정</span>
-      <span class="note-form-expiry-summary">{expirySummaryText}</span>
-    </div>
-  </div>
+			<div class="note-form-expiry-controls">
+				<button type="button" onclick={() => shiftExpiry(-ONE_DAY_MS)} class="note-form-expiry-adjust" title="-1일">
+					-1d
+				</button>
+				<button type="button" onclick={() => shiftExpiry(ONE_DAY_MS)} class="note-form-expiry-adjust" title="+1일">
+					+1d
+				</button>
+			</div>
 
-  {#if showPrecisePicker}
-    <div class="note-form-precision">
-      <input
-        type="datetime-local"
-        bind:value={expiresAtLocal}
-        min={minExpiryLocal}
-        class="note-form-input note-form-precision-input min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 focus:outline-none focus:border-white/20"
-      />
-      <span class="note-form-precision-meta">{expirySummaryText}</span>
-    </div>
-  {/if}
+			<button type="button" onclick={() => { showPrecisePicker = !showPrecisePicker; }} class="note-form-expiry-toggle">
+				{showPrecisePicker ? '직접 설정 닫기' : '시간 직접 설정'}
+			</button>
+			<button type="button" onclick={handleSubmit} disabled={loading} class="note-form-submit-primary">
+				{#if loading}
+					<span class="inline-block h-3.5 w-3.5 rounded-full border border-white/30 border-t-white/90 animate-spin"></span>
+				{:else}
+					작성
+				{/if}
+			</button>
+		</div>
 
-  <div class="note-form-footer flex items-center justify-between gap-2">
-    {#if error}
-      <span class="text-xs text-red-400">{error}</span>
-    {:else}
-      <span></span>
-    {/if}
-  </div>
+		<div class="note-form-expiry-summary-row">
+			<span class="note-form-expiry-summary-label">삭제 예정</span>
+			<span class="note-form-expiry-summary">{expirySummaryText}</span>
+		</div>
+	</div>
+
+	{#if showPrecisePicker}
+		<div class="note-form-precision">
+			<input
+				type="datetime-local"
+				bind:value={expiresAtLocal}
+				min={minExpiryLocal}
+				class="note-form-input note-form-precision-input min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 focus:outline-none focus:border-white/20"
+			/>
+			<span class="note-form-precision-meta">{expirySummaryText}</span>
+		</div>
+	{/if}
+
+	<div class="note-form-footer flex items-center justify-between gap-2">
+		{#if error}
+			<span class="text-xs text-red-400">{error}</span>
+		{:else}
+			<span></span>
+		{/if}
+	</div>
 </div>
