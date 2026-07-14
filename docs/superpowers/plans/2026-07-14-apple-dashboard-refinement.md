@@ -1,3 +1,5 @@
+> Superseded by /DESIGN.md after the UX reset on 2026-07-14. Do not implement this narrow refinement as the current design.
+
 # Dashboard Refinement Implementation Plan
 
 1. Add a no-dependency masonry measurement action and apply it to dashboard card wrappers.
