@@ -25,13 +25,7 @@
 	import ServerDeleteModal from '$lib/components/ServerDeleteModal.svelte';
 
 	type Tab = 'internal' | 'all' | 'external';
-	type HeaderMode = 'expanded' | 'compact' | 'minimized';
-	const HEADER_TOP_Y = 8;
-	const HEADER_COMPACT_Y = 24;
-	const HEADER_MINIMIZE_Y = 128;
-	const HEADER_MINIMIZE_DELTA = 56;
-	const HEADER_REVEAL_DELTA = 12;
-	const HEADER_DELTA_NOISE = 4;
+	const HEADER_SCROLL_DELTA = 10;
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
 	const themeOptions = [
@@ -59,13 +53,9 @@
 	let nextRefreshAtMs = $state<number | null>(null);
 	let refreshInFlight = $state(false);
 	let refreshFailed = $state(false);
-	let headerMode = $state<HeaderMode>('expanded');
-	let headerHovered = $state(false);
-	let headerElement = $state<HTMLElement | null>(null);
+	let headerCompact = $state(false);
 	let headerScrollFrame: number | null = null;
 	let headerPreviousY = 0;
-	let headerDirection: 'up' | 'down' | null = null;
-	let headerDistance = 0;
 	let retryingInitialLoad = $state(false);
 	const POLL_REFRESH_MS = 10_000;
 	const HIDDEN_REFRESH_MS = 60_000;
@@ -282,73 +272,24 @@
 		scheduleNextRefresh();
 	}
 
-	function prefersReducedMotion(): boolean {
-		return browser && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-	}
-
-	function headerLockedOpen(): boolean {
-		return (
-			headerHovered ||
-			viewMenuOpen ||
-			actionsMenuOpen ||
-			networkMenuOpen ||
-			adminOpen ||
-			deleteOpen ||
-			(document.activeElement instanceof Node && headerElement?.contains(document.activeElement) === true)
-		);
-	}
-
-	function revealHeader(focusHeader = false): void {
-		headerMode = window.scrollY <= HEADER_TOP_Y ? 'expanded' : 'compact';
-		headerDistance = 0;
-		headerDirection = null;
-		if (focusHeader) {
-			requestAnimationFrame(() => headerElement?.focus());
-		}
+	function revealHeader(): void {
+		headerCompact = false;
 	}
 
 	function updateHeaderFromScroll(): void {
 		headerScrollFrame = null;
 		const currentY = Math.max(0, window.scrollY);
-		if (prefersReducedMotion()) {
-			headerMode = currentY <= HEADER_TOP_Y ? 'expanded' : 'compact';
-			headerPreviousY = currentY;
-			return;
-		}
-		if (headerLockedOpen()) {
-			headerMode = currentY <= HEADER_TOP_Y ? 'expanded' : 'compact';
-			headerPreviousY = currentY;
-			headerDistance = 0;
-			headerDirection = null;
-			return;
-		}
-		if (currentY <= HEADER_TOP_Y) {
-			headerMode = 'expanded';
-			headerPreviousY = currentY;
-			headerDistance = 0;
-			headerDirection = null;
-			return;
-		}
 		const delta = currentY - headerPreviousY;
 		headerPreviousY = currentY;
-		if (Math.abs(delta) < HEADER_DELTA_NOISE) return;
-		const direction = delta > 0 ? 'down' : 'up';
-		if (direction !== headerDirection) {
-			headerDirection = direction;
-			headerDistance = 0;
-		}
-		headerDistance += Math.abs(delta);
-		if (direction === 'up') {
-			if (currentY <= 16 || headerDistance >= HEADER_REVEAL_DELTA) {
-				headerMode = currentY <= 16 ? 'expanded' : 'compact';
-				headerDistance = 0;
-			}
+
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || currentY <= 12) {
+			headerCompact = false;
 			return;
 		}
-		if (currentY > HEADER_COMPACT_Y && headerMode === 'expanded') headerMode = 'compact';
-		if (currentY >= HEADER_MINIMIZE_Y && headerDistance >= HEADER_MINIMIZE_DELTA) {
-			headerMode = 'minimized';
-			headerDistance = 0;
+		if (delta <= -HEADER_SCROLL_DELTA) {
+			headerCompact = false;
+		} else if (delta >= HEADER_SCROLL_DELTA && currentY > 56) {
+			headerCompact = true;
 		}
 	}
 
@@ -520,12 +461,8 @@
 	let adminOpen    = $state(false);
 	let deleteOpen   = $state(false);
 	let editingServer = $state<ServerRecord | null>(null);
-	let viewMenuOpen = $state(false);
-	let viewMenuEl = $state<HTMLDivElement | null>(null);
 	let actionsMenuOpen = $state(false);
 	let actionsMenuEl = $state<HTMLDivElement | null>(null);
-	let networkMenuOpen = $state(false);
-	let networkMenuEl = $state<HTMLDivElement | null>(null);
 
 	async function handleSaved() {
 		await reloadDashboard(true);
@@ -551,40 +488,23 @@
 		adminOpen = true;
 	}
 
-	function toggleViewMenu() {
-		viewMenuOpen = !viewMenuOpen;
-		if (viewMenuOpen) revealHeader();
-	}
-
 	function toggleActionsMenu() {
 		actionsMenuOpen = !actionsMenuOpen;
 		if (actionsMenuOpen) revealHeader();
 	}
 
-	function toggleNetworkMenu() {
-		networkMenuOpen = !networkMenuOpen;
-		if (networkMenuOpen) revealHeader();
-	}
-
 	function selectNetwork(tab: Tab) {
 		activeTab.set(tab);
-		networkMenuOpen = false;
 	}
 
 	function handleWindowClick(event: MouseEvent) {
 		const target = event.target;
 		if (!(target instanceof Node)) return;
-		if (viewMenuOpen && viewMenuEl && !viewMenuEl.contains(target)) viewMenuOpen = false;
 		if (actionsMenuOpen && actionsMenuEl && !actionsMenuEl.contains(target)) actionsMenuOpen = false;
-		if (networkMenuOpen && networkMenuEl && !networkMenuEl.contains(target)) networkMenuOpen = false;
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') {
-			viewMenuOpen = false;
-			actionsMenuOpen = false;
-			networkMenuOpen = false;
-		}
+		if (event.key === 'Escape') actionsMenuOpen = false;
 	}
 
 	const pageShellClass = $derived(
@@ -625,121 +545,75 @@
 		class:layout-framed={$dashboardLayoutWidth === 'framed'}
 	>
 	<!-- Header -->
-	<div
-		class="dashboard-adaptive-header"
-		class:dashboard-header-expanded={headerMode === 'expanded'}
-		class:dashboard-header-compact={headerMode === 'compact'}
-		class:dashboard-header-minimized={headerMode === 'minimized'}
-	>
-		<button
-			type="button"
-			class="dashboard-header-reveal"
-			aria-label="대시보드 헤더 표시"
-			tabindex={headerMode === 'minimized' ? 0 : -1}
-			onclick={() => revealHeader(true)}
-			onfocus={() => revealHeader()}
-		>
-			<span aria-hidden="true"></span>
-		</button>
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<header
-			bind:this={headerElement}
-			tabindex="-1"
-			class="dashboard-header border-b border-surface-border px-6"
-			onmouseenter={() => {
-				headerHovered = true;
-				revealHeader();
-			}}
-			onmouseleave={() => (headerHovered = false)}
-			onfocusin={() => revealHeader()}
-		>
-			<div class="dashboard-header-content" inert={headerMode === 'minimized'}>
-				<div class={`dashboard-header-inner ${pageShellClass}`}>
-					<div class="dashboard-header-identity min-w-0">
-						<div class="dashboard-title-block min-w-0">
-							<h1 class="dashboard-title text-lg font-semibold tracking-tight">GPU Monitor</h1>
-							<div class="dashboard-title-meta mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-								<span class="dashboard-meta-text">전체 {relativeTime(lastRefreshAtMs)}</span>
-								<span class="dashboard-meta-separator">·</span>
-								<span class="dashboard-live-pill inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[11px]">
-									<span class="relative flex h-2 w-2 overflow-visible">
-										<span class="dashboard-live-ping absolute inline-flex h-full w-full rounded-full {$wsConnected && !refreshFailed ? 'animate-ping' : ''}"></span>
-										<span class="dashboard-live-dot relative inline-flex h-2 w-2 rounded-full"></span>
-									</span>
-									<span class="dashboard-live-health">{refreshHealthText()}</span>
-									<span class="dashboard-live-separator">·</span>
-									<span class="dashboard-live-text">{nextRefreshText()}</span>
-								</span>
-							</div>
-						</div>
-					</div>
+	<div class="ops-header-shell" class:ops-header-compact={headerCompact}>
+		<header class="ops-header border-b border-surface-border px-4 sm:px-6">
+			<div class={`ops-header-inner ${pageShellClass}`}>
+				<div class="ops-identity">
+					<h1>GPU Monitor</h1>
+					<p class="ops-status" aria-live="polite">
+						<span class:ops-status-attention={!$wsConnected || refreshFailed} class="ops-status-dot"></span>
+						<span>{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
+					</p>
+				</div>
 
-					<div class="dashboard-network-control">
-						<div class="dashboard-tabs dashboard-tabs-desktop" role="group" aria-label="네트워크 필터">
-							{#each $tabOptions as tab}
-								<button
-									class="dashboard-tab"
-									class:active={$activeTab === tab.value}
-									aria-pressed={$activeTab === tab.value}
-									onclick={() => selectNetwork(tab.value)}
-								>
-									<span>{tab.label}</span>
-									<span class="dashboard-tab-count">{tab.count}</span>
-								</button>
-							{/each}
-						</div>
-						<div class="dashboard-network-mobile relative" bind:this={networkMenuEl}>
-							<button class="dashboard-mobile-filter" aria-haspopup="true" aria-expanded={networkMenuOpen} onclick={toggleNetworkMenu}>
-								{$activeTab === 'internal' ? '내부망' : $activeTab === 'external' ? '외부망' : '전체'}
-							</button>
-							{#if networkMenuOpen}
-								<div class="dashboard-network-popover" role="group" aria-label="네트워크 필터">
-									{#each $tabOptions as tab}
-										<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}>{tab.label} <span>{tab.count}</span></button>
-									{/each}
-								</div>
-							{/if}
-						</div>
-					</div>
-
-					<div class="dashboard-header-actions">
-						<button class="btn-ghost text-xs dashboard-direct-action" onclick={() => { adminOpen = true; revealHeader(); }}>
-							+ 서버 등록
+				<div class="ops-scope ops-scope-desktop" role="group" aria-label="네트워크 필터">
+					{#each $tabOptions as tab}
+						<button
+							class:active={$activeTab === tab.value}
+							aria-pressed={$activeTab === tab.value}
+							onclick={() => selectNetwork(tab.value)}
+						>
+							<span>{tab.label}</span><span class="ops-scope-count">{tab.count}</span>
 						</button>
-						<a href="/logs" class="btn-ghost text-xs px-3 py-1.5 rounded-lg dashboard-direct-action">로그</a>
-						<div class="relative" bind:this={viewMenuEl}>
-							<button class={`btn-ghost text-xs ${viewMenuOpen ? 'bg-white/10' : ''}`} onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen}>보기</button>
-							{#if viewMenuOpen}
-								<div class="dashboard-view-popover">
-									<div class="dashboard-view-group" role="group" aria-label="레이아웃 폭">
-										<span class="dashboard-view-label">폭</span>
-										<button class="dashboard-view-button" class:active={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); viewMenuOpen = false; }}>기본</button>
-										<button class="dashboard-view-button" class:active={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); viewMenuOpen = false; }}>전체</button>
+					{/each}
+				</div>
+
+				<div class="ops-actions">
+					<button class="ops-primary-action" onclick={() => { adminOpen = true; revealHeader(); }}>서버 등록</button>
+					<a href="/logs" class="ops-quiet-action">로그</a>
+					<div class="ops-overflow-anchor relative" bind:this={actionsMenuEl}>
+						<button class:active={actionsMenuOpen} class="ops-icon-action" onclick={toggleActionsMenu} aria-label="대시보드 옵션" aria-haspopup="true" aria-expanded={actionsMenuOpen}>•••</button>
+						{#if actionsMenuOpen}
+							<div class="ops-overflow-menu">
+								<div class="ops-menu-group">
+									<span class="ops-menu-label">화면</span>
+									<div class="ops-menu-row" role="group" aria-label="레이아웃 폭">
+										<span>폭</span>
+										<button class:active={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); actionsMenuOpen = false; }}>기본</button>
+										<button class:active={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); actionsMenuOpen = false; }}>전체</button>
 									</div>
-									<div class="dashboard-view-group" role="group" aria-label="화면 배율">
-										<span class="dashboard-view-label">배율</span>
+									<div class="ops-menu-row" role="group" aria-label="화면 배율">
+										<span>배율</span>
 										{#each ['small', 'default', 'large'] as scale}
-											<button class="dashboard-view-button" class:active={$dashboardTextScale === scale} onclick={() => { setDashboardTextScale(scale as 'small' | 'default' | 'large'); viewMenuOpen = false; }}>{scale === 'small' ? '작게' : scale === 'default' ? '기본' : '크게'}</button>
+											<button class:active={$dashboardTextScale === scale} onclick={() => { setDashboardTextScale(scale as 'small' | 'default' | 'large'); actionsMenuOpen = false; }}>{scale === 'small' ? '작게' : scale === 'default' ? '기본' : '크게'}</button>
 										{/each}
 									</div>
 								</div>
-							{/if}
-						</div>
-						<div class="relative" bind:this={actionsMenuEl}>
-							<button class={`btn-ghost text-xs ${actionsMenuOpen ? 'bg-white/10' : ''}`} onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>메뉴</button>
-							{#if actionsMenuOpen}
-								<div class="dashboard-actions-popover">
-									<button onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button>
-									<a href="/debug">개발 진단</a>
-									<div class="dashboard-action-theme-row" role="group" aria-label="테마 선택">
+								<div class="ops-menu-group">
+									<span class="ops-menu-label">테마</span>
+									<div class="ops-menu-row ops-theme-row" role="group" aria-label="테마 선택">
 										{#each themeOptions as option}
-											<button class:active={$theme === option.value} type="button" aria-pressed={$theme === option.value} onclick={() => setTheme(option.value)}>{option.label}</button>
+											<button class:active={$theme === option.value} type="button" aria-pressed={$theme === option.value} onclick={() => { setTheme(option.value); actionsMenuOpen = false; }}>{option.label}</button>
 										{/each}
 									</div>
 								</div>
-							{/if}
-						</div>
+								<a class="ops-menu-link" href="/debug">개발 진단</a>
+								<button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button>
+							</div>
+						{/if}
 					</div>
+				</div>
+
+				<div class="ops-scope ops-scope-mobile" role="group" aria-label="네트워크 필터">
+					{#each $tabOptions as tab}
+						<button
+							class:active={$activeTab === tab.value}
+							aria-pressed={$activeTab === tab.value}
+							onclick={() => selectNetwork(tab.value)}
+						>
+							<span>{tab.label}</span><span class="ops-scope-count">{tab.count}</span>
+						</button>
+					{/each}
 				</div>
 			</div>
 		</header>
