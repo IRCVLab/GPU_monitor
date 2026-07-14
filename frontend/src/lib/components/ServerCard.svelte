@@ -145,13 +145,17 @@
     return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
   }
 
+  function gpuStatusIsStale(): boolean {
+    return server.status === 'offline' || server.status === 'unknown';
+  }
+
   function gpuDotState(userCount: number): 'free' | 'busy' | 'stale' {
-    if (server.status === 'offline' || server.status === 'unknown') return 'stale';
+    if (gpuStatusIsStale()) return 'stale';
     return userCount === 0 ? 'free' : 'busy';
   }
 
   function gpuDotTitle(index: number, users: string[]): string {
-    if (server.status === 'offline' || server.status === 'unknown') {
+    if (gpuStatusIsStale()) {
       return `GPU ${index} 상태 미확인`;
     }
 
@@ -193,6 +197,7 @@
   const freeGpuCount = $derived(server.gpus.filter((gpu) => gpu.users.length === 0).length);
   const gpuAvailabilityAriaText = $derived.by(() => {
     if (server.gpus.length === 0) return 'GPU 정보 없음';
+    if (gpuStatusIsStale()) return `총 ${server.gpus.length}개 GPU 상태 미확인`;
     return `총 ${server.gpus.length}개 중 사용 가능 ${freeGpuCount}개`;
   });
   const serverCardAriaLabel = $derived.by(() => {

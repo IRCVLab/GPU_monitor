@@ -269,23 +269,18 @@
 .monitor-card__gpu-list {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 0 1rem 1rem;
+  gap: 0.6rem;
+  padding: 0 1rem 0.9rem;
 }
 
 .monitor-gpu-row {
-  padding: 0.1rem 0 0;
-}
-
-.monitor-gpu-row + .monitor-gpu-row {
-  border-top: 1px solid color-mix(in srgb, var(--ops-border) 56%, transparent);
-  padding-top: 0.82rem;
+  padding: 0;
 }
 
 .monitor-gpu-row__body {
   min-width: 0;
   display: grid;
-  gap: 0.36rem;
+  gap: 0.24rem;
 }
 
 .monitor-gpu-row__primary {
@@ -314,7 +309,7 @@
 .monitor-gpu-row__user,
 .monitor-gpu-row__idle {
   font-size: 0.82rem;
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 .monitor-gpu-row__user {
@@ -351,7 +346,7 @@
 
 .monitor-gpu-row__metric-value {
   font-size: 0.74rem;
-  line-height: 1;
+  line-height: 1.2;
   color: color-mix(in srgb, var(--ops-fg) 58%, transparent);
   font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
 }
