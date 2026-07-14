@@ -224,4 +224,4 @@
 - [x] Notes semantics: remain free text with current expiry/auth behavior.
 - [x] Debug exposure: remain under Manage and clearly development-only.
 - [x] Compact status: retain the user-approved dot-only resting state with hover/focus expansion.
-- [ ] Final visual reference approval by user before implementation.
+- [x] Final visual reference approved by user on 2026-07-14.
