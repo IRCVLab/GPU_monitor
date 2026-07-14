@@ -567,6 +567,22 @@
 	>
 	<!-- Header -->
 	<div class="ops-header-shell" class:ops-header-compact={headerCompact}>
+		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerCompact}>
+			<div class="ops-indicator">
+				<button class="ops-indicator-trigger" aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)}. 상세 상태 보기`}>
+					<span class:attention={!$wsConnected || refreshFailed} class="ops-indicator-dot" aria-hidden="true"></span>
+				</button>
+				<div class="ops-indicator-panel">
+					<span class="ops-indicator-status">{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
+					<span class="ops-indicator-divider" aria-hidden="true"></span>
+					<div class="ops-indicator-network" role="group" aria-label="네트워크 필터">
+						{#each $tabOptions as tab}
+							<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>
+						{/each}
+					</div>
+				</div>
+			</div>
+		</div>
 		<header class="ops-header border-b border-surface-border px-4 sm:px-6">
 			<div class={`ops-header-inner ${pageShellClass}`}>
 				<div class="ops-identity">
