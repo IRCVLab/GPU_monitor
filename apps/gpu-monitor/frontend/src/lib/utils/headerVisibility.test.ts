@@ -1,10 +1,14 @@
-// @ts-nocheck
+// @ts-expect-error node built-in types are not installed for these stripped Node tests.
 import test from 'node:test';
+// @ts-expect-error node built-in types are not installed for these stripped Node tests.
 import assert from 'node:assert/strict';
+// @ts-expect-error node built-in types are not installed for these stripped Node tests.
+import { readFileSync } from 'node:fs';
 import {
 	HEADER_SCROLL_DIRECTION_THRESHOLD_PX,
 	HEADER_TOP_RESET_PX,
 	updateHeaderVisibility
+// @ts-expect-error Node strip-types executes the .ts helper directly.
 } from './headerVisibility.ts';
 
 test('keeps a compact header compact on subthreshold downward motion', () => {
@@ -127,4 +131,47 @@ test('reduced motion preserves immediate threshold semantics without timers', ()
 
 	assert.equal(result.compact, true);
 	assert.equal(result.nextPreviousY, 60);
+});
+
+
+const pageSource = readFileSync(new URL('../../routes/+page.svelte', import.meta.url), 'utf8');
+const dashboardCss = readFileSync(new URL('../styles/monitor-dashboard.css', import.meta.url), 'utf8');
+
+function functionBody(source: string, name: string): string {
+	const start = source.indexOf(`function ${name}`);
+	assert.notEqual(start, -1, `Missing function ${name}`);
+	const open = source.indexOf('{', start);
+	let depth = 0;
+	for (let index = open; index < source.length; index += 1) {
+		if (source[index] === '{') depth += 1;
+		if (source[index] === '}') depth -= 1;
+		if (depth === 0) return source.slice(open + 1, index);
+	}
+	throw new Error(`Could not parse function ${name}`);
+}
+
+test('manual header reveal resets accumulated scroll state to the current viewport position', () => {
+	const body = functionBody(pageSource, 'revealHeader');
+
+	assert.match(body, /headerCompact\s*=\s*false/);
+	assert.match(body, /headerIndicatorVisible\s*=\s*false/);
+	assert.match(body, /headerScrollDirection\s*=\s*null/);
+	assert.match(body, /headerScrollDistance\s*=\s*0/);
+	assert.match(body, /browser[\s\S]*window\.scrollY/);
+	assert.match(body, /headerPreviousY\s*=\s*Math\.max\(0,\s*window\.scrollY\)/);
+});
+
+test('header resize recomputes indicator visibility and unregisters the passive listener', () => {
+	assert.match(pageSource, /function\s+handleHeaderResize\s*\(/);
+	assert.match(pageSource, /window\.addEventListener\(\s*'resize'\s*,\s*handleHeaderResize\s*,\s*\{\s*passive:\s*true\s*\}\s*\)/);
+	assert.match(pageSource, /window\.removeEventListener\(\s*'resize'\s*,\s*handleHeaderResize\s*\)/);
+
+	const resizeBody = functionBody(pageSource, 'handleHeaderResize');
+	assert.match(resizeBody, /headerHasOuterGutter\(window\.innerWidth\)/);
+	assert.match(resizeBody, /viewportWidth:\s*window\.innerWidth/);
+	assert.match(resizeBody, /headerIndicatorVisible\s*=\s*result\.indicatorVisible/);
+});
+
+test('desktop indicator has a defensive CSS cutoff below 1200px', () => {
+	assert.match(dashboardCss, /@media\s*\(max-width:\s*1199px\)[\s\S]*\.ops-indicator-anchor\s*\{[\s\S]*display:\s*none\s*!important\s*;/);
 });
