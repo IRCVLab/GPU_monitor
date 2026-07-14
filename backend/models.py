@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Index, JSON, func
+    Column, Integer, String, Text, DateTime, ForeignKey, Index, JSON, func, text
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -39,6 +39,8 @@ class Note(Base):
     server_id = Column(Integer, ForeignKey("servers.id"), nullable=False)
     username = Column(Text, nullable=False)           # 메모 작성자
     content = Column(Text, nullable=False)
+    kind = Column(Text, nullable=False, default="memo", server_default=text("'memo'"))
+    gpu_indices = Column(Text, nullable=False, default="[]", server_default=text("'[]'"))
     created_at = Column(DateTime, default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
