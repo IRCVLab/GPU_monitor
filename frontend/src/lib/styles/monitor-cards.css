@@ -11,30 +11,6 @@
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
 }
 
-.monitor-card::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto;
-  height: 6.8rem;
-  pointer-events: none;
-  opacity: 0;
-  background:
-    radial-gradient(circle at top right, color-mix(in srgb, #22c55e 12%, transparent), transparent 58%),
-    linear-gradient(180deg, color-mix(in srgb, var(--ops-primary) 12%, transparent), transparent 82%);
-  transition: opacity 180ms ease;
-}
-
-.monitor-card[data-has-free-gpu='true'] {
-  border-color: color-mix(in srgb, var(--ops-primary) 14%, var(--ops-border));
-  box-shadow:
-    0 10px 28px color-mix(in srgb, var(--ops-fg) 10%, transparent),
-    0 1px 0 color-mix(in srgb, var(--ops-primary) 8%, transparent);
-}
-
-.monitor-card[data-has-free-gpu='true']::before {
-  opacity: 1;
-}
-
 .monitor-card:hover {
   transform: translateY(-1px);
   box-shadow: 0 14px 30px color-mix(in srgb, var(--ops-fg) 13%, transparent);
@@ -46,9 +22,7 @@
 }
 
 .monitor-card__header {
-  position: relative;
-  z-index: 1;
-  padding: 1rem 1rem 0.7rem;
+  padding: 1rem 1rem 0.85rem;
 }
 
 .monitor-card__title-row {
@@ -121,71 +95,6 @@
   color: color-mix(in srgb, var(--ops-fg) 42%, transparent);
 }
 
-.monitor-card__gpu-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.55rem 0.8rem;
-  margin-top: 0.68rem;
-}
-
-.monitor-card__gpu-summary-copy {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.28rem 0.42rem;
-}
-
-.monitor-card__gpu-model {
-  min-width: 0;
-  font-size: 0.86rem;
-  line-height: 1.35;
-  font-weight: 600;
-  color: color-mix(in srgb, var(--ops-fg) 84%, transparent);
-  overflow-wrap: anywhere;
-}
-
-.monitor-card__gpu-vram {
-  font-size: 0.78rem;
-  line-height: 1.35;
-  color: color-mix(in srgb, var(--ops-fg) 56%, transparent);
-  font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-.monitor-card__gpu-dot-list {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.38rem;
-  flex: 0 0 auto;
-}
-
-.monitor-card__gpu-dot {
-  width: 0.56rem;
-  height: 0.56rem;
-  border-radius: 999px;
-  background: transparent;
-  box-shadow: inset 0 0 0 1.15px color-mix(in srgb, var(--ops-fg) 24%, transparent);
-}
-
-.monitor-card__gpu-dot[data-state='free'] {
-  background: color-mix(in srgb, #22c55e 82%, var(--ops-card));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #22c55e 18%, var(--ops-card));
-}
-
-.monitor-card__gpu-dot[data-state='busy'] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.15px color-mix(in srgb, var(--ops-fg) 30%, transparent);
-}
-
-.monitor-card__gpu-dot[data-state='stale'] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ops-fg) 30%, transparent);
-}
-
 .monitor-card__meta,
 .monitor-card__reason {
   margin-top: 0.35rem;
@@ -208,8 +117,8 @@
 .monitor-card__metric-value,
 .monitor-card__hardware-index,
 .monitor-card__hardware-value,
+.monitor-gpu-metric__value,
 .monitor-gpu-row__index,
-.monitor-gpu-row__metric-value,
 .monitor-note-item__time,
 .monitor-note-item__expiry,
 .monitor-note-item__password,
@@ -298,57 +207,53 @@
 }
 
 .monitor-card__gpu-list {
-  position: relative;
-  z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.42rem;
-  padding: 0 1rem 0.9rem;
+  gap: 0.8rem;
+  padding: 0 1rem 1rem;
+  border-top: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
 }
 
 .monitor-gpu-row {
-  padding: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 0.65rem 0.8rem;
 }
 
-.monitor-gpu-row[data-free='true'] {
-  padding: 0.42rem 0.62rem;
-  border-radius: 1rem;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, #22c55e 11%, transparent), color-mix(in srgb, var(--ops-primary) 7%, transparent));
+.monitor-gpu-row__index {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.15rem;
+  min-height: 1.45rem;
+  padding: 0 0.45rem;
+  border-radius: 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
+  background: color-mix(in srgb, var(--ops-muted) 70%, var(--ops-card));
+  font-size: 0.7rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--ops-fg) 48%, transparent);
 }
 
 .monitor-gpu-row__body {
   min-width: 0;
   display: grid;
-  gap: 0.28rem;
-}
-
-.monitor-gpu-row__primary {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.28rem 0.55rem;
-}
-
-.monitor-gpu-row__index {
-  flex: 0 0 auto;
-  font-size: 0.68rem;
-  line-height: 1;
-  color: color-mix(in srgb, var(--ops-fg) 34%, transparent);
+  gap: 0.45rem;
 }
 
 .monitor-gpu-row__users {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.2rem 0.42rem;
+  align-items: flex-start;
+  gap: 0.25rem 0.45rem;
   min-width: 0;
 }
 
 .monitor-gpu-row__user,
 .monitor-gpu-row__idle {
-  font-size: 0.82rem;
+  font-size: 0.79rem;
   line-height: 1.35;
 }
 
@@ -358,72 +263,32 @@
 }
 
 .monitor-gpu-row__idle {
-  color: color-mix(in srgb, #22c55e 74%, var(--ops-fg));
-  font-weight: 600;
-}
-
-.monitor-gpu-row__secondary {
-  display: grid;
-  gap: 0.24rem;
-  min-width: 0;
-  padding-left: 1.48rem;
-}
-
-.monitor-gpu-row__util {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.monitor-gpu-row__util-track {
-  position: relative;
-  width: min(11rem, 100%);
-  height: 0.18rem;
-  min-width: 0;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ops-fg) 9%, transparent);
-}
-
-.monitor-gpu-row__util-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: color-mix(in srgb, var(--ops-primary) 38%, var(--ops-fg));
+  color: color-mix(in srgb, var(--ops-fg) 40%, transparent);
 }
 
 .monitor-gpu-row__metrics {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 0.8rem;
+  min-width: 0;
+}
+
+.monitor-gpu-metric {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.2rem 0.45rem;
-  min-width: 0;
+  gap: 0.45rem;
 }
 
-.monitor-gpu-row__metric {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.24rem;
-  min-width: 0;
-}
-
-.monitor-gpu-row__metric-label {
+.monitor-gpu-metric__label {
   font-size: 0.63rem;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: color-mix(in srgb, var(--ops-fg) 34%, transparent);
 }
 
-.monitor-gpu-row__metric-value {
-  font-size: 0.74rem;
-  line-height: 1.2;
-  color: color-mix(in srgb, var(--ops-fg) 58%, transparent);
-  font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
-}
-
-.monitor-gpu-row__metric-separator {
-  color: color-mix(in srgb, var(--ops-fg) 24%, transparent);
-}
-
+.monitor-gpu-metric__track,
 .monitor-meter {
   position: relative;
   height: 0.34rem;
@@ -433,16 +298,19 @@
   background: color-mix(in srgb, var(--ops-fg) 10%, transparent);
 }
 
+.monitor-gpu-metric__fill,
 .monitor-meter__fill {
   height: 100%;
   border-radius: inherit;
   transition: width 180ms ease;
 }
 
+.monitor-gpu-metric__fill--util,
 .monitor-meter__fill--util {
   background: color-mix(in srgb, var(--ops-fg) 42%, transparent);
 }
 
+.monitor-gpu-metric__fill--memory,
 .monitor-meter__fill--memory {
   background: color-mix(in srgb, var(--ops-primary) 46%, transparent);
 }
@@ -451,17 +319,32 @@
   background: color-mix(in srgb, var(--ops-fg) 28%, var(--ops-primary));
 }
 
+.monitor-gpu-row[data-active='false'] .monitor-gpu-metric__fill--util,
+.monitor-gpu-row[data-active='false'] .monitor-gpu-metric__fill--memory {
+  background: color-mix(in srgb, var(--ops-fg) 22%, transparent);
+}
+
+.monitor-gpu-metric__value {
+  min-width: 3.5ch;
+  text-align: right;
+  font-size: 0.74rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--ops-fg) 60%, transparent);
+  font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+}
+
+.monitor-gpu-metric__value--memory {
+  min-width: 10ch;
+}
+
 .monitor-card__footer {
-  position: relative;
-  z-index: 1;
   margin-top: auto;
-  border-top: 1px solid color-mix(in srgb, var(--ops-border) 72%, transparent);
-  background: transparent;
-  padding-bottom: 0.15rem;
+  border-top: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
+  background: color-mix(in srgb, var(--ops-card) 92%, var(--ops-muted));
 }
 
 .monitor-card__footer-section + .monitor-card__footer-section {
-  border-top: none;
+  border-top: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
 }
 
 .monitor-card__footer-toggle {
@@ -478,7 +361,7 @@
 }
 
 .monitor-card__footer-toggle:hover {
-  background: color-mix(in srgb, var(--ops-muted) 36%, transparent);
+  background: color-mix(in srgb, var(--ops-muted) 68%, transparent);
   color: color-mix(in srgb, var(--ops-fg) 78%, transparent);
 }
 
@@ -572,8 +455,8 @@
 .monitor-card__subsection,
 .monitor-note-list,
 .monitor-card .note-form {
-  padding-top: 0.72rem;
-  border-top: none;
+  padding-top: 0.78rem;
+  border-top: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
 }
 
 .monitor-card__metric-row {
@@ -618,15 +501,15 @@
 
 .monitor-card__hardware-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(6.2rem, 1fr));
-  gap: 0.3rem 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(6.4rem, 1fr));
+  gap: 0.45rem;
 }
 
 .monitor-card__hardware-item,
 .monitor-card__mount-item,
 .monitor-note-item {
-  border: none;
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
+  background: color-mix(in srgb, var(--ops-muted) 56%, var(--ops-card));
 }
 
 .monitor-card__hardware-item {
@@ -634,8 +517,8 @@
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.18rem 0;
-  border-radius: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.85rem;
 }
 
 .monitor-card__hardware-index,
@@ -667,7 +550,7 @@
 
 .monitor-card__mount-list {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.45rem;
 }
 
 .monitor-card__mount-item {
@@ -675,8 +558,8 @@
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.36rem 0;
-  border-radius: 0;
+  padding: 0.58rem 0.7rem;
+  border-radius: 0.85rem;
 }
 
 .monitor-card__mount-path {
@@ -721,7 +604,7 @@
 
 .monitor-note-list {
   display: grid;
-  gap: 0;
+  gap: 0.6rem;
 }
 
 .monitor-note-item {
@@ -729,12 +612,8 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.85rem;
-  padding: 0.78rem 0;
-  border-radius: 0;
-}
-
-.monitor-note-item + .monitor-note-item {
-  border-top: 1px solid color-mix(in srgb, var(--ops-border) 48%, transparent);
+  padding: 0.78rem 0.85rem;
+  border-radius: 0.95rem;
 }
 
 .monitor-note-item__body {
@@ -979,12 +858,8 @@
 }
 
 @media (max-width: 520px) {
-  .monitor-card__gpu-summary {
-    align-items: flex-start;
-  }
-
-  .monitor-gpu-row__secondary {
-    padding-left: 0;
+  .monitor-gpu-row__metrics {
+    grid-template-columns: 1fr;
   }
 
   .monitor-card .note-form-identity-row {
@@ -996,6 +871,7 @@
   .monitor-card,
   .monitor-card__edit-button,
   .monitor-card__footer-toggle,
+  .monitor-gpu-metric__fill,
   .monitor-meter__fill,
   .monitor-note-item__delete,
   .monitor-card .note-form-expiry-adjust,

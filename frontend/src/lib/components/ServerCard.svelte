@@ -145,77 +145,16 @@
     return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
   }
 
-  function gpuStatusIsStale(): boolean {
-    return server.status === 'offline' || server.status === 'unknown';
-  }
-
-  function gpuDotState(userCount: number): 'free' | 'busy' | 'stale' {
-    if (gpuStatusIsStale()) return 'stale';
-    return userCount === 0 ? 'free' : 'busy';
-  }
-
-  function gpuDotTitle(index: number, users: string[]): string {
-    if (gpuStatusIsStale()) {
-      return `GPU ${index} 상태 미확인`;
-    }
-
-    if (users.length === 0) {
-      return `GPU ${index} 사용 가능`;
-    }
-
-    return `GPU ${index} 사용 중: ${users.join(', ')}`;
-  }
-
   const statusMeta = $derived(statusConfig[server.status] ?? statusConfig.unknown);
   const lastSeenAbsoluteText = $derived(absoluteTime(server.last_seen));
   const refreshText = $derived(`갱신 ${lastSeenAbsoluteText}`);
   const hostText = $derived(server.port ? `${server.host}:${server.port}` : server.host);
   const statusReasonText = $derived(server.status_reason?.message ?? '');
   const statusTooltip = $derived(statusReasonText ? `${statusMeta.label} · ${statusReasonText}` : statusMeta.label);
-  const gpuModelText = $derived.by(() => {
-    const gpuNames = Array.from(
-      new Set(server.gpus.map((gpu) => gpu.name.trim()).filter((name) => name.length > 0))
-    );
-
-    if (gpuNames.length === 0) return 'GPU 정보 없음';
-    if (gpuNames.length === 1) return gpuNames[0];
-    return `${gpuNames[0]} 외 ${gpuNames.length - 1}종`;
-  });
-  const gpuVramText = $derived.by(() => {
-    const capacities = Array.from(
-      new Set(
-        server.gpus
-          .map((gpu) => Math.round(gpu.memory_total / 1024))
-          .filter((value) => Number.isFinite(value) && value > 0)
-      )
-    ).sort((a, b) => a - b);
-
-    if (capacities.length === 0) return '';
-    if (capacities.length === 1) return `${capacities[0]} GB`;
-    return `${capacities[0]}–${capacities[capacities.length - 1]} GB`;
-  });
-  const freeGpuCount = $derived(server.gpus.filter((gpu) => gpu.users.length === 0).length);
-  const gpuAvailabilityAriaText = $derived.by(() => {
-    if (server.gpus.length === 0) return 'GPU 정보 없음';
-    if (gpuStatusIsStale()) return `총 ${server.gpus.length}개 GPU 상태 미확인`;
-    return `총 ${server.gpus.length}개 중 사용 가능 ${freeGpuCount}개`;
-  });
-  const hasFreeGpuAccent = $derived(!gpuStatusIsStale() && freeGpuCount > 0);
-  const serverCardAriaLabel = $derived.by(() => {
-    const parts = [server.server_name, statusMeta.label];
-
-    if (server.gpus.length > 0) {
-      parts.push(gpuModelText);
-      if (gpuVramText) parts.push(gpuVramText);
-      parts.push(gpuAvailabilityAriaText);
-    }
-
-    return parts.join(', ');
-  });
 
   const cpuPct = $derived(server.system?.cpu_percent ?? 0);
-  const ramUsed = $derived(server.system ? Math.round(server.system.ram_used / 1024) : '–');
-  const ramTotal = $derived(server.system ? Math.round(server.system.ram_total / 1024) : '–');
+  const ramUsed = $derived(server.system ? (server.system.ram_used / 1024).toFixed(1) : '–');
+  const ramTotal = $derived(server.system ? (server.system.ram_total / 1024).toFixed(1) : '–');
   const ramPct = $derived(
     server.system && server.system.ram_total > 0
       ? (server.system.ram_used / server.system.ram_total) * 100
@@ -333,12 +272,7 @@
   });
 </script>
 
-<article
-  class="monitor-card bg-surface-card border border-surface-border"
-  data-status={server.status}
-  data-has-free-gpu={hasFreeGpuAccent ? 'true' : 'false'}
-  aria-label={serverCardAriaLabel}
->
+<article class="monitor-card bg-surface-card border border-surface-border" data-status={server.status}>
   <header class="monitor-card__header">
     <div class="monitor-card__title-row">
       <div class="monitor-card__title-stack">
@@ -350,29 +284,6 @@
           </span>
           {#if showNetwork}
             <span class="monitor-card__network">{server.network === 'internal' ? '내부망' : '외부망'}</span>
-          {/if}
-        </div>
-
-        <div class="monitor-card__gpu-summary">
-          <div class="monitor-card__gpu-summary-copy">
-            <span class="monitor-card__gpu-model">{gpuModelText}</span>
-            {#if gpuVramText}
-              <span class="monitor-card__meta-separator" aria-hidden="true">·</span>
-              <span class="monitor-card__gpu-vram">{gpuVramText}</span>
-            {/if}
-          </div>
-
-          {#if server.gpus.length > 0}
-            <div class="monitor-card__gpu-dot-list" role="img" aria-label={gpuAvailabilityAriaText}>
-              {#each server.gpus as gpu (gpu.index)}
-                <span
-                  class="monitor-card__gpu-dot"
-                  data-state={gpuDotState(gpu.users.length)}
-                  title={gpuDotTitle(gpu.index, gpu.users)}
-                  aria-hidden="true"
-                ></span>
-              {/each}
-            </div>
           {/if}
         </div>
 
