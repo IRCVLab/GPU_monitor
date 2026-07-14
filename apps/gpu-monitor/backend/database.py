@@ -31,7 +31,13 @@ def ensure_notes_expiry_schema_sync(conn: Connection) -> None:
 
     if "expires_at" not in columns:
         conn.execute(text("ALTER TABLE notes ADD COLUMN expires_at DATETIME"))
+    if "kind" not in columns:
+        conn.execute(text("ALTER TABLE notes ADD COLUMN kind TEXT NOT NULL DEFAULT 'memo'"))
+    if "gpu_indices" not in columns:
+        conn.execute(text("ALTER TABLE notes ADD COLUMN gpu_indices TEXT NOT NULL DEFAULT '[]'"))
 
+    conn.execute(text("UPDATE notes SET kind = 'memo' WHERE kind IS NULL OR kind = ''"))
+    conn.execute(text("UPDATE notes SET gpu_indices = '[]' WHERE gpu_indices IS NULL OR gpu_indices = ''"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_notes_expires_at ON notes (expires_at)"))
 
 
