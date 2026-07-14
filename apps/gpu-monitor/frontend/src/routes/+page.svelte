@@ -25,7 +25,8 @@
 	import ServerDeleteModal from '$lib/components/ServerDeleteModal.svelte';
 
 	type Tab = 'internal' | 'all' | 'external';
-	const HEADER_SCROLL_DELTA = 10;
+	const HEADER_SCROLL_DELTA = 6;
+	const HEADER_COMPACT_Y = 24;
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
 
@@ -280,7 +281,7 @@
 		headerPreviousY = currentY;
 
 		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-			headerCompact = currentY > 56;
+			headerCompact = currentY > HEADER_COMPACT_Y;
 			return;
 		}
 		if (currentY <= 12) {
@@ -298,7 +299,7 @@
 		headerScrollDistance += Math.abs(delta);
 		if (headerScrollDistance < HEADER_SCROLL_DELTA) return;
 
-		headerCompact = direction === 'down' && currentY > 56;
+		headerCompact = direction === 'down' && currentY > HEADER_COMPACT_Y;
 		headerScrollDistance = 0;
 	}
 
