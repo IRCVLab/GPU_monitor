@@ -30,7 +30,7 @@
   - Improve the existing original/default server-card dashboard first; do not replace it with a compact availability table in this scope.
   - Let researchers answer “Which server can I use right now?” without scanning every GPU row.
   - Preserve complete per-GPU ownership: every user name remains visible and wraps rather than truncating into misleading ownership.
-  - Surface GPU model, integer VRAM capacity, free/total GPU count, utilization, memory use, scope, and freshness at the level where they aid server choice.
+  - Surface GPU model, integer VRAM capacity, visual per-GPU availability, utilization, memory use, scope, and freshness at the level where they aid server choice; do not use visible textual availability counts such as `3 available`.
   - Keep internal/external/all scope, manual ordering, server CRUD, notes, logs, debug, filters, and live refresh behavior intact.
 - Non-goals:
   - Turning this into a fleet operations center, incident command dashboard, or general analytics product.
@@ -48,7 +48,7 @@
 - Primary personas: researchers choosing compute for training jobs; administrators maintaining server metadata and availability context
 - User jobs:
   - Choose an independent server to enter based on immediate available GPU capacity.
-  - Compare free/total GPU count, GPU model, VRAM, network scope, users, and freshness before starting work.
+  - Compare per-GPU availability cues, GPU model, VRAM, network scope, users, and freshness before starting work without relying on visible count text.
   - Identify single-user and shared-GPU occupancy without hidden names.
   - Check per-GPU utilization and memory when a server is a candidate.
   - Read notes that affect server choice, such as reservation, maintenance, or lab usage expectations.
@@ -72,7 +72,7 @@
 - Content hierarchy:
   1. Server choice and immediately available GPU capacity.
   2. Scope and server identity.
-  3. GPU model, VRAM, and free/total count.
+  3. GPU model, VRAM, and unboxed per-GPU availability dots.
   4. Per-GPU users, utilization, and memory.
   5. System/storage and notes.
   6. Administration and diagnostics.
@@ -97,20 +97,20 @@
   - Desktop keeps readable card widths before maximizing column count; tablet and mobile preserve full GPU row readability.
   - No CSS zoom. Density preferences adjust card width, spacing, and disclosure—not browser-scale typography.
 - Server header:
-  - Simplify to server name, small health dot/text, and essential availability/model context.
+  - Simplify to server name, small health dot/text, promoted GPU model/VRAM, and an unboxed per-GPU circular availability cue.
   - Show network only in All scope; omit it in Internal/External scopes because the scope already provides context.
   - Put IP address and refreshed time on one secondary line.
   - Edit/admin affordance appears on hover and focus-within, not as persistent header chrome; it must remain reachable on touch through an explicit menu/action.
 - GPU row hierarchy:
   - Users are emphasized as the key occupancy signal and remain visible/wrapping.
   - Utilization and memory align in fixed-width numeric columns with tabular numerals.
-  - GPU index is a small, flat, quiet `G#`; avoid pill clutter.
-  - Bars, borders, and row fills are quieter than user names and availability state.
-  - Shared occupancy may be indicated textually where helpful, but never as a global shared metric/badge competing with availability.
+  - Remove boxed `G#` labels; if GPU index remains visible, keep it inline and quieter than users/model/VRAM.
+  - Remove boxy/grid-like interiors, excessive dividers, equal-strength dual bars, and boxed footer sections; bars, borders, and row fills are quieter than user names, model/VRAM, and availability dots.
+  - One small circular dot represents each GPU near the promoted model/VRAM line: free uses the semantic availability/accent color, occupied/shared uses a quiet neutral; this replaces visible textual availability counts such as `3 available`.
   - Memory capacities and usage are integer GB.
 - Footer/system/notes:
-  - System telemetry, storage, notes, and related secondary details use one unified quiet footer/disclosure region.
-  - Footer content supports wrapping notes and avoids stacked glass panels.
+  - System telemetry, storage, notes, and related secondary details remain available but read as one quiet continuation of the card, not boxed footer sections.
+  - Footer content supports wrapping notes and avoids stacked glass panels, nested boxes, or equal-weight dividers.
 - Visual treatment:
   - Semantic restrained color: green for available/healthy, amber for delayed/degraded, red for offline/destructive, muted neutrals for full/occupied.
   - Larger outer radii, weak shadows, fewer pills, lower-contrast nested borders, and no glow/glass excess.
@@ -118,7 +118,7 @@
 - Default success criteria:
   - Researchers can choose a candidate server from cards without opening every card.
   - Unequal GPU counts do not create distracting layout holes.
-  - Every user name is visible, utilization/memory columns align, and capacity labels are integer GB.
+  - Every user name is visible, model/VRAM is prominent, availability is perceived from per-GPU dots, and capacity labels are integer GB.
   - Header chrome is calmer while health, IP, network-in-All, and freshness remain discoverable.
 
 ## Deferred future work: availability board
@@ -139,7 +139,7 @@
   - UI follows the reference system font stack: Segoe UI, Helvetica Neue, Helvetica, Lucida Grande, Arial, Ubuntu, Cantarell, Fira Sans, sans-serif.
   - Metrics use SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace.
   - Tabular numerals are mandatory for aligned telemetry.
-  - Server names and available capacity are strongest; host, timestamps, and labels are quieter.
+  - Server names, GPU model, VRAM, and visual availability cues are strongest; host, timestamps, and labels are quieter.
 - Spacing/layout rhythm:
   - 4px base unit.
   - Default main shell supports readable 360–400px cards and masonry flow.
@@ -167,8 +167,8 @@
   - Theme, dashboard preference, tab, server, and order stores.
 - New/changed components:
   - DefaultDashboardMasonry: masonry/equivalent card layout that preserves manual order semantics and avoids blank gaps.
-  - ServerCard shell: simplified header, health dot/text, summary counts, network only in All scope, contextual actions on hover/focus.
-  - GpuRow/GpuBar default rows: user-first row, fixed-width utilization/memory columns, flat `G#` index, wrapping users, integer memory labels, quiet bars.
+  - ServerCard shell: simplified header, health dot/text, promoted GPU model/VRAM, unboxed per-GPU availability dots instead of visible count text, network only in All scope, contextual actions on hover/focus.
+  - GpuRow/GpuBar default rows: user-first rows, no boxed `G#` labels, wrapping users, integer memory labels, and quieter utilization/memory telemetry that does not create equal-strength dual bars.
   - QuietServerFooter: unified system/storage/notes region.
   - MobileOverflowMenu: Manage entry points without crowding the header.
   - Deferred future work only: Compact availability-board component work is not current implementation scope.
@@ -194,7 +194,7 @@
   - Telemetry uses minimum readable sizes and tabular alignment.
 - Screen-reader semantics:
   - Dashboard summary uses live regions only for meaningful availability/freshness transitions.
-  - Default cards announce server name, status, free/total GPU count, model, freshness, and scope as applicable.
+  - Default cards visually avoid textual availability counts, but accessible names may summarize server name, status, available/total GPU count, model, freshness, and scope for screen-reader users.
   - GPU rows announce index, availability, utilization, memory, and all users.
   - Shared occupancy is explicit in GPU row text, not only badge color.
 - Reduced motion and sensory considerations:
@@ -208,7 +208,7 @@
   - Desktop: masonry/equivalent multi-column cards when width permits.
   - Tablet: two readable columns or masonry columns based on available width.
   - Mobile: one column, freshness first, scope scrollable, actions in one overflow menu.
-  - GPU metrics remain row one and users remain visible/wrapping at every width.
+  - Model/VRAM, availability dots, and users remain visible/wrapping at every width; telemetry stays secondary.
 - Deferred future layout:
   - Compact availability-board responsive behavior is out of current scope and must not drive acceptance now.
 - Touch/hover differences:
@@ -272,7 +272,7 @@
   - Svelte diagnostics and production build for implementation work.
   - Default dark desktop at 1440x1000 and light desktop at 1440x1000.
   - Default dark mobile at 390x844 and light mobile at 390x844.
-  - Default: masonry gaps, simplified headers, network only in All scope, hover/focus edit access, GPU row alignment, flat `G#` index, all-user wrapping, quiet bars, quiet footer, integer memory, restrained semantic color, fewer pills, weak borders/shadows, no glow/glass excess, and no CSS zoom.
+  - Default: masonry gaps, simplified headers, network only in All scope, hover/focus edit access, promoted model/VRAM, unboxed per-GPU availability dots with no visible `3 available`-style text, no boxed `G#` labels, all-user wrapping, quiet telemetry, quiet unboxed footer, integer memory, restrained semantic color, fewer pills, weak borders/shadows, no glow/glass excess, and no CSS zoom.
   - Reduced motion checks for hover, expansion, bar motion, and initial entry.
 
 ## Visual QA expectations
@@ -280,9 +280,9 @@
   - Compare desktop and mobile screenshots against this contract, not the compact reference.
   - Verify masonry/equivalent layout removes large blank space across unequal GPU counts.
   - Verify server header is simpler and calmer while preserving health, IP, refreshed time, and network-in-All behavior.
-  - Verify all user names wrap and remain visible; no ellipsis hides ownership.
-  - Verify utilization/memory columns align and memory capacities are integer GB.
-  - Verify footer combines system/notes into one quiet area without nested glass clutter.
+  - Verify all user names wrap and remain visible; no ellipsis hides ownership, including shared GPUs with multiple users.
+  - Verify model/VRAM is promoted, memory capacities are integer GB, and utilization/memory telemetry is secondary rather than equal-strength dual bars.
+  - Verify footer keeps system/notes functionality in one quiet area without boxed sections, nested glass clutter, or excessive dividers.
   - Verify semantic colors are restrained and pills/borders are reduced.
 - Deferred future QA:
   - Availability-board research/reference may be noted for future work only. Do not require Compact Visual Ralph, Compact screenshots, Compact implementation files, or Compact acceptance verdicts for this current default-card pass.
