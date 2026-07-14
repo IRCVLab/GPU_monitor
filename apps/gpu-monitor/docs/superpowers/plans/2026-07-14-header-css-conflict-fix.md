@@ -14,6 +14,18 @@ At 1440x1000 after intentional downward scroll:
 
 ## Root cause
 
+
+### Second browser verification round
+
+After the first tail-block removal and reload at 1440px with intentional down-scroll:
+
+- `.ops-header-shell` still had `ops-header-compact`.
+- Shell measured height remained `52px`.
+- `.ops-indicator-anchor` was now absolute and correctly positioned in the gutter.
+
+Additional root cause: an earlier obsolete `@layer` header block in `frontend/src/app.css` still defined component-owned header selectors, especially `@media (min-width: 1200px) { .ops-header-compact { height: 52px; ... } }`, plus duplicate `.ops-header-shell`, `.ops-header`, `.ops-header-inner`, status/actions/menu rules. This block also competes with `frontend/src/lib/styles/monitor-dashboard.css` and must be removed so the component stylesheet is the only active header owner.
+
+
 The active `frontend/src/lib/styles/monitor-dashboard.css` correctly defines an absolute, zero-layout indicator anchor and grid-row collapse. A historical header/indicator block at the end of `frontend/src/app.css` has equal-or-higher specificity and later effective cascade rules, including:
 
 - fixed `.ops-header-compact` heights,
@@ -40,6 +52,8 @@ Those legacy rules override the active design contract and keep occupying layout
 4. Move/retain the slow indicator breathing keyframes and reduced-motion rule in the component-owned stylesheet.
 5. Run targeted tests, all Node tests, `npm run check`, `npm run build`, and `git diff --check`.
 6. Re-run 1440px browser measurements and screenshots before continuing to soft holds.
+7. Remove the earlier obsolete `app.css` header block beginning at `/* Quiet control-plane header: compact surface, one segmented scope switcher. */` and ending before `.badge-online`, preserving adjacent dashboard/log/modal rules.
+8. Keep menu positioning/stacking and responsive expanded-header rhythm in `monitor-dashboard.css`; do not restore fixed compact shell height.
 
 ## Stop conditions
 
