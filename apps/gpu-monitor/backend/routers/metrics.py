@@ -81,6 +81,11 @@ async def get_all_server_status(db: AsyncSession = Depends(get_db)):
             from collectors.manager import get_current_state
         state = get_current_state()
         log_health = get_event_log_health()
+        try:
+            from ..config import get_settings
+        except ImportError:  # pragma: no cover - direct execution fallback
+            from config import get_settings
+        collectors_disabled = get_settings().monitoring_disable_collectors
 
         result = await db.execute(select(Server).order_by(Server.display_order, Server.id))
         for server in result.scalars().all():
@@ -96,13 +101,23 @@ async def get_all_server_status(db: AsyncSession = Depends(get_db)):
                 "network": server.network,
                 "display_order": server.display_order,
                 "offline_since": None,
-                "status_reason": {
-                    "code": "credentials_missing",
-                    "source": "collector",
-                    "message": "SSH credentials not configured",
-                    "retryable": True,
-                    "updated_at": None,
-                },
+                "status_reason": (
+                    {
+                        "code": "development_collectors_disabled",
+                        "source": "development",
+                        "message": "Development mode: GPU collectors are disabled",
+                        "retryable": False,
+                        "updated_at": None,
+                    }
+                    if collectors_disabled
+                    else {
+                        "code": "credentials_missing",
+                        "source": "collector",
+                        "message": "SSH credentials not configured",
+                        "retryable": True,
+                        "updated_at": None,
+                    }
+                ),
                 "gpus": [],
                 "system": None,
                 "storage": None,
