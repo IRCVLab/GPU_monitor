@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import type { ServerState, ServerStatus } from '$lib/types';
-	import { getLinuxUsernameInitials } from '$lib/utils/linuxUsernameInitials';
+	import type { GpuInfo, ServerState, ServerStatus } from '$lib/types';
+	import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
 
 	let {
 		server,
@@ -28,31 +28,18 @@
 		unknown: { label: '확인중' }
 	};
 
-	function formatHost(target: ServerState): string {
-		return target.port ? `${target.host}:${target.port}` : target.host;
-	}
+	const sortedGpus = $derived(server ? [...server.gpus].sort((a, b) => a.index - b.index) : []);
 
 	function formatNetwork(target: ServerState): string {
 		return target.network === 'external' ? '외부망' : '내부망';
 	}
 
-	function absoluteTime(value: string | null): string {
-		if (!value) return '업데이트 없음';
 
-		return new Intl.DateTimeFormat('ko-KR', {
-			hour: '2-digit',
-			minute: '2-digit',
-			second: '2-digit',
-			hour12: false
-		}).format(new Date(value));
-	}
-
-	function formatUtilization(value: number): number {
-		return Math.round(Math.min(100, Math.max(0, value)));
-	}
-
-	function formatMemory(value: number): number {
-		return Math.round(value / 1024);
+	function occupancyText(gpu: GpuInfo): string {
+		const state = server ? getCompactGpuState(server.status, server.last_seen, gpu) : 'unknown';
+		if (state === 'available') return 'Available';
+		if (state === 'unknown') return '상태 확인 필요';
+		return gpu.users.join(', ');
 	}
 
 	$effect(() => {
@@ -65,22 +52,16 @@
 	{#if server}
 		<div class="compact-detail__header">
 			<div class="compact-detail__identity">
-				<p class="compact-detail__eyebrow">
-					<span>{statusConfig[server.status]?.label ?? statusConfig.unknown.label}</span>
+				<div class="compact-detail__title-line">
+					<h2 id={titleId} class="compact-detail__title">{server.server_name}</h2>
+					<span class="compact-detail__status" data-status={server.status}>
+						<span class="compact-detail__status-dot" aria-hidden="true"></span>
+						<span>{statusConfig[server.status]?.label ?? statusConfig.unknown.label}</span>
+					</span>
 					{#if showNetwork}
-						<span aria-hidden="true">•</span>
-						<span>{formatNetwork(server)}</span>
+						<span class="compact-detail__network">{formatNetwork(server)}</span>
 					{/if}
-				</p>
-				<h2 id={titleId} class="compact-detail__title">{server.server_name}</h2>
-				<p class="compact-detail__meta">
-					<span class="compact-detail__host">{formatHost(server)}</span>
-					<span aria-hidden="true">•</span>
-					<span>{absoluteTime(server.last_seen)}</span>
-				</p>
-				{#if server.status_reason?.message}
-					<p class="compact-detail__reason">{server.status_reason.message}</p>
-				{/if}
+				</div>
 			</div>
 
 			<button bind:this={closeButton} type="button" class="compact-detail__close" onclick={onClose}>
@@ -89,44 +70,17 @@
 		</div>
 
 		<div class="compact-detail__gpu-list">
-			{#each server.gpus as gpu (gpu.index)}
-				<section class="compact-detail__gpu" aria-label={`GPU ${gpu.index} 상세`}>
-					<div class="compact-detail__gpu-head">
-						<div class="compact-detail__gpu-id">
-							<span class="compact-detail__gpu-slot">G{gpu.index}</span>
-							<span class="compact-detail__gpu-name">{gpu.name}</span>
-						</div>
-						<div class="compact-detail__gpu-metrics">
-							<span>{formatUtilization(gpu.utilization)}%</span>
-							<span>{formatMemory(gpu.memory_used)}/{formatMemory(gpu.memory_total)}GB</span>
-						</div>
-					</div>
-
-					<ul class="compact-detail__users">
-						{#if gpu.users.length > 0}
-							{#each gpu.users as user, index (`detail-${gpu.index}-${user}-${index}`)}
-								{@const badge = getLinuxUsernameInitials(user)}
-								<li class="compact-detail__user">
-									<span
-										class="compact-avatar compact-avatar--detail"
-										style={`--compact-avatar-hue: ${badge.seed % 360};`}
-									>
-										{badge.initials}
-									</span>
-									<span class="compact-detail__username">{user}</span>
-								</li>
-							{/each}
-						{:else}
-							<li class="compact-detail__empty">활성 사용자 없음</li>
-						{/if}
-					</ul>
-				</section>
+			{#each sortedGpus as gpu (gpu.index)}
+				<div class="compact-detail__gpu" data-state={server ? getCompactGpuState(server.status, server.last_seen, gpu) : 'unknown'} aria-label={`G${gpu.index}, ${occupancyText(gpu)}`}>
+					<span class="compact-detail__gpu-slot">G{gpu.index}</span>
+					<span class="compact-detail__gpu-occupancy">{occupancyText(gpu)}</span>
+				</div>
 			{/each}
 		</div>
 	{:else}
 		<div class="compact-detail__placeholder">
-			<h2 id={titleId} class="compact-detail__title">Compact 상세</h2>
-			<p>서버를 선택하면 GPU 사용자와 점유 상태를 자세히 볼 수 있습니다.</p>
+			<h2 id={titleId} class="compact-detail__title">Compact occupancy</h2>
+			<p>서버를 선택하면 점유 사용자만 빠르게 확인할 수 있습니다.</p>
 		</div>
 	{/if}
 </section>
