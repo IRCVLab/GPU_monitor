@@ -723,7 +723,7 @@
 				<p>{$activeTab === 'all' ? '표시할 서버가 없습니다' : '이 네트워크에 서버 없음'}</p>
 			</section>
 		{:else if $dashboardView === 'compact'}
-			<CompactDashboard servers={$currentServers} showNetwork={$activeTab === 'all'} {nowMs} />
+			<CompactDashboard servers={$currentServers} showNetwork={$activeTab === 'all'} />
 		{:else}
 			<div class="monitor-dashboard-grid" style={serverGridStyle} use:masonry role="list">
 				{#each $currentServers as server (server.server_id)}

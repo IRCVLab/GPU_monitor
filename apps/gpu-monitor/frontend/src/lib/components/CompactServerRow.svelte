@@ -1,21 +1,30 @@
 <script lang="ts">
 	import type { GpuInfo, ServerState, ServerStatus } from '$lib/types';
+	import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
 	import { getLinuxUsernameInitials } from '$lib/utils/linuxUsernameInitials';
+
+	type CompactTooltip = {
+		title: string;
+		users: string[];
+		hiddenUserCount: number;
+		left: number;
+		top: number;
+	};
 
 	let {
 		server,
 		selected = false,
 		showNetwork = false,
-		nowMs,
 		onSelect,
-		onRegisterRow = () => {}
+		onRegisterRow = () => {},
+		onTooltipChange = () => {}
 	}: {
 		server: ServerState;
 		selected?: boolean;
 		showNetwork?: boolean;
-		nowMs: number;
 		onSelect: (serverId: number) => void;
 		onRegisterRow?: (serverId: number, element: HTMLElement | null) => void;
+		onTooltipChange?: (tooltip: CompactTooltip | null) => void;
 	} = $props();
 
 	let rowEl = $state<HTMLButtonElement | null>(null);
@@ -27,47 +36,38 @@
 		unknown: { label: '확인중' }
 	};
 
-	function formatHost(target: ServerState): string {
-		return target.port ? `${target.host}:${target.port}` : target.host;
-	}
+	const sortedGpus = $derived([...server.gpus].sort((a, b) => a.index - b.index));
+	const slotColumnCount = $derived(Math.max(1, Math.min(sortedGpus.length, 8)));
 
 	function formatNetwork(target: ServerState): string {
 		return target.network === 'external' ? '외부망' : '내부망';
 	}
 
-	function relativeTime(value: string | null): string {
-		if (!value) return '업데이트 없음';
-		const parsed = Date.parse(value);
-		if (Number.isNaN(parsed)) return '업데이트 없음';
-		const diffSeconds = Math.max(0, Math.floor((nowMs - parsed) / 1000));
-		if (diffSeconds < 60) return `${diffSeconds}초 전`;
-		if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}분 전`;
-		return `${Math.floor(diffSeconds / 3600)}시간 전`;
-	}
 
-	function formatUtilization(value: number): number {
-		return Math.round(Math.min(100, Math.max(0, value)));
-	}
-
-	function formatMemory(value: number): number {
-		return Math.round(value / 1024);
+	function hiddenUserText(gpu: GpuInfo): string {
+		const hiddenUserCount = Math.max(0, gpu.users.length - 2);
+		return hiddenUserCount > 0 ? `, 미리보기 외 추가 사용자 ${hiddenUserCount}명` : '';
 	}
 
 	function slotAriaLabel(gpu: GpuInfo): string {
-		const users = gpu.users.length > 0 ? gpu.users.join(', ') : '사용자 없음';
-		return `G${gpu.index}, 사용자 ${users}, 사용률 ${formatUtilization(gpu.utilization)} 퍼센트, 메모리 ${formatMemory(gpu.memory_used)} / ${formatMemory(gpu.memory_total)} 기가바이트`;
+		const state = getCompactGpuState(server.status, server.last_seen, gpu);
+		if (state === 'available') {
+			return `G${gpu.index}, 사용 가능`;
+		}
+		if (state === 'unknown') {
+			return `G${gpu.index}, 상태 확인 필요`;
+		}
+		return `G${gpu.index}, 사용자 ${gpu.users.join(', ')}${hiddenUserText(gpu)}`;
 	}
 
 	function rowAriaLabel(target: ServerState): string {
 		const segments = [
 			target.server_name,
-			statusConfig[target.status]?.label ?? statusConfig.unknown.label,
-			formatHost(target),
-			relativeTime(target.last_seen)
+			statusConfig[target.status]?.label ?? statusConfig.unknown.label
 		];
 
 		if (showNetwork) {
-			segments.splice(2, 0, formatNetwork(target));
+			segments.push(formatNetwork(target));
 		}
 
 		return segments.join(' · ');
@@ -77,11 +77,20 @@
 		onSelect(server.server_id);
 	}
 
-	function handleKeydown(event: KeyboardEvent): void {
-		if (event.currentTarget !== event.target) return;
-		if (event.key !== 'Enter' && event.key !== ' ') return;
-		event.preventDefault();
-		activateRow();
+	function showTooltip(gpu: GpuInfo, target: EventTarget | null): void {
+		if (!(target instanceof HTMLElement)) return;
+		const rect = target.getBoundingClientRect();
+		onTooltipChange({
+			title: `G${gpu.index}`,
+			users: [...gpu.users],
+			hiddenUserCount: Math.max(0, gpu.users.length - 2),
+			left: rect.left + rect.width / 2 - 88,
+			top: rect.bottom + 8
+		});
+	}
+
+	function hideTooltip(): void {
+		onTooltipChange(null);
 	}
 
 	$effect(() => {
@@ -100,7 +109,6 @@
 		aria-pressed={selected}
 		aria-label={rowAriaLabel(server)}
 		onclick={activateRow}
-		onkeydown={handleKeydown}
 	></button>
 
 	<div class="compact-row__identity">
@@ -110,41 +118,46 @@
 				<span class="compact-row__status-dot" aria-hidden="true"></span>
 				<span>{statusConfig[server.status]?.label ?? statusConfig.unknown.label}</span>
 			</span>
-		</div>
-
-		<p class="compact-row__meta">
-			<span class="compact-row__host">{formatHost(server)}</span>
 			{#if showNetwork}
-				<span aria-hidden="true">•</span>
-				<span>{formatNetwork(server)}</span>
+				<span class="compact-row__network">{formatNetwork(server)}</span>
 			{/if}
-			<span aria-hidden="true">•</span>
-			<span>{relativeTime(server.last_seen)}</span>
-		</p>
-
-		{#if server.status_reason?.message}
-			<p class="compact-row__reason">{server.status_reason.message}</p>
-		{/if}
+		</div>
 	</div>
 
-	<div class="compact-row__slots" aria-label={`${server.server_name} GPU 슬롯`}>
-		{#each server.gpus as gpu (gpu.index)}
+	<div class="compact-row__slots" style={`--compact-slot-columns: ${slotColumnCount};`} aria-label={`${server.server_name} GPU 슬롯`}>
+		{#each sortedGpus as gpu (gpu.index)}
 			{@const visibleUsers = gpu.users.slice(0, 2)}
 			{@const hiddenUserCount = Math.max(0, gpu.users.length - 2)}
-			{@const tooltipId = `compact-slot-tooltip-${server.server_id}-${gpu.index}`}
-			<div class="compact-slot" data-active={gpu.users.length > 0 ? 'true' : 'false'} role="group" aria-label={slotAriaLabel(gpu)}>
-				<div class="compact-slot__head">
-					<span class="compact-slot__label">G{gpu.index}</span>
-					<span class="compact-slot__metric">{formatUtilization(gpu.utilization)}%</span>
-				</div>
+			{@const state = getCompactGpuState(server.status, server.last_seen, gpu)}
+			<div
+				class="compact-slot"
+				data-state={state}
+				data-available={state === 'available' ? 'true' : 'false'}
+				role="group"
+				aria-label={slotAriaLabel(gpu)}
+			>
+				<span class="compact-slot__label">G{gpu.index}</span>
 
 				<div class="compact-slot__preview">
-					{#if gpu.users.length > 0}
+					{#if state === 'available'}
+						<span class="compact-slot__free" aria-hidden="true">
+							<span class="compact-slot__free-dot"></span>
+						</span>
+						<span class="sr-only">사용 가능한 GPU 슬롯</span>
+					{:else if state === 'unknown'}
+						<span class="compact-slot__unknown" aria-hidden="true">
+							<span class="compact-slot__unknown-dot"></span>
+						</span>
+						<span class="sr-only">상태 확인이 필요한 GPU 슬롯</span>
+					{:else}
 						<button
 							type="button"
 							class="compact-slot__users"
 							aria-label={slotAriaLabel(gpu)}
-							aria-describedby={tooltipId}
+							onmouseenter={(event) => showTooltip(gpu, event.currentTarget)}
+							onmouseleave={hideTooltip}
+							onfocus={(event) => showTooltip(gpu, event.currentTarget)}
+							onblur={hideTooltip}
 							onclick={activateRow}
 						>
 							<span class="compact-avatar-stack" aria-hidden="true">
@@ -161,27 +174,13 @@
 									<span class="compact-avatar-count">+{hiddenUserCount}</span>
 								{/if}
 							</span>
-							<span class="sr-only">{gpu.users.join(', ')}</span>
+							<span class="sr-only">
+								{gpu.users.join(', ')}{hiddenUserCount > 0 ? `. 미리보기 외 추가 사용자 ${hiddenUserCount}명.` : ''}
+							</span>
 						</button>
-
-						<div id={tooltipId} role="tooltip" class="compact-slot__tooltip">
-							<p class="compact-slot__tooltip-label">G{gpu.index}</p>
-							<ul class="compact-slot__tooltip-list">
-								{#each gpu.users as user, index (`tooltip-${gpu.index}-${user}-${index}`)}
-									<li>{user}</li>
-								{/each}
-							</ul>
-						</div>
-					{:else}
-						<span class="compact-slot__empty" aria-hidden="true">
-							<span class="compact-slot__empty-dot"></span>
-						</span>
-						<span class="sr-only">사용 가능한 GPU 슬롯</span>
 					{/if}
 				</div>
 			</div>
 		{/each}
 	</div>
-
-	<div class="compact-row__chevron" aria-hidden="true">›</div>
 </article>
