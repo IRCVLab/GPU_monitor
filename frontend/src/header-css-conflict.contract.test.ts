@@ -25,9 +25,32 @@ function declarationBlock(css, selectorPart, property) {
 	return block.declarations;
 }
 
+test('app.css does not define component-owned header selectors', () => {
+	const componentHeaderSelectors = [
+		'.ops-header-shell',
+		'.ops-header',
+		'.ops-header-inner',
+		'.ops-header-compact'
+	];
+	const activeHeaderDefinitions = cssBlocks(appCss).filter((block) =>
+		componentHeaderSelectors.some((selector) =>
+			block.selector
+				.split(',')
+				.map((part) => part.trim())
+				.some((part) => part.startsWith(selector))
+		)
+	);
+
+	assert.deepEqual(
+		activeHeaderDefinitions.map((block) => block.selector),
+		[],
+		'app.css must not define component-owned header shell/header/inner/compact selectors'
+	);
+});
+
 test('app.css does not retain legacy compact header fixed-height overrides', () => {
 	const fixedHeightOverrides = blocksContaining(appCss, '.ops-header-compact').filter((block) =>
-		/\bheight\s*:\s*(?:48|54|64)px\b/.test(block.declarations)
+		/\bheight\s*:\s*(?:48|52|54|64)px\b/.test(block.declarations)
 	);
 
 	assert.deepEqual(
@@ -85,6 +108,14 @@ test('monitor-dashboard.css owns compact header rhythm and absolute indicator pl
 	const indicator = declarationBlock(dashboardCss, '.ops-indicator', 'transform');
 	assert.match(indicator, /margin-left\s*:\s*auto\b/, 'indicator is pushed to the right gutter');
 	assert.match(indicator, /transform\s*:\s*translateX\(calc\(2\.5rem \+ 0\.5rem\)\)/, 'indicator sits outside the content edge');
+});
+
+test('monitor-dashboard.css owns header menu positioning and stacking', () => {
+	const menu = declarationBlock(dashboardCss, '.ops-view-menu', 'position');
+	assert.match(menu, /position\s*:\s*absolute(?:;|\s)/, 'header menus are absolutely positioned by the component stylesheet');
+	assert.match(menu, /top\s*:\s*calc\(100% \+ 0\.6rem\)/, 'header menus are anchored below their controls');
+	assert.match(menu, /right\s*:\s*0(?:;|\s)/, 'header menus align to their control edge');
+	assert.match(menu, /z-index\s*:\s*60(?:;|\s)/, 'header menus retain component-owned stacking above dashboard content');
 });
 
 test('monitor-dashboard.css owns slow indicator breathing and reduced motion', () => {
