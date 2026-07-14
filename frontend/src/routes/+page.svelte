@@ -19,6 +19,13 @@
 	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import { dashboardView, setDashboardView } from '$lib/stores/dashboardPrefs';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
+	import {
+		HEADER_INDICATOR_TOP_MAX_PX,
+		HEADER_INDICATOR_TOP_MIN_PX,
+		HEADER_OUTER_GUTTER_MIN_PX,
+		type HeaderScrollDirection,
+		updateHeaderVisibility
+	} from '$lib/utils/headerVisibility';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
 	import { getServerStatus, getServers } from '$lib/api';
 	import type { ServerRecord, ServerState } from '$lib/types';
@@ -29,8 +36,6 @@
 	import ServerDeleteModal from '$lib/components/ServerDeleteModal.svelte';
 
 	type Tab = 'internal' | 'all' | 'external';
-	const HEADER_SCROLL_DELTA = 6;
-	const HEADER_COMPACT_Y = 24;
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
 
@@ -119,9 +124,10 @@
 	let refreshInFlight = $state(false);
 	let refreshFailed = $state(false);
 	let headerCompact = $state(false);
+	let headerIndicatorVisible = $state(false);
 	let headerScrollFrame: number | null = null;
 	let headerPreviousY = 0;
-	let headerScrollDirection: 'up' | 'down' | null = null;
+	let headerScrollDirection: HeaderScrollDirection = null;
 	let headerScrollDistance = 0;
 	let retryingInitialLoad = $state(false);
 	const POLL_REFRESH_MS = 10_000;
@@ -341,35 +347,35 @@
 
 	function revealHeader(): void {
 		headerCompact = false;
+		headerIndicatorVisible = false;
+	}
+
+	function headerHasOuterGutter(viewportWidth: number): boolean {
+		const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+		const maxShellWidth = 80 * (Number.isFinite(rootFontSize) ? rootFontSize : 16);
+		const shellWidth = Math.min(viewportWidth, maxShellWidth);
+		return (viewportWidth - shellWidth) / 2 >= HEADER_OUTER_GUTTER_MIN_PX;
 	}
 
 	function updateHeaderFromScroll(): void {
 		headerScrollFrame = null;
 		const currentY = Math.max(0, window.scrollY);
-		const delta = currentY - headerPreviousY;
-		headerPreviousY = currentY;
+		const result = updateHeaderVisibility({
+			currentY,
+			previousY: headerPreviousY,
+			direction: headerScrollDirection,
+			accumulatedDelta: headerScrollDistance,
+			currentCompact: headerCompact,
+			reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+			hasOuterGutter: headerHasOuterGutter(window.innerWidth),
+			viewportWidth: window.innerWidth
+		});
 
-		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-			headerCompact = currentY > HEADER_COMPACT_Y;
-			return;
-		}
-		if (currentY <= 12) {
-			headerCompact = false;
-			headerScrollDirection = null;
-			headerScrollDistance = 0;
-			return;
-		}
-		if (Math.abs(delta) < 1) return;
-		const direction = delta > 0 ? 'down' : 'up';
-		if (direction !== headerScrollDirection) {
-			headerScrollDirection = direction;
-			headerScrollDistance = 0;
-		}
-		headerScrollDistance += Math.abs(delta);
-		if (headerScrollDistance < HEADER_SCROLL_DELTA) return;
-
-		headerCompact = direction === 'down' && currentY > HEADER_COMPACT_Y;
-		headerScrollDistance = 0;
+		headerCompact = result.compact;
+		headerIndicatorVisible = result.indicatorVisible;
+		headerPreviousY = result.nextPreviousY;
+		headerScrollDirection = result.nextDirection;
+		headerScrollDistance = result.nextAccumulatedDelta;
 	}
 
 	function handleHeaderScroll(): void {
@@ -599,13 +605,14 @@
 	const pageShellClass = 'max-w-7xl mx-auto';
 	const pageMainClass = 'max-w-7xl mx-auto px-4 py-4 sm:px-6';
 	const serverGridStyle = '--monitor-dashboard-card-min: 22rem;';
+	const headerIndicatorStyle = `--ops-indicator-top-min: ${HEADER_INDICATOR_TOP_MIN_PX}px; --ops-indicator-top-max: ${HEADER_INDICATOR_TOP_MAX_PX}px;`;
 </script>
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
 
 <div class="dashboard-page min-h-screen bg-surface">
-	<div class="ops-header-shell" class:ops-header-compact={headerCompact}>
-		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerCompact}>
+	<div class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible}>
+		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerIndicatorVisible} style={headerIndicatorStyle}>
 			<div class="ops-indicator">
 				<button
 					class="ops-indicator-trigger"

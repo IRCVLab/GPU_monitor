@@ -6,12 +6,42 @@
 	position: sticky;
 	top: 0;
 	z-index: 30;
+	display: grid;
+	grid-template-rows: 1fr;
 	backdrop-filter: blur(18px);
+	background: color-mix(in srgb, var(--ops-bg) 78%, transparent);
+	transition: grid-template-rows 180ms ease, background-color 180ms ease;
+}
+
+.ops-header-shell.ops-header-compact {
+	grid-template-rows: 0fr;
+	background: transparent;
+}
+
+.ops-header-shell.ops-header-compact:hover,
+.ops-header-shell.ops-header-compact:focus-within {
+	grid-template-rows: 1fr;
 	background: color-mix(in srgb, var(--ops-bg) 78%, transparent);
 }
 
 .ops-header {
+	min-height: 0;
+	overflow: hidden;
 	background: color-mix(in srgb, var(--ops-bg) 84%, transparent);
+	opacity: 1;
+	transform: translateY(0);
+	transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.ops-header-shell.ops-header-compact .ops-header {
+	opacity: 0;
+	transform: translateY(-0.75rem);
+}
+
+.ops-header-shell.ops-header-compact:hover .ops-header,
+.ops-header-shell.ops-header-compact:focus-within .ops-header {
+	opacity: 1;
+	transform: translateY(0);
 }
 
 .ops-header-inner {
@@ -25,8 +55,8 @@
 }
 
 .ops-header-compact .ops-header-inner {
-	min-height: 4.4rem;
-	padding-block: 0.65rem;
+	min-height: 5.25rem;
+	padding-block: 0.85rem;
 }
 
 .ops-identity {
@@ -177,14 +207,20 @@
 .ops-indicator-anchor {
 	position: absolute;
 	inset-inline: 0;
-	top: 0.55rem;
+	top: clamp(var(--ops-indicator-top-min, 12px), 1vw, var(--ops-indicator-top-max, 16px));
+	display: none;
 	pointer-events: none;
+}
+
+.ops-header-shell.ops-header-indicator-visible .ops-indicator-anchor {
+	display: block;
 }
 
 .ops-indicator {
 	position: relative;
 	display: flex;
 	justify-content: flex-end;
+	transform: translateX(calc(100% + 0.5rem));
 }
 
 .ops-indicator-trigger {
@@ -446,6 +482,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+	.ops-header-shell,
+	.ops-header,
 	.ops-header-inner,
 	.ops-network button,
 	.ops-indicator-network button,
