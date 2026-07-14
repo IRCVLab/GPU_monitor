@@ -14,14 +14,12 @@
 	let {
 		server,
 		selected = false,
-		showNetwork = false,
 		onSelect,
 		onRegisterRow = () => {},
 		onTooltipChange = () => {}
 	}: {
 		server: ServerState;
 		selected?: boolean;
-		showNetwork?: boolean;
 		onSelect: (serverId: number) => void;
 		onRegisterRow?: (serverId: number, element: HTMLElement | null) => void;
 		onTooltipChange?: (tooltip: CompactTooltip | null) => void;
@@ -37,12 +35,6 @@
 	};
 
 	const sortedGpus = $derived([...server.gpus].sort((a, b) => a.index - b.index));
-	const slotColumnCount = $derived(Math.max(1, Math.min(sortedGpus.length, 8)));
-
-	function formatNetwork(target: ServerState): string {
-		return target.network === 'external' ? '외부망' : '내부망';
-	}
-
 
 	function hiddenUserText(gpu: GpuInfo): string {
 		const hiddenUserCount = Math.max(0, gpu.users.length - 2);
@@ -65,10 +57,6 @@
 			target.server_name,
 			statusConfig[target.status]?.label ?? statusConfig.unknown.label
 		];
-
-		if (showNetwork) {
-			segments.push(formatNetwork(target));
-		}
 
 		return segments.join(' · ');
 	}
@@ -118,13 +106,10 @@
 				<span class="compact-row__status-dot" aria-hidden="true"></span>
 				<span>{statusConfig[server.status]?.label ?? statusConfig.unknown.label}</span>
 			</span>
-			{#if showNetwork}
-				<span class="compact-row__network">{formatNetwork(server)}</span>
-			{/if}
 		</div>
 	</div>
 
-	<div class="compact-row__slots" style={`--compact-slot-columns: ${slotColumnCount};`} aria-label={`${server.server_name} GPU 슬롯`}>
+	<div class="compact-row__slots" aria-label={`${server.server_name} GPU 슬롯`}>
 		{#each sortedGpus as gpu (gpu.index)}
 			{@const visibleUsers = gpu.users.slice(0, 2)}
 			{@const hiddenUserCount = Math.max(0, gpu.users.length - 2)}

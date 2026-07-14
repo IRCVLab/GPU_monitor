@@ -15,11 +15,9 @@
 	};
 
 	let {
-		servers,
-		showNetwork = false
+		servers
 	}: {
 		servers: ServerState[];
-		showNetwork?: boolean;
 	} = $props();
 
 	const DESKTOP_MEDIA_QUERY = '(min-width: 1200px)';
@@ -27,7 +25,6 @@
 	const TOOLTIP_VIEWPORT_MARGIN = 12;
 
 	let selectedServerId = $state<number | null>(null);
-	let mobileSheetOpen = $state(false);
 	let lastTriggerRowId = $state<number | null>(null);
 	let isDesktop = $state(false);
 	let rowRefs = new Map<number, HTMLElement>();
@@ -50,9 +47,6 @@
 	function openServer(serverId: number): void {
 		selectedServerId = serverId;
 		lastTriggerRowId = serverId;
-		if (!isDesktop) {
-			mobileSheetOpen = true;
-		}
 	}
 
 	async function restoreFocus(): Promise<void> {
@@ -62,19 +56,8 @@
 	}
 
 	function closeSelection(): void {
+		activeTooltip = null;
 		selectedServerId = null;
-	}
-
-	function closeDesktopDetail(): void {
-		activeTooltip = null;
-		closeSelection();
-		void restoreFocus();
-	}
-
-	function closeMobileSheet(): void {
-		activeTooltip = null;
-		mobileSheetOpen = false;
-		closeSelection();
 		void restoreFocus();
 	}
 
@@ -98,14 +81,9 @@
 
 	function handleWindowKeydown(event: KeyboardEvent): void {
 		if (event.key !== 'Escape') return;
-		if (mobileSheetOpen) {
+		if (selectedServerId !== null) {
 			event.preventDefault();
-			closeMobileSheet();
-			return;
-		}
-		if (isDesktop && selectedServerId !== null) {
-			event.preventDefault();
-			closeDesktopDetail();
+			closeSelection();
 		}
 	}
 
@@ -119,9 +97,6 @@
 		const media = window.matchMedia(DESKTOP_MEDIA_QUERY);
 		const updateLayout = (): void => {
 			isDesktop = media.matches;
-			if (media.matches) {
-				mobileSheetOpen = false;
-			}
 		};
 
 		updateLayout();
@@ -139,7 +114,6 @@
 		if (selectedServerId === null) return;
 		if (servers.some((server) => server.server_id === selectedServerId)) return;
 		selectedServerId = null;
-		mobileSheetOpen = false;
 		activeTooltip = null;
 	});
 </script>
@@ -152,7 +126,6 @@
 			<div role="listitem">
 				<CompactServerRow
 					{server}
-					{showNetwork}
 					selected={selectedServerId === server.server_id}
 					onSelect={openServer}
 					onRegisterRow={registerRow}
@@ -162,15 +135,16 @@
 		{/each}
 	</div>
 
-	<aside class="compact-dashboard__detail-panel">
-		<CompactServerDetail
-			server={selectedServer}
-			{showNetwork}
-			onClose={closeDesktopDetail}
-			titleId="compact-detail-title-desktop"
-			mode="panel"
-		/>
-	</aside>
+	{#if selectedServer && isDesktop}
+		<div class="compact-detail-overlay">
+			<CompactServerDetail
+				server={selectedServer}
+				mode="overlay"
+				titleId="compact-detail-title-desktop"
+				onClose={closeSelection}
+			/>
+		</div>
+	{/if}
 
 	{#if activeTooltip}
 		<div
@@ -191,17 +165,16 @@
 	{/if}
 </div>
 
-{#if mobileSheetOpen && selectedServer}
+{#if selectedServer && !isDesktop}
 	<div class="compact-sheet-backdrop">
-		<button type="button" class="compact-sheet-dismiss" aria-label="상세 닫기" onclick={closeMobileSheet}></button>
+		<button type="button" class="compact-sheet-dismiss" aria-label="상세 닫기" onclick={closeSelection}></button>
 		<div class="compact-sheet" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="compact-detail-title-mobile">
 			<CompactServerDetail
 				server={selectedServer}
-				{showNetwork}
-				onClose={closeMobileSheet}
-				titleId="compact-detail-title-mobile"
 				mode="sheet"
+				titleId="compact-detail-title-mobile"
 				autofocusClose={true}
+				onClose={closeSelection}
 			/>
 		</div>
 	</div>
