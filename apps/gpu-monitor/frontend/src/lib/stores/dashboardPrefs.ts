@@ -1,12 +1,13 @@
 import { writable } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 import { readCookie, writeCookie } from '$lib/utils/cookies';
+import type { DashboardView } from '$lib/utils/dashboardViewLabel';
 
-export type DashboardView = 'default' | 'compact';
+export type { DashboardView } from '$lib/utils/dashboardViewLabel';
 
 const DASHBOARD_VIEW_COOKIE = 'dashboardView';
 
-function readDashboardView(): DashboardView {
+export function readDashboardView(): DashboardView {
 	const value = readCookie(DASHBOARD_VIEW_COOKIE);
 	return value === 'compact' ? 'compact' : 'default';
 }
