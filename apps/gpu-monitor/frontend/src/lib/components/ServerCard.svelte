@@ -200,6 +200,7 @@
     if (gpuStatusIsStale()) return `총 ${server.gpus.length}개 GPU 상태 미확인`;
     return `총 ${server.gpus.length}개 중 사용 가능 ${freeGpuCount}개`;
   });
+  const hasFreeGpuAccent = $derived(!gpuStatusIsStale() && freeGpuCount > 0);
   const serverCardAriaLabel = $derived.by(() => {
     const parts = [server.server_name, statusMeta.label];
 
@@ -335,6 +336,7 @@
 <article
   class="monitor-card bg-surface-card border border-surface-border"
   data-status={server.status}
+  data-has-free-gpu={hasFreeGpuAccent ? 'true' : 'false'}
   aria-label={serverCardAriaLabel}
 >
   <header class="monitor-card__header">
