@@ -1,7 +1,13 @@
 <script lang="ts">
   import type { GpuInfo } from '$lib/types';
 
-  let { gpu }: { gpu: GpuInfo } = $props();
+  type AdvisoryHoldCue = {
+    owner: string;
+    remaining: string;
+    memo: string;
+  };
+
+  let { gpu, advisoryHolds = [] }: { gpu: GpuInfo; advisoryHolds?: AdvisoryHoldCue[] } = $props();
 
   const memUsedGB = $derived(Math.round(gpu.memory_used / 1024));
   const memTotalGB = $derived(Math.round(gpu.memory_total / 1024));
@@ -13,9 +19,21 @@
       : 0
   );
   const isActive = $derived(gpu.users.length > 0);
+  const primaryHold = $derived(advisoryHolds[0] ?? null);
+  const holdDetailText = $derived.by(() =>
+    advisoryHolds
+      .map((hold, index) => {
+        const detail = [`HOLD ${index + 1}`, hold.owner];
+        if (hold.remaining) detail.push(hold.remaining);
+        if (hold.memo) detail.push(hold.memo);
+        return detail.join(' · ');
+      })
+      .join('; ')
+  );
+  const holdAriaDetail = $derived(holdDetailText ? `, advisory ${holdDetailText}` : '');
   const gpuAriaLabel = $derived.by(() => {
     const usage = gpu.users.length > 0 ? gpu.users.join(', ') : 'idle';
-    return `GPU ${gpu.index}, users ${usage}, utilization ${utilValue} percent, memory ${memUsedGB} of ${memTotalGB} gigabytes`;
+    return `GPU ${gpu.index}, users ${usage}, utilization ${utilValue} percent, memory ${memUsedGB} of ${memTotalGB} gigabytes${holdAriaDetail}`;
   });
 </script>
 
@@ -30,6 +48,12 @@
         {/each}
       {:else}
         <span class="monitor-gpu-row__idle">idle</span>
+      {/if}
+
+      {#if primaryHold}
+        <span class="monitor-gpu-row__hold-cue" title={holdDetailText} aria-label={holdDetailText}>
+          HOLD {primaryHold.owner}{#if advisoryHolds.length > 1} +{advisoryHolds.length - 1}{/if}
+        </span>
       {/if}
     </div>
 

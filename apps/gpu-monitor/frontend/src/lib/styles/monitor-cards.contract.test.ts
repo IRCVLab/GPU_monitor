@@ -133,3 +133,14 @@ test('GPU chip hover has focus-visible and reduced-motion coverage', () => {
 	assert.match(css, /\.note-form-gpu-chip:focus-visible[\s\S]*box-shadow/);
 	assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.note-form-gpu-chip:hover[\s\S]*transform:\s*none/);
 });
+
+test('GPU advisory hold cue is dense visible text with subtle noninteractive styling', () => {
+	const rule = cssRule('.monitor-gpu-row__hold-cue');
+	assert.match(rule, /display:\s*inline-flex/);
+	assert.match(rule, /font-size:\s*0\.6[0-9]rem/);
+	assert.match(rule, /line-height:\s*1/);
+	assert.match(rule, /pointer-events:\s*none/);
+	assert.doesNotMatch(rule, /min-height:\s*(?:1\.[2-9]|[2-9])/);
+	assert.match(rule, /color:\s*color-mix\(in srgb, #f59e0b/);
+	assert.match(css, /\.monitor-gpu-row__users[\s\S]*align-items:\s*center/);
+});
