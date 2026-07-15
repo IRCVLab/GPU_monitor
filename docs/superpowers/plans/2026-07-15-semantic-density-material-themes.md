@@ -10,6 +10,16 @@
 
 ---
 
+## Implementation audit, 2026-07-16 KST
+
+- Task 2 is completed by `bf28961` and nullable frontend alignment in `0c87ccc`: optional Linux PSI I/O pressure fields and backend tests exist.
+- Task 3 is partial by `2823fcb`: collapsed System/Memo/Hold hierarchy, explicit Korean expiry, and Full hold collar are present, but System and Memo disclosure panels still need symmetric close motion rather than conditional unmount.
+- Task 4 is completed by `c245313`: Compact row activation, pointer-transparent identity hint, held-cell collar, and manual-order protections are implemented.
+- Acceptance remains perceptual legibility in the running dashboard, not merely the presence of code, selectors, or tests.
+- Complete Task 4a before starting material presets so disclosure motion is resolved while the card hierarchy is still the active workstream.
+
+---
+
 ### Task 1: Verify the documented design contract
 
 **Files:**
@@ -22,6 +32,8 @@
 - [x] Commit the documentation before implementation.
 
 ### Task 2: Add Linux PSI I/O pressure through TDD
+
+**Audit status:** Completed by `bf28961` and `0c87ccc`; keep the checklist as historical implementation evidence.
 
 **Files:**
 - Create: `backend/tests/test_system_metrics.py`
@@ -38,6 +50,8 @@
 - [ ] Commit.
 
 ### Task 3: Rebuild collapsed System, Memo, and Hold hierarchy through TDD
+
+**Audit status:** Partial by `2823fcb`; hierarchy is implemented, but mounted symmetric disclosure motion is split into Task 4a.
 
 **Files:**
 - Modify: `frontend/src/lib/components/ServerCard.svelte`
@@ -57,6 +71,8 @@
 
 ### Task 4: Make Compact interaction purposeful through TDD
 
+**Audit status:** Completed by `c245313`; validate perceptual legibility in browser QA.
+
 **Files:**
 - Modify: `frontend/src/lib/components/CompactServerRow.svelte`
 - Modify: `frontend/src/lib/components/CompactDashboard.svelte`
@@ -69,6 +85,23 @@
 - [ ] Keep exact GPU, owner, state, and hold context only.
 - [ ] Strengthen held-cell collar using the same shape language as Full.
 - [ ] Verify server order is unchanged, run tests, and commit.
+
+### Task 4a: Make System and Memo disclosure close motion symmetric through TDD
+
+**Files:**
+- Modify: `frontend/src/lib/components/ServerCard.svelte`
+- Modify: `frontend/src/lib/styles/monitor-cards.css`
+- Modify: `frontend/src/lib/components/ServerCard.note-contract.test.ts`
+- Modify: `frontend/src/lib/styles/monitor-cards.contract.test.ts`
+
+- [ ] Write failing assertions that System and Memo panels remain mounted for both open and closed states, expose `aria-expanded` accurately, and do not rely on `display` toggling for the close animation.
+- [ ] Verify RED with the targeted ServerCard and monitor-card style contracts.
+- [ ] Replace conditional panel unmount with a disclosure wrapper that transitions intrinsic height, preferably `grid-template-rows: 0fr -> 1fr`, plus opacity and a slight `translateY`.
+- [ ] Keep closing content mounted until the transition ends; after the transition, only disable visibility, focus, or pointer interaction as needed.
+- [ ] Respect `prefers-reduced-motion` with an immediate state change.
+- [ ] Do not animate `top` or hard-coded `max-height`.
+- [ ] Verify System and Memo open and close with the same perceived smoothness before proceeding to material presets.
+- [ ] Run targeted tests and commit.
 
 ### Task 5: Replace color themes with material presets through TDD
 
