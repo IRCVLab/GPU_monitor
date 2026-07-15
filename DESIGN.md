@@ -59,8 +59,8 @@
   - Make Compact an availability-only fixed-column rack with one shared GPU header, one server per row, no large detail surface, and no ordinary horizontal/page scrolling.
   - Add phase-1 advisory GPU soft holds as a backward-compatible Note extension only.
 - Non-goals:
-  - Slack profiles, Slack avatars, Linux-to-Slack mapping, email matching, hard scheduling, hard locks, share/export, new dependencies, collector changes, WebSocket payload changes, production repo edits, pushes, and deployment.
-  - Density setting UI, density cookies, layout-width preference, generic bootstrap code, full-screen reveal effects, and standalone gradient/surface-opacity tokens.
+  - Slack profiles, Slack avatars, Linux-to-Slack mapping, email matching, hard scheduling, hard locks, share/export, new dependencies, WebSocket protocol changes, production repo edits, pushes, and deployment.
+  - Density setting UI, density cookies, layout-width preference, generic bootstrap code, and standalone unrelated gradient/surface-opacity tokens.
 - Success signals:
   - Researchers can scan visible servers in manual order and distinguish free, occupied, unknown, and stale states without opening a persistent rail.
   - Exact `G#`, integer memory, and full usernames remain available.
@@ -131,7 +131,7 @@
 - Motion:
   - Restrained 140-240ms transitions.
   - Scroll handlers use `requestAnimationFrame` and thresholding.
-  - Existing immediate theme mode switch remains; generic 600ms circular reveal is not required.
+  - Light/dark mode uses a button-centered circular reveal with reduced-motion fallback; material preset changes remain immediate and restrained.
   - Slower status breathing only where it does not distract.
 - Imagery/iconography:
   - Deterministic initials are functional identity marks.
@@ -246,6 +246,19 @@ letter-spacing 0em
   - Tokens live in global CSS/theme layers.
   - Component CSS consumes semantic tokens and may use color-mix frost only for header, popover, and selected surfaces.
   - No new design-system layer or dependency.
+
+## Semantic density refinement (2026-07-15)
+
+- Collapsed System and Memo have no decorative leading circle.
+- Healthy server identity, host/IP, freshness, and edit action share one compact line.
+- Collapsed System is one baseline: CPU, RAM, PSI I/O pressure, and disk capacity. Expanded detail explains PSI and may show full pressure and blocked tasks.
+- Memo reads owner, authored content, then explicit Korean expiry. Hold reads exact GPUs, owner, reason, then expiry.
+- A hold overlays a warm collar/notch on the exact GPU in both Full and Compact without changing telemetry state.
+- Compact row activation opens Full. GPU hover/focus is a non-interactive, pointer-transparent identity hint and contains no nested navigation.
+- The expanded header freshness orb morphs toward the collapsed indicator. Its detail panel stays mounted and animates opacity, transform, and visibility instead of toggling display.
+- The View menu offers Liquid Glass, Claude+, and AstroVista as complete material presets. Light/dark remains a separate sun/moon control.
+- Liquid Glass is reserved for functional layers such as header, menus, popovers, and indicator; content cards remain mostly opaque for hierarchy.
+- The sun/moon control originates a circular mode reveal, with activation locking, cleanup, and reduced-motion fallback.
 
 ## Accessibility
 
