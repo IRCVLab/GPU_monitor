@@ -48,6 +48,13 @@ Selected. When a server is selected at desktop width, the list and a narrow insp
 - Target a collapsed control height around `25–28px`, reducing two controls by roughly one text line per card.
 - Preserve full summary content through the existing `title`/accessible button name.
 
+### Expanded Full system density
+
+- Keep all CPU, RAM, GPU hardware, storage summary, and mount data.
+- On mobile, each storage mount remains one line (`path · used/total · percent`) with path ellipsis instead of becoming a three-line mini-card.
+- Preserve four GPU hardware cells per row at 390px by reducing only internal padding, gap, and secondary type size enough to prevent clipping.
+- Do not increase card width or create horizontal page overflow.
+
 ### Compact desktop inspector
 
 - Replace `.compact-detail-overlay` with an in-flow `.compact-dashboard__inspector`.
@@ -55,7 +62,7 @@ Selected. When a server is selected at desktop width, the list and a narrow insp
 - The server list remains the first grid column and keeps original order and row structure.
 - The inspector uses the existing detail content, but the mode name changes from presentation-specific `overlay` to semantic `inspector`.
 - The inspector enters with a short opacity/translate animation only; no glow, scale, or layout-blocking motion.
-- The inspector aligns to the top of the Compact list and may be sticky within the page only if it does not cover the collapsed header indicator. Initial implementation stays in normal flow.
+- The inspector is an in-flow grid item with `position: sticky`, a `4.25rem` top offset, and viewport-bounded internal overflow so details remain reachable for long server lists without covering the header or indicator.
 - At widths below `1200px`, the existing bottom sheet remains unchanged.
 
 ## Accessibility
@@ -70,9 +77,10 @@ Selected. When a server is selected at desktop width, the list and a narrow insp
 ## Acceptance criteria
 
 1. At `390px` and `360px`, collapsed Full System/Memo controls are one horizontal line, previews truncate, and the page has no horizontal overflow.
-2. At `1440x900` and `1200x800`, opening Compact detail produces zero geometric overlap between the list and inspector.
-3. The inspector does not cover header controls and does not introduce horizontal page overflow.
-4. At `1024px` and below, selection still opens the existing bottom sheet.
-5. Compact server order and one-row-per-server layout are unchanged.
-6. GPU availability/occupied color semantics are unchanged.
-7. Existing frontend tests, `npm run check`, `npm run build`, and backend tests pass.
+2. At `390px`, expanded System mount telemetry stays one line, four GPU hardware cells do not clip, and no system-panel child creates horizontal page overflow.
+3. At `1440x900` and `1200x800`, opening Compact detail produces zero geometric overlap between the list and inspector.
+4. In a long Compact list, the inspector remains sticky inside the viewport below the header and uses internal scrolling only when its own content exceeds the viewport bound.
+5. At `1024px` and below, selection still opens the existing bottom sheet.
+6. Compact server order and one-row-per-server layout are unchanged.
+7. GPU availability/occupied color semantics are unchanged.
+8. Existing frontend tests, `npm run check`, `npm run build`, and backend tests pass.

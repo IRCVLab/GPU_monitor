@@ -83,6 +83,44 @@ test('mobile full cards keep server identity and edit control on one dense row',
 	);
 });
 
+test('mobile collapsed utility controls remain one horizontal line with protected disclosure', () => {
+	const mobile = mediaBlock('(max-width: 640px)');
+	assert.match(mobile, /\.monitor-card__footer-toggle\s*\{[^}]*flex-direction:\s*row;/s);
+	assert.match(mobile, /\.monitor-card__footer-toggle\s*\{[^}]*align-items:\s*center;/s);
+	assert.doesNotMatch(mobile, /\.monitor-card__footer-toggle\s*\{[^}]*flex-direction:\s*column;/s);
+
+	const mainRule = cssRule('.monitor-card__footer-toggle-main');
+	assertDeclaration(mainRule, 'flex', '0 0 auto');
+
+	const sideRule = cssRule('.monitor-card__footer-side');
+	assertDeclaration(sideRule, 'min-width', '0');
+	assertDeclaration(sideRule, 'flex', '1 1 auto');
+
+	const previewRule = cssRule('.monitor-card__footer-preview');
+	assertDeclaration(previewRule, 'overflow', 'hidden');
+	assertDeclaration(previewRule, 'text-overflow', 'ellipsis');
+	assertDeclaration(previewRule, 'white-space', 'nowrap');
+});
+
+test('mobile expanded system keeps hardware and mount telemetry dense without clipping', () => {
+	const mobile = mediaBlock('(max-width: 640px)');
+	assert.doesNotMatch(
+		mobile,
+		/\.monitor-card__mount-item\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/s
+	);
+	assert.doesNotMatch(
+		mobile,
+		/\.monitor-card__mount-usage\s*\{[^}]*grid-column:\s*1 \/ -1;/s
+	);
+
+	const hardwareRule = cssRule('.monitor-card__hardware-item');
+	assert.ok(Math.max(...remValues(declarationValue(hardwareRule, 'padding'))) <= 0.3);
+	assert.ok(Math.max(...remValues(declarationValue(hardwareRule, 'gap'))) <= 0.2);
+
+	const hardwareTypeRule = cssRule('.monitor-card__hardware-index,\n.monitor-card__hardware-value');
+	assert.ok(remValues(declarationValue(hardwareTypeRule, 'font-size'))[0] <= 0.66);
+});
+
 test('task 4 hardware mounts and notes align to dense card scale', () => {
 	const hardwareRule = cssRule('.monitor-card__hardware-item');
 	assert.ok(remValues(declarationValue(hardwareRule, 'padding'))[0] <= 0.3);

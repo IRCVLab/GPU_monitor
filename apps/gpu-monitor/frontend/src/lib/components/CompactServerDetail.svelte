@@ -7,13 +7,13 @@
 		server,
 		onClose = () => {},
 		titleId = 'compact-detail-title',
-		mode = 'overlay',
+		mode = 'inspector',
 		autofocusClose = false
 	}: {
 		server: ServerState | null;
 		onClose?: () => void;
 		titleId?: string;
-		mode?: 'overlay' | 'sheet';
+		mode?: 'inspector' | 'sheet';
 		autofocusClose?: boolean;
 	} = $props();
 

@@ -7,6 +7,10 @@
 	overflow-x: clip;
 }
 
+.compact-dashboard.has-inspector {
+	grid-template-columns: minmax(0, 1fr) minmax(16rem, 18rem);
+}
+
 .compact-dashboard__list {
 	min-width: 0;
 	display: flex;
@@ -346,12 +350,14 @@ html.light .compact-avatar-count {
 	color: color-mix(in srgb, var(--ops-fg) 48%, transparent);
 }
 
-.compact-detail-overlay {
-	position: fixed;
-	right: 1rem;
-	top: 1rem;
-	z-index: 50;
-	width: min(30rem, calc(100vw - 2rem));
+.compact-dashboard__inspector {
+	position: sticky;
+	top: 4.25rem;
+	min-width: 0;
+	max-height: calc(100vh - 5rem);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	animation: compact-inspector-enter 170ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .compact-detail {
@@ -361,7 +367,7 @@ html.light .compact-avatar-count {
 	box-shadow: 0 6px 18px color-mix(in srgb, var(--ops-fg) 7%, transparent);
 }
 
-.compact-detail--overlay {
+.compact-detail--inspector {
 	padding: 0.68rem 0.78rem 0.74rem;
 }
 
@@ -495,6 +501,17 @@ html.light .compact-avatar-count {
 	animation: compact-sheet-slide-in 170ms ease;
 }
 
+@keyframes compact-inspector-enter {
+	from {
+		opacity: 0;
+		transform: translate3d(0.35rem, 0, 0);
+	}
+	to {
+		opacity: 1;
+		transform: translate3d(0, 0, 0);
+	}
+}
+
 @keyframes compact-sheet-fade-in {
 	from {
 		opacity: 0;
@@ -566,6 +583,7 @@ html.light .compact-avatar-count {
 
 @media (prefers-reduced-motion: reduce) {
 	.compact-row,
+	.compact-dashboard__inspector,
 	.compact-sheet-backdrop,
 	.compact-sheet {
 		animation: none !important;
