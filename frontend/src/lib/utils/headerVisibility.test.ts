@@ -48,7 +48,6 @@ test('keeps a compact header compact on subthreshold downward motion', () => {
 		accumulatedDelta: 0,
 		currentCompact: true,
 		reducedMotion: false,
-		hasOuterGutter: true,
 		viewportWidth: 1440
 	});
 
@@ -63,7 +62,6 @@ test('keeps an expanded header expanded on subthreshold upward motion', () => {
 		accumulatedDelta: 18,
 		currentCompact: false,
 		reducedMotion: false,
-		hasOuterGutter: true,
 		viewportWidth: 1440
 	});
 
@@ -78,7 +76,6 @@ test('top reset expands and clears accumulated motion', () => {
 		accumulatedDelta: 80,
 		currentCompact: true,
 		reducedMotion: false,
-		hasOuterGutter: true,
 		viewportWidth: 1440
 	});
 
@@ -95,7 +92,6 @@ test('compacts only after accumulated downward threshold', () => {
 		accumulatedDelta: 0,
 		currentCompact: false,
 		reducedMotion: false,
-		hasOuterGutter: true,
 		viewportWidth: 1440
 	});
 	const crossed = updateHeaderVisibility({
@@ -105,7 +101,6 @@ test('compacts only after accumulated downward threshold', () => {
 		accumulatedDelta: 0,
 		currentCompact: false,
 		reducedMotion: false,
-		hasOuterGutter: true,
 		viewportWidth: 1440
 	});
 
@@ -121,7 +116,6 @@ test('direction change resets accumulation before expanding', () => {
 		accumulatedDelta: 28,
 		currentCompact: true,
 		reducedMotion: false,
-		hasOuterGutter: true,
 		viewportWidth: 1440
 	});
 
@@ -138,7 +132,6 @@ test('desktop indicator visibility is independent of scroll position', () => {
 		accumulatedDelta: 30,
 		currentCompact: true,
 		reducedMotion: false,
-		hasOuterGutter: true,
 		viewportWidth: 1440
 	});
 
@@ -147,7 +140,7 @@ test('desktop indicator visibility is independent of scroll position', () => {
 });
 
 
-test('compact indicator is visible at the 921px desktop lane edge without an outer gutter', () => {
+test('compact indicator is visible at the 921px desktop lane edge', () => {
 	const result = updateHeaderVisibility({
 		currentY: 80,
 		previousY: 40,
@@ -155,7 +148,6 @@ test('compact indicator is visible at the 921px desktop lane edge without an out
 		accumulatedDelta: 0,
 		currentCompact: false,
 		reducedMotion: false,
-		hasOuterGutter: false,
 		viewportWidth: 921
 	});
 
@@ -171,12 +163,19 @@ test('compact indicator remains hidden at the 920px mobile cutoff', () => {
 		accumulatedDelta: 0,
 		currentCompact: false,
 		reducedMotion: false,
-		hasOuterGutter: true,
 		viewportWidth: 920
 	});
 
 	assert.equal(result.compact, true);
 	assert.equal(result.indicatorVisible, false);
+});
+
+
+test('header visibility API no longer accepts or computes an outer gutter input', () => {
+	assert.doesNotMatch(headerVisibilitySource, /hasOuterGutter/);
+	assert.doesNotMatch(pageSource, /headerHasOuterGutter/);
+	assert.doesNotMatch(pageSource, /HEADER_OUTER_GUTTER_MIN_PX/);
+	assert.doesNotMatch(pageSource, /hasOuterGutter\s*:/);
 });
 
 test('reduced motion preserves immediate threshold semantics without timers', () => {
@@ -187,7 +186,6 @@ test('reduced motion preserves immediate threshold semantics without timers', ()
 		accumulatedDelta: 0,
 		currentCompact: false,
 		reducedMotion: true,
-		hasOuterGutter: true,
 		viewportWidth: 1440
 	});
 
@@ -198,6 +196,7 @@ test('reduced motion preserves immediate threshold semantics without timers', ()
 
 const pageSource = readFileSync(new URL('../../routes/+page.svelte', import.meta.url), 'utf8');
 const dashboardCss = readFileSync(new URL('../styles/monitor-dashboard.css', import.meta.url), 'utf8');
+const headerVisibilitySource = readFileSync(new URL('./headerVisibility.ts', import.meta.url), 'utf8');
 
 function functionBody(source: string, name: string): string {
 	const start = source.indexOf(`function ${name}`);
@@ -243,7 +242,7 @@ test('header resize recomputes indicator visibility and unregisters the passive 
 	assert.match(pageSource, /window\.removeEventListener\(\s*'resize'\s*,\s*handleHeaderResize\s*\)/);
 
 	const resizeBody = functionBody(pageSource, 'handleHeaderResize');
-	assert.match(resizeBody, /headerHasOuterGutter\(window\.innerWidth\)/);
+	assert.doesNotMatch(resizeBody, /hasOuterGutter/);
 	assert.match(resizeBody, /viewportWidth:\s*window\.innerWidth/);
 	assert.match(resizeBody, /headerIndicatorVisible\s*=\s*result\.indicatorVisible/);
 });
@@ -295,6 +294,47 @@ test('header surface is hidden from interaction while the indicator remains inde
 	assert.match(pageSource, /<div class=\{`ops-indicator-anchor \$\{pageShellClass\}`\} aria-hidden=\{!headerIndicatorVisible\}/);
 	assert.match(pageSource, /<button\s+[\s\S]*class="ops-indicator-trigger"[\s\S]*>/);
 	assert.match(pageSource, /<header\s+[\s\S]*inert=\{headerCompact\}[\s\S]*aria-hidden=\{headerCompact\}/);
+});
+
+test('compact indicator panel is pointer-interactive and can be opened without hover', () => {
+	const panelRule = dashboardCss.match(/\.ops-indicator-panel\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
+
+	assert.match(panelRule, /pointer-events:\s*auto\s*;/);
+	assert.match(dashboardCss, /\.ops-indicator-panel\.ops-indicator-panel-open\s*\{[\s\S]*display:\s*flex\s*;/);
+	assert.match(dashboardCss, /\.ops-indicator:hover \.ops-indicator-panel,\s*\.ops-indicator:focus-within \.ops-indicator-panel/);
+});
+
+test('compact indicator trigger keeps dot visual size with an invisible minimum hit area', () => {
+	const triggerRule = dashboardCss.match(/\.ops-indicator-trigger\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
+	const dotRule = dashboardCss.match(/\.ops-status-dot,\s*\.ops-indicator-dot\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
+
+	assert.match(triggerRule, /min-width:\s*1\.5rem\s*;/);
+	assert.match(triggerRule, /min-height:\s*1\.5rem\s*;/);
+	assert.match(triggerRule, /border:\s*0\s*;/);
+	assert.match(triggerRule, /background:\s*transparent\s*;/);
+	assert.doesNotMatch(triggerRule, /border-radius:\s*999px/);
+	assert.match(dotRule, /width:\s*0\.55rem\s*;/);
+	assert.match(dotRule, /height:\s*0\.55rem\s*;/);
+});
+
+test('compact indicator has explicit accessible activation and closes on reveal, Escape, and outside click', () => {
+	assert.match(pageSource, /let indicatorPanelOpen\s*=\s*\$state\(false\)/);
+	assert.match(pageSource, /const indicatorPanelId\s*=\s*'ops-indicator-panel'/);
+	assert.match(pageSource, /bind:this=\{indicatorElement\}/);
+	assert.match(pageSource, /onclick=\{toggleIndicatorPanel\}/);
+	assert.match(pageSource, /aria-expanded=\{indicatorPanelOpen\}/);
+	assert.match(pageSource, /aria-controls=\{indicatorPanelId\}/);
+	assert.match(pageSource, /id=\{indicatorPanelId\}/);
+	assert.match(pageSource, /class:ops-indicator-panel-open=\{indicatorPanelOpen\}/);
+
+	const revealBody = functionBody(pageSource, 'revealHeader');
+	assert.match(revealBody, /indicatorPanelOpen\s*=\s*false/);
+
+	const clickBody = functionBody(pageSource, 'handleWindowClick');
+	assert.match(clickBody, /indicatorPanelOpen[\s\S]*indicatorElement[\s\S]*contains\(target\)[\s\S]*indicatorPanelOpen\s*=\s*false/);
+
+	const keyboardBody = functionBody(pageSource, 'handleWindowKeydown');
+	assert.match(keyboardBody, /event\.key\s*===\s*'Escape'[\s\S]*indicatorPanelOpen\s*=\s*false/);
 });
 
 test('desktop indicator is shrink-wrapped with separate edge and gutter lanes', () => {
