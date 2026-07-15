@@ -1,10 +1,5 @@
 .dashboard-page {
 	color: var(--ops-fg);
-	--ops-indicator-lane-height: 0px;
-}
-
-.dashboard-page.ops-page-compact {
-	overflow-anchor: none;
 }
 
 .ops-header-shell {
@@ -15,12 +10,12 @@
 	grid-template-rows: minmax(0, 1fr);
 	backdrop-filter: blur(18px);
 	background: color-mix(in srgb, var(--ops-bg) 78%, transparent);
-	transition: grid-template-rows 180ms ease, padding-top 160ms ease, background-color 180ms ease;
+	transition: grid-template-rows 180ms ease, background-color 180ms ease;
 }
 
 .ops-header-shell.ops-header-compact {
 	grid-template-rows: minmax(0, 0fr);
-	padding-top: var(--ops-indicator-lane-height, 0px);
+	padding-top: 0;
 	backdrop-filter: blur(12px);
 	background: linear-gradient(
 		to bottom,
