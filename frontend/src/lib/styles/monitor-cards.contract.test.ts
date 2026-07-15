@@ -274,11 +274,12 @@ test('task 5 full card header and system density follow the quiet instrument con
 
 	const previewRule = cssRule('.monitor-card__system-preview');
 	assert.match(previewRule, /display:\s*grid/);
-	assert.match(previewRule, /grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*max-content\)\)/);
+	assert.match(previewRule, /grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/);
+	assertDeclaration(previewRule, 'min-width', '0');
 
 	const previewItemRule = cssRule('.monitor-card__system-preview-item');
-	assert.match(previewItemRule, /display:\s*inline-grid/);
-	assert.match(previewItemRule, /grid-template-columns:\s*auto/);
+	assertDeclaration(previewItemRule, 'min-width', '0');
+	assert.match(previewItemRule, /display:\s*grid|display:\s*inline-grid/);
 	assertDeclaration(previewItemRule, 'gap', '0.08rem');
 
 	const previewLabelRule = cssRule('.monitor-card__system-preview-item small');
@@ -286,6 +287,10 @@ test('task 5 full card header and system density follow the quiet instrument con
 	assert.match(previewLabelRule, /font-size:\s*0\.5[0-9]rem/);
 
 	const previewValueRule = cssRule('.monitor-card__system-preview-item strong');
+	assertDeclaration(previewValueRule, 'min-width', '0');
+	assertDeclaration(previewValueRule, 'overflow', 'hidden');
+	assertDeclaration(previewValueRule, 'text-overflow', 'ellipsis');
+	assertDeclaration(previewValueRule, 'white-space', 'nowrap');
 	assert.match(previewValueRule, /font-size:\s*0\.6[0-9]rem/);
 	assert.match(previewValueRule, /font-variant-numeric:\s*tabular-nums/);
 

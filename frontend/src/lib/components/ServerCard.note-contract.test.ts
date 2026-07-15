@@ -53,9 +53,14 @@ test('ServerCard hides the normal status label while keeping exception labels vi
 test('ServerCard renders collapsed system preview as four named micro-items', () => {
 	assert.match(source, /monitor-card__system-preview/);
 	assert.match(source, /monitor-card__system-preview-item/);
-	assert.match(source, /<small>CPU<\/small>[\s\S]*?<strong>\{[\s\S]*?\}<\/strong>/);
-	assert.match(source, /<small>RAM<\/small>[\s\S]*?<strong>\{[\s\S]*?\}<\/strong>/);
-	assert.match(source, /<small>GPU<\/small>[\s\S]*?<strong>\{[\s\S]*?\}<\/strong>/);
-	assert.match(source, /<small>Disk<\/small>[\s\S]*?<strong>\{[\s\S]*?\}<\/strong>/);
+	assert.match(source, /<small>CPU<\/small>[\s\S]*?<strong[^>]*>\{server\.system \? `\$\{cpuPct\.toFixed\(0\)\}%` : '–'\}<\/strong>/);
+	assert.match(source, /<small>RAM<\/small>[\s\S]*?<strong[^>]*>\{server\.system \? `\$\{ramPct\.toFixed\(0\)\}%` : '–'\}<\/strong>/);
+	assert.match(source, /<small>GPU<\/small>[\s\S]*?<strong[^>]*>\{totalGpuPowerText\}<\/strong>/);
+	assert.match(source, /<small>Disk<\/small>[\s\S]*?<strong[^>]*>\{storageSummary \? `\$\{storagePct\.toFixed\(0\)\}%` : '–'\}<\/strong>/);
+	assert.doesNotMatch(source, /aria-label="시스템 요약"/);
+	assert.match(source, /title=\{`CPU \$\{cpuPreviewText\}`\}/);
+	assert.match(source, /title=\{`RAM \$\{server\.system \? `\$\{ramPct\.toFixed\(0\)\}%` : '–'\}`\}/);
+	assert.match(source, /title=\{`GPU \$\{totalGpuPowerText\}`\}/);
+	assert.match(source, /title=\{`Disk \$\{diskPreviewText\}`\}/);
 	assert.doesNotMatch(source, /segments\.join\(' · '\)/);
 });

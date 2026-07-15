@@ -379,20 +379,20 @@
           </span>
           <span class="monitor-card__footer-side">
             {#if !sysExpanded}
-              <span class="monitor-card__footer-preview monitor-card__system-preview" aria-label="시스템 요약">
-                <span class="monitor-card__system-preview-item" data-level={cpuLevel}>
+              <span class="monitor-card__footer-preview monitor-card__system-preview">
+                <span class="monitor-card__system-preview-item" data-level={cpuLevel} title={`CPU ${cpuPreviewText}`}>
                   <small>CPU</small>
                   <strong>{server.system ? `${cpuPct.toFixed(0)}%` : '–'}</strong>
                 </span>
-                <span class="monitor-card__system-preview-item" data-level={ramLevel}>
+                <span class="monitor-card__system-preview-item" data-level={ramLevel} title={`RAM ${server.system ? `${ramPct.toFixed(0)}%` : '–'}`}>
                   <small>RAM</small>
-                  <strong>{server.system ? `${ramUsed}/${ramTotal}GB` : '–'}</strong>
+                  <strong>{server.system ? `${ramPct.toFixed(0)}%` : '–'}</strong>
                 </span>
-                <span class="monitor-card__system-preview-item" data-level={gpuLevel}>
+                <span class="monitor-card__system-preview-item" data-level={gpuLevel} title={`GPU ${totalGpuPowerText}`}>
                   <small>GPU</small>
                   <strong>{totalGpuPowerText}</strong>
                 </span>
-                <span class="monitor-card__system-preview-item" data-level={diskLevel}>
+                <span class="monitor-card__system-preview-item" data-level={diskLevel} title={`Disk ${diskPreviewText}`}>
                   <small>Disk</small>
                   <strong>{storageSummary ? `${storagePct.toFixed(0)}%` : '–'}</strong>
                 </span>
