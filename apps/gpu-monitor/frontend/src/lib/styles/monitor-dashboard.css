@@ -203,6 +203,7 @@
 	background: color-mix(in srgb, var(--ops-popover) 92%, transparent);
 	box-shadow: var(--ops-shadow);
 	backdrop-filter: blur(18px);
+	pointer-events: auto;
 }
 
 .ops-indicator-anchor {
@@ -233,6 +234,8 @@
 	justify-content: center;
 	width: 0.55rem;
 	height: 0.55rem;
+	min-width: 1.5rem;
+	min-height: 1.5rem;
 	padding: 0;
 	border: 0;
 	background: transparent;
@@ -241,7 +244,7 @@
 }
 
 .ops-indicator-panel {
-	pointer-events: none;
+	pointer-events: auto;
 	display: none;
 	align-items: center;
 	gap: 0.75rem;
@@ -250,7 +253,8 @@
 }
 
 .ops-indicator:hover .ops-indicator-panel,
-.ops-indicator:focus-within .ops-indicator-panel {
+.ops-indicator:focus-within .ops-indicator-panel,
+.ops-indicator-panel.ops-indicator-panel-open {
 	display: flex;
 }
 

@@ -24,7 +24,6 @@
 		compensateHeaderScrollPosition,
 		HEADER_INDICATOR_TOP_MAX_PX,
 		HEADER_INDICATOR_TOP_MIN_PX,
-		HEADER_OUTER_GUTTER_MIN_PX,
 		shouldRevealSettledHeaderAtTop,
 		type HeaderScrollDirection,
 		updateHeaderVisibility
@@ -145,6 +144,8 @@
 	let refreshFailed = $state(false);
 	let headerCompact = $state(false);
 	let headerIndicatorVisible = $state(false);
+	let indicatorPanelOpen = $state(false);
+	let indicatorElement = $state<HTMLDivElement | null>(null);
 	let headerShellElement = $state<HTMLDivElement | null>(null);
 	let headerSurfaceElement = $state<HTMLElement | null>(null);
 	let headerScrollFrame: number | null = null;
@@ -421,18 +422,12 @@
 	function revealHeader(): void {
 		headerCompact = false;
 		headerIndicatorVisible = false;
+		indicatorPanelOpen = false;
 		headerScrollDirection = null;
 		headerScrollDistance = 0;
 		if (browser) {
 			headerPreviousY = currentHeaderScrollPosition();
 		}
-	}
-
-	function headerHasOuterGutter(viewportWidth: number): boolean {
-		const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
-		const maxShellWidth = 80 * (Number.isFinite(rootFontSize) ? rootFontSize : 16);
-		const shellWidth = Math.min(viewportWidth, maxShellWidth);
-		return (viewportWidth - shellWidth) / 2 >= HEADER_OUTER_GUTTER_MIN_PX;
 	}
 
 	function updateHeaderFromScroll(): void {
@@ -445,12 +440,12 @@
 			accumulatedDelta: headerScrollDistance,
 			currentCompact: headerCompact,
 			reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-			hasOuterGutter: headerHasOuterGutter(window.innerWidth),
 			viewportWidth: window.innerWidth
 		});
 
 		headerCompact = result.compact;
 		headerIndicatorVisible = result.indicatorVisible;
+		if (!result.indicatorVisible) indicatorPanelOpen = false;
 		headerPreviousY = result.nextPreviousY;
 		headerScrollDirection = result.nextDirection;
 		headerScrollDistance = result.nextAccumulatedDelta;
@@ -470,12 +465,12 @@
 			accumulatedDelta: 0,
 			currentCompact: headerCompact,
 			reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-			hasOuterGutter: headerHasOuterGutter(window.innerWidth),
 			viewportWidth: window.innerWidth
 		});
 
 		headerCompact = result.compact;
 		headerIndicatorVisible = result.indicatorVisible;
+		if (!result.indicatorVisible) indicatorPanelOpen = false;
 		headerPreviousY = result.nextPreviousY;
 		headerScrollDirection = result.nextDirection;
 		headerScrollDistance = result.nextAccumulatedDelta;
@@ -692,20 +687,27 @@
 		if (actionsMenuOpen) revealHeader();
 	}
 
+	function toggleIndicatorPanel() {
+		indicatorPanelOpen = !indicatorPanelOpen;
+	}
+
 	function selectNetwork(tab: Tab) {
 		activeTab.set(tab);
+		indicatorPanelOpen = false;
 	}
 
 
 	function handleWindowClick(event: MouseEvent) {
 		const target = event.target;
 		if (!(target instanceof Node)) return;
+		if (indicatorPanelOpen && indicatorElement && !indicatorElement.contains(target)) indicatorPanelOpen = false;
 		if (viewMenuOpen && viewMenuEl && !viewMenuEl.contains(target)) viewMenuOpen = false;
 		if (actionsMenuOpen && actionsMenuEl && !actionsMenuEl.contains(target)) actionsMenuOpen = false;
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
+			indicatorPanelOpen = false;
 			viewMenuOpen = false;
 			actionsMenuOpen = false;
 		}
@@ -720,6 +722,7 @@
 	const pageShellClass = 'max-w-7xl mx-auto';
 	const pageMainClass = 'max-w-7xl mx-auto px-4 py-4 sm:px-6';
 	const serverGridStyle = '--monitor-dashboard-card-min: 22rem;';
+	const indicatorPanelId = 'ops-indicator-panel';
 	const headerIndicatorStyle = `--ops-indicator-top-min: ${HEADER_INDICATOR_TOP_MIN_PX}px; --ops-indicator-top-max: ${HEADER_INDICATOR_TOP_MAX_PX}px;`;
 </script>
 
@@ -728,14 +731,18 @@
 <div class="dashboard-page min-h-screen bg-surface">
 	<div bind:this={headerShellElement} ontransitionend={handleHeaderTransitionEnd} class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible} class:ops-header-menu-open={viewMenuOpen || actionsMenuOpen}>
 		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerIndicatorVisible} style={headerIndicatorStyle}>
-			<div class="ops-indicator">
+			<div bind:this={indicatorElement} class="ops-indicator">
 				<button
+					type="button"
 					class="ops-indicator-trigger"
 					aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)}. 상세 상태 보기`}
+					aria-expanded={indicatorPanelOpen}
+					aria-controls={indicatorPanelId}
+					onclick={toggleIndicatorPanel}
 				>
 					<span class:attention={!$wsConnected || refreshFailed} class="ops-indicator-dot" aria-hidden="true"></span>
 				</button>
-				<div class="ops-indicator-panel">
+				<div id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen}>
 					<span class="ops-indicator-status">{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
 					<span class="ops-indicator-divider" aria-hidden="true"></span>
 					<div class="ops-indicator-network" role="group" aria-label="네트워크 필터">

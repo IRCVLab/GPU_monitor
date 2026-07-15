@@ -1,6 +1,5 @@
 export const HEADER_SCROLL_DIRECTION_THRESHOLD_PX = 30;
 export const HEADER_TOP_RESET_PX = 12;
-export const HEADER_OUTER_GUTTER_MIN_PX = 48;
 export const HEADER_INDICATOR_TOP_MIN_PX = 12;
 export const HEADER_INDICATOR_TOP_MAX_PX = 16;
 
@@ -13,7 +12,6 @@ export interface HeaderVisibilityInput {
 	accumulatedDelta: number;
 	currentCompact: boolean;
 	reducedMotion: boolean;
-	hasOuterGutter: boolean;
 	viewportWidth: number;
 }
 

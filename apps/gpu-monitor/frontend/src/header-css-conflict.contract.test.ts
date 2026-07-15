@@ -141,13 +141,21 @@ test('monitor-dashboard.css owns compact header rhythm and absolute indicator pl
 	assert.match(gutterIndicator, /transform\s*:\s*translateX\(calc\(0\.55rem \+ 0\.5rem\)\)/, '1200px+ gutter moves the bare dot outside the content edge');
 });
 
-test('compact indicator trigger is the dot only with no circular container surface', () => {
-	const trigger = declarationBlock(dashboardCss, '.ops-indicator-trigger', 'width');
-	assert.match(trigger, /width\s*:\s*0\.55rem\b/, 'trigger width matches the status dot');
-	assert.match(trigger, /height\s*:\s*0\.55rem\b/, 'trigger height matches the status dot');
+test('compact indicator trigger has an invisible 24px hit target around the dot', () => {
+	const trigger = declarationBlock(dashboardCss, '.ops-indicator-trigger', 'min-width');
+	assert.match(trigger, /min-width\s*:\s*1\.5rem\b/, 'trigger hit target is at least 24px wide');
+	assert.match(trigger, /min-height\s*:\s*1\.5rem\b/, 'trigger hit target is at least 24px tall');
 	assert.match(trigger, /border\s*:\s*0\b/, 'trigger has no circular border');
 	assert.match(trigger, /background\s*:\s*transparent\b/, 'trigger has no circular background');
 	assert.doesNotMatch(trigger, /border-radius\s*:\s*999px/, 'trigger must not draw a circular shell');
+});
+
+test('compact indicator panel and its network buttons are hit-testable when opened', () => {
+	const panel = declarationBlock(dashboardCss, '.ops-indicator-panel', 'pointer-events');
+	assert.match(panel, /pointer-events\s*:\s*auto\b/, 'open panel must receive pointer events');
+	assert.match(dashboardCss, /\.ops-indicator-panel\.ops-indicator-panel-open\s*\{[\s\S]*display\s*:\s*flex\b/, 'click-open class displays the panel');
+	assert.match(pageSource, /class:ops-indicator-panel-open=\{indicatorPanelOpen\}/, 'page binds the open class');
+	assert.match(pageSource, /onclick=\{\(\) => selectNetwork\(tab\.value\)\}/, 'network buttons retain click handlers');
 });
 
 test('monitor-dashboard.css owns header menu positioning and stacking', () => {
