@@ -255,12 +255,12 @@ test('GPU Monitor identity, refresh ring, and health label share one header row'
 test('header and collapsed indicator share a continuous ten-second satellite cadence', () => {
 	assert.match(
 		dashboardCss,
-		/@media \(min-width: 921px\)[\s\S]*?\.ops-header-inner,[\s\S]*?padding-block:\s*0\.35rem;/
+		/@media \(min-width: 921px\)[\s\S]*?\.ops-header-inner\s*\{[\s\S]*?padding-block:\s*0\.35rem;/
 	);
 	assert.equal((pageSource.match(/<RefreshRing/g) ?? []).length, 2);
 	assert.match(dashboardCss, /\.ops-refresh-ring__satellite\s*\{[^}]*animation:\s*ops-refresh-satellite-orbit 10s linear infinite/);
 	assert.match(dashboardCss, /@keyframes ops-refresh-satellite-orbit\s*\{[\s\S]*transform:\s*rotate\(0deg\);[\s\S]*transform:\s*rotate\(360deg\);/);
-	assert.match(dashboardCss, /\.ops-refresh-ring__dot\s*\{[^}]*animation:\s*ops-indicator-breathe 6(?:\.[0-9]+)?s ease-in-out infinite/);
+	assert.match(dashboardCss, /\.ops-refresh-ring__dot\s*\{[^}]*animation:\s*ops-indicator-breathe 6s ease-in-out infinite/);
 	assert.doesNotMatch(dashboardCss, /ops-refresh-ring-orbit|--ops-refresh-duration/);
 	assert.doesNotMatch(dashboardCss, /ops-refresh-cadence-flow/);
 });
