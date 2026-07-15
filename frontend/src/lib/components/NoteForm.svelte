@@ -9,10 +9,11 @@
 		gpus: GpuInfo[];
 		serverStatus: ServerStatus;
 		lastSeen: string | null;
+		active?: boolean;
 		onCreated: (note: Note) => void;
 	}
 
-	let { serverId, gpus, serverStatus, lastSeen, onCreated }: NoteFormProps = $props();
+	let { serverId, gpus, serverStatus, lastSeen, active = true, onCreated }: NoteFormProps = $props();
 
 	const DEFAULT_EXPIRY_MS = 24 * 60 * 60 * 1000;
 	const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -150,6 +151,9 @@
 	}
 
 	$effect(() => {
+		if (!active) return;
+
+		nowMs = Date.now();
 		const timer = setInterval(() => {
 			nowMs = Date.now();
 		}, 1000);
