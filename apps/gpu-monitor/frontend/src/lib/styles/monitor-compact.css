@@ -29,13 +29,14 @@
 .compact-row {
 	position: relative;
 	display: grid;
-	grid-template-columns: minmax(0, 1fr);
+	box-sizing: border-box;
+	grid-template-columns: minmax(7rem, 8.5rem) minmax(0, 1fr);
 	align-items: center;
 	gap: 0.45rem;
 	width: 100%;
 	min-width: 0;
 	overflow-x: clip;
-	min-height: 3rem;
+	min-height: 2.7rem;
 	padding: 0.28rem 0.46rem 0.28rem 0.58rem;
 	background: transparent;
 	transition: background-color 120ms ease;
@@ -157,8 +158,9 @@
 
 .compact-slot {
 	position: relative;
+	box-sizing: border-box;
 	min-width: 0;
-	height: 1.9rem;
+	height: 1.8rem;
 	border: 1px solid color-mix(in srgb, var(--ops-border) 94%, transparent);
 	border-radius: 0.42rem;
 	background: color-mix(in srgb, var(--ops-card) 90%, transparent);
@@ -484,11 +486,11 @@ html.light .compact-avatar-count {
 
 @media (max-width: 1199px) {
 	.compact-row {
-		grid-template-columns: minmax(0, 1fr);
-		align-items: start;
+		grid-template-columns: minmax(7rem, 8.5rem) minmax(0, 1fr);
+		align-items: center;
 		gap: 0.34rem;
-		min-height: 4.6rem;
-		padding: 0.42rem 0.44rem 0.48rem 0.52rem;
+		min-height: 2.7rem;
+		padding: 0.28rem 0.44rem 0.28rem 0.52rem;
 	}
 
 	.compact-row__slots {
@@ -502,7 +504,10 @@ html.light .compact-avatar-count {
 	}
 
 	.compact-row {
+		grid-template-columns: minmax(0, 1fr);
+		align-items: start;
 		min-height: 4.6rem;
+		padding: 0.42rem 0.44rem 0.48rem 0.52rem;
 	}
 
 	.compact-row__title-line {
