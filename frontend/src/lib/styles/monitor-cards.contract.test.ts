@@ -94,9 +94,12 @@ test('mobile collapsed utility controls remain one horizontal line with protecte
 
 	const sideRule = cssRule('.monitor-card__footer-side');
 	assertDeclaration(sideRule, 'min-width', '0');
-	assertDeclaration(sideRule, 'flex', '1 1 auto');
+	assertDeclaration(sideRule, 'flex', '1 1 0');
+	assertDeclaration(sideRule, 'padding-right', '1px');
 
 	const previewRule = cssRule('.monitor-card__footer-preview');
+	assertDeclaration(previewRule, 'min-width', '0');
+	assertDeclaration(previewRule, 'flex', '1 1 0');
 	assertDeclaration(previewRule, 'overflow', 'hidden');
 	assertDeclaration(previewRule, 'text-overflow', 'ellipsis');
 	assertDeclaration(previewRule, 'white-space', 'nowrap');
@@ -252,6 +255,7 @@ test('collapsed utility rows use subtle markers and CSS disclosure angles', () =
 	const disclosureRule = cssRule('.monitor-card__footer-disclosure');
 	assert.match(disclosureRule, /border-right:\s*1px solid/);
 	assert.match(disclosureRule, /border-bottom:\s*1px solid/);
+	assertDeclaration(disclosureRule, 'box-sizing', 'border-box');
 	assertDeclaration(disclosureRule, 'transform', 'rotate(45deg)');
 
 	const expandedRule = cssRule('.monitor-card__footer-disclosure.is-expanded');
@@ -276,6 +280,8 @@ test('task 5 full card header and system density follow the quiet instrument con
 	assert.match(previewRule, /display:\s*grid/);
 	assert.match(previewRule, /grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/);
 	assertDeclaration(previewRule, 'min-width', '0');
+	assertDeclaration(previewRule, 'flex', '1 1 0');
+	assert.doesNotMatch(previewRule, /width:\s*100%/);
 
 	const previewItemRule = cssRule('.monitor-card__system-preview-item');
 	assertDeclaration(previewItemRule, 'min-width', '0');

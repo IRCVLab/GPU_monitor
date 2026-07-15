@@ -467,7 +467,8 @@
 
 .monitor-card__footer-side {
 	min-width: 0;
-	flex: 1 1 auto;
+	flex: 1 1 0;
+	padding-right: 1px;
 	display: flex;
 	align-items: center;
 	justify-content: flex-end;
@@ -478,6 +479,7 @@
 	width: 0.38rem;
 	height: 0.38rem;
 	flex: 0 0 auto;
+	box-sizing: border-box;
 	border-right: 1px solid color-mix(in srgb, var(--ops-fg) 34%, transparent);
 	border-bottom: 1px solid color-mix(in srgb, var(--ops-fg) 34%, transparent);
 	transform: rotate(45deg);
@@ -498,7 +500,7 @@
 
 .monitor-card__footer-preview {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -509,7 +511,7 @@
 
 .monitor-card__system-preview {
   min-width: 0;
-  width: 100%;
+  flex: 1 1 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   justify-items: end;
