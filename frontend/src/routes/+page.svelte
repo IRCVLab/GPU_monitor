@@ -695,10 +695,6 @@
 		indicatorPanelOpen = false;
 	}
 
-	function toggleIndicatorPanel() {
-		indicatorPanelOpen = !indicatorPanelOpen;
-	}
-
 	function handleIndicatorFocusOut(event: FocusEvent) {
 		const nextTarget = event.relatedTarget;
 		if (nextTarget instanceof Node && indicatorElement && indicatorElement.contains(nextTarget)) return;
@@ -752,7 +748,7 @@
 					aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)}. 상세 상태 보기`}
 					aria-expanded={indicatorPanelOpen}
 					aria-controls={indicatorPanelId}
-					onclick={toggleIndicatorPanel}
+					onclick={openIndicatorPanel}
 				>
 					<span class:attention={!$wsConnected || refreshFailed} class="ops-indicator-dot" aria-hidden="true"></span>
 				</button>
