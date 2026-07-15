@@ -70,6 +70,7 @@
 		--ops-popover: var(--popover);
 		--ops-primary: var(--primary);
 		--ops-primary-fg: var(--primary-foreground);
+		--ops-on-primary: #040609;
 		--ops-secondary: var(--secondary);
 		--ops-secondary-fg: var(--secondary-foreground);
 		--ops-muted: var(--muted);
@@ -146,6 +147,7 @@
 		--ops-popover: var(--popover);
 		--ops-primary: var(--primary);
 		--ops-primary-fg: var(--primary-foreground);
+		--ops-on-primary: #040609;
 		--ops-secondary: var(--secondary);
 		--ops-secondary-fg: var(--secondary-foreground);
 		--ops-muted: var(--muted);
@@ -222,6 +224,7 @@
 		--ops-popover: var(--popover);
 		--ops-primary: var(--primary);
 		--ops-primary-fg: var(--primary-foreground);
+		--ops-on-primary: #040609;
 		--ops-secondary: var(--secondary);
 		--ops-secondary-fg: var(--secondary-foreground);
 		--ops-muted: var(--muted);
@@ -256,6 +259,7 @@
 		--ops-popover: var(--elevated);
 		--ops-primary: var(--primary);
 		--ops-primary-fg: #ffffff;
+		--ops-on-primary: #040609;
 		--ops-secondary: color-mix(in srgb, var(--surface) 92%, black 8%);
 		--ops-muted: color-mix(in srgb, var(--surface) 96%, black 4%);
 		--ops-muted-fg: var(--muted);
@@ -2383,11 +2387,13 @@ html.rose .log-detail-json {
 /* ── Reference theme application: palette only shifts accent/selection affordances. ── */
 html[data-color-theme='violet'] {
 	--primary: #864ad2;
+	--ops-on-primary: #ffffff;
 	--ops-accent: color-mix(in srgb, var(--primary) 14%, transparent);
 	--ops-focus: #9b61ea;
 }
 html.dark[data-color-theme='violet'] {
 	--primary: #9b61ea;
+	--ops-on-primary: #040609;
 	--ops-accent: color-mix(in srgb, var(--primary) 18%, transparent);
 	--ops-focus: #b480ff;
 }

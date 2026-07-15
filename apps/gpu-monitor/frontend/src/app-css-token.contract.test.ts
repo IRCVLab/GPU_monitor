@@ -6,15 +6,45 @@ import { readFileSync } from 'node:fs';
 const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
 
 function declarationsFor(selector) {
-	const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	const match = css.match(new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\n\\t\\}`, 'm'));
-	assert.ok(match, `missing ${selector} block`);
-	return Object.fromEntries(
-		Array.from(match[1].matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)).map(([, name, value]) => [
-			`--${name}`,
-			value.trim()
-		])
-	);
+	const start = css.indexOf(`${selector} {`);
+	assert.notEqual(start, -1, `missing ${selector} block`);
+	const open = css.indexOf('{', start);
+	let depth = 0;
+	for (let index = open; index < css.length; index += 1) {
+		if (css[index] === '{') depth += 1;
+		if (css[index] === '}') depth -= 1;
+		if (depth === 0) {
+			const body = css.slice(open + 1, index);
+			return Object.fromEntries(
+				Array.from(body.matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)).map(([, name, value]) => [
+					`--${name}`,
+					value.trim()
+				])
+			);
+		}
+	}
+	assert.fail(`unterminated ${selector} block`);
+}
+
+function mergedDeclarations(...selectors) {
+	return Object.assign({}, ...selectors.map((selector) => declarationsFor(selector)));
+}
+
+function channelToLinear(value) {
+	return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(hex) {
+	assert.match(hex, /^#[0-9a-f]{6}$/i, `expected six-digit hex, got ${hex}`);
+	const normalized = hex.slice(1);
+	const channels = [0, 2, 4].map((index) => Number.parseInt(normalized.slice(index, index + 2), 16) / 255);
+	const [red, green, blue] = channels.map(channelToLinear);
+	return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrastRatio(a, b) {
+	const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((left, right) => right - left);
+	return (lighter + 0.05) / (darker + 0.05);
 }
 
 const darkTokens = {
@@ -58,7 +88,8 @@ const darkTokens = {
 	'--shadow-offset': '0 4px',
 	'--spacing': '0.25rem',
 	'--letter-spacing': '0em',
-	'--shadow': '0 4px 40px rgb(0 0 0 / 0.45)'
+	'--shadow': '0 4px 40px rgb(0 0 0 / 0.45)',
+	'--ops-on-primary': '#040609'
 };
 
 const lightTokens = {
@@ -102,14 +133,15 @@ const lightTokens = {
 	'--shadow-offset': '0 2px',
 	'--spacing': '0.25rem',
 	'--letter-spacing': '0em',
-	'--shadow': '0 2px 28px rgb(78 86 97 / 0.10)'
+	'--shadow': '0 2px 28px rgb(78 86 97 / 0.10)',
+	'--ops-on-primary': '#040609'
 };
 
 const aliases = [
 	'--surface', '--surface-foreground', '--surface-muted', '--surface-muted-foreground',
 	'--surface-border', '--surface-ring', '--elevated', '--text', '--danger', '--success',
 	'--warning', '--radius-outer', '--radius-inner', '--ops-bg', '--ops-fg', '--ops-card',
-	'--ops-popover', '--ops-primary', '--ops-primary-fg', '--ops-secondary', '--ops-secondary-fg',
+	'--ops-popover', '--ops-primary', '--ops-primary-fg', '--ops-on-primary', '--ops-secondary', '--ops-secondary-fg',
 	'--ops-muted', '--ops-muted-fg', '--ops-border', '--ops-accent', '--ops-accent-fg',
 	'--ops-danger', '--ops-danger-fg', '--ops-input', '--ops-ring', '--ops-shadow'
 ];
@@ -139,4 +171,32 @@ test('theme blocks expose compatibility aliases and literal shadows', () => {
 		for (const alias of aliases) assert.ok(alias in declarations, `${selector} missing ${alias}`);
 		assert.doesNotMatch(declarations['--shadow'], /color-mix|var\(/, `${selector} shadow must be literal`);
 	}
+});
+
+test('semantic on-primary token is declared centrally with the required light-violet exception', () => {
+	assert.equal(declarationsFor('html.rose')['--ops-on-primary'], '#040609');
+	assert.equal(declarationsFor("html[data-color-theme='violet']")['--ops-on-primary'], '#ffffff');
+	assert.equal(declarationsFor("html.dark[data-color-theme='violet']")['--ops-on-primary'], '#040609');
+});
+
+test('primary fill foreground stays AA across shipped accent combinations', () => {
+	const scenarios = [
+		{ name: 'default light', selectors: ['html.light'], expected: '5.05' },
+		{ name: 'emerald light', selectors: ['html.light', "html[data-color-theme='emerald']"], expected: '6.33' },
+		{ name: 'violet light', selectors: ['html.light', "html[data-color-theme='violet']"], expected: '5.35' },
+		{ name: 'default dark', selectors: ['html.dark'], expected: '6.16' },
+		{ name: 'emerald dark', selectors: ['html.dark', "html.dark[data-color-theme='emerald']"], expected: '7.92' },
+		{ name: 'violet dark', selectors: ['html.dark', "html.dark[data-color-theme='violet']"], expected: '5.11' },
+		{ name: 'rose', selectors: ['html.rose'], expected: '5.44' }
+	];
+
+	for (const scenario of scenarios) {
+		const declarations = mergedDeclarations(...scenario.selectors);
+		const ratio = contrastRatio(declarations['--primary'], declarations['--ops-on-primary']);
+		assert.equal(ratio.toFixed(2), scenario.expected, `${scenario.name} contrast ratio`);
+		assert.ok(ratio >= 4.5, `${scenario.name} must satisfy AA for small text`);
+	}
+
+	const lightVioletDarkText = contrastRatio('#864ad2', '#040609');
+	assert.ok(lightVioletDarkText < 4.5, 'light violet needs a white override; dark text is insufficient');
 });

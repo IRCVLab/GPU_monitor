@@ -349,13 +349,13 @@
 .monitor-gpu-row[data-state='available'] .monitor-gpu-row__index {
   background: color-mix(in srgb, var(--ops-card) 92%, #040609);
   border-color: var(--ops-primary);
-  color: var(--ops-primary);
+  color: var(--ops-fg);
 }
 
 .monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index {
   background: var(--ops-primary);
   border-color: var(--ops-primary);
-  color: var(--ops-primary-fg);
+  color: var(--ops-on-primary);
 }
 
 .monitor-gpu-row[data-state='unknown'] .monitor-gpu-row__index {

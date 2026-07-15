@@ -223,12 +223,14 @@ test('Mem receives the wider flexible track without wasting a 10ch value column'
 
 test('full gpu index uses the selected theme accent with inverted availability states', () => {
 	const availableRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-row__index");
-	assertDeclaration(availableRule, 'color', 'var(--ops-primary)');
+	assertDeclaration(availableRule, 'color', 'var(--ops-fg)');
+	assert.doesNotMatch(availableRule, /(?:^|[\n\r])\s*color:\s*var\(--ops-primary\)\s*;/);
 	assertDeclaration(availableRule, 'border-color', 'var(--ops-primary)');
 	const occupiedRule = cssRule(".monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index");
 	assertDeclaration(occupiedRule, 'background', 'var(--ops-primary)');
 	assertDeclaration(occupiedRule, 'border-color', 'var(--ops-primary)');
-	assertDeclaration(occupiedRule, 'color', 'var(--ops-primary-fg)');
+	assertDeclaration(occupiedRule, 'color', 'var(--ops-on-primary)');
+	assert.doesNotMatch(occupiedRule, /(?:^|[\n\r])\s*color:\s*var\(--ops-primary-fg\)\s*;/);
 	const unknownRule = cssRule(".monitor-gpu-row[data-state='unknown'] .monitor-gpu-row__index");
 	assert.doesNotMatch(unknownRule, /#f59e0b|var\(--chart-[12]\)|var\(--ops-primary\)/);
 });
