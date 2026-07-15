@@ -113,14 +113,14 @@
 <section class="compact-dashboard" aria-label="Compact GPU availability rack">
 	{#if bankCount > 1}
 		<div class="compact-dashboard__controls">
-			<div class="compact-dashboard__bank-selector" role="tablist" aria-label="GPU bank selector">
+			<div class="compact-dashboard__bank-selector" role="group" aria-label="GPU bank selector">
 				{#each bankOptions as bankIndex (bankIndex)}
 					<button
 						type="button"
 						class="compact-dashboard__bank-button"
 						class:is-active={bankIndex === activeBankIndex}
-						role="tab"
-						aria-selected={bankIndex === activeBankIndex}
+						aria-pressed={bankIndex === activeBankIndex}
+						aria-current={bankIndex === activeBankIndex ? 'true' : undefined}
 						onclick={() => selectBank(bankIndex)}
 					>
 						G{bankIndex * COMPACT_GPU_BANK_SIZE}-G{bankIndex * COMPACT_GPU_BANK_SIZE + COMPACT_GPU_BANK_SIZE - 1}

@@ -26,15 +26,24 @@ test('compact dashboard removes the inspector flow and renders a fixed banked ma
 	assert.match(dashboardSource, /compact-dashboard__column-header/);
 });
 
-test('compact rows support absent placeholders, optional held notches, and hide visible status copy', () => {
+test('compact bank selector uses ordinary button pressed and current semantics', () => {
+	assert.doesNotMatch(dashboardSource, /role="tablist"|role=\{'tablist'\}/);
+	assert.doesNotMatch(dashboardSource, /role="tab"|role=\{'tab'\}/);
+	assert.match(dashboardSource, /aria-pressed=\{bankIndex === activeBankIndex\}/);
+	assert.match(dashboardSource, /aria-current=\{bankIndex === activeBankIndex \? 'true' : undefined\}/);
+});
+
+test('compact rows support absent placeholders, optional held overlays, and hide visible status copy', () => {
+	assert.match(rowSource, /data-state=\{state\}/);
 	assert.match(rowSource, /data-state="absent"|data-state=\{'absent'\}/);
-	assert.match(rowSource, /data-held/);
+	assert.match(rowSource, /data-held=\{heldGpuIndices\?\.has\(gpu\.index\) \? 'true' : undefined\}/);
 	assert.doesNotMatch(rowSource, />\{statusConfig\[server\.status\].*label/);
+	assert.match(cssSource, /\.compact-slot\[data-held='true'\]::after/);
 });
 
 test('compact rack css keeps eight fixed gpu columns and passive absent slots', () => {
 	assert.doesNotMatch(cssSource, /repeat\(auto-fit/);
-	assert.match(cssSource, /repeat\(8,\s*minmax\(22px,\s*1fr\)\)/);
+	assert.match(cssSource, /grid-template-columns:\s*clamp\(4\.5rem,\s*18vw,\s*8\.25rem\)\s*repeat\(8,\s*minmax\(22px,\s*1fr\)\)/);
 	assert.doesNotMatch(cssSource, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
 
 	const availableRule = cssRule(cssSource, ".compact-slot[data-state='available']");
@@ -51,4 +60,12 @@ test('compact rack css keeps eight fixed gpu columns and passive absent slots', 
 	const absentRule = cssRule(cssSource, ".compact-slot[data-state='absent']");
 	assertDeclaration(absentRule, 'pointer-events', 'none');
 	assert.match(absentRule, /background:\s*transparent/);
+});
+
+test('compact mobile css keeps one row, disables per-cell touch, and preserves the row touch target', () => {
+	assert.match(cssSource, /\.compact-row__select\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0[^}]*cursor:\s*pointer/s);
+	assert.match(cssSource, /@media \(max-width: 767px\) \{[\s\S]*\.compact-slot__users\s*\{[^}]*pointer-events:\s*none/s);
+	assert.doesNotMatch(cssSource, /@media \(max-width: 767px\) \{[\s\S]*\.compact-row\s*\{[^}]*grid-template-columns\s*:/s);
+	assert.doesNotMatch(cssSource, /@media \(max-width: 767px\) \{[\s\S]*\.compact-row\s*\{[^}]*display:\s*block/s);
+	assert.doesNotMatch(cssSource, /@media \(max-width: 767px\) \{[\s\S]*\.compact-row\s*\{[^}]*display:\s*flex/s);
 });
