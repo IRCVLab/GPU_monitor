@@ -321,7 +321,8 @@ test('compact indicator uses one state source for click, pointer, focus, Escape,
 	assert.match(pageSource, /let indicatorPanelOpen\s*=\s*\$state\(false\)/);
 	assert.match(pageSource, /const indicatorPanelId\s*=\s*'ops-indicator-panel'/);
 	assert.match(pageSource, /bind:this=\{indicatorElement\}/);
-	assert.match(pageSource, /onclick=\{toggleIndicatorPanel\}/);
+	assert.match(pageSource, /onclick=\{openIndicatorPanel\}/);
+	assert.doesNotMatch(pageSource, /function toggleIndicatorPanel/);
 	assert.match(pageSource, /onmouseenter=\{openIndicatorPanel\}/);
 	assert.match(pageSource, /onmouseleave=\{closeIndicatorPanel\}/);
 	assert.match(pageSource, /onfocusin=\{openIndicatorPanel\}/);
@@ -344,6 +345,16 @@ test('compact indicator uses one state source for click, pointer, focus, Escape,
 
 	const keyboardBody = functionBody(pageSource, 'handleWindowKeydown');
 	assert.match(keyboardBody, /event\.key\s*===\s*'Escape'[\s\S]*indicatorPanelOpen\s*=\s*false/);
+});
+
+
+test('indicator trigger click is idempotent open so pointer-enter before click cannot close it', () => {
+	const openBody = functionBody(pageSource, 'openIndicatorPanel');
+	assert.match(openBody, /indicatorPanelOpen\s*=\s*true/);
+	assert.doesNotMatch(openBody, /!indicatorPanelOpen/);
+	assert.match(pageSource, /onclick=\{openIndicatorPanel\}/);
+	assert.doesNotMatch(pageSource, /onclick=\{toggleIndicatorPanel\}/);
+	assert.doesNotMatch(pageSource, /function toggleIndicatorPanel/);
 });
 
 test('desktop indicator is shrink-wrapped with separate edge and gutter lanes', () => {
