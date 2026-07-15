@@ -508,17 +508,18 @@
 }
 
 .monitor-card__system-preview {
+  min-width: 0;
+  width: 100%;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, max-content));
-  justify-content: end;
-  gap: 0.45rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  justify-items: end;
+  gap: 0.35rem;
   white-space: normal;
 }
 
 .monitor-card__system-preview-item {
   min-width: 0;
-  display: inline-grid;
-  grid-template-columns: auto;
+  display: grid;
   justify-items: end;
   gap: 0.08rem;
 }
@@ -541,6 +542,12 @@
 }
 
 .monitor-card__system-preview-item strong {
+  min-width: 0;
+  max-width: 100%;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.66rem;
   line-height: 1;
   font-weight: 620;
