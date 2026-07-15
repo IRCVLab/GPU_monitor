@@ -270,7 +270,7 @@ html[data-material='astro'] {
 	--material-saturation: 128%;
 	--material-border-alpha: 78%;
 	--material-highlight-alpha: 24%;
-	--material-radius: .75rem;
+	--material-radius: .5rem;
 	--material-control-radius: 999px;
 	--material-shadow: 0 0.85rem 2.2rem color-mix(in srgb, var(--ops-primary) 12%, transparent), 0 0.25rem 0.8rem color-mix(in srgb, var(--shadow-color) 16%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 20%, transparent);
 }
