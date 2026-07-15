@@ -74,11 +74,14 @@ function assertFontSizeAtMost(selector, maxRem) {
 
 test('task 3 dense full footer spacing keeps the approved compact tokens', () => {
 	const footerRule = cssRule('.monitor-card__footer');
-	assertDeclaration(footerRule, 'gap', '0.28rem');
-	assertDeclaration(footerRule, 'padding', '0.5rem 0.75rem 0.55rem');
+	assert.ok(remValues(declarationValue(footerRule, 'gap'))[0] <= 0.16);
+	assert.ok(remValues(declarationValue(footerRule, 'padding'))[0] <= 0.36);
 
 	const secondSectionRule = cssRule('.monitor-card__footer-section + .monitor-card__footer-section');
-	assert.ok(remValues(declarationValue(secondSectionRule, 'padding-top'))[0] <= 0.3);
+	assert.ok(remValues(declarationValue(secondSectionRule, 'padding-top'))[0] <= 0.18);
+
+	const toggleRule = cssRule('.monitor-card__footer-toggle');
+	assert.ok(remValues(declarationValue(toggleRule, 'min-height'))[0] <= 1.45);
 
 	const panelStackRule = cssRule(
 		'.monitor-card__footer-panel > .monitor-card__metric-stack,\n.monitor-card__footer-panel > .monitor-card__subsection,\n.monitor-card__footer-panel > .monitor-note-list,\n.monitor-card__footer-panel > .note-form'
@@ -90,6 +93,9 @@ test('task 3 dense full footer spacing keeps the approved compact tokens', () =>
 });
 
 test('header baseline stays on one dense line without legacy meta or network pills', () => {
+	const header = cssRule('.monitor-card__header');
+	assert.ok(remValues(declarationValue(header, 'padding'))[0] <= 0.62);
+
 	const titleRow = cssRule('.monitor-card__title-row');
 	assert.match(titleRow, /display:\s*flex/);
 	assert.match(titleRow, /align-items:\s*center/);

@@ -21,6 +21,10 @@ const proxy = {
 
 export default defineConfig({
 	plugins: [sveltekit()],
+	resolve: {
+		// vite-plugin-svelte v4 adds `svelte`; Vite 6 requires retaining its client defaults.
+		conditions: ['svelte', 'browser', 'module', 'development|production']
+	},
 	server: {
 		proxy
 	},

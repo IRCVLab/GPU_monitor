@@ -33,12 +33,48 @@ test('compact bank selector uses ordinary button pressed and current semantics',
 	assert.match(dashboardSource, /aria-current=\{bankIndex === activeBankIndex \? 'true' : undefined\}/);
 });
 
-test('compact rows support absent placeholders, optional held overlays, and hide visible status copy', () => {
+test('compact dashboard fetches active hold cues locally when parent data is absent', () => {
+	assert.match(dashboardSource, /import \{ getNotes \} from '\$lib\/api';/);
+	assert.match(dashboardSource, /type CompactHoldCue = \{/);
+	assert.match(dashboardSource, /function parseNoteTime\(iso: string \| null\): number \| null/);
+	assert.match(dashboardSource, /function noteVisible\(note: Note, nowMs: number\): boolean/);
+	assert.match(dashboardSource, /note\.kind !== 'hold'/);
+	assert.match(dashboardSource, /serverIds\.map\(async \(serverId\) => \{/);
+	assert.match(dashboardSource, /getNotes\(serverId\)/);
+	assert.match(dashboardSource, /const resolvedHeldGpuIndicesByServer = \$derived\.by\(/);
+	assert.match(dashboardSource, /heldGpuIndicesByServer\?\.get\(serverId\) \?\? fetchedHeldGpuIndicesByServer\.get\(serverId\)/);
+	assert.match(dashboardSource, /holdCuesByGpu=\{fetchedHoldCuesByServer\.get\(server\.server_id\)\}/);
+	assert.match(dashboardSource, /heldGpuIndices=\{resolvedHeldGpuIndicesByServer\.get\(server\.server_id\)\}/);
+});
+
+test('compact rows support absent placeholders, keep held overlays orthogonal to telemetry state, and hide visible status copy', () => {
 	assert.match(rowSource, /data-state=\{state\}/);
 	assert.match(rowSource, /data-state="absent"|data-state=\{'absent'\}/);
 	assert.match(rowSource, /data-held=\{heldGpuIndices\?\.has\(gpu\.index\) \? 'true' : undefined\}/);
 	assert.doesNotMatch(rowSource, />\{statusConfig\[server\.status\].*label/);
 	assert.match(cssSource, /\.compact-slot\[data-held='true'\]::after/);
+});
+
+test('compact occupied cells show full usernames inline and allow wrapping growth inside one server row', () => {
+	assert.doesNotMatch(rowSource, /getLinuxUsernameInitials/);
+	assert.doesNotMatch(rowSource, /compact-slot__badge/);
+	assert.match(rowSource, /\{#each gpu\.users as user, index/);
+	assert.match(rowSource, /class="compact-slot__user-list"/);
+	assert.match(rowSource, /class="compact-slot__username"/);
+
+	const slotRule = cssRule(cssSource, '.compact-slot');
+	assertDeclaration(slotRule, 'min-height', '1\.72rem');
+	assert.doesNotMatch(slotRule, /(?:^|[ ;])height:\s*1\.72rem/);
+	const usersRule = cssRule(cssSource, '.compact-slot__users');
+	assertDeclaration(usersRule, 'height', 'auto');
+	assertDeclaration(usersRule, 'align-items', 'flex-start');
+	const userListRule = cssRule(cssSource, '.compact-slot__user-list');
+	assertDeclaration(userListRule, 'display', 'grid');
+	assertDeclaration(userListRule, 'white-space', 'normal');
+	assertDeclaration(userListRule, 'word-break', 'break-word');
+	const usernameRule = cssRule(cssSource, '.compact-slot__username');
+	assertDeclaration(usernameRule, 'font-size', '0\.58rem');
+	assertDeclaration(usernameRule, 'line-height', '1\.1');
 });
 
 test('compact rack css keeps eight fixed gpu columns and passive absent slots', () => {
@@ -51,8 +87,11 @@ test('compact rack css keeps eight fixed gpu columns and passive absent slots', 
 	assert.ok(/border[^;]*var\(--ops-primary\)|outline[^;]*var\(--ops-primary\)|box-shadow:[^;]*var\(--ops-primary\)/.test(availableRule), 'available slots must use a var(--ops-primary) outline');
 
 	const occupiedRule = cssRule(cssSource, ".compact-slot[data-state='occupied']");
-	assert.match(occupiedRule, /var\(--ops-primary\)/);
-	assert.ok(/background:\s*[^;]*var\(--ops-primary\)/.test(occupiedRule), 'occupied slots must use selected theme fill');
+	assert.match(occupiedRule, /background:\s*var\(--ops-primary\);/);
+	assert.match(occupiedRule, /color:\s*var\(--ops-on-primary\);/);
+
+	const usernameRule = cssRule(cssSource, '.compact-slot__username');
+	assertDeclaration(usernameRule, 'color', 'inherit');
 
 	const unknownRule = cssRule(cssSource, ".compact-slot[data-state='unknown']");
 	assert.doesNotMatch(unknownRule, /var\(--ops-primary\)|#22c55e|var\(--chart-2\)/);
@@ -70,30 +109,97 @@ test('compact mobile css keeps one row, disables per-cell touch, and preserves t
 	assert.doesNotMatch(cssSource, /@media \(max-width: 767px\) \{[\s\S]*\.compact-row\s*\{[^}]*display:\s*flex/s);
 });
 
-test('compact row primary activation preserves disclosure for occupied rows and exposes explicit full action in the popover', () => {
-	assert.match(rowSource, /const occupiedSlots = \$derived\.by\(/);
-	assert.match(rowSource, /onclick=\{\(event\) => handleRowActivation\(event\)\}/);
-	assert.match(rowSource, /if \(occupiedSlots\.length > 0\) \{/);
-	assert.match(rowSource, /openTooltip\(event\.currentTarget, popoverItems\(occupiedSlots\)\)/);
-	assert.doesNotMatch(rowSource, /class="compact-row__select"[\s\S]*onclick=\{openFull\}/);
-	assert.match(dashboardSource, />Full에서 보기</);
-	assert.match(dashboardSource, /onmousedown=\{\(event\) => event\.preventDefault\(\)\}/);
-	assert.match(dashboardSource, /onclick=\{\(\) => openFull\((activeTooltip\.serverId|tooltipServerId)\)\}/);
-	assert.match(dashboardSource, /closeTooltip\(\);\s*onOpenFull\(serverId\);/);
+test('compact server identity leaves the full-row button hit target unobstructed', () => {
+	const identityRule = cssRule(cssSource, '.compact-row__identity');
+	assertDeclaration(identityRule, 'pointer-events', 'none');
 });
 
+test('compact hold refresh preserves prior cues and exposes failures instead of masking them as empty', () => {
+	assert.match(dashboardSource, /type CompactHoldLoadResult = \{/);
+	assert.match(dashboardSource, /failedServerIds: Set<number>/);
+	assert.match(dashboardSource, /previousNotes\.get\(serverId\) \?\? \[\]/);
+	assert.match(dashboardSource, /compactHoldLoadErrors = result\.failedServerIds/);
+	assert.doesNotMatch(dashboardSource, /catch \{\s*return \[server\.server_id, \[\] as Note\[\]\]/);
+	assert.match(dashboardSource, /HOLD 정보 확인 지연/);
+});
 
+test('compact row activation always opens full while gpu hover and focus only reveal a passive hint', () => {
+	assert.doesNotMatch(rowSource, /if \(occupiedSlots\.length > 0\) \{/);
+	assert.doesNotMatch(rowSource, /openTooltip\(event\.currentTarget, popoverItems\(occupiedSlots\)\)/);
+	assert.match(rowSource, /class="compact-row__select"[\s\S]*onclick=\{openFull\}/);
+	assert.match(rowSource, /onmouseenter=\{\(event\) => openTooltip\(event\.currentTarget, popoverItem\(gpu\)\)\}/);
+	assert.match(rowSource, /onfocus=\{\(event\) => openTooltip\(event\.currentTarget, popoverItem\(gpu\)\)\}/);
+	assert.match(rowSource, /onclick=\{openFull\}/);
+	assert.doesNotMatch(dashboardSource, />Full에서 보기</);
+	assert.doesNotMatch(dashboardSource, /compact-dashboard__tooltip-action|compact-dashboard__tooltip-footer|tooltipActionButton|focusAction/);
+	assert.match(dashboardSource, /role="tooltip"/);
+	const tooltipRule = cssRule(cssSource, '.compact-dashboard__tooltip');
+	assertDeclaration(tooltipRule, 'pointer-events', 'none');
+});
 
-test('compact occupied popover prioritizes GPU identity and full usernames', () => {
-	assert.ok(!dashboardSource.includes('compact-dashboard__tooltip-state">사용 중'));
-	const entryStart = dashboardSource.indexOf('class="compact-dashboard__tooltip-entry"');
-	assert.notEqual(entryStart, -1);
-	const entryMarkup = dashboardSource.slice(entryStart, dashboardSource.indexOf('</li>', entryStart));
-	assert.doesNotMatch(entryMarkup, /aria-label=.*사용 중/);
-	assert.ok(entryMarkup.indexOf('compact-dashboard__tooltip-gpu') < entryMarkup.indexOf('compact-dashboard__tooltip-users'));
+test('compact gpu hint carries exact gpu, telemetry truth, owners, and hold annotation without interactive affordances', () => {
+	assert.match(rowSource, /stateLabel:/);
+	assert.match(rowSource, /ownersLabel:/);
+	assert.match(rowSource, /holdLabel:/);
+	assert.match(rowSource, /heldGpuIndices\?\.has\(gpu\.index\) \? 'HOLD' : ''/);
+	assert.match(dashboardSource, /compact-dashboard__tooltip-gpu/);
+	assert.match(dashboardSource, /compact-dashboard__tooltip-state/);
+	assert.match(dashboardSource, /compact-dashboard__tooltip-users/);
+	assert.match(dashboardSource, /compact-dashboard__tooltip-hold/);
+	assert.doesNotMatch(dashboardSource, /compact-dashboard__tooltip[\s\S]*<button/);
+
 	const entryRule = cssRule(cssSource, '.compact-dashboard__tooltip-entry');
 	assert.ok(entryRule.includes('grid-template-columns: auto minmax(0, 1fr)'));
 	assertDeclaration(entryRule, 'align-items', 'baseline');
-	const usersRule = cssRule(cssSource, '.compact-dashboard__tooltip-users');
-	assertDeclaration(usersRule, 'font-weight', '650');
+	const metaRule = cssRule(cssSource, '.compact-dashboard__tooltip-meta');
+	assertDeclaration(metaRule, 'display', 'flex');
+	assertDeclaration(metaRule, 'gap', '0\.35rem');
+	const holdRule = cssRule(cssSource, '.compact-dashboard__tooltip-hold');
+	assertDeclaration(holdRule, 'font-weight', '700');
+});
+
+test('compact held overlay uses a full-style collar and notch on the exact cell without recoloring telemetry state', () => {
+	const heldRule = cssRule(cssSource, ".compact-slot[data-held='true']");
+	assert.match(heldRule, /box-shadow:\s*inset 0 0 0 1px/);
+	assert.doesNotMatch(heldRule, /background:|border-color:/);
+
+	const notchRule = cssRule(cssSource, ".compact-slot[data-held='true']::after");
+	assert.match(notchRule, /content:\s*''/);
+	assert.match(notchRule, /position:\s*absolute/);
+	assert.match(notchRule, /height:\s*2px/);
+	assert.match(notchRule, /background:\s*#f59e0b/);
+});
+
+test('compact dashboard preserves incoming server order by rendering rows directly from servers', () => {
+	assert.match(dashboardSource, /\{#each servers as server \(server\.server_id\)\}/);
+	assert.doesNotMatch(dashboardSource, /\.sort\(|orderServers\(|reversed\(|slice\(\)\.reverse\(/);
+});
+
+
+test('compact hold polling depends on stable server ids instead of high-frequency telemetry objects', () => {
+	assert.match(dashboardSource, /const serverIdSignature = \$derived\(/);
+	assert.match(dashboardSource, /async function loadHoldNotes\([\s\S]*serverIds: readonly number\[\]/);
+	assert.match(dashboardSource, /const serverIdSnapshot = parseServerIdSignature\(serverIdSignature\);/);
+	assert.doesNotMatch(dashboardSource, /const serverSnapshot = \[\.\.\.servers\]/);
+});
+
+test('compact hold refresh ignores stale async responses after the server snapshot changes', () => {
+	assert.match(
+		dashboardSource,
+		/async function loadHoldNotes\([\s\S]*serverIds: readonly number\[\],[\s\S]*previousNotes: ReadonlyMap<number, Note\[]>[\s\S]*\): Promise<CompactHoldLoadResult>/
+	);
+	assert.match(
+		dashboardSource,
+		/const result = await loadHoldNotes\(serverIdSnapshot, holdNotesCache\);[\s\S]*if \(cancelled\) return;[\s\S]*compactHoldNotesByServer = result\.notesByServer;/
+	);
+	assert.doesNotMatch(
+		dashboardSource,
+		/async function loadHoldNotes[\s\S]*compactHoldNotesByServer = new Map\(entries\)/
+	);
+});
+
+test("compact hold polling serializes slow refresh batches for the same server snapshot", () => {
+	assert.match(dashboardSource, /let holdRefreshInFlight = false;/);
+	assert.match(dashboardSource, /if \(holdRefreshInFlight\) return;[\s\S]*holdRefreshInFlight = true;/);
+	assert.match(dashboardSource, /finally \{[\s\S]*holdRefreshInFlight = false;[\s\S]*\}/);
 });

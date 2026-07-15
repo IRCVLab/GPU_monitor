@@ -16,13 +16,12 @@ test('task 3 keeps view layout controls contextual and wires compact-to-full con
 	assert.match(pageSource, /\{#if \$dashboardView === 'default'\}[\s\S]*카드 배치/);
 	assert.match(pageSource, /<CompactDashboard[\s\S]*onOpenFull=/);
 	assert.match(pageSource, /focusedServerId/);
-	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
+	assert.match(pageSource, /\{#each \$displayServers as server \(server\.server_id\)\}/);
 	assert.match(compactDashboardSource, /<CompactServerRow[\s\S]*onOpenFull=/);
-	assert.match(compactDashboardSource, /Full에서 보기/);
+	assert.doesNotMatch(compactDashboardSource, /Full에서 보기/);
 	assert.match(compactServerRowSource, /onOpenFull\?: \(serverId: number\) => void/);
-	assert.match(compactServerRowSource, /onclick=\{\(event\) => handleRowActivation\(event\)\}/);
-	assert.match(compactServerRowSource, /if \(occupiedSlots\.length > 0\) \{[\s\S]*openTooltip\(event\.currentTarget, popoverItems\(occupiedSlots\)\)/);
-	assert.match(compactServerRowSource, /\t\topenFull\(\);/);
+	assert.match(compactServerRowSource, /class="compact-row__select"[\s\S]*onclick=\{openFull\}/);
+	assert.doesNotMatch(compactServerRowSource, /handleRowActivation|occupiedSlots/);
 });
 
 const dashboardCss = readFileSync(new URL('../lib/styles/monitor-dashboard.css', import.meta.url), 'utf8');
@@ -97,8 +96,8 @@ test('task 2 card gpu list and footer use compact spacing', () => {
 	assertDeclaration(listRule, 'padding', '0 0.9rem 0.9rem');
 
 	const footerRule = cssRule(cardCss, '.monitor-card__footer');
-	assertDeclaration(footerRule, 'gap', '0.28rem');
-	assertDeclaration(footerRule, 'padding', '0.5rem 0.75rem 0.55rem');
+	assertDeclaration(footerRule, 'gap', '0.12rem');
+	assertDeclaration(footerRule, 'padding', '0.32rem 0.7rem 0.36rem');
 });
 
 
@@ -127,8 +126,9 @@ test('user server order remains movable and is shared by Full and Compact views'
 	assert.match(pageSource, /ondragover=/);
 	assert.match(pageSource, /ondrop=/);
 	assert.match(pageSource, /ondragend=/);
-	assert.match(pageSource, /<CompactDashboard[\s\S]*servers=\{\$currentServers\}[\s\S]*onOpenFull=/);
-	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
+	assert.match(pageSource, /const displayServers = derived\([\s\S]*\[currentServers, activeDevScenario\]/);
+	assert.match(pageSource, /<CompactDashboard[\s\S]*servers=\{\$displayServers\}[\s\S]*onOpenFull=/);
+	assert.match(pageSource, /\{#each \$displayServers as server \(server\.server_id\)\}/);
 });
 
 test('View menu chooses aligned Grid or gapless Masonry without changing server order', () => {
@@ -222,12 +222,16 @@ test('persistent header shows semantic health and cadence without visible second
 	const statusMarkup = pageSource.slice(statusStart, statusEnd);
 	const statusBody = statusMarkup.slice(statusMarkup.indexOf('>') + 1);
 
-	assert.match(statusMarkup, /\{refreshHealthText\(\)\}/);
+	assert.match(statusMarkup, /aria-label=\{refreshIssueText\(\) \|\| '정상'\}/);
 	assert.match(statusMarkup, /<RefreshRing/);
 	assert.doesNotMatch(statusMarkup, /cycleKey=|durationMs=/);
 	assert.match(statusMarkup, /\{#if refreshWarningText\(\)\}[\s\S]*ops-status-label[\s\S]*\{refreshWarningText\(\)\}/);
 	assert.doesNotMatch(statusBody, /relativeTime\(|nextRefreshText\(/);
-	assert.match(statusMarkup, /aria-label=\{`\$\{refreshHealthText\(\)\}[\s\S]*relativeTime\(lastRefreshAtMs\)[\s\S]*nextRefreshText\(\)/);
+	assert.doesNotMatch(statusMarkup, /relativeTime\(lastRefreshAtMs\)|nextRefreshText\(\)/);
+	assert.doesNotMatch(pageSource, /function nextRefreshText/);
+	assert.doesNotMatch(pageSource, /class=\"ops-indicator-status\">\{refreshHealthText\(\)\}[\s\S]*relativeTime\(lastRefreshAtMs\)/);
+	assert.match(pageSource, /function refreshIssueText[\s\S]*warning \? \x60\$\{warning\} · \$\{relativeTime\(lastRefreshAtMs\)\}\x60 : ''/);
+	assert.match(pageSource, /\{#if refreshWarningText\(\)\}[\s\S]*ops-indicator-status[\s\S]*\{refreshIssueText\(\)\}[\s\S]*\{\/if\}/);
 	assert.doesNotMatch(pageSource, /ops-refresh-cadence|refreshCadencePct/);
 	assert.doesNotMatch(pageSource, /'갱신 중'|'동기화'/, 'ordinary in-flight requests must not create visible transient status copy');
 });
