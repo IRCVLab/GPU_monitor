@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Restore backend-owned server order and correct the header, GPU metric, and secondary-control density defects in the development dashboard.
+**Goal:** Preserve movable user-owned server order, add selectable Grid/Masonry layout, and correct the header, GPU metric, and secondary-control density defects in the development dashboard.
 
-**Architecture:** Keep the existing Svelte components and telemetry data flow. Remove only the page-local ordering override, make header cadence a derived visual value, and implement layout corrections through the existing semantic component classes and contract tests.
+**Architecture:** Keep the existing Svelte components and telemetry data flow. Retain the saved order overlay, persist layout independently from Full/Compact view, make header cadence a derived visual value, and implement layout corrections through existing semantic component classes and contract tests.
 
 **Tech Stack:** Svelte 5, TypeScript, CSS, Node test runner, SvelteKit/Vite.
 
@@ -17,7 +17,7 @@
 
 ---
 
-### Task 1: Backend-authoritative order and all-width indicator
+### Task 1: Movable saved order, selectable layout, and all-width indicator
 
 **Files:**
 - Modify: `frontend/src/routes/+page.svelte`
@@ -25,9 +25,9 @@
 - Modify: `frontend/src/lib/styles/monitor-dashboard.css`
 - Modify: `frontend/src/lib/utils/headerVisibility.test.ts`
 
-- [ ] Write failing contracts that reject client order/drag code and reject any responsive rule that hides `.ops-indicator-anchor`.
+- [ ] Write failing contracts that preserve client drag ordering, add Grid/Masonry preference, and reject any responsive rule that hides `.ops-indicator-anchor`.
 - [ ] Run the targeted tests and confirm they fail for those exact reasons.
-- [ ] Derive `currentServers` from the selected backend-sorted store only; remove drag handlers/attributes; keep ordered masonry placement.
+- [ ] Derive `currentServers` from backend fallback plus saved order; restore drag handlers; make ordered masonry conditional on the selected layout.
 - [ ] Remove the 920px indicator suppression and add narrow-width safe positioning.
 - [ ] Run the targeted tests and commit.
 

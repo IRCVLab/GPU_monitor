@@ -95,21 +95,34 @@ test('task 2 has no css zoom or dashboard scale wrappers in page dashboard card 
 });
 
 test('task 2 preserves masonry grid behavior', () => {
-	assert.match(pageSource, /class="monitor-dashboard-grid"[^>]*use:masonry/);
-	const gridRule = cssRule(dashboardCss, '.monitor-dashboard-grid');
-	assertDeclaration(gridRule, 'grid-auto-rows', 'var(--monitor-dashboard-masonry-row)');
+	assert.match(pageSource, /class="monitor-dashboard-grid"[\s\S]*use:masonry=\{\$dashboardLayout === 'masonry'\}/);
+	const masonryRule = cssRule(dashboardCss, '.monitor-dashboard-grid--masonry');
+	assertDeclaration(masonryRule, 'grid-auto-rows', 'var(--monitor-dashboard-masonry-row)');
 });
 
-test('dashboard order is owned by the backend sequence in Full and Compact views', () => {
-	assert.doesNotMatch(pageSource, /from '\$lib\/stores\/order'/);
-	assert.doesNotMatch(pageSource, /\bserverOrder\b|\bsaveOrder\b|\borderServers\s*\(|\bmergeVisibleOrder\s*\(/);
-	assert.doesNotMatch(pageSource, /draggable="true"|ondragstart=|ondragover=|ondrop=|ondragend=/);
-	assert.match(
-		pageSource,
-		/const currentServers = derived\(\s*\[activeTab, allServers, internalServers, externalServers\],[\s\S]*return \$tab === 'all' \? \$all : \$tab === 'external' \? \$ext : \$int;[\s\S]*\);/
-	);
+test('user server order remains movable and is shared by Full and Compact views', () => {
+	assert.match(pageSource, /import \{ serverOrder, saveOrder \} from '\$lib\/stores\/order';/);
+	assert.match(pageSource, /const currentServers = derived\([\s\S]*return orderServers\(selected, \$order\);[\s\S]*\);/);
+	assert.match(pageSource, /draggable="true"|ondragstart=/);
+	assert.match(pageSource, /ondragover=/);
+	assert.match(pageSource, /ondrop=/);
+	assert.match(pageSource, /ondragend=/);
 	assert.match(pageSource, /<CompactDashboard servers=\{\$currentServers\} \/>/);
 	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
+});
+
+test('View menu chooses aligned Grid or gapless Masonry without changing server order', () => {
+	assert.match(pageSource, /\bdashboardLayout\b/);
+	assert.match(pageSource, /\bsetDashboardLayout\b/);
+	assert.match(pageSource, />그리드<\/button>/);
+	assert.match(pageSource, />빈틈 없이<\/button>/);
+	assert.match(pageSource, /use:masonry=\{\$dashboardLayout === 'masonry'\}/);
+	assert.match(pageSource, /class:monitor-dashboard-grid--masonry=\{\$dashboardLayout === 'masonry'\}/);
+
+	const gridRule = cssRule(dashboardCss, '.monitor-dashboard-grid');
+	assertDeclaration(gridRule, 'grid-auto-rows', 'auto');
+	const masonryRule = cssRule(dashboardCss, '.monitor-dashboard-grid--masonry');
+	assertDeclaration(masonryRule, 'grid-auto-rows', 'var(--monitor-dashboard-masonry-row)');
 });
 
 test('task 1 masonry action writes and cleans stable grid placement properties', () => {
@@ -175,10 +188,10 @@ test('persistent header shows semantic health and cadence without visible second
 	assert.match(statusMarkup, /\{refreshHealthText\(\)\}/);
 	assert.match(statusMarkup, /class="ops-refresh-cadence"/);
 	assert.match(statusMarkup, /class="ops-refresh-cadence__fill"/);
-	assert.match(statusMarkup, /refreshCadencePct/);
+	assert.doesNotMatch(statusMarkup, /style=\{`width:/);
 	assert.doesNotMatch(statusBody, /relativeTime\(|nextRefreshText\(/);
 	assert.match(statusMarkup, /aria-label=\{`\$\{refreshHealthText\(\)\}[\s\S]*relativeTime\(lastRefreshAtMs\)[\s\S]*nextRefreshText\(\)/);
-	assert.match(pageSource, /const refreshCadencePct = \$derived\.by\(/);
+	assert.doesNotMatch(pageSource, /refreshCadencePct/);
 });
 
 test('desktop header reserves breathing room below the compact cadence line', () => {
@@ -189,4 +202,8 @@ test('desktop header reserves breathing room below the compact cadence line', ()
 	const cadenceRule = cssRule(dashboardCss, '.ops-refresh-cadence');
 	assertDeclaration(cadenceRule, 'width', '2.4rem');
 	assertDeclaration(cadenceRule, 'height', '0.2rem');
+	const cadenceFillRule = cssRule(dashboardCss, '.ops-refresh-cadence__fill');
+	assertDeclaration(cadenceFillRule, 'width', '42%');
+	assert.match(cadenceFillRule, /animation:\s*ops-refresh-cadence-flow 2\.4s linear infinite/);
+	assert.match(dashboardCss, /@keyframes ops-refresh-cadence-flow\s*\{[\s\S]*translate3d\(-120%, 0, 0\)[\s\S]*translate3d\(340%, 0, 0\)/);
 });

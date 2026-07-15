@@ -10,7 +10,7 @@ Make the dashboard trustworthy at a glance: server order must never change local
 
 ## Root causes
 
-1. `serverOrder` is read from a browser cookie and overrides the API sequence. Dragging writes that private order back to the cookie, so different browsers can show different server orders.
+1. Server order is intentionally user-controlled. Removing the `serverOrder` overlay also removed drag reordering, which is a required interaction. The correct contract is backend order as the initial fallback and the saved user order after manual movement.
 2. `.ops-indicator-anchor` is forced to `display: none` at `max-width: 920px`, even when the header state says the indicator is visible.
 3. GPU metrics split the row into two equal columns, while the memory value reserves `10ch`. That reserve leaves the Mem track shorter than Util and wastes horizontal space.
 4. The visible header repeats exact relative and next-refresh seconds. The text is noisy, wraps more easily, and leaves almost no bottom breathing room.
@@ -20,10 +20,17 @@ Make the dashboard trustworthy at a glance: server order must never change local
 
 ### Server order
 
-- The API/backend sequence is authoritative in Full and Compact views.
-- Sort by `display_order`, then `server_id` as the deterministic tie-breaker.
-- Remove `serverOrder` from the page derivation and remove card drag/drop presentation.
-- Do not delete the legacy store in this patch; it may still be referenced by unrelated code, but it cannot affect dashboard presentation.
+- Sort by `display_order`, then `server_id` as the deterministic initial order.
+- Preserve drag reordering and the saved `serverOrder` overlay.
+- Full and Compact consume the same ordered store so switching views never changes the sequence.
+- Changing card layout never resets or reinterprets the saved order.
+
+### Card layout choice
+
+- Add `그리드` and `빈틈 없이` under `보기 > 배치`.
+- `그리드` uses normal row-major CSS Grid and permits row whitespace when card heights differ.
+- `빈틈 없이` enables the existing deterministic ordered masonry placement.
+- Persist this independently from the Full/Compact view preference.
 
 ### Scroll header and health cadence
 
@@ -50,11 +57,11 @@ Make the dashboard trustworthy at a glance: server order must never change local
 
 ## Acceptance criteria
 
-1. No `serverOrder`, `saveOrder`, `draggable`, or drag event handler participates in `+page.svelte`.
-2. Full and Compact render the same backend-derived sequence.
-3. Compact-scroll indicator is visible at 390, 900, 1024, and 1440px without covering card content.
-4. Persistent full-header status contains no visible `n초 전` or `n초 뒤` text; those details remain accessible.
-5. At 1440px, the Mem track is wider than Util while `used/totalGB` remains visible.
-6. Memo expansion visibly separates history from composer and preserves note deletion and hold creation.
-7. Existing frontend tests, `npm run check`, `npm run build`, and backend tests pass.
-
+1. Dragging a Full card updates the saved user order again.
+2. Full and Compact render the same saved sequence, with backend order as the fallback.
+3. `보기 > 배치` exposes `그리드` and `빈틈 없이`, and switching either does not alter the sequence.
+4. Compact-scroll indicator is visible at 390, 900, 1024, and 1440px without covering card content.
+5. Persistent full-header status contains no visible `n초 전` or `n초 뒤` text; those details remain accessible.
+6. At 1440px, the Mem track is wider than Util while `used/totalGB` remains visible.
+7. Memo expansion visibly separates history from composer and preserves note deletion and hold creation.
+8. Existing frontend tests, `npm run check`, `npm run build`, and backend tests pass.
