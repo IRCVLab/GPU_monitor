@@ -5,6 +5,20 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./GpuBar.svelte', import.meta.url), 'utf8');
 const serverCardSource = readFileSync(new URL('./ServerCard.svelte', import.meta.url), 'utf8');
+const cardCss = readFileSync(new URL('../styles/monitor-cards.css', import.meta.url), 'utf8');
+
+function cssRule(selector) {
+	const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const match = cardCss.match(new RegExp(`${escaped}\\s*\\{(?<body>[^}]*)\\}`, 'm'));
+	assert.ok(match?.groups?.body, `Missing CSS rule for ${selector}`);
+	return match.groups.body;
+}
+
+function assertDeclaration(rule, property, value) {
+	const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	assert.match(rule, new RegExp(`${escapedProperty}\\s*:\\s*${escapedValue}\\s*;`));
+}
 
 function normalized() {
 	return source.replace(/\s+/g, ' ');
@@ -12,6 +26,15 @@ function normalized() {
 
 test('GPU memory metric retains the compact GB value', () => {
 	assert.match(source, /\{memUsedGB\}\/\{memTotalGB\}GB/);
+});
+
+test('GpuBar metric fills use one selected accent without chart-1 chart-2 split', () => {
+	const utilRule = cssRule('.monitor-gpu-metric__fill--util');
+	assertDeclaration(utilRule, 'background', 'var(--ops-primary)');
+
+	const memoryRule = cssRule('.monitor-gpu-metric__fill--memory');
+	assert.match(memoryRule, /var\(--ops-primary\)/);
+	assert.doesNotMatch(memoryRule, /var\(--chart-1\)|var\(--chart-2\)/);
 });
 
 test('GpuBar accepts the shared availability state without letting holds alter it', () => {
