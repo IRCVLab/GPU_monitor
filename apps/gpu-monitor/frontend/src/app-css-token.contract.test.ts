@@ -328,7 +328,7 @@ test('Task 5 material presets centralize functional-layer material variables', (
 	const astro = declarationsFor("html[data-material='astro']");
 	assert.equal(astro['--material-blur'], '18px');
 	assert.equal(astro['--material-saturation'], '128%');
-	assert.equal(astro['--material-radius'], '.75rem');
+	assert.equal(astro['--material-radius'], '.5rem');
 });
 
 test('Task 5 removes obsolete accent color selectors from global CSS', () => {
