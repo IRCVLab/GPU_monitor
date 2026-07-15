@@ -222,6 +222,11 @@
 	box-shadow: 0 0.8rem 1.8rem color-mix(in srgb, var(--ops-primary) 18%, transparent);
 }
 
+.ops-network button.active span:last-child,
+.ops-indicator-network button.active span:last-child {
+	color: inherit;
+}
+
 .ops-network button:focus-visible,
 .ops-indicator-network button:focus-visible,
 .ops-menu-row button:focus-visible,
