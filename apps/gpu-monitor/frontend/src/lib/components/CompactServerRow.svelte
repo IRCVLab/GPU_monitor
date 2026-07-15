@@ -15,6 +15,8 @@
 		items: CompactPopoverItem[];
 		left: number;
 		top: number;
+		trigger: HTMLElement | null;
+		focusAction: boolean;
 	};
 
 	let {
@@ -30,7 +32,6 @@
 		onOpenFull?: (serverId: number) => void;
 		onTooltipChange?: (tooltip: CompactTooltip | null) => void;
 	} = $props();
-
 
 	const statusConfig: Record<ServerStatus, { label: string }> = {
 		online: { label: '정상' },
@@ -70,7 +71,9 @@
 			serverName: server.server_name,
 			items,
 			left: rect.left + rect.width / 2 - 110,
-			top: rect.bottom + 8
+			top: rect.bottom + 8,
+			trigger: target,
+			focusAction: target.matches('.compact-row__select')
 		});
 	}
 
@@ -81,6 +84,23 @@
 	function openFull(): void {
 		hideTooltip();
 		onOpenFull(server.server_id);
+	}
+
+	function handleRowActivation(event: MouseEvent): void {
+		if (occupiedSlots.length > 0) {
+			openTooltip(event.currentTarget, popoverItems(occupiedSlots));
+			return;
+		}
+
+		openFull();
+	}
+
+	function handleTriggerBlur(event: FocusEvent): void {
+		const nextTarget = event.relatedTarget;
+		if (nextTarget instanceof HTMLElement && nextTarget.closest('[data-compact-popover="true"]')) {
+			return;
+		}
+		hideTooltip();
 	}
 
 	function handleSlotClick(event: MouseEvent, gpu: GpuInfo): void {
@@ -114,8 +134,10 @@
 		type="button"
 		class="compact-row__select"
 		aria-label={rowAriaLabel()}
+		aria-haspopup={occupiedSlots.length > 0 ? 'dialog' : undefined}
 		data-compact-trigger="true"
-		onclick={openFull}
+		onblur={handleTriggerBlur}
+		onclick={(event) => handleRowActivation(event)}
 	></button>
 
 	<div class="compact-row__identity">
@@ -153,7 +175,7 @@
 						onmouseenter={(event) => openTooltip(event.currentTarget, popoverItems([gpu]))}
 						onmouseleave={hideTooltip}
 						onfocus={(event) => openTooltip(event.currentTarget, popoverItems([gpu]))}
-						onblur={hideTooltip}
+						onblur={handleTriggerBlur}
 						onclick={(event) => handleSlotClick(event, gpu)}
 					>
 						<span class="compact-slot__occupants" aria-hidden="true">

@@ -294,9 +294,12 @@ html.light .compact-slot__badge {
 .compact-dashboard__tooltip {
 	position: fixed;
 	z-index: 70;
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr) auto;
+	gap: 0.44rem;
 	width: clamp(11.25rem, 28vw, 13.75rem);
 	max-height: 7.5rem;
-	overflow: auto;
+	overflow: hidden;
 	padding: 0.56rem 0.66rem;
 	border-radius: 0.7rem;
 	border: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
@@ -317,6 +320,41 @@ html.light .compact-slot__badge {
 	list-style: none;
 	display: grid;
 	gap: 0.32rem;
+	overflow: auto;
+}
+
+.compact-dashboard__tooltip-footer {
+	display: flex;
+	justify-content: flex-end;
+}
+
+.compact-dashboard__tooltip-action {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 1.68rem;
+	padding: 0.24rem 0.72rem;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--ops-primary) 36%, var(--ops-border));
+	background: color-mix(in srgb, var(--ops-primary) 12%, var(--ops-popover));
+	color: color-mix(in srgb, var(--ops-fg) 92%, transparent);
+	font-size: 0.68rem;
+	font-weight: 700;
+	line-height: 1.1;
+	transition:
+		background 140ms ease,
+		border-color 140ms ease,
+		box-shadow 140ms ease,
+		transform 140ms ease;
+}
+
+.compact-dashboard__tooltip-action:hover {
+	background: color-mix(in srgb, var(--ops-primary) 18%, var(--ops-popover));
+}
+
+.compact-dashboard__tooltip-action:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--ops-primary) 28%, transparent);
 }
 
 .compact-dashboard__tooltip-entry {

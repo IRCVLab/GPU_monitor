@@ -18,8 +18,11 @@ test('task 3 keeps view layout controls contextual and wires compact-to-full con
 	assert.match(pageSource, /focusedServerId/);
 	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
 	assert.match(compactDashboardSource, /<CompactServerRow[\s\S]*onOpenFull=/);
+	assert.match(compactDashboardSource, /Full에서 보기/);
 	assert.match(compactServerRowSource, /onOpenFull\?: \(serverId: number\) => void/);
-	assert.match(compactServerRowSource, /onclick=\{openFull\}/);
+	assert.match(compactServerRowSource, /onclick=\{\(event\) => handleRowActivation\(event\)\}/);
+	assert.match(compactServerRowSource, /if \(occupiedSlots\.length > 0\) \{[\s\S]*openTooltip\(event\.currentTarget, popoverItems\(occupiedSlots\)\)/);
+	assert.match(compactServerRowSource, /\t\topenFull\(\);/);
 });
 
 const dashboardCss = readFileSync(new URL('../lib/styles/monitor-dashboard.css', import.meta.url), 'utf8');

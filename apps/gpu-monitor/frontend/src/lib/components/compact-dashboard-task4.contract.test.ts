@@ -69,3 +69,15 @@ test('compact mobile css keeps one row, disables per-cell touch, and preserves t
 	assert.doesNotMatch(cssSource, /@media \(max-width: 767px\) \{[\s\S]*\.compact-row\s*\{[^}]*display:\s*block/s);
 	assert.doesNotMatch(cssSource, /@media \(max-width: 767px\) \{[\s\S]*\.compact-row\s*\{[^}]*display:\s*flex/s);
 });
+
+test('compact row primary activation preserves disclosure for occupied rows and exposes explicit full action in the popover', () => {
+	assert.match(rowSource, /const occupiedSlots = \$derived\.by\(/);
+	assert.match(rowSource, /onclick=\{\(event\) => handleRowActivation\(event\)\}/);
+	assert.match(rowSource, /if \(occupiedSlots\.length > 0\) \{/);
+	assert.match(rowSource, /openTooltip\(event\.currentTarget, popoverItems\(occupiedSlots\)\)/);
+	assert.doesNotMatch(rowSource, /class="compact-row__select"[\s\S]*onclick=\{openFull\}/);
+	assert.match(dashboardSource, />Full에서 보기</);
+	assert.match(dashboardSource, /onclick=\{\(\) => openFull\((activeTooltip\.serverId|tooltipServerId)\)\}/);
+	assert.match(dashboardSource, /closeTooltip\(\);\s*onOpenFull\(serverId\);/);
+});
+
