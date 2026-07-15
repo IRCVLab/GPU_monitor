@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
+const dashboardCss = readFileSync(new URL('./lib/styles/monitor-dashboard.css', import.meta.url), 'utf8');
 
 function declarationsFor(selector) {
 	const start = css.indexOf(`${selector} {`);
@@ -24,6 +25,20 @@ function declarationsFor(selector) {
 		}
 	}
 	assert.fail(`unterminated ${selector} block`);
+}
+
+function ruleBody(source, selector) {
+	const start = source.indexOf(selector);
+	assert.notEqual(start, -1, `missing ${selector} rule`);
+	const open = source.indexOf('{', start);
+	assert.notEqual(open, -1, `missing ${selector} rule body`);
+	let depth = 0;
+	for (let index = open; index < source.length; index += 1) {
+		if (source[index] === '{') depth += 1;
+		if (source[index] === '}') depth -= 1;
+		if (depth === 0) return source.slice(open + 1, index);
+	}
+	assert.fail(`unterminated ${selector} rule`);
 }
 
 function mergedDeclarations(...selectors) {
@@ -173,15 +188,24 @@ test('theme blocks expose compatibility aliases and literal shadows', () => {
 	}
 });
 
-test('base liquid primary fill foreground stays AA in light and dark', () => {
+test('Task 5 active controls use the contrast-safe foreground across every material and mode', () => {
+	const activeControlRule = ruleBody(dashboardCss, '.ops-network button.active,');
+	assert.match(activeControlRule, /background:\s*var\(--ops-primary\)/);
+	assert.match(activeControlRule, /color:\s*var\(--ops-on-primary\)/);
+	assert.doesNotMatch(activeControlRule, /color:\s*var\(--ops-primary-fg\)/);
+
 	for (const scenario of [
 		{ name: 'liquid light', selectors: ['html.light'], expected: '5.05' },
-		{ name: 'liquid dark', selectors: ['html.dark'], expected: '6.16' }
+		{ name: 'liquid dark', selectors: ['html.dark'], expected: '6.16' },
+		{ name: 'claude light', selectors: ['html.light', "html.light[data-material='claude']"], expected: '5.20' },
+		{ name: 'claude dark', selectors: ['html.dark', "html.dark[data-material='claude']"], expected: '6.50' },
+		{ name: 'astro light', selectors: ['html.light', "html.light[data-material='astro']"], expected: '5.66' },
+		{ name: 'astro dark', selectors: ['html.dark', "html.dark[data-material='astro']"], expected: '5.66' }
 	]) {
 		const declarations = mergedDeclarations(...scenario.selectors);
 		const ratio = contrastRatio(declarations['--primary'], declarations['--ops-on-primary']);
 		assert.equal(ratio.toFixed(2), scenario.expected, `${scenario.name} contrast ratio`);
-		assert.ok(ratio >= 4.5, `${scenario.name} must satisfy AA for small text`);
+		assert.ok(ratio >= 4.5, `${scenario.name} active-control contrast must satisfy AA for small text`);
 	}
 });
 

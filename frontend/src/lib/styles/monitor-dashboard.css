@@ -218,7 +218,7 @@
 .ops-utility-action.active {
 	background: var(--ops-primary);
 	border-color: color-mix(in srgb, var(--ops-primary) 70%, transparent);
-	color: var(--ops-primary-fg);
+	color: var(--ops-on-primary);
 	box-shadow: 0 0.8rem 1.8rem color-mix(in srgb, var(--ops-primary) 18%, transparent);
 }
 

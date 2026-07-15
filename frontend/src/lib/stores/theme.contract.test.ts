@@ -6,6 +6,27 @@ import { Script, createContext } from 'node:vm';
 
 const storeSource = readFileSync(new URL('./theme.ts', import.meta.url), 'utf8');
 const appHtml = readFileSync(new URL('../../app.html', import.meta.url), 'utf8');
+const appScriptBody = appHtml.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1];
+
+function runInitialTheme(cookie) {
+	assert.ok(appScriptBody, 'app.html inline theme script must exist');
+	const classes = new Set(['dark']);
+	const context = createContext({
+		document: {
+			cookie,
+			documentElement: {
+				classList: {
+					remove: (...values) => values.forEach((value) => classes.delete(value)),
+					add: (value) => classes.add(value)
+				},
+				dataset: {}
+			}
+		}
+	});
+
+	new Script(appScriptBody).runInContext(context);
+	return { classes, material: context.document.documentElement.dataset.material };
+}
 
 test('Task 5 theme store exposes semantic material presets only', () => {
 	assert.match(storeSource, /materialThemes = \['liquid', 'claude', 'astro'\] as const/);
@@ -17,16 +38,27 @@ test('Task 5 theme store exposes semantic material presets only', () => {
 });
 
 test('Task 5 store and initial HTML migrate old accent values to liquid with matching logic', () => {
-	for (const legacy of ['blue', 'violet', 'emerald', 'rose', 'pink']) {
-		assert.match(storeSource, new RegExp(`oldMaterialValues[\\s\\S]*['\"]${legacy}['\"]`), `store migrates ${legacy}`);
-		assert.match(appHtml, new RegExp(`oldMaterialValues[\\s\\S]*['\"]${legacy}['\"]`), `app.html migrates ${legacy}`);
+	for (const legacyValue of ['blue', 'violet', 'emerald', 'rose', 'pink']) {
+		for (const cookieName of ['materialTheme', 'colorTheme', 'theme']) {
+			const result = runInitialTheme(`session=abc; ${cookieName}=${legacyValue}`);
+			assert.equal(result.material, 'liquid', `${cookieName}=${legacyValue}`);
+		}
 	}
+	for (const material of ['liquid', 'claude', 'astro']) {
+		assert.equal(runInitialTheme(`materialTheme=${material}`).material, material);
+	}
+
 	assert.match(storeSource, /const MATERIAL_COOKIE = 'materialTheme'/);
 	assert.match(storeSource, /const LEGACY_COLOR_COOKIE = 'colorTheme'/);
-	assert.match(appHtml, /read\('materialTheme'\)/);
-	assert.match(appHtml, /read\('colorTheme'\)/);
-	assert.match(storeSource, /oldMaterialValues\.includes[\s\S]*return 'liquid'/);
-	assert.match(appHtml, /oldMaterialValues\.includes\(requestedMaterial\) \? 'liquid' : 'liquid'/);
+	assert.match(
+		storeSource,
+		/readCookie\(MATERIAL_COOKIE\)[\s\S]*readCookie\(LEGACY_COLOR_COOKIE\)[\s\S]*readCookie\(LEGACY_THEME_COOKIE\)/
+	);
+	assert.match(storeSource, /return normalizeMaterial\(requestedMaterial\) \?\? 'liquid'/);
+	assert.match(appHtml, /const requestedMaterial = read\('materialTheme'\) \|\| read\('colorTheme'\) \|\| legacy/);
+	assert.match(appHtml, /const material = materialValues\.includes\(requestedMaterial\)\s*\? requestedMaterial\s*: 'liquid'/);
+	assert.doesNotMatch(storeSource, /oldMaterialValues|\? 'liquid' : 'liquid'/);
+	assert.doesNotMatch(appHtml, /oldMaterialValues|\? 'liquid' : 'liquid'/);
 });
 
 test('Task 5 app.html is SSR-safe and initializes the semantic material data attribute', () => {
@@ -37,24 +69,8 @@ test('Task 5 app.html is SSR-safe and initializes the semantic material data att
 
 
 test('Task 5 app.html inline cookie reader finds material cookies after earlier cookies', () => {
-	const scriptBody = appHtml.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1];
-	assert.ok(scriptBody, 'app.html inline theme script must exist');
-	const classes = new Set(['dark']);
-	const context = createContext({
-		document: {
-			cookie: 'session=abc; themeMode=light; unrelated=1; materialTheme=astro',
-			documentElement: {
-				classList: {
-					remove: (...values) => values.forEach((value) => classes.delete(value)),
-					add: (value) => classes.add(value)
-				},
-				dataset: {}
-			}
-		}
-	});
-
-	new Script(scriptBody).runInContext(context);
-	assert.equal(context.document.documentElement.dataset.material, 'astro');
-	assert.equal(classes.has('light'), true);
-	assert.equal(classes.has('dark'), false);
+	const result = runInitialTheme('session=abc; themeMode=light; unrelated=1; materialTheme=astro');
+	assert.equal(result.material, 'astro');
+	assert.equal(result.classes.has('light'), true);
+	assert.equal(result.classes.has('dark'), false);
 });
