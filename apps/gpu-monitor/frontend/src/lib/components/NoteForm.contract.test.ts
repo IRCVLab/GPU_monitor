@@ -27,7 +27,8 @@ test('NoteForm derives memo versus hold from selected GPUs and resets after succ
 test('NoteForm warns for offline or stale telemetry without blocking submission', () => {
 	assert.match(source, /serverStatus\s*!==\s*'online'/);
 	assert.match(source, /telemetryStale/);
-	assert.doesNotMatch(source, /if \([^)]*(serverStatus|telemetryStale)[^)]*\)\s*return/);
+	const submit = source.match(new RegExp('async function handleSubmit\\(\\) \\{[\\s\\S]*?\\n\\t\\}'))?.[0] ?? '';
+	assert.doesNotMatch(submit, /(serverStatus|telemetryStale|statusWarning)/);
 });
 
 
@@ -35,6 +36,23 @@ test('NoteForm always renders accessible GPU selector before submit and only sel
 	assert.match(source, /role="group"\s+aria-label="GPU 선택/);
 	assert.match(source, /aria-pressed=\{selectedGpuIndices\.includes\(gpu\.index\)\}/);
 	assert.doesNotMatch(source, /\{#if\s+kind\s*===\s*['"]hold['"]\}/);
-	assert.match(source, /\{#if\s+selectedGpuIndices\.length\s*>\s*0\}/);
 	assert.match(source, /\{#if\s+selectedGpuIndices\.length\s*>\s*0\s*&&\s*\(telemetryStale\s*\|\|\s*statusWarning\)\}/);
+});
+
+
+test('NoteForm removes the always-visible hold explainer and stays within three compact composer rows', () => {
+	assert.doesNotMatch(source, /note-form-hold-copy/);
+	assert.doesNotMatch(source, /showPrecisePicker/);
+	assert.doesNotMatch(source, /note-form-expiry-summary-row/);
+	assert.match(source, /class="note-form-row note-form-scope-row"/);
+	assert.match(source, /class="note-form-row note-form-entry-row"/);
+	assert.match(source, /class="note-form-row note-form-submit-row"/);
+	assert.match(source, /class="note-form-identity-stack"/);
+	assert.match(source, /type="datetime-local"/);
+});
+
+test('NoteForm keeps the hold warning conditional to stale or abnormal telemetry only', () => {
+	assert.doesNotMatch(source, /선택한 GPU는 비독점 참고 홀드입니다/);
+	assert.match(source, /\{#if\s+selectedGpuIndices\.length\s*>\s*0\s*&&\s*\(telemetryStale\s*\|\|\s*statusWarning\)\}/);
+	assert.match(source, /참고 안내로만 사용하세요/);
 });

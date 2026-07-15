@@ -514,13 +514,15 @@
           {#if !notesExpanded}
             <span class="monitor-card__footer-preview monitor-card__footer-preview--notes">
               {#if previewNotes.length > 0}
-                <span class="monitor-card__note-preview-user">{previewNotes[0].username}</span>
-                {#if previewNotes[0].kind === 'hold'}
-                  <span class="monitor-card__note-preview-scope">
-                    {#each holdGpuIndices(previewNotes[0]) as gpuIndex, index (gpuIndex)}{index > 0 ? '·' : ''}G{gpuIndex}{/each}
-                  </span>
-                {/if}
-                <span class="monitor-card__note-preview-content">{previewNotes[0].content}</span>
+                <span class="monitor-card__note-preview-main">
+                  {#if previewNotes[0].kind === 'hold'}
+                    <span class="monitor-card__note-preview-scope">
+                      {#each holdGpuIndices(previewNotes[0]) as gpuIndex, index (gpuIndex)}{index > 0 ? '·' : ''}G{gpuIndex}{/each}
+                    </span>
+                  {/if}
+                  <span class="monitor-card__note-preview-user">{previewNotes[0].username}</span>
+                  <span class="monitor-card__note-preview-content">{previewNotes[0].content}</span>
+                </span>
                 {#if previewNotes[0].expires_at}
                   <span class={`monitor-card__note-preview-expiry ${notePreviewBadgeClass(previewNotes[0])}`}>
                     {notePreviewCountdownText(previewNotes[0])}
@@ -548,82 +550,84 @@
               <button onclick={() => void loadNotes(true)} class="monitor-card__retry-button">다시 시도</button>
             </div>
           {:else}
-            <div class="monitor-card__memo-group monitor-card__memo-group--history">
-              <div class="monitor-card__memo-group-head">
-                <span class="monitor-card__memo-group-title">기록</span>
-                <span class="monitor-card__memo-group-meta">{visibleNotes.length}</span>
-              </div>
+            <div class="monitor-card__memo-stack">
+              <div class="monitor-card__memo-group monitor-card__memo-group--history">
+                <div class="monitor-card__memo-group-head">
+                  <span class="monitor-card__memo-group-title">기록</span>
+                  <span class="monitor-card__memo-group-meta">{visibleNotes.length}</span>
+                </div>
 
-              {#if visibleNotes.length > 0}
-                <div class="monitor-note-list">
-                  {#each visibleNotes as note (note.id)}
-                    <div class="monitor-note-item">
-                      <div class="monitor-note-item__body">
-                        <div class="monitor-note-item__meta">
-                          <span class="monitor-note-item__user">{note.username}</span>
-                          <span class="monitor-note-item__time">{noteDate(note.created_at)}</span>
-                          {#if note.expires_at}
-                            <span class="monitor-card__meta-separator" aria-hidden="true">·</span>
-                            <span class={`monitor-note-item__expiry ${noteExpiryTextClass(note)}`}>
-                              {noteRemainingText(note)}
-                            </span>
+                {#if visibleNotes.length > 0}
+                  <div class="monitor-note-list">
+                    {#each visibleNotes as note (note.id)}
+                      <div class="monitor-note-item">
+                        <div class="monitor-note-item__body">
+                          <div class="monitor-note-item__meta">
+                            <span class="monitor-note-item__user">{note.username}</span>
+                            <span class="monitor-note-item__time">{noteDate(note.created_at)}</span>
+                            {#if note.expires_at}
+                              <span class="monitor-card__meta-separator" aria-hidden="true">·</span>
+                              <span class={`monitor-note-item__expiry ${noteExpiryTextClass(note)}`}>
+                                {noteRemainingText(note)}
+                              </span>
+                            {/if}
+                          </div>
+                          {#if note.kind === 'hold'}
+                            <div class="monitor-note-item__hold">
+                              <span class="monitor-note-item__kind">HOLD</span>
+                              <span class="monitor-note-item__gpu-chips" aria-label="Selected GPUs">
+                                {#each holdGpuIndices(note) as gpuIndex (gpuIndex)}
+                                  <span class="monitor-note-item__gpu-chip">G{gpuIndex}</span>
+                                {/each}
+                              </span>
+                            </div>
+                          {/if}
+                          <p class="monitor-note-item__content">{note.content}</p>
+                          {#if deleteState[note.id]?.error}
+                            <p class="monitor-card__error-text">{deleteState[note.id].error}</p>
                           {/if}
                         </div>
-                        {#if note.kind === 'hold'}
-                          <div class="monitor-note-item__hold">
-                            <span class="monitor-note-item__kind">HOLD</span>
-                            <span class="monitor-note-item__gpu-chips" aria-label="Selected GPUs">
-                              {#each holdGpuIndices(note) as gpuIndex (gpuIndex)}
-                                <span class="monitor-note-item__gpu-chip">G{gpuIndex}</span>
-                              {/each}
-                            </span>
-                          </div>
-                        {/if}
-                        <p class="monitor-note-item__content">{note.content}</p>
-                        {#if deleteState[note.id]?.error}
-                          <p class="monitor-card__error-text">{deleteState[note.id].error}</p>
-                        {/if}
-                      </div>
 
-                      <div class="monitor-note-item__actions">
-                        <input
-                          type="password"
-                          placeholder="pw"
-                          bind:value={deletePassword[note.id]}
-                          class="monitor-note-item__password"
-                        />
-                        <button
-                          onclick={() => handleDelete(note)}
-                          disabled={deleteState[note.id]?.loading}
-                          class="monitor-note-item__delete"
-                        >
-                          {#if deleteState[note.id]?.loading}
-                            <span class="inline-block h-3 w-3 animate-spin rounded-full border border-white/20 border-t-white/60"></span>
-                          {:else}
-                            삭제
-                          {/if}
-                        </button>
+                        <div class="monitor-note-item__actions">
+                          <input
+                            type="password"
+                            placeholder="pw"
+                            bind:value={deletePassword[note.id]}
+                            class="monitor-note-item__password"
+                          />
+                          <button
+                            onclick={() => handleDelete(note)}
+                            disabled={deleteState[note.id]?.loading}
+                            class="monitor-note-item__delete"
+                          >
+                            {#if deleteState[note.id]?.loading}
+                              <span class="inline-block h-3 w-3 animate-spin rounded-full border border-white/20 border-t-white/60"></span>
+                            {:else}
+                              삭제
+                            {/if}
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  {/each}
-                </div>
-              {:else}
-                <p class="monitor-card__memo-empty">아직 등록된 메모가 없습니다.</p>
-              {/if}
-            </div>
-
-            <div class="monitor-card__memo-group monitor-card__memo-group--composer">
-              <div class="monitor-card__memo-group-head">
-                <span class="monitor-card__memo-group-title">작성</span>
-                <span class="monitor-card__memo-group-meta">GPU 선택 시 HOLD</span>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="monitor-card__memo-empty">아직 등록된 메모가 없습니다.</p>
+                {/if}
               </div>
-              <NoteForm
-                serverId={server.server_id}
-                gpus={server.gpus}
-                serverStatus={server.status}
-                lastSeen={server.last_seen}
-                onCreated={onNoteCreated}
-              />
+
+              <div class="monitor-card__memo-group monitor-card__memo-group--composer">
+                <div class="monitor-card__memo-group-head">
+                  <span class="monitor-card__memo-group-title">작성</span>
+                  <span class="monitor-card__memo-group-meta">GPU 선택 시 HOLD</span>
+                </div>
+                <NoteForm
+                  serverId={server.server_id}
+                  gpus={server.gpus}
+                  serverStatus={server.status}
+                  lastSeen={server.last_seen}
+                  onCreated={onNoteCreated}
+                />
+              </div>
             </div>
           {/if}
         </div>
