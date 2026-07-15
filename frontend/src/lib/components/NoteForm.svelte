@@ -24,7 +24,6 @@
 	let content = $state('');
 	let loading = $state(false);
 	let error = $state('');
-	let showPrecisePicker = $state(false);
 	let nowMs = $state(Date.now());
 	let expiresAtLocal = $state(defaultExpiryLocal());
 	let selectedGpuIndices = $state<number[]>([]);
@@ -104,6 +103,13 @@
 
 		return `${formatExpiryAbsolute(expiresAtDate)} · ${formatRemaining(diffMs)}`;
 	});
+	const holdWarningText = $derived.by(() => {
+		if (selectedGpuIndices.length === 0) return '';
+		if (statusWarning && telemetryStale) return '서버 상태와 텔레메트리가 불안정합니다. 참고 안내로만 사용하세요.';
+		if (statusWarning) return `서버 상태가 ${serverStatus}입니다. 참고 안내로만 사용하세요.`;
+		if (telemetryStale) return '텔레메트리가 오래되었습니다. 참고 안내로만 사용하세요.';
+		return '';
+	});
 
 	async function handleSubmit() {
 		if (!username.trim() || !sshPassword.trim() || !content.trim()) return;
@@ -135,7 +141,6 @@
 			onCreated(note);
 			content = '';
 			expiresAtLocal = defaultExpiryLocal();
-			showPrecisePicker = false;
 			selectedGpuIndices = [];
 		} catch (e) {
 			error = e instanceof Error ? e.message : '작성 실패';
@@ -153,11 +158,11 @@
 	});
 </script>
 
-<div class="note-form flex flex-col gap-1.5 pt-1.5">
-	<div class="note-form-gpu-selector">
+<div class="note-form">
+	<div class="note-form-row note-form-scope-row">
 		<div class="note-form-gpu-selector-head">
 			<span class="note-form-gpu-label">GPU 참고 홀드</span>
-			<span class="note-form-gpu-hint">선택 없으면 일반 메모</span>
+			<span class="note-form-gpu-hint">선택 없으면 일반 메모 · 비독점 HOLD</span>
 		</div>
 		<div class="note-form-gpu-chip-row" role="group" aria-label="GPU 선택(선택 시 참고 홀드)">
 			{#each sortedGpus as gpu (gpu.index)}
@@ -171,105 +176,69 @@
 				</button>
 			{/each}
 		</div>
-		{#if selectedGpuIndices.length > 0}
-			<div class="note-form-hold-block" aria-live="polite">
-				<p class="note-form-hold-copy">선택한 GPU는 비독점 참고 홀드입니다. 실제 상태는 텔레메트리가 기준입니다.</p>
-				{#if selectedGpuIndices.length > 0 && (telemetryStale || statusWarning)}
-					<p class="note-form-hold-warning">
-						{#if statusWarning && telemetryStale}
-							서버 상태와 텔레메트리가 불안정합니다. 참고 안내로만 사용하세요.
-						{:else if statusWarning}
-							서버 상태가 {serverStatus}입니다. 참고 안내로만 사용하세요.
-						{:else}
-							텔레메트리가 오래되었습니다. 참고 안내로만 사용하세요.
-						{/if}
-					</p>
-				{/if}
-			</div>
+		{#if selectedGpuIndices.length > 0 && (telemetryStale || statusWarning)}
+			<p class="note-form-hold-warning" aria-live="polite">{holdWarningText}</p>
 		{/if}
 	</div>
 
-	<div class="note-form-identity-row">
-		<input
-			type="text"
-			placeholder="이름"
-			bind:value={username}
-			class="note-form-input note-form-input-half min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20"
-		/>
-		<input
-			type="password"
-			placeholder="비밀번호"
-			bind:value={sshPassword}
-			class="note-form-input note-form-input-half min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20"
-		/>
-	</div>
-
-	<textarea
-		placeholder="내용"
-		bind:value={content}
-		rows="2"
-		class="note-form-textarea w-full rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/20 resize-none"
-	></textarea>
-
-	<div class="note-form-time-block">
-		<div class="note-form-time-row">
-			<span class="note-form-expiry-label">자동 삭제</span>
-
-			<div class="note-form-expiry-controls">
-				<button type="button" onclick={() => shiftExpiry(-ONE_HOUR_MS)} class="note-form-expiry-adjust" title="-1시간">
-					-1h
-				</button>
-				<button type="button" onclick={() => shiftExpiry(ONE_HOUR_MS)} class="note-form-expiry-adjust" title="+1시간">
-					+1h
-				</button>
-			</div>
-
-			<span class="note-form-expiry-divider" aria-hidden="true">|</span>
-
-			<div class="note-form-expiry-controls">
-				<button type="button" onclick={() => shiftExpiry(-ONE_DAY_MS)} class="note-form-expiry-adjust" title="-1일">
-					-1d
-				</button>
-				<button type="button" onclick={() => shiftExpiry(ONE_DAY_MS)} class="note-form-expiry-adjust" title="+1일">
-					+1d
-				</button>
-			</div>
-
-			<button type="button" onclick={() => { showPrecisePicker = !showPrecisePicker; }} class="note-form-expiry-toggle">
-				{showPrecisePicker ? '직접 설정 닫기' : '시간 직접 설정'}
-			</button>
-			<button type="button" onclick={handleSubmit} disabled={loading} class="note-form-submit-primary">
-				{#if loading}
-					<span class="inline-block h-3.5 w-3.5 rounded-full border border-white/30 border-t-white/90 animate-spin"></span>
-				{:else}
-					작성
-				{/if}
-			</button>
-		</div>
-
-		<div class="note-form-expiry-summary-row">
-			<span class="note-form-expiry-summary-label">삭제 예정</span>
-			<span class="note-form-expiry-summary">{expirySummaryText}</span>
-		</div>
-	</div>
-
-	{#if showPrecisePicker}
-		<div class="note-form-precision">
+	<div class="note-form-row note-form-entry-row">
+		<div class="note-form-identity-stack">
 			<input
-				type="datetime-local"
-				bind:value={expiresAtLocal}
-				min={minExpiryLocal}
-				class="note-form-input note-form-precision-input min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/80 focus:outline-none focus:border-white/20"
+				type="text"
+				placeholder="이름"
+				aria-label="작성자 이름"
+				bind:value={username}
+				class="note-form-input"
 			/>
-			<span class="note-form-precision-meta">{expirySummaryText}</span>
+			<input
+				type="password"
+				placeholder="비밀번호"
+				aria-label="메모 관리자 비밀번호"
+				bind:value={sshPassword}
+				class="note-form-input"
+			/>
 		</div>
-	{/if}
 
-	<div class="note-form-footer flex items-center justify-between gap-2">
-		{#if error}
-			<span class="text-xs text-red-400">{error}</span>
-		{:else}
-			<span></span>
-		{/if}
+		<textarea
+			placeholder="내용"
+			aria-label="메모 내용"
+			bind:value={content}
+			rows="2"
+			class="note-form-textarea"
+		></textarea>
+	</div>
+
+	<div class="note-form-row note-form-submit-row">
+		<div class="note-form-submit-main">
+			<div class="note-form-expiry-row">
+				<span class="note-form-expiry-label">자동 삭제</span>
+				<input
+					type="datetime-local"
+					aria-label="자동 삭제 시간"
+					bind:value={expiresAtLocal}
+					min={minExpiryLocal}
+					class="note-form-precision-input note-form-expiry-field"
+				/>
+				<div class="note-form-expiry-controls">
+					<button type="button" onclick={() => shiftExpiry(-ONE_HOUR_MS)} class="note-form-expiry-adjust" title="-1시간">-1h</button>
+					<button type="button" onclick={() => shiftExpiry(ONE_HOUR_MS)} class="note-form-expiry-adjust" title="+1시간">+1h</button>
+					<button type="button" onclick={() => shiftExpiry(-ONE_DAY_MS)} class="note-form-expiry-adjust" title="-1일">-1d</button>
+					<button type="button" onclick={() => shiftExpiry(ONE_DAY_MS)} class="note-form-expiry-adjust" title="+1일">+1d</button>
+				</div>
+			</div>
+			{#if error}
+				<p class="note-form-inline-meta note-form-inline-meta--error" aria-live="polite">{error}</p>
+			{:else}
+				<p class="note-form-inline-meta" title={expirySummaryText}>{expirySummaryText}</p>
+			{/if}
+		</div>
+
+		<button type="button" onclick={handleSubmit} disabled={loading} class="note-form-submit-primary">
+			{#if loading}
+				<span class="inline-block h-3.5 w-3.5 rounded-full border border-white/30 border-t-white/90 animate-spin"></span>
+			{:else}
+				작성
+			{/if}
+		</button>
 	</div>
 </div>

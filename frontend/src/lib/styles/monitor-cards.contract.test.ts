@@ -337,3 +337,54 @@ test('memo history and composer are grouped without nested card surfaces', () =>
 	const emptyRule = cssRule('.monitor-card__memo-empty');
 	assert.match(emptyRule, /font-size:\s*0\.6[0-9]rem/);
 });
+
+
+test('collapsed note preview uses a fixed expiry column and plain text countdown instead of a pill badge', () => {
+	const previewRule = cssRule('.monitor-card__footer-preview--notes');
+	assertDeclaration(previewRule, 'display', 'grid');
+	assertDeclaration(previewRule, 'grid-template-columns', 'minmax(0, 1fr) auto');
+	assertDeclaration(previewRule, 'align-items', 'center');
+
+	const mainRule = cssRule('.monitor-card__note-preview-main');
+	assertDeclaration(mainRule, 'min-width', '0');
+	assertDeclaration(mainRule, 'display', 'inline-flex');
+
+	const expiryRule = cssRule('.monitor-card__note-preview-expiry');
+	assertDeclaration(expiryRule, 'justify-self', 'end');
+	assertDeclaration(expiryRule, 'font-variant-numeric', 'tabular-nums');
+	assert.doesNotMatch(expiryRule, /background\s*:/);
+	assert.doesNotMatch(expiryRule, /border\s*:/);
+	assert.doesNotMatch(expiryRule, /border-radius\s*:/);
+});
+
+test('note composer uses three dense rows with shared-surface note history styling', () => {
+	const formRule = cssRule('.monitor-card .note-form');
+	assertDeclaration(formRule, 'gap', '0.34rem');
+
+	const rowRule = cssRule('.monitor-card .note-form-row');
+	assertDeclaration(rowRule, 'min-width', '0');
+
+	const scopeRule = cssRule('.monitor-card .note-form-scope-row');
+	assertDeclaration(scopeRule, 'display', 'grid');
+
+	const entryRule = cssRule('.monitor-card .note-form-entry-row');
+	assertDeclaration(entryRule, 'display', 'grid');
+	assertDeclaration(entryRule, 'grid-template-columns', 'minmax(0, 0.9fr) minmax(0, 1.6fr)');
+
+	const identityRule = cssRule('.monitor-card .note-form-identity-stack');
+	assertDeclaration(identityRule, 'display', 'grid');
+
+	const submitRule = cssRule('.monitor-card .note-form-submit-row');
+	assertDeclaration(submitRule, 'display', 'grid');
+	assertDeclaration(submitRule, 'grid-template-columns', 'minmax(0, 1fr) auto');
+
+	const textareaRule = cssRule('.monitor-card .note-form-textarea');
+	assertDeclaration(textareaRule, 'min-height', '2.35rem');
+	assertDeclaration(textareaRule, 'resize', 'none');
+
+	const noteRule = cssRule('.monitor-note-item');
+	assertDeclaration(noteRule, 'background', 'transparent');
+
+	const listRule = cssRule('.monitor-note-item + .monitor-note-item');
+	assert.match(listRule, /border-top\s*:/);
+});

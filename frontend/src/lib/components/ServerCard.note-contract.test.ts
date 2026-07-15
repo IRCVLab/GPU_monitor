@@ -64,3 +64,11 @@ test('ServerCard renders collapsed system preview as four named micro-items', ()
 	assert.match(source, /title=\{`Disk \$\{diskPreviewText\}`\}/);
 	assert.doesNotMatch(source, /segments\.join\(' · '\)/);
 });
+
+
+test('ServerCard collapsed hold preview leads with GPU scope and keeps expiry outside the memo line', () => {
+	const preview = source.match(/monitor-card__footer-preview monitor-card__footer-preview--notes[\s\S]*?monitor-card__footer-disclosure/)?.[0] ?? '';
+	assert.match(preview, /monitor-card__note-preview-main/);
+	assert.match(preview, /monitor-card__note-preview-scope[\s\S]*monitor-card__note-preview-user[\s\S]*monitor-card__note-preview-content/);
+	assert.match(preview, /monitor-card__note-preview-expiry/);
+});
