@@ -1,5 +1,7 @@
 # Dashboard Motion and Refresh Semantics Implementation Plan
 
+> **Superseded scope:** Do not execute the response-synchronized refresh work or the solid Compact occupied-fill rules below. Refresh cadence, collapsed-indicator containment, and Compact occupied styling are replaced by `2026-07-15-continuous-refresh-satellite.md`. This file remains only as history for the FLIP layout work and the original shared-state model.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add coherent layout motion, a response-synchronized refresh ring, a left-side collapsed indicator, and one GPU occupancy color language across Full and Compact views.
@@ -13,12 +15,12 @@
 - Do not modify or restart the live `monitoring_v2` service on port 5173.
 - Add no dependencies.
 - Preserve saved server order and both Full/Compact view preferences.
-- Available and occupied use one shared accent in inverse treatments in every view: available is dark with accent text/border; occupied is accent-filled with near-black text; unknown/stale is neutral.
+- Full and Compact share the same availability state model, but their visual surfaces may differ. Current Compact occupied slots use a restrained accent tint; available remains dark and outlined; unknown/stale is neutral.
 - Respect `prefers-reduced-motion: reduce`.
 
 ---
 
-### Task 1: Shared refresh ring and completion-synchronized cycle
+### Task 1: Shared refresh ring and completion-synchronized cycle (superseded)
 
 **Files:**
 - Create: `frontend/src/lib/components/RefreshRing.svelte`
