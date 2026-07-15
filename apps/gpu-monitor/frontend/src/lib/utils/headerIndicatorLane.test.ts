@@ -4,7 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	INDICATOR_PANEL_CLEARANCE_PX,
-	resolveIndicatorLaneHeight
+	resolveIndicatorLaneHeight,
+	shouldSyncIndicatorLane
 // @ts-expect-error Node strip-types executes the .ts helper directly.
 } from './headerIndicatorLane.ts';
 
@@ -55,4 +56,13 @@ test('expanded header or hidden indicator does not reserve a compact lane', () =
 		}),
 		0
 	);
+});
+
+
+test("lane sync runs only when compact visibility state actually changes", () => {
+	assert.equal(shouldSyncIndicatorLane(false, false, true, true), true);
+	assert.equal(shouldSyncIndicatorLane(true, true, false, false), true);
+	assert.equal(shouldSyncIndicatorLane(true, false, true, true), true);
+	assert.equal(shouldSyncIndicatorLane(true, true, true, true), false);
+	assert.equal(shouldSyncIndicatorLane(false, false, false, false), false);
 });

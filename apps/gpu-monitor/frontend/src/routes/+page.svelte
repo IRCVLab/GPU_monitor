@@ -41,8 +41,8 @@
 		updateHeaderVisibility
 	} from '$lib/utils/headerVisibility';
 	import {
-		INDICATOR_PANEL_CLEARANCE_PX,
-		resolveIndicatorLaneHeight
+		resolveIndicatorLaneHeight,
+		shouldSyncIndicatorLane
 	} from '$lib/utils/headerIndicatorLane';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
 	import { getServerStatus, getServers } from '$lib/api';
@@ -490,7 +490,6 @@
 		if (!browser) return;
 
 		const syncToken = ++indicatorLaneSyncToken;
-		const scrollYBeforeSync = window.scrollY;
 		await tick();
 		await nextFrame();
 		if (syncToken !== indicatorLaneSyncToken) return;
@@ -512,11 +511,7 @@
 				suppressHeaderScrollSync = false;
 				return;
 			}
-			if (window.scrollY !== scrollYBeforeSync) {
-				window.scrollTo({ top: scrollYBeforeSync, behavior: 'auto' });
-			}
 		}
-		await alignDashboardContentBelowIndicatorLane();
 		headerPreviousY = currentHeaderScrollPosition();
 		headerScrollDirection = null;
 		headerScrollDistance = 0;
@@ -528,33 +523,11 @@
 		void syncIndicatorLaneAfterDom();
 	}
 
-	async function alignDashboardContentBelowIndicatorLane(): Promise<void> {
-		if (!browser || !headerCompact || !headerIndicatorVisible) return;
-
-		for (let attempt = 0; attempt < 6; attempt += 1) {
-			const laneFloor = indicatorPanelOpen && indicatorPanelElement
-				? indicatorPanelElement.getBoundingClientRect().bottom + INDICATOR_PANEL_CLEARANCE_PX
-				: indicatorTriggerElement?.getBoundingClientRect().bottom ?? indicatorLaneHeightPx;
-			const visibleCardRects = Array.from(document.querySelectorAll('.monitor-card'))
-				.filter((card): card is HTMLElement => card instanceof HTMLElement)
-				.map((card) => card.getBoundingClientRect())
-				.filter((rect) => rect.bottom > 0 && rect.top < laneFloor);
-			if (visibleCardRects.length === 0) return;
-
-			const topmostCardTop = Math.min(...visibleCardRects.map((rect) => rect.top));
-			const requiredShift = Math.ceil(laneFloor - topmostCardTop);
-			if (requiredShift <= 0) return;
-
-			const nextScrollY = Math.max(0, window.scrollY - requiredShift);
-			if (nextScrollY === window.scrollY) return;
-			window.scrollTo({ top: nextScrollY, behavior: 'auto' });
-			await nextFrame();
-		}
-	}
-
 	function updateHeaderFromScroll(): void {
 		headerScrollFrame = null;
 		const currentY = currentHeaderScrollPosition();
+		const previousCompact = headerCompact;
+		const previousIndicatorVisible = headerIndicatorVisible;
 		const result = updateHeaderVisibility({
 			currentY,
 			previousY: headerPreviousY,
@@ -568,7 +541,16 @@
 		headerCompact = result.compact;
 		headerIndicatorVisible = result.indicatorVisible;
 		if (!result.indicatorVisible) indicatorPanelOpen = false;
-		scheduleIndicatorLaneSync();
+		if (
+			shouldSyncIndicatorLane(
+				previousCompact,
+				previousIndicatorVisible,
+				result.compact,
+				result.indicatorVisible
+			)
+		) {
+			scheduleIndicatorLaneSync();
+		}
 		headerPreviousY = result.nextPreviousY;
 		headerScrollDirection = result.nextDirection;
 		headerScrollDistance = result.nextAccumulatedDelta;

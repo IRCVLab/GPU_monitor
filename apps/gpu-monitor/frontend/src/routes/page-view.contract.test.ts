@@ -238,7 +238,9 @@ test('compact indicator lane is measured from live geometry instead of fixed pad
 	assert.match(pageSource, /bind:this=\{indicatorTriggerElement\}/);
 	assert.match(pageSource, /bind:this=\{indicatorPanelElement\}/);
 	assert.match(pageSource, /function syncIndicatorLaneAfterDom\(/);
-	assert.match(pageSource, /window\.scrollTo\(\{\s*top:\s*scrollYBeforeSync,\s*behavior:\s*'auto'\s*\}\)/);
+	const laneSyncBody = functionBody(pageSource, 'syncIndicatorLaneAfterDom');
+	assert.doesNotMatch(laneSyncBody, /window\.scrollTo|alignDashboardContentBelowIndicatorLane/);
+	assert.match(pageSource, /shouldSyncIndicatorLane/);
 	assert.match(pageSource, /class:ops-page-compact=\{headerCompact\}/);
 	assert.match(pageSource, /class:ops-page-indicator-panel-open=\{headerCompact && indicatorPanelOpen\}/);
 });
