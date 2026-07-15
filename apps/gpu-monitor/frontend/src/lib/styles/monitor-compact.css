@@ -1,5 +1,4 @@
 .compact-dashboard {
-	--compact-rack-template: clamp(4.5rem, 18vw, 8.25rem) repeat(8, minmax(22px, 1fr));
 	position: relative;
 	display: grid;
 	gap: 0.55rem;

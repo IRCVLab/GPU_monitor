@@ -29,7 +29,6 @@
 		onTooltipChange?: (tooltip: CompactTooltip | null) => void;
 	} = $props();
 
-	let rowButton = $state<HTMLButtonElement | null>(null);
 
 	const statusConfig: Record<ServerStatus, { label: string }> = {
 		online: { label: '정상' },
@@ -109,7 +108,6 @@
 
 <article class="compact-row" class:has-available={hasAvailable}>
 	<button
-		bind:this={rowButton}
 		type="button"
 		class="compact-row__select"
 		aria-label={rowAriaLabel()}
