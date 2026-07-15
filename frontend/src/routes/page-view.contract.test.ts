@@ -232,17 +232,12 @@ test('persistent header shows semantic health and cadence without visible second
 	assert.doesNotMatch(pageSource, /'갱신 중'|'동기화'/, 'ordinary in-flight requests must not create visible transient status copy');
 });
 
-test('compact indicator lane is measured from live geometry instead of fixed padding constants', () => {
-	assert.match(pageSource, /import \{[\s\S]*resolveIndicatorLaneHeight[\s\S]*\} from '\$lib\/utils\/headerIndicatorLane';/);
-	assert.match(pageSource, /let indicatorLaneHeightPx = \$state\(0\);/);
-	assert.match(pageSource, /bind:this=\{indicatorTriggerElement\}/);
-	assert.match(pageSource, /bind:this=\{indicatorPanelElement\}/);
-	assert.match(pageSource, /function syncIndicatorLaneAfterDom\(/);
-	const laneSyncBody = functionBody(pageSource, 'syncIndicatorLaneAfterDom');
-	assert.doesNotMatch(laneSyncBody, /window\.scrollTo|alignDashboardContentBelowIndicatorLane/);
-	assert.match(pageSource, /shouldSyncIndicatorLane/);
-	assert.match(pageSource, /class:ops-page-compact=\{headerCompact\}/);
-	assert.match(pageSource, /class:ops-page-indicator-panel-open=\{headerCompact && indicatorPanelOpen\}/);
+test('collapsed indicator is fixed and reserves no dashboard layout lane', () => {
+	assert.doesNotMatch(pageSource, /headerIndicatorLane|resolveIndicatorLaneHeight|shouldSyncIndicatorLane/);
+	assert.doesNotMatch(pageSource, /indicatorLaneHeightPx|syncIndicatorLaneAfterDom|scheduleIndicatorLaneSync/);
+	assert.doesNotMatch(pageSource, /--ops-indicator-lane-height/);
+	assert.doesNotMatch(pageSource, /class:ops-page-compact|class:ops-page-indicator-panel-open/);
+	assert.doesNotMatch(pageSource, /bind:this=\{indicatorTriggerElement\}|bind:this=\{indicatorPanelElement\}/);
 });
 
 test('header warning copy appears only after persistent refresh trouble', () => {

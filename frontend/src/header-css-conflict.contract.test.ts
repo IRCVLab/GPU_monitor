@@ -231,31 +231,16 @@ test('compact indicator panel and its network buttons are hit-testable only thro
 	assert.match(pageSource, /onclick=\{\(\) => selectNetwork\(tab\.value\)\}/, 'network buttons retain click handlers');
 });
 
-test('compact header lane is state-driven, slim by default, and no longer uses fixed panel-open padding recipes', () => {
-	assert.match(pageSource, /class:ops-page-compact=\{headerCompact\}/, 'page exposes compact state at the page level');
-	assert.match(pageSource, /class:ops-page-indicator-panel-open=\{headerCompact && indicatorPanelOpen\}/, 'page exposes the open compact indicator state at the page level');
-	assert.match(pageSource, /--ops-indicator-lane-height:\s*\$\{indicatorLaneHeightPx\}px;/, 'page drives the indicator lane through a measured CSS variable');
-	assert.match(pageSource, /class:ops-header-indicator-panel-open=\{indicatorPanelOpen\}/, 'page still exposes panel-open state on the shell');
-
+test('compact header collapses to zero layout height while the indicator remains fixed', () => {
 	const compactShell = declarationBlock(
 		dashboardCss,
 		'.ops-header-shell.ops-header-compact',
 		'padding-top'
 	);
-	assert.match(compactShell, /padding-top\s*:\s*var\(--ops-indicator-lane-height,\s*0px\)/, 'compact shell reserves only the measured indicator lane');
-
-	const pageCompact = declarationBlock(
-		dashboardCss,
-		'.dashboard-page.ops-page-compact',
-		'overflow-anchor'
-	);
-	assert.match(pageCompact, /overflow-anchor\s*:\s*none(?:;|\s)/, 'compact page disables scroll anchoring while lane height changes');
-
-	assert.doesNotMatch(
-		dashboardCss,
-		/\.ops-header-shell\.ops-header-compact\.ops-header-indicator-panel-open\s*\{[\s\S]*padding-top\s*:\s*calc\(env\(safe-area-inset-top, 0px\) \+ (?:5rem|9\.5rem)\)/,
-		'fixed compact panel-open padding recipes must be removed in favor of measured lane reserve'
-	);
+	assert.match(compactShell, /padding-top\s*:\s*0(?:;|\s)/, 'compact shell must not reserve an indicator lane');
+	assert.doesNotMatch(dashboardCss, /--ops-indicator-lane-height|\.dashboard-page\.ops-page-compact/);
+	assert.doesNotMatch(pageSource, /indicatorLaneHeightPx|syncIndicatorLaneAfterDom|scheduleIndicatorLaneSync/);
+	assert.match(dashboardCss, /\.ops-indicator-anchor\s*\{[\s\S]*position\s*:\s*fixed\b/);
 });
 
 test('monitor-dashboard.css owns header menu positioning and stacking', () => {
