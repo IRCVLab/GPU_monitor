@@ -33,6 +33,7 @@
   const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
   type GpuHoldCue = { owner: string; remaining: string; memo: string };
+  type MetricLevel = 'normal' | 'medium' | 'high';
 
   const statusConfig: Record<ServerStatus, { label: string }> = {
     online: { label: '정상' },
@@ -66,6 +67,13 @@
       second: '2-digit',
       hour12: false
     }).format(new Date(iso));
+  }
+
+  function metricLevel(percent: number | null | undefined): MetricLevel {
+    if (!Number.isFinite(percent)) return 'normal';
+    if ((percent ?? 0) >= 90) return 'high';
+    if ((percent ?? 0) >= 75) return 'medium';
+    return 'normal';
   }
 
   function parseNoteTime(iso: string | null): number | null {
@@ -182,19 +190,13 @@
       (a, b) => b.percent - a.percent || a.mount.localeCompare(b.mount)
     )
   );
-  const systemPreviewText = $derived.by(() => {
-    const segments = [
-      `CPU ${server.system ? `${cpuPct.toFixed(0)}%` : '–'}`,
-      `RAM ${server.system ? `${ramUsed}/${ramTotal}GB` : '–'}`,
-      `GPU ${totalGpuPowerText}`
-    ];
-
-    if (storageSummary) {
-      segments.push(`Disk ${storagePct.toFixed(0)}%`);
-    }
-
-    return segments.join(' · ');
-  });
+  const cpuPreviewText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : '–');
+  const ramPreviewText = $derived(server.system ? `${ramUsed}/${ramTotal}GB` : '–');
+  const diskPreviewText = $derived(storageSummary ? `${storagePct.toFixed(0)}%` : '–');
+  const cpuLevel = $derived(server.system ? metricLevel(cpuPct) : 'normal');
+  const ramLevel = $derived(server.system ? metricLevel(ramPct) : 'normal');
+  const gpuLevel = $derived('normal');
+  const diskLevel = $derived(storageSummary ? metricLevel(storagePct) : 'normal');
   const hasSystemSection = $derived(Boolean(server.system || server.storage || server.gpus.length > 0));
 
   const visibleNotes = $derived.by(() => notes.filter((note) => noteVisible(note)));
@@ -310,7 +312,11 @@
           <h2 class="monitor-card__title">{server.server_name}</h2>
           <span class="monitor-card__status" data-status={server.status} title={statusTooltip}>
             <span class="monitor-card__status-dot" aria-hidden="true"></span>
-            <span class="monitor-card__status-text">{statusMeta.label}</span>
+            {#if statusMeta.label === '정상'}
+              <span class="monitor-card__status-text monitor-card__sr-only">{statusMeta.label}</span>
+            {:else}
+              <span class="monitor-card__status-text">{statusMeta.label}</span>
+            {/if}
           </span>
           {#if showNetwork}
             <span class="monitor-card__network">{server.network === 'internal' ? '내부망' : '외부망'}</span>
@@ -373,8 +379,23 @@
           </span>
           <span class="monitor-card__footer-side">
             {#if !sysExpanded}
-              <span class="monitor-card__footer-preview" title={systemPreviewText}>
-                {systemPreviewText}
+              <span class="monitor-card__footer-preview monitor-card__system-preview" aria-label="시스템 요약">
+                <span class="monitor-card__system-preview-item" data-level={cpuLevel}>
+                  <small>CPU</small>
+                  <strong>{server.system ? `${cpuPct.toFixed(0)}%` : '–'}</strong>
+                </span>
+                <span class="monitor-card__system-preview-item" data-level={ramLevel}>
+                  <small>RAM</small>
+                  <strong>{server.system ? `${ramUsed}/${ramTotal}GB` : '–'}</strong>
+                </span>
+                <span class="monitor-card__system-preview-item" data-level={gpuLevel}>
+                  <small>GPU</small>
+                  <strong>{totalGpuPowerText}</strong>
+                </span>
+                <span class="monitor-card__system-preview-item" data-level={diskLevel}>
+                  <small>Disk</small>
+                  <strong>{storageSummary ? `${storagePct.toFixed(0)}%` : '–'}</strong>
+                </span>
               </span>
             {/if}
             <span class="monitor-card__footer-disclosure" class:is-expanded={sysExpanded} aria-hidden="true"></span>
@@ -383,24 +404,44 @@
 
         {#if sysExpanded}
           <div id={`system-panel-${server.server_id}`} class="monitor-card__footer-panel">
-            {#if server.system}
-              <div class="monitor-card__metric-stack">
-                <div class="monitor-card__metric-row">
-                  <span class="monitor-card__metric-name">CPU</span>
-                  <div class="monitor-meter" aria-hidden="true">
-                    <div class="monitor-meter__fill monitor-meter__fill--util" style={`width: ${Math.min(100, cpuPct)}%`}></div>
-                  </div>
-                  <span class="monitor-card__metric-value">{cpuPct.toFixed(0)}%</span>
+            <div class="monitor-card__metric-stack monitor-card__system-summary">
+              <div class="monitor-card__summary-item" data-level={cpuLevel}>
+                <div class="monitor-card__summary-head">
+                  <span class="monitor-card__summary-label">CPU</span>
+                  <span class="monitor-card__summary-value">{cpuPreviewText}</span>
                 </div>
-                <div class="monitor-card__metric-row">
-                  <span class="monitor-card__metric-name">RAM</span>
-                  <div class="monitor-meter" aria-hidden="true">
-                    <div class="monitor-meter__fill monitor-meter__fill--memory" style={`width: ${Math.min(100, ramPct)}%`}></div>
-                  </div>
-                  <span class="monitor-card__metric-value">{ramUsed}/{ramTotal}GB</span>
+                <div class="monitor-meter" aria-hidden="true">
+                  <div class="monitor-meter__fill monitor-meter__fill--util" style={`width: ${Math.min(100, cpuPct)}%`}></div>
                 </div>
               </div>
-            {/if}
+              <div class="monitor-card__summary-item" data-level={ramLevel}>
+                <div class="monitor-card__summary-head">
+                  <span class="monitor-card__summary-label">RAM</span>
+                  <span class="monitor-card__summary-value">{ramPreviewText}</span>
+                </div>
+                <div class="monitor-meter" aria-hidden="true">
+                  <div class="monitor-meter__fill monitor-meter__fill--memory" style={`width: ${Math.min(100, ramPct)}%`}></div>
+                </div>
+              </div>
+              <div class="monitor-card__summary-item" data-level={gpuLevel}>
+                <div class="monitor-card__summary-head">
+                  <span class="monitor-card__summary-label">GPU</span>
+                  <span class="monitor-card__summary-value">{totalGpuPowerText}</span>
+                </div>
+                <div class="monitor-card__summary-meta">
+                  {server.gpus.length > 0 ? `${server.gpus.length} devices` : 'GPU 없음'}
+                </div>
+              </div>
+              <div class="monitor-card__summary-item" data-level={diskLevel}>
+                <div class="monitor-card__summary-head">
+                  <span class="monitor-card__summary-label">Disk</span>
+                  <span class="monitor-card__summary-value">{diskPreviewText}</span>
+                </div>
+                <div class="monitor-meter" aria-hidden="true">
+                  <div class="monitor-meter__fill monitor-meter__fill--storage" style={`width: ${Math.min(100, storagePct)}%`}></div>
+                </div>
+              </div>
+            </div>
 
             {#if server.gpus.length > 0}
               <div class="monitor-card__subsection">

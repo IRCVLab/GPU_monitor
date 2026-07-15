@@ -69,6 +69,11 @@
   color: color-mix(in srgb, var(--ops-fg) 58%, transparent);
 }
 
+.monitor-card__status-text {
+  display: inline-flex;
+  align-items: center;
+}
+
 .monitor-card__status-dot {
   width: 0.5rem;
   height: 0.5rem;
@@ -103,11 +108,26 @@
 
 .monitor-card__meta {
   display: flex;
-  flex-wrap: wrap;
+  min-width: 0;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.2rem 0.45rem;
+  overflow: hidden;
+  white-space: nowrap;
   font-size: 0.72rem;
   color: color-mix(in srgb, var(--ops-fg) 42%, transparent);
+}
+
+.monitor-card__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .monitor-card__host,
@@ -134,6 +154,17 @@
 .monitor-card__host,
 .monitor-card__refresh {
   font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+}
+
+.monitor-card__host {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.monitor-card__refresh {
+  flex: 0 0 auto;
 }
 
 .monitor-card__meta-separator {
@@ -476,6 +507,57 @@
   color: color-mix(in srgb, var(--ops-fg) 44%, transparent);
 }
 
+.monitor-card__system-preview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, max-content));
+  justify-content: end;
+  gap: 0.45rem;
+  white-space: normal;
+}
+
+.monitor-card__system-preview-item {
+  min-width: 0;
+  display: inline-grid;
+  grid-template-columns: auto;
+  justify-items: end;
+  gap: 0.08rem;
+}
+
+.monitor-card__system-preview-item small,
+.monitor-card__summary-label,
+.monitor-card__summary-meta {
+  font-size: 0.58rem;
+  line-height: 1;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.monitor-card__system-preview-item small {
+  font-size: 0.58rem;
+  line-height: 1;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ops-fg) 30%, transparent);
+}
+
+.monitor-card__system-preview-item strong {
+  font-size: 0.66rem;
+  line-height: 1;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--ops-fg) 44%, transparent);
+}
+
+.monitor-card__system-preview-item[data-level='medium'] strong,
+.monitor-card__summary-item[data-level='medium'] .monitor-card__summary-value {
+  color: color-mix(in srgb, #f59e0b 72%, var(--ops-fg));
+}
+
+.monitor-card__system-preview-item[data-level='high'] strong,
+.monitor-card__summary-item[data-level='high'] .monitor-card__summary-value {
+  color: color-mix(in srgb, #ef4444 74%, var(--ops-fg));
+}
+
 .monitor-card__footer-preview--notes {
   display: inline-flex;
   align-items: center;
@@ -607,6 +689,46 @@
   gap: 0.32rem;
 }
 
+.monitor-card__system-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem 0.5rem;
+}
+
+.monitor-card__summary-item {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.monitor-card__summary-head {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.monitor-card__summary-label {
+  color: color-mix(in srgb, var(--ops-fg) 34%, transparent);
+}
+
+.monitor-card__summary-meta {
+  color: color-mix(in srgb, var(--ops-fg) 36%, transparent);
+}
+
+.monitor-card__summary-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  line-height: 1.1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--ops-fg) 52%, transparent);
+}
+
 .monitor-card__metric-name,
 .monitor-card__loading-state,
 .monitor-card__retry-button,
@@ -637,13 +759,13 @@
 
 .monitor-card__subsection {
   display: grid;
-  gap: 0.36rem;
+  gap: 0.28rem;
 }
 
 .monitor-card__hardware-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(4.8rem, 1fr));
-  gap: 0.24rem;
+  gap: 0.18rem 0.24rem;
 }
 
 .monitor-card__hardware-item,
@@ -658,8 +780,11 @@
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 0.18rem;
-  padding: 0.22rem 0.28rem;
-  border-radius: 0.48rem;
+  min-height: 1.5rem;
+  padding: 0.08rem 0.18rem;
+  border-width: 0;
+  border-radius: 0.24rem;
+  background: transparent;
 }
 
 .monitor-card__hardware-index,
@@ -699,7 +824,7 @@
   gap: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
-  border-radius: 0.48rem;
+  border-radius: 0.6rem;
 }
 
 .monitor-card__mount-item {
@@ -707,9 +832,10 @@
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.42rem;
-  padding: 0.26rem 0.42rem;
+  min-height: 1.5rem;
+  padding: 0.08rem 0.42rem;
   border-width: 1px 0 0;
-  border-radius: 0.48rem;
+  border-radius: 0.24rem;
   background: transparent;
 }
 
@@ -1004,6 +1130,18 @@
 
   .monitor-card__footer-preview--notes {
     justify-content: flex-end;
+  }
+
+  .monitor-card__system-preview {
+    gap: 0.32rem;
+  }
+
+  .monitor-card__hardware-item {
+    min-height: 1.5rem;
+  }
+
+  .monitor-card__mount-item {
+    min-height: 1.5rem;
   }
 
 }

@@ -258,6 +258,63 @@ test('collapsed utility rows use subtle markers and CSS disclosure angles', () =
 	assertDeclaration(expandedRule, 'transform', 'rotate(225deg)');
 });
 
+test('task 5 full card header and system density follow the quiet instrument contract', () => {
+	const statusTextRule = cssRule('.monitor-card__status-text');
+	assert.doesNotMatch(statusTextRule, /display:\s*none/);
+
+	const srOnlyRule = cssRule('.monitor-card__sr-only');
+	assert.match(srOnlyRule, /position:\s*absolute/);
+	assert.match(srOnlyRule, /width:\s*1px/);
+	assert.match(srOnlyRule, /height:\s*1px/);
+	assert.match(srOnlyRule, /clip:\s*rect\(0,\s*0,\s*0,\s*0\)/);
+
+	const headerMetaRule = cssRule('.monitor-card__meta');
+	assertDeclaration(headerMetaRule, 'flex-wrap', 'nowrap');
+	assertDeclaration(headerMetaRule, 'white-space', 'nowrap');
+
+	const previewRule = cssRule('.monitor-card__system-preview');
+	assert.match(previewRule, /display:\s*grid/);
+	assert.match(previewRule, /grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*max-content\)\)/);
+
+	const previewItemRule = cssRule('.monitor-card__system-preview-item');
+	assert.match(previewItemRule, /display:\s*inline-grid/);
+	assert.match(previewItemRule, /grid-template-columns:\s*auto/);
+	assertDeclaration(previewItemRule, 'gap', '0.08rem');
+
+	const previewLabelRule = cssRule('.monitor-card__system-preview-item small');
+	assert.match(previewLabelRule, /text-transform:\s*uppercase/);
+	assert.match(previewLabelRule, /font-size:\s*0\.5[0-9]rem/);
+
+	const previewValueRule = cssRule('.monitor-card__system-preview-item strong');
+	assert.match(previewValueRule, /font-size:\s*0\.6[0-9]rem/);
+	assert.match(previewValueRule, /font-variant-numeric:\s*tabular-nums/);
+
+	const footerToggleRule = cssRule('.monitor-card__footer-toggle');
+	assert.ok(remValues(declarationValue(footerToggleRule, 'min-height'))[0] <= 1.875);
+
+	const systemSummaryRule = cssRule('.monitor-card__system-summary');
+	assert.match(systemSummaryRule, /display:\s*grid/);
+	assert.match(systemSummaryRule, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+
+	const hardwareRule = cssRule('.monitor-card__hardware-item');
+	assertDeclaration(hardwareRule, 'min-height', '1.5rem');
+	assert.match(hardwareRule, /background:\s*transparent/);
+	assert.doesNotMatch(hardwareRule, /border-radius:\s*0\.[45]/);
+
+	const mountRule = cssRule('.monitor-card__mount-item');
+	assertDeclaration(mountRule, 'min-height', '1.5rem');
+	assert.match(mountRule, /background:\s*transparent/);
+
+	const mountListRule = cssRule('.monitor-card__mount-list');
+	assert.doesNotMatch(mountListRule, /background:/);
+
+	const mobile = mediaBlock('(max-width: 640px)');
+	assert.match(mobile, /\.monitor-card__hardware-item\s*\{[^}]*min-height:\s*1\.5rem;/s);
+	assert.match(mobile, /\.monitor-card__mount-item\s*\{[^}]*min-height:\s*1\.5rem;/s);
+	assert.doesNotMatch(mobile, /\.monitor-card__hardware-item\s*\{[^}]*min-height:\s*1\.[0-4]/s);
+	assert.doesNotMatch(mobile, /\.monitor-card__mount-item\s*\{[^}]*min-height:\s*1\.[0-4]/s);
+});
+
 test('memo history and composer are grouped without nested card surfaces', () => {
 	const groupRule = cssRule('.monitor-card__memo-group');
 	assertDeclaration(groupRule, 'background', 'transparent');
