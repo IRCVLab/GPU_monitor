@@ -850,7 +850,7 @@
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
 
 <div class="dashboard-page min-h-screen bg-surface">
-	<div bind:this={headerShellElement} ontransitionend={handleHeaderTransitionEnd} class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible} class:ops-header-menu-open={viewMenuOpen || actionsMenuOpen}>
+	<div bind:this={headerShellElement} ontransitionend={handleHeaderTransitionEnd} class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible} class:ops-header-indicator-panel-open={indicatorPanelOpen} class:ops-header-menu-open={viewMenuOpen || actionsMenuOpen}>
 		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerIndicatorVisible} style={headerIndicatorStyle}>
 			<div bind:this={indicatorElement} class="ops-indicator" role="group" aria-label="상태 표시기" onmouseenter={openIndicatorPanel} onmouseleave={closeIndicatorPanel} onfocusin={openIndicatorPanel} onfocusout={handleIndicatorFocusOut}>
 				<button

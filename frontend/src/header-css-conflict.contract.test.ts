@@ -26,6 +26,12 @@ function declarationBlock(css, selectorPart, property) {
 	return block.declarations;
 }
 
+function declarationBlockExact(css, selector, property) {
+	const block = cssBlocks(css).find((candidate) => candidate.selector === selector);
+	assert.ok(block, `missing rule for ${selector}`);
+	assert.match(block.declarations, new RegExp(`${property}\\s*:`), `missing ${property} declaration for ${selector}`);
+	return block.declarations;
+}
 
 function mediaBlock(css, query) {
 	const start = css.indexOf(`@media ${query}`);
@@ -111,8 +117,11 @@ test('monitor-dashboard.css keeps the one-row desktop header inside a 56px borde
 	assert.match(headerInner, /height\s*:\s*3\.5rem(?:;|\s)/, 'desktop expanded header measures as one compact row');
 	assert.match(headerInner, /padding-block\s*:\s*0\.[0-5][0-9]*rem(?:;|\s)/, 'desktop header uses restrained in-box vertical padding');
 
+	const shell = declarationBlock(dashboardCss, '.ops-header-shell', 'grid-template-rows');
+	assert.match(shell, /grid-template-rows\s*:\s*minmax\(0,\s*1fr\)(?:;|\s)/, 'expanded shell keeps the header in a collapsible grid track');
+
 	const compactShell = declarationBlock(dashboardCss, '.ops-header-shell.ops-header-compact', 'grid-template-rows');
-	assert.match(compactShell, /grid-template-rows\s*:\s*0fr(?:;|\s)/, 'compact shell still reserves zero row height');
+	assert.match(compactShell, /grid-template-rows\s*:\s*minmax\(0,\s*0fr\)(?:;|\s)/, 'compact shell collapses the reserved header row instead of preserving content height');
 });
 
 test('tablet and mobile header keeps controls to two rows until the narrow fallback', () => {
@@ -138,14 +147,27 @@ test('tablet and mobile header keeps controls to two rows until the narrow fallb
 	assert.match(narrowNetwork, /grid-column\s*:\s*auto(?:;|\s)/, 'narrow fallback releases the spanning network row');
 });
 
-test('monitor-dashboard.css owns compact header rhythm and fixed left indicator placement', () => {
+test('monitor-dashboard.css owns compact header rhythm and viewport-safe left indicator placement', () => {
 	const headerInner = declarationBlock(dashboardCss, '.ops-header-inner', 'min-height');
 	assert.match(headerInner, /min-height\s*:\s*3\.5rem\b/, 'expanded header rhythm stays in the 56px class');
 
-	const anchor = declarationBlock(dashboardCss, '.ops-indicator-anchor', 'position');
+	const compactInner = declarationBlock(
+		dashboardCss,
+		'.ops-header-shell.ops-header-compact .ops-header-inner',
+		'min-height'
+	);
+	assert.match(compactInner, /min-height\s*:\s*0\b/, 'compact header removes the inner minimum height from layout flow');
+	assert.match(compactInner, /height\s*:\s*0\b/, 'compact header drops the inner box height instead of hiding it inside a tall shell');
+	assert.match(compactInner, /padding-block\s*:\s*0\b/, 'compact header removes reserved padding while collapsed');
+
+	const anchor = declarationBlock(dashboardCss, '.ops-indicator-anchor', 'left');
 	assert.match(anchor, /position\s*:\s*fixed\b/, 'indicator anchor is fixed to the viewport');
-	assert.match(anchor, /inset-inline\s*:\s*0\b/, 'indicator anchor spans the shell without adding inline layout');
-	assert.match(anchor, /top\s*:\s*clamp\([^;]*12px[^;]*16px[^;]*\)/, 'indicator top offset stays within the 12-16px contract');
+	assert.match(anchor, /left\s*:\s*clamp\(0\.75rem,\s*2vw,\s*1rem\)/, 'indicator anchor follows the content gutter with a safe clamp');
+	assert.match(anchor, /right\s*:\s*auto\b/, 'indicator anchor does not pin to the right edge');
+	assert.match(anchor, /max-width\s*:\s*calc\(100vw - 1\.5rem\)/, 'indicator anchor never exceeds the viewport width');
+	assert.match(anchor, /top\s*:\s*max\(/, 'indicator top offset uses a safe inset calculation');
+	assert.match(anchor, /safe-area-inset-top/, 'indicator top offset respects the viewport safe area');
+	assert.doesNotMatch(anchor, /inset-inline\s*:/, 'indicator anchor no longer stretches across the viewport');
 	assert.match(anchor, /pointer-events\s*:\s*none\b/, 'indicator anchor does not create layout interaction surface');
 	assert.match(anchor, /display\s*:\s*block\b/, 'indicator remains mounted so cadence motion stays synchronized');
 	assert.match(anchor, /opacity\s*:\s*0\b/, 'hidden indicator is visually transparent');
@@ -159,45 +181,45 @@ test('monitor-dashboard.css owns compact header rhythm and fixed left indicator 
 	assert.match(visibleAnchor, /opacity\s*:\s*1\b/, 'component controls indicator visibility');
 	assert.match(visibleAnchor, /visibility\s*:\s*visible\b/, 'visible indicator is exposed to interaction');
 
-	const indicator = declarationBlock(dashboardCss, '.ops-indicator', 'transform');
-	assert.match(indicator, /margin-right\s*:\s*auto\b/, 'indicator is held at the left edge');
-	assert.match(indicator, /margin-left\s*:\s*0\b/, 'indicator does not drift to the right');
-
-	const desktopGutter = mediaBlock(dashboardCss, '(min-width: 1200px)');
-	const gutterIndicator = declarationBlock(desktopGutter, '.ops-indicator', 'transform');
-	assert.match(gutterIndicator, /transform\s*:\s*translateX\(calc\(-0\.55rem - 0\.5rem\)\)/, '1200px+ gutter moves the bare ring outside the content edge');
+	const indicator = declarationBlockExact(dashboardCss, '.ops-indicator', 'display');
+	assert.match(indicator, /width\s*:\s*max-content\b/, 'indicator wraps only its trigger and panel');
+	assert.doesNotMatch(indicator, /transform\s*:/, 'indicator no longer uses transform offsets that can push it outside the viewport');
+	assert.doesNotMatch(dashboardCss, /translateX\(/, 'indicator geometry never relies on translateX offsets');
 });
 
 test('compact indicator trigger has an invisible 24px hit target around the dot', () => {
-	const trigger = declarationBlock(dashboardCss, '.ops-indicator-trigger', 'min-width');
+	const trigger = declarationBlockExact(dashboardCss, '.ops-indicator-trigger', 'min-width');
 	assert.match(trigger, /min-width\s*:\s*1\.5rem\b/, 'trigger hit target is at least 24px wide');
 	assert.match(trigger, /min-height\s*:\s*1\.5rem\b/, 'trigger hit target is at least 24px tall');
+	assert.match(trigger, /max-width\s*:\s*100%(?:;|\s)/, 'trigger cannot overflow its viewport-clamped anchor');
 	assert.match(trigger, /border\s*:\s*0\b/, 'trigger has no circular border');
 	assert.match(trigger, /background\s*:\s*transparent\b/, 'trigger has no circular background');
 	assert.doesNotMatch(trigger, /border-radius\s*:\s*999px/, 'trigger must not draw a circular shell');
 });
 
 test('left indicator panel opens toward the page interior', () => {
-	const panel = declarationBlock(dashboardCss, '.ops-indicator-panel', 'left');
-	assert.match(panel, /left\s*:\s*0\b/);
+	const panel = declarationBlockExact(dashboardCss, '.ops-indicator-panel', 'left');
+	assert.match(panel, /left\s*:\s*calc\(100% \+ 0\.5rem\)(?:;|\s)/);
 	assert.match(panel, /right\s*:\s*auto\b/);
+	assert.match(panel, /top\s*:\s*0(?:;|\s)/, 'desktop panel stays inside the safe top inset instead of centering above the trigger');
+	assert.match(panel, /transform\s*:\s*none(?:;|\s)/, 'desktop panel does not use a negative centering transform near the viewport edge');
+	assert.match(panel, /max-width\s*:\s*calc\(100vw - 1\.5rem\)/, 'panel width is clamped to the viewport');
 });
 
-test('narrow indicator stays in the outer gutter while its panel stays on screen', () => {
-	const tablet = mediaBlock(dashboardCss, '(max-width: 1199px)');
-	const tabletIndicator = declarationBlock(tablet, '.ops-indicator', 'transform');
-	const tabletPanel = declarationBlock(tablet, '.ops-indicator-panel', 'left');
-	assert.match(tabletIndicator, /transform\s*:\s*translateX\(0\)/, 'tablet visible ring begins inside the viewport');
-	assert.match(tabletPanel, /left\s*:\s*0\b/, 'tablet panel begins at the viewport edge');
+test('collapsed indicator anchor remains mounted and viewport-safe across desktop tablet and mobile lanes', () => {
+	const tablet = mediaBlock(dashboardCss, '(max-width: 920px)');
+	assert.doesNotMatch(tablet, /\.ops-indicator-anchor[\s\S]*display\s*:\s*none/, 'tablet rules must not hide the anchor');
+	assert.doesNotMatch(tablet, /\.ops-indicator\s*\{[\s\S]*transform\s*:/, 'tablet rules must not push the indicator with transforms');
 
 	const mobile = mediaBlock(dashboardCss, '(max-width: 640px)');
-	const mobileIndicator = declarationBlock(mobile, '.ops-indicator', 'transform');
+	assert.doesNotMatch(mobile, /\.ops-indicator-anchor[\s\S]*display\s*:\s*none/, 'mobile rules must not hide the anchor');
+	assert.doesNotMatch(mobile, /\.ops-indicator\s*\{[\s\S]*transform\s*:/, 'mobile rules must not push the indicator with transforms');
 	const mobilePanel = declarationBlock(mobile, '.ops-indicator-panel', 'left');
-	const mobileRing = declarationBlock(mobile, ".ops-refresh-ring[data-variant='floating']", 'width');
-	assert.match(mobileIndicator, /transform\s*:\s*translateX\(0\)/, 'mobile ring keeps a visible inset from the viewport edge');
-	assert.match(mobilePanel, /left\s*:\s*2px\b/, 'mobile panel begins at the viewport edge');
-	assert.match(mobileRing, /width\s*:\s*0\.75rem\b/, 'mobile painted ring fits wholly inside the 16px page gutter');
-	assert.match(mobileRing, /height\s*:\s*0\.75rem\b/, 'mobile ring remains circular');
+	assert.match(mobilePanel, /left\s*:\s*0\b/, 'mobile panel stays aligned to the anchor');
+	assert.match(mobilePanel, /right\s*:\s*auto\b/, 'mobile panel still opens inward from the left edge');
+	assert.match(mobilePanel, /top\s*:\s*calc\(100% \+ 0\.5rem\)(?:;|\s)/, 'mobile panel drops below the trigger instead of covering content to the right');
+	assert.match(mobilePanel, /transform\s*:\s*none(?:;|\s)/, 'mobile panel removes the desktop centering transform');
+	assert.match(mobilePanel, /max-width\s*:\s*calc\(100vw - 1\.5rem\)/, 'mobile panel remains viewport-clamped');
 });
 
 test('compact indicator panel and its network buttons are hit-testable only through the open state class', () => {
@@ -207,6 +229,24 @@ test('compact indicator panel and its network buttons are hit-testable only thro
 	assert.doesNotMatch(dashboardCss, /\.ops-indicator:(?:hover|focus-within)\s+\.ops-indicator-panel/, 'CSS hover/focus must not own panel visibility');
 	assert.match(pageSource, /class:ops-indicator-panel-open=\{indicatorPanelOpen\}/, 'page binds the open class');
 	assert.match(pageSource, /onclick=\{\(\) => selectNetwork\(tab\.value\)\}/, 'network buttons retain click handlers');
+});
+
+test('open compact indicator panel reserves temporary top room instead of covering dashboard content', () => {
+	assert.match(pageSource, /class:ops-header-indicator-panel-open=\{indicatorPanelOpen\}/, 'page exposes the compact panel-open state on the shell');
+	const compactOpen = declarationBlock(
+		dashboardCss,
+		'.ops-header-shell.ops-header-compact.ops-header-indicator-panel-open',
+		'padding-top'
+	);
+	assert.match(compactOpen, /padding-top\s*:\s*calc\(env\(safe-area-inset-top, 0px\) \+ 5rem\)/, 'desktop/tablet compact panel reserve prevents overlay on content');
+
+	const mobile = mediaBlock(dashboardCss, '(max-width: 640px)');
+	const mobileOpen = declarationBlock(
+		mobile,
+		'.ops-header-shell.ops-header-compact.ops-header-indicator-panel-open',
+		'padding-top'
+	);
+	assert.match(mobileOpen, /padding-top\s*:\s*calc\(env\(safe-area-inset-top, 0px\) \+ 9\.5rem\)/, 'mobile compact panel reserve prevents overlay on wrapped controls');
 });
 
 test('monitor-dashboard.css owns header menu positioning and stacking', () => {
@@ -237,7 +277,7 @@ test('open header menus escape the collapse clip without disabling the compact-s
 
 test('monitor-dashboard.css owns slow indicator breathing and reduced motion', () => {
 	const dot = declarationBlock(dashboardCss, '.ops-refresh-ring__dot', 'animation');
-	assert.match(dot, /animation\s*:\s*ops-indicator-breathe\s+6(?:\.[0-9]+)?s\s+ease-in-out\s+infinite\b/);
+	assert.match(dot, /animation\s*:\s*ops-indicator-breathe\s+6s\s+ease-in-out\s+infinite\b/);
 	assert.match(dashboardCss, /@keyframes\s+ops-indicator-breathe\b/, 'component stylesheet defines breathing keyframes');
 	assert.match(
 		dashboardCss,
