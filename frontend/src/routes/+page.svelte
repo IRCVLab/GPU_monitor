@@ -19,6 +19,7 @@
 	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import { dashboardView, setDashboardView } from '$lib/stores/dashboardPrefs';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
+	import { placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
 	import {
 		compensateHeaderScrollPosition,
 		HEADER_INDICATOR_TOP_MAX_PX,
@@ -64,18 +65,32 @@
 			return Number.isFinite(value) && value >= 0 ? value : 16;
 		}
 
+		function columnCount(): number {
+			const template = getComputedStyle(node).gridTemplateColumns.trim();
+			if (template === '' || template === 'none') return 1;
+			return template.split(/\s+/).length;
+		}
+
 		function layout(): void {
 			frame = 0;
 			const currentRowSize = rowSize();
 			const currentGap = rowGap();
-
-			for (const child of Array.from(node.children)) {
-				if (!(child instanceof HTMLElement)) continue;
+			const items = Array.from(node.children).filter(
+				(child): child is HTMLElement => child instanceof HTMLElement
+			);
+			const spans = items.map((child) => {
 				child.style.gridRowEnd = 'span 1';
 				const height = child.getBoundingClientRect().height;
-				const span = Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
-				child.style.gridRowEnd = `span ${span}`;
-			}
+				return Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
+			});
+			const placements = placeOrderedMasonryItems({ columnCount: columnCount(), spans });
+
+			items.forEach((child, index) => {
+				const placement = placements[index];
+				child.style.gridColumnStart = String(placement.gridColumnStart);
+				child.style.gridRowStart = String(placement.gridRowStart);
+				child.style.gridRowEnd = placement.gridRowEnd;
+			});
 		}
 
 		function observeItems(): void {
@@ -100,6 +115,8 @@
 				mutationObserver.disconnect();
 				for (const child of Array.from(node.children)) {
 					if (child instanceof HTMLElement) {
+						child.style.removeProperty('grid-column-start');
+						child.style.removeProperty('grid-row-start');
 						child.style.removeProperty('grid-row-end');
 					}
 				}

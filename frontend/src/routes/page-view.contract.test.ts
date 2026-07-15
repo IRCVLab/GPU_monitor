@@ -92,6 +92,16 @@ test('task 2 preserves manual current server order in Full view', () => {
 	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
 });
 
+test('task 1 masonry action writes and cleans stable grid placement properties', () => {
+	assert.match(pageSource, /import \{\s*placeOrderedMasonryItems\s*\} from '\$lib\/utils\/orderedMasonry';/);
+	assert.match(pageSource, /style\.gridColumnStart\s*=\s*String\(placement\.gridColumnStart\)/);
+	assert.match(pageSource, /style\.gridRowStart\s*=\s*String\(placement\.gridRowStart\)/);
+	assert.match(pageSource, /style\.gridRowEnd\s*=\s*placement\.gridRowEnd/);
+	assert.match(pageSource, /style\.removeProperty\('grid-column-start'\)/);
+	assert.match(pageSource, /style\.removeProperty\('grid-row-start'\)/);
+	assert.match(pageSource, /style\.removeProperty\('grid-row-end'\)/);
+});
+
 test('task 2 leaves inactive gpu fills without desaturation overrides', () => {
 	assert.doesNotMatch(
 		cardCss,
