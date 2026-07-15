@@ -162,3 +162,31 @@ test('task 1 masonry layout clears stale placement before resize column detectio
 	assert.ok(resetRowStart < columnRead, 'grid-row-start must be cleared before column detection');
 	assert.ok(resetRowEnd < heightRead, 'grid-row-end must be reset before measuring height');
 });
+
+test('persistent header shows semantic health and cadence without visible second-by-second copy', () => {
+	const statusClass = pageSource.indexOf('class="ops-status"');
+	assert.notEqual(statusClass, -1, 'Missing persistent header status');
+	const statusStart = pageSource.lastIndexOf('<p', statusClass);
+	const statusEnd = pageSource.indexOf('</p>', statusClass);
+	assert.notEqual(statusEnd, -1, 'Missing persistent header status closing tag');
+	const statusMarkup = pageSource.slice(statusStart, statusEnd);
+	const statusBody = statusMarkup.slice(statusMarkup.indexOf('>') + 1);
+
+	assert.match(statusMarkup, /\{refreshHealthText\(\)\}/);
+	assert.match(statusMarkup, /class="ops-refresh-cadence"/);
+	assert.match(statusMarkup, /class="ops-refresh-cadence__fill"/);
+	assert.match(statusMarkup, /refreshCadencePct/);
+	assert.doesNotMatch(statusBody, /relativeTime\(|nextRefreshText\(/);
+	assert.match(statusMarkup, /aria-label=\{`\$\{refreshHealthText\(\)\}[\s\S]*relativeTime\(lastRefreshAtMs\)[\s\S]*nextRefreshText\(\)/);
+	assert.match(pageSource, /const refreshCadencePct = \$derived\.by\(/);
+});
+
+test('desktop header reserves breathing room below the compact cadence line', () => {
+	assert.match(
+		dashboardCss,
+		/@media \(min-width: 921px\)[\s\S]*?\.ops-header-inner,[\s\S]*?padding-block:\s*0\.45rem 0\.65rem;/
+	);
+	const cadenceRule = cssRule(dashboardCss, '.ops-refresh-cadence');
+	assertDeclaration(cadenceRule, 'width', '2.4rem');
+	assertDeclaration(cadenceRule, 'height', '0.2rem');
+});
