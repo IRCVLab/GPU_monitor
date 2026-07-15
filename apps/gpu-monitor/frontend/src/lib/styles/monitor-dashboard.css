@@ -1,5 +1,10 @@
 .dashboard-page {
 	color: var(--ops-fg);
+	--ops-indicator-lane-height: 0px;
+}
+
+.dashboard-page.ops-page-compact {
+	overflow-anchor: none;
 }
 
 .ops-header-shell {
@@ -15,12 +20,9 @@
 
 .ops-header-shell.ops-header-compact {
 	grid-template-rows: minmax(0, 0fr);
+	padding-top: var(--ops-indicator-lane-height, 0px);
 	backdrop-filter: none;
 	background: transparent;
-}
-
-.ops-header-shell.ops-header-compact.ops-header-indicator-panel-open {
-	padding-top: calc(env(safe-area-inset-top, 0px) + 5rem);
 }
 
 
@@ -605,10 +607,6 @@
 		top: calc(100% + 0.5rem);
 		transform: none;
 		max-width: calc(100vw - 1.5rem);
-	}
-
-	.ops-header-shell.ops-header-compact.ops-header-indicator-panel-open {
-		padding-top: calc(env(safe-area-inset-top, 0px) + 9.5rem);
 	}
 
 	.ops-refresh-ring[data-variant='floating'] {

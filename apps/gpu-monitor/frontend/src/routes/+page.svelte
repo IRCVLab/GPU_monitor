@@ -40,6 +40,10 @@
 		type HeaderScrollDirection,
 		updateHeaderVisibility
 	} from '$lib/utils/headerVisibility';
+	import {
+		INDICATOR_PANEL_CLEARANCE_PX,
+		resolveIndicatorLaneHeight
+	} from '$lib/utils/headerIndicatorLane';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
 	import { getServerStatus, getServers } from '$lib/api';
 	import type { ServerRecord, ServerState } from '$lib/types';
@@ -214,6 +218,9 @@
 	let headerIndicatorVisible = $state(false);
 	let indicatorPanelOpen = $state(false);
 	let indicatorElement = $state<HTMLDivElement | null>(null);
+	let indicatorTriggerElement = $state<HTMLButtonElement | null>(null);
+	let indicatorPanelElement = $state<HTMLDivElement | null>(null);
+	let indicatorLaneHeightPx = $state(0);
 	let headerShellElement = $state<HTMLDivElement | null>(null);
 	let headerSurfaceElement = $state<HTMLElement | null>(null);
 	let headerScrollFrame: number | null = null;
@@ -222,6 +229,8 @@
 	let headerScrollDistance = 0;
 	let headerTouchY: number | null = null;
 	let retryingInitialLoad = $state(false);
+	let indicatorLaneSyncToken = 0;
+	let suppressHeaderScrollSync = false;
 
 	function mergeStatusSnapshot(
 		current: Map<number, ServerState>,
@@ -410,22 +419,30 @@
 		const scrollY = Math.max(0, window.scrollY);
 		if (!headerShellElement || !headerSurfaceElement) return scrollY;
 		const renderedHeight = headerShellElement.getBoundingClientRect().height;
+		const compactLaneHeight = headerCompact ? indicatorLaneHeightPx : 0;
+		const renderedHeaderHeight = Math.max(0, renderedHeight - compactLaneHeight);
+		const expandedHeaderHeight = Math.max(0, headerSurfaceElement.scrollHeight - compactLaneHeight);
 
-		if (shouldRevealSettledHeaderAtTop(scrollY, headerCompact, renderedHeight)) return 0;
+		if (shouldRevealSettledHeaderAtTop(scrollY, headerCompact, renderedHeaderHeight)) return 0;
 
 		return compensateHeaderScrollPosition(
 			scrollY,
-			headerSurfaceElement.scrollHeight,
-			renderedHeight
+			expandedHeaderHeight,
+			renderedHeaderHeight
 		);
 	}
 
 	function shouldRevealHeaderForUpwardIntent(): boolean {
 		if (!headerShellElement) return false;
+		const compactLaneHeight = headerCompact ? indicatorLaneHeightPx : 0;
+		const renderedHeaderHeight = Math.max(
+			0,
+			headerShellElement.getBoundingClientRect().height - compactLaneHeight
+		);
 		return shouldRevealSettledHeaderAtTop(
 			Math.max(0, window.scrollY),
 			headerCompact,
-			headerShellElement.getBoundingClientRect().height
+			renderedHeaderHeight
 		);
 	}
 
@@ -454,16 +471,84 @@
 		headerPreviousY = currentHeaderScrollPosition();
 		headerScrollDirection = null;
 		headerScrollDistance = 0;
+		scheduleIndicatorLaneSync();
 	}
 
 	function revealHeader(): void {
 		headerCompact = false;
 		headerIndicatorVisible = false;
 		indicatorPanelOpen = false;
+		indicatorLaneHeightPx = 0;
 		headerScrollDirection = null;
 		headerScrollDistance = 0;
 		if (browser) {
 			headerPreviousY = currentHeaderScrollPosition();
+		}
+	}
+
+	async function syncIndicatorLaneAfterDom(): Promise<void> {
+		if (!browser) return;
+
+		const syncToken = ++indicatorLaneSyncToken;
+		const scrollYBeforeSync = window.scrollY;
+		await tick();
+		await nextFrame();
+		if (syncToken !== indicatorLaneSyncToken) return;
+
+		const nextLaneHeight = resolveIndicatorLaneHeight({
+			compact: headerCompact,
+			indicatorVisible: headerIndicatorVisible,
+			triggerBottom: indicatorTriggerElement?.getBoundingClientRect().bottom ?? null,
+			panelOpen: indicatorPanelOpen,
+			panelBottom: indicatorPanelElement?.getBoundingClientRect().bottom ?? null
+		});
+
+		suppressHeaderScrollSync = true;
+		if (nextLaneHeight !== indicatorLaneHeightPx) {
+			indicatorLaneHeightPx = nextLaneHeight;
+			await tick();
+			await nextFrame();
+			if (syncToken !== indicatorLaneSyncToken) {
+				suppressHeaderScrollSync = false;
+				return;
+			}
+			if (window.scrollY !== scrollYBeforeSync) {
+				window.scrollTo({ top: scrollYBeforeSync, behavior: 'auto' });
+			}
+		}
+		await alignDashboardContentBelowIndicatorLane();
+		headerPreviousY = currentHeaderScrollPosition();
+		headerScrollDirection = null;
+		headerScrollDistance = 0;
+		suppressHeaderScrollSync = false;
+	}
+
+	function scheduleIndicatorLaneSync(): void {
+		if (!browser) return;
+		void syncIndicatorLaneAfterDom();
+	}
+
+	async function alignDashboardContentBelowIndicatorLane(): Promise<void> {
+		if (!browser || !headerCompact || !headerIndicatorVisible) return;
+
+		for (let attempt = 0; attempt < 6; attempt += 1) {
+			const laneFloor = indicatorPanelOpen && indicatorPanelElement
+				? indicatorPanelElement.getBoundingClientRect().bottom + INDICATOR_PANEL_CLEARANCE_PX
+				: indicatorTriggerElement?.getBoundingClientRect().bottom ?? indicatorLaneHeightPx;
+			const visibleCardRects = Array.from(document.querySelectorAll('.monitor-card'))
+				.filter((card): card is HTMLElement => card instanceof HTMLElement)
+				.map((card) => card.getBoundingClientRect())
+				.filter((rect) => rect.bottom > 0 && rect.top < laneFloor);
+			if (visibleCardRects.length === 0) return;
+
+			const topmostCardTop = Math.min(...visibleCardRects.map((rect) => rect.top));
+			const requiredShift = Math.ceil(laneFloor - topmostCardTop);
+			if (requiredShift <= 0) return;
+
+			const nextScrollY = Math.max(0, window.scrollY - requiredShift);
+			if (nextScrollY === window.scrollY) return;
+			window.scrollTo({ top: nextScrollY, behavior: 'auto' });
+			await nextFrame();
 		}
 	}
 
@@ -483,12 +568,14 @@
 		headerCompact = result.compact;
 		headerIndicatorVisible = result.indicatorVisible;
 		if (!result.indicatorVisible) indicatorPanelOpen = false;
+		scheduleIndicatorLaneSync();
 		headerPreviousY = result.nextPreviousY;
 		headerScrollDirection = result.nextDirection;
 		headerScrollDistance = result.nextAccumulatedDelta;
 	}
 
 	function handleHeaderScroll(): void {
+		if (suppressHeaderScrollSync) return;
 		if (headerScrollFrame !== null) return;
 		headerScrollFrame = requestAnimationFrame(updateHeaderFromScroll);
 	}
@@ -508,6 +595,7 @@
 		headerCompact = result.compact;
 		headerIndicatorVisible = result.indicatorVisible;
 		if (!result.indicatorVisible) indicatorPanelOpen = false;
+		scheduleIndicatorLaneSync();
 		headerPreviousY = result.nextPreviousY;
 		headerScrollDirection = result.nextDirection;
 		headerScrollDistance = result.nextAccumulatedDelta;
@@ -541,6 +629,7 @@
 		window.addEventListener('touchstart', handleHeaderTouchStart, { passive: true });
 		window.addEventListener('touchmove', handleHeaderTouchMove, { passive: true });
 		window.addEventListener('touchend', handleHeaderTouchEnd, { passive: true });
+		scheduleIndicatorLaneSync();
 
 		startPollingCadence();
 		void reloadDashboard(true);
@@ -558,6 +647,8 @@
 			window.removeEventListener('touchmove', handleHeaderTouchMove);
 			window.removeEventListener('touchend', handleHeaderTouchEnd);
 			headerTouchY = null;
+			indicatorLaneSyncToken += 1;
+			suppressHeaderScrollSync = false;
 			if (headerScrollFrame !== null) {
 				cancelAnimationFrame(headerScrollFrame);
 				headerScrollFrame = null;
@@ -799,22 +890,28 @@
 	}
 
 	function openIndicatorPanel() {
+		if (indicatorPanelOpen) return;
 		indicatorPanelOpen = true;
+		scheduleIndicatorLaneSync();
 	}
 
 	function closeIndicatorPanel() {
+		if (!indicatorPanelOpen) return;
 		indicatorPanelOpen = false;
+		scheduleIndicatorLaneSync();
 	}
 
 	function handleIndicatorFocusOut(event: FocusEvent) {
 		const nextTarget = event.relatedTarget;
 		if (nextTarget instanceof Node && indicatorElement && indicatorElement.contains(nextTarget)) return;
 		indicatorPanelOpen = false;
+		scheduleIndicatorLaneSync();
 	}
 
 	function selectNetwork(tab: Tab) {
 		activeTab.set(tab);
 		indicatorPanelOpen = false;
+		scheduleIndicatorLaneSync();
 	}
 
 
@@ -824,6 +921,7 @@
 		if (indicatorPanelOpen && indicatorElement && !indicatorElement.contains(target)) indicatorPanelOpen = false;
 		if (viewMenuOpen && viewMenuEl && !viewMenuEl.contains(target)) viewMenuOpen = false;
 		if (actionsMenuOpen && actionsMenuEl && !actionsMenuEl.contains(target)) actionsMenuOpen = false;
+		scheduleIndicatorLaneSync();
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
@@ -831,6 +929,7 @@
 			indicatorPanelOpen = false;
 			viewMenuOpen = false;
 			actionsMenuOpen = false;
+			scheduleIndicatorLaneSync();
 		}
 		if (
 			(event.key === 'Home' || event.key === 'ArrowUp' || event.key === 'PageUp') &&
@@ -849,11 +948,12 @@
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
 
-<div class="dashboard-page min-h-screen bg-surface">
+<div class="dashboard-page min-h-screen bg-surface" class:ops-page-compact={headerCompact} class:ops-page-indicator-panel-open={headerCompact && indicatorPanelOpen} style={`--ops-indicator-lane-height: ${indicatorLaneHeightPx}px;`}>
 	<div bind:this={headerShellElement} ontransitionend={handleHeaderTransitionEnd} class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible} class:ops-header-indicator-panel-open={indicatorPanelOpen} class:ops-header-menu-open={viewMenuOpen || actionsMenuOpen}>
 		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerIndicatorVisible} style={headerIndicatorStyle}>
 			<div bind:this={indicatorElement} class="ops-indicator" role="group" aria-label="상태 표시기" onmouseenter={openIndicatorPanel} onmouseleave={closeIndicatorPanel} onfocusin={openIndicatorPanel} onfocusout={handleIndicatorFocusOut}>
 				<button
+					bind:this={indicatorTriggerElement}
 					type="button"
 					class="ops-indicator-trigger"
 					aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)}. 상세 상태 보기`}
@@ -863,7 +963,7 @@
 				>
 					<RefreshRing attention={Boolean(refreshWarningText())} variant="floating" />
 				</button>
-				<div id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen}>
+				<div bind:this={indicatorPanelElement} id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen}>
 					<span class="ops-indicator-status">{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
 					<span class="ops-indicator-divider" aria-hidden="true"></span>
 					<div class="ops-indicator-network" role="group" aria-label="네트워크 필터">

@@ -80,3 +80,56 @@ Measured on the live dev UI after collapsing the header in Full view:
 
 ## Residual risk
 - The temporary compact panel reserve strip improves the open-state geometry, but Full-card content that is already partially scrolled into the viewport can still sit behind the open panel at some widths. This did not break tests/builds and does not cause overflow/clipping, but it is the remaining UX edge to revisit if the panel must never overlay partially visible Full cards.
+
+---
+
+## 2026-07-15 addendum — reserve non-overlapping indicator lane
+
+### Updated scope
+- Base HEAD: `76a8157fe284881995a88dd6531b36c0c5823b11`
+- Fix target: eliminate compact indicator/panel overlap with `.monitor-card` content in Full view at `360`, `390`, `920`, and `1440` after deep scroll, without restoring the old tall collapsed header.
+
+### Additional changed files
+- `frontend/src/lib/utils/headerIndicatorLane.ts`
+- `frontend/src/lib/utils/headerIndicatorLane.test.ts`
+
+### RED evidence before this fix
+Playwright against the isolated dev UI (`127.0.0.1:4174`) reproduced the verified overlap:
+
+```json
+{
+  "viewport": {"width": 360, "height": 844},
+  "scrollY": 2102,
+  "shellRect": {"top": 0, "bottom": 152, "height": 152},
+  "panelRect": {"top": 44, "bottom": 149.28, "left": 12, "right": 348},
+  "visibleCard": {"index": 4, "top": -209.92, "bottom": 145.06, "left": 16, "right": 344},
+  "intersection": true
+}
+```
+
+### Updated implementation summary
+- Replaced fixed compact `5rem` / `9.5rem` padding recipes with a measured lane driven by `--ops-indicator-lane-height`.
+- Kept full header content collapsed in compact mode while always reserving only the slim trigger lane (`36px` mobile/tablet, `39px` desktop in the verified runs).
+- Expanded that lane to the measured panel bottom plus clearance (`154px` mobile, `79px` at `920`, `82px` at `1440` in the verified runs).
+- Disabled compact-page scroll anchoring and added deterministic one-shot upward scroll compensation so cards clear the reserved lane/panel instead of staying underneath it.
+- Preserved left/top fixed anchor clamps, panel viewport bounds, 10s orbit, 6s breath, reduced motion, click/hover/focus/Escape/outside behavior, and compact close -> slim lane restore.
+
+### Updated geometry verification
+All checks below came from Playwright DOM-rect probes after performing the deep-scroll compact transition, opening the indicator panel, closing it again, then using `Home` to verify full-header restoration.
+
+| Width | Closed lane | Closed first visible card | Closed overlap | Open lane | Open panel rect | Open first visible card | Open overlap | Close returns slim lane | Home restores full header |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 360 | `36px` | `top 39 / bottom 393.98` | none | `154px` | `top 44 / bottom 149.28 / left 12 / right 348` | `top 170 / bottom 524.98` | none | yes (`36px`) | yes (`95.95px`, compact=false) |
+| 390 | `36px` | `top 39 / bottom 393.98` | none | `154px` | `top 44 / bottom 149.28 / left 12 / right 378` | `top 170 / bottom 524.98` | none | yes (`36px`) | yes (`95.95px`, compact=false) |
+| 920 | `36px` | `top 41 / bottom 395.98` | none | `79px` | `top 12 / bottom 74.84 / left 48 / right 426.97` | `top 95 / bottom 449.98` | none | yes (`36px`) | yes (`97.23px`, compact=false) |
+| 1440 | `39px` | `top 44 / bottom 398.98` | none | `82px` | `top 14.39 / bottom 77.23 / left 48 / right 426.97` | `top 98 / bottom 452.98` | none | yes (`39px`) | yes (`57px`, compact=false) |
+
+### Updated automated verification
+- `node --experimental-strip-types --test $(find src -name "*.test.ts" -print | sort)` → `142/142` pass
+- `npm run check` → pass, `0 errors`, `0 warnings`
+- `npm run build` → pass
+- `./.venv/bin/python -m unittest discover -s backend/tests -p "test_*.py" -v` → `27/27` pass
+- `git diff --check` → pass
+
+### Remaining risk
+- The compact lane fix now satisfies the no-overlap geometry contract, but it does so by explicitly clearing the top visible card band when compacting/opening. That movement is deterministic and bounded, but it should still receive human UX review if future requirements prefer preserving deeper scroll position over guaranteed zero overlap.
