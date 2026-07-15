@@ -302,7 +302,7 @@ test('compact-scroll indicator has no responsive visibility cutoff', () => {
 	);
 	assert.match(
 		dashboardCss,
-		/@media\s*\(max-width:\s*920px\)[\s\S]*?\.ops-indicator\s*\{[^}]*transform:\s*translateX\(0\)\s*;/
+		/@media\s*\(max-width:\s*1199px\)[\s\S]*?\.ops-indicator\s*\{[^}]*transform:\s*translateX\(-0\.25rem\)\s*;/
 	);
 });
 
@@ -327,7 +327,7 @@ test('compact indicator panel visibility is state-owned without CSS hover or foc
 
 test('compact indicator trigger keeps dot visual size with an invisible minimum hit area', () => {
 	const triggerRule = dashboardCss.match(/\.ops-indicator-trigger\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
-	const dotRule = dashboardCss.match(/\.ops-status-dot,\s*\.ops-indicator-dot\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
+	const dotRule = dashboardCss.match(/\.ops-refresh-ring__dot\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
 
 	assert.match(triggerRule, /min-width:\s*1\.5rem\s*;/);
 	assert.match(triggerRule, /min-height:\s*1\.5rem\s*;/);
@@ -378,12 +378,13 @@ test('indicator trigger click is idempotent open so pointer-enter before click c
 	assert.doesNotMatch(pageSource, /function toggleIndicatorPanel/);
 });
 
-test('desktop indicator is shrink-wrapped with separate edge and gutter lanes', () => {
+test('desktop indicator is shrink-wrapped with separate left edge and gutter lanes', () => {
 	const indicatorRule = dashboardCss.match(/\.ops-indicator\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
 
 	assert.match(indicatorRule, /width:\s*max-content\s*;/);
-	assert.match(indicatorRule, /margin-left:\s*auto\s*;/);
+	assert.match(indicatorRule, /margin-left:\s*0\s*;/);
+	assert.match(indicatorRule, /margin-right:\s*auto\s*;/);
 	assert.doesNotMatch(indicatorRule, /translateX\(\s*calc\(\s*100%/);
-	assert.match(indicatorRule, /transform:\s*translateX\(\s*calc\(\s*-0\.55rem\s*-\s*0\.5rem\s*\)\s*\)\s*;/);
-	assert.match(dashboardCss, /@media\s*\(min-width:\s*1200px\)[\s\S]*\.ops-indicator\s*\{[\s\S]*transform:\s*translateX\(\s*calc\(\s*0\.55rem\s*\+\s*0\.5rem\s*\)\s*\)\s*;/);
+	assert.match(indicatorRule, /transform:\s*translateX\(-0\.25rem\)\s*;/);
+	assert.match(dashboardCss, /@media\s*\(min-width:\s*1200px\)[\s\S]*\.ops-indicator\s*\{[\s\S]*transform:\s*translateX\(\s*calc\(\s*-0\.55rem\s*-\s*0\.5rem\s*\)\s*\)\s*;/);
 });

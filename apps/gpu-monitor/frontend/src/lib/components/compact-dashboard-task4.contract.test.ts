@@ -103,3 +103,15 @@ test('task 3 compact rows stay one-line through tablet widths and stack only on 
 		'repeat\\(auto-fit, minmax\\(2\\.6rem, 1fr\\)\\)'
 	);
 });
+
+test('compact gpu slots use one accent with inverse available and occupied treatments', () => {
+	assert.match(rowSource, /data-state=\{state\}/);
+	const availableRule = cssRule(cssSource, ".compact-slot[data-state='available']");
+	assert.match(availableRule, /var\(--chart-2\)/);
+	assert.match(availableRule, /var\(--ops-card\)/);
+	const occupiedRule = cssRule(cssSource, ".compact-slot[data-state='occupied']");
+	assert.match(occupiedRule, /background:\s*var\(--chart-2\)\s*;/);
+	assert.match(occupiedRule, /border-color:\s*var\(--chart-2\)\s*;/);
+	const unknownRule = cssRule(cssSource, ".compact-slot[data-state='unknown']");
+	assert.doesNotMatch(unknownRule, /#f59e0b|var\(--chart-[12]\)/);
+});

@@ -43,18 +43,21 @@
 	grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
 	align-items: center;
 	gap: 1rem;
-	min-height: 4rem;
-	padding-block: 0.65rem;
+	min-height: 3.5rem;
+	padding-block: 0.35rem;
 	transition: min-height 160ms ease, padding-block 160ms ease;
 }
 
 .ops-header-compact .ops-header-inner {
-	min-height: 4rem;
-	padding-block: 0.65rem;
+	min-height: 3.5rem;
+	padding-block: 0.35rem;
 }
 
 .ops-identity {
 	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 0.55rem;
 }
 
 .ops-identity h1 {
@@ -63,6 +66,7 @@
 	font-weight: 650;
 	letter-spacing: -0.02em;
 	color: var(--ops-fg);
+	white-space: nowrap;
 }
 
 .ops-status {
@@ -70,7 +74,7 @@
 	flex-wrap: nowrap;
 	align-items: center;
 	gap: 0.4rem;
-	margin-top: 0.3rem;
+	margin: 0;
 	font-size: 0.76rem;
 	line-height: 1;
 	color: color-mix(in srgb, var(--ops-fg) 68%, transparent);
@@ -80,67 +84,76 @@
 	font-weight: 580;
 }
 
-.ops-refresh-cadence {
+.ops-refresh-ring {
+	--indicator-color: #2fb36f;
 	position: relative;
-	display: inline-flex;
-	width: 2.4rem;
-	height: 0.2rem;
-	overflow: hidden;
-	border-radius: 999px;
-	background: color-mix(in srgb, var(--ops-fg) 12%, transparent);
+	display: inline-grid;
+	place-items: center;
+	width: 1.1rem;
+	height: 1.1rem;
+	flex: 0 0 auto;
+	color: var(--indicator-color);
 }
 
-.ops-refresh-cadence__fill {
-	width: 42%;
+.ops-refresh-ring[data-variant='floating'] {
+	width: 1.35rem;
+	height: 1.35rem;
+}
+
+.ops-refresh-ring__svg {
+	position: absolute;
+	inset: 0;
+	width: 100%;
 	height: 100%;
-	border-radius: inherit;
-	background: linear-gradient(
-		90deg,
-		color-mix(in srgb, #2fb36f 12%, transparent),
-		color-mix(in srgb, #2fb36f 88%, var(--ops-fg)),
-		color-mix(in srgb, #2fb36f 12%, transparent)
-	);
-	animation: ops-refresh-cadence-flow 2.4s linear infinite;
+	overflow: visible;
+	transform: rotate(-90deg);
+}
+
+.ops-refresh-ring__track,
+.ops-refresh-ring__progress {
+	fill: none;
+	stroke-width: 2;
+	vector-effect: non-scaling-stroke;
+}
+
+.ops-refresh-ring__track {
+	stroke: color-mix(in srgb, var(--indicator-color) 18%, var(--ops-fg) 8%);
+}
+
+.ops-refresh-ring__progress {
+	stroke: currentColor;
+	stroke-linecap: round;
+	stroke-dasharray: 0.28 0.72;
+	stroke-dashoffset: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: ops-refresh-ring-orbit var(--ops-refresh-duration) linear forwards;
 	will-change: transform;
 }
 
-.ops-refresh-cadence__fill.attention {
-	background: linear-gradient(
-		90deg,
-		color-mix(in srgb, #f2ae43 12%, transparent),
-		#f2ae43,
-		color-mix(in srgb, #f2ae43 12%, transparent)
-	);
-}
-
-@keyframes ops-refresh-cadence-flow {
-	from {
-		transform: translate3d(-120%, 0, 0);
-	}
-	to {
-		transform: translate3d(340%, 0, 0);
-	}
-}
-
-.ops-status-dot,
-.ops-indicator-dot {
-	--indicator-color: #2fb36f;
+.ops-refresh-ring__dot {
 	width: 0.55rem;
 	height: 0.55rem;
 	border-radius: 999px;
 	background: var(--indicator-color);
-	box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--indicator-color) 16%, transparent);
+	box-shadow: 0 0 0 0.12rem color-mix(in srgb, var(--indicator-color) 12%, transparent);
 }
 
-.ops-indicator-dot {
+.ops-refresh-ring[data-variant='floating'] .ops-refresh-ring__dot {
 	animation: ops-indicator-breathe 6.4s ease-in-out infinite;
 }
 
-.ops-status-attention,
-.ops-indicator-dot.attention {
+.ops-refresh-ring.attention {
 	--indicator-color: #f2ae43;
-	background: var(--indicator-color);
-	box-shadow: 0 0 0 0.18rem color-mix(in srgb, var(--indicator-color) 16%, transparent);
+}
+
+@keyframes ops-refresh-ring-orbit {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
 }
 
 .ops-status-separator,
@@ -254,24 +267,30 @@
 }
 
 .ops-indicator-anchor {
-	position: absolute;
+	position: fixed;
 	inset-inline: 0;
 	top: clamp(var(--ops-indicator-top-min, 12px), 1vw, var(--ops-indicator-top-max, 16px));
-	display: none;
+	display: block;
+	opacity: 0;
+	visibility: hidden;
 	pointer-events: none;
+	transition: opacity 160ms ease, visibility 0s linear 160ms;
 }
 
 .ops-header-shell.ops-header-indicator-visible .ops-indicator-anchor {
-	display: block;
+	opacity: 1;
+	visibility: visible;
+	transition-delay: 0s;
 }
 
 .ops-indicator {
 	position: relative;
 	display: flex;
-	justify-content: flex-end;
+	justify-content: flex-start;
 	width: max-content;
-	margin-left: auto;
-	transform: translateX(calc(-0.55rem - 0.5rem));
+	margin-left: 0;
+	margin-right: auto;
+	transform: translateX(-0.25rem);
 }
 
 .ops-indicator-trigger {
@@ -291,6 +310,8 @@
 }
 
 .ops-indicator-panel {
+	left: 0;
+	right: auto;
 	pointer-events: auto;
 	display: none;
 	align-items: center;
@@ -480,16 +501,16 @@
 	.ops-header-inner,
 	.ops-header-compact .ops-header-inner {
 		box-sizing: border-box;
-		min-height: 4rem;
-		height: 4rem;
-		padding-block: 0.45rem 0.65rem;
+		min-height: 3.5rem;
+		height: 3.5rem;
+		padding-block: 0.35rem;
 	}
 }
 
 
 @media (min-width: 1200px) {
 	.ops-indicator {
-		transform: translateX(calc(0.55rem + 0.5rem));
+		transform: translateX(calc(-0.55rem - 0.5rem));
 	}
 }
 @media (max-width: 920px) {
@@ -517,13 +538,15 @@
 		justify-content: flex-start;
 	}
 
-	.ops-indicator-anchor {
-		box-sizing: border-box;
-		padding-inline: 1rem;
+}
+
+@media (max-width: 1199px) {
+	.ops-indicator {
+		transform: translateX(-1px);
 	}
 
-	.ops-indicator {
-		transform: translateX(0);
+	.ops-indicator-panel {
+		left: 1px;
 	}
 }
 
@@ -550,11 +573,25 @@
 	}
 
 	.ops-view-menu,
-	.ops-overflow-menu,
-	.ops-indicator-panel {
+	.ops-overflow-menu {
 		left: 0;
 		right: auto;
 		max-width: min(92vw, 20rem);
+	}
+
+	.ops-indicator {
+		transform: translateX(-0.25rem);
+	}
+
+	.ops-indicator-panel {
+		left: 0.25rem;
+		right: auto;
+		max-width: min(92vw, 20rem);
+	}
+
+	.ops-refresh-ring[data-variant='floating'] {
+		width: 1rem;
+		height: 1rem;
 	}
 
 	.monitor-dashboard-grid {
@@ -583,16 +620,16 @@
 	.ops-menu-row button,
 	.ops-utility-action,
 	.ops-mode-action,
-	.monitor-dashboard-button,
-	.monitor-dashboard-spinner,
-	.ops-indicator-dot,
-	.ops-refresh-cadence__fill {
+		.monitor-dashboard-button,
+		.monitor-dashboard-spinner,
+		.ops-refresh-ring__dot,
+		.ops-refresh-ring__progress {
 		transition: none;
 		animation: none;
 	}
 
-	.ops-refresh-cadence__fill {
-		transform: translate3d(70%, 0, 0);
+	.ops-refresh-ring__progress {
+		transform: rotate(225deg);
 	}
 
 	.monitor-dashboard-spinner {

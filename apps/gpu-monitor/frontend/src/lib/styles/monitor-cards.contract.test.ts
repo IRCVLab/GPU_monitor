@@ -154,6 +154,18 @@ test('Mem receives the wider flexible track without wasting a 10ch value column'
 	assert.doesNotMatch(memoryValueRule, /10ch/);
 });
 
+test('full gpu index uses a single inverted occupancy accent', () => {
+	const availableRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-row__index");
+	assertDeclaration(availableRule, 'color', 'var(--chart-2)');
+	assertDeclaration(availableRule, 'border-color', 'var(--chart-2)');
+	const occupiedRule = cssRule(".monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index");
+	assertDeclaration(occupiedRule, 'background', 'var(--chart-2)');
+	assertDeclaration(occupiedRule, 'border-color', 'var(--chart-2)');
+	assertDeclaration(occupiedRule, 'color', '#040609');
+	const unknownRule = cssRule(".monitor-gpu-row[data-state='unknown'] .monitor-gpu-row__index");
+	assert.doesNotMatch(unknownRule, /#f59e0b|var\(--chart-[12]\)/);
+});
+
 test('collapsed utility rows use subtle markers and CSS disclosure angles', () => {
 	const markerRule = cssRule('.monitor-card__footer-marker');
 	assertDeclaration(markerRule, 'width', '0.34rem');
