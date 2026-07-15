@@ -164,17 +164,17 @@ test('narrow indicator stays in the outer gutter while its panel stays on screen
 	const tablet = mediaBlock(dashboardCss, '(max-width: 1199px)');
 	const tabletIndicator = declarationBlock(tablet, '.ops-indicator', 'transform');
 	const tabletPanel = declarationBlock(tablet, '.ops-indicator-panel', 'left');
-	assert.match(tabletIndicator, /transform\s*:\s*translateX\(-1px\)/, 'tablet ring fits wholly inside the 24px page gutter');
-	assert.match(tabletPanel, /left\s*:\s*1px\b/, 'tablet panel offsets the negative indicator translation');
+	assert.match(tabletIndicator, /transform\s*:\s*translateX\(0\)/, 'tablet visible ring begins inside the viewport');
+	assert.match(tabletPanel, /left\s*:\s*0\b/, 'tablet panel begins at the viewport edge');
 
 	const mobile = mediaBlock(dashboardCss, '(max-width: 640px)');
 	const mobileIndicator = declarationBlock(mobile, '.ops-indicator', 'transform');
 	const mobilePanel = declarationBlock(mobile, '.ops-indicator-panel', 'left');
 	const mobileRing = declarationBlock(mobile, ".ops-refresh-ring[data-variant='floating']", 'width');
-	assert.match(mobileIndicator, /transform\s*:\s*translateX\(-0\.25rem\)/, 'mobile ring aligns to the 16px page gutter');
-	assert.match(mobilePanel, /left\s*:\s*0\.25rem\b/, 'mobile panel cancels the negative translation at the viewport edge');
-	assert.match(mobileRing, /width\s*:\s*1rem\b/, 'mobile ring fits wholly inside the 16px page gutter');
-	assert.match(mobileRing, /height\s*:\s*1rem\b/, 'mobile ring remains circular');
+	assert.match(mobileIndicator, /transform\s*:\s*translateX\(-2px\)/, 'mobile ring stays inside the 16px content gutter');
+	assert.match(mobilePanel, /left\s*:\s*2px\b/, 'mobile panel begins at the viewport edge');
+	assert.match(mobileRing, /width\s*:\s*0\.75rem\b/, 'mobile painted ring fits wholly inside the 16px page gutter');
+	assert.match(mobileRing, /height\s*:\s*0\.75rem\b/, 'mobile ring remains circular');
 });
 
 test('compact indicator panel and its network buttons are hit-testable only through the open state class', () => {
@@ -213,7 +213,7 @@ test('open header menus escape the collapse clip without disabling the compact-s
 });
 
 test('monitor-dashboard.css owns slow indicator breathing and reduced motion', () => {
-	const dot = declarationBlock(dashboardCss, ".ops-refresh-ring[data-variant='floating'] .ops-refresh-ring__dot", 'animation');
+	const dot = declarationBlock(dashboardCss, '.ops-refresh-ring__dot', 'animation');
 	assert.match(dot, /animation\s*:\s*ops-indicator-breathe\s+6(?:\.[0-9]+)?s\s+ease-in-out\s+infinite\b/);
 	assert.match(dashboardCss, /@keyframes\s+ops-indicator-breathe\b/, 'component stylesheet defines breathing keyframes');
 	assert.match(

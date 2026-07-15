@@ -104,14 +104,18 @@ test('task 3 compact rows stay one-line through tablet widths and stack only on 
 	);
 });
 
-test('compact gpu slots use one accent with inverse available and occupied treatments', () => {
+test('compact gpu slots keep available dark and make occupied a restrained accent tint', () => {
 	assert.match(rowSource, /data-state=\{state\}/);
 	const availableRule = cssRule(cssSource, ".compact-slot[data-state='available']");
 	assert.match(availableRule, /var\(--chart-2\)/);
 	assert.match(availableRule, /var\(--ops-card\)/);
 	const occupiedRule = cssRule(cssSource, ".compact-slot[data-state='occupied']");
-	assert.match(occupiedRule, /background:\s*var\(--chart-2\)\s*;/);
-	assert.match(occupiedRule, /border-color:\s*var\(--chart-2\)\s*;/);
+	assert.match(occupiedRule, /background:\s*color-mix\(in srgb, var\(--chart-2\) 1[0-8]%, var\(--ops-card\)\)/);
+	assert.match(occupiedRule, /border-color:\s*color-mix\(in srgb, var\(--chart-2\) [234][0-9]%, var\(--ops-border\)\)/);
+	assert.doesNotMatch(occupiedRule, /background:\s*var\(--chart-2\)/);
+	const occupiedDetailRule = cssRule(cssSource, ".compact-detail__gpu[data-state='occupied']");
+	assert.match(occupiedDetailRule, /background:\s*color-mix\(in srgb, var\(--chart-2\) 1[0-8]%, var\(--ops-card\)\)/);
+	assert.doesNotMatch(occupiedDetailRule, /background:\s*var\(--chart-2\)/);
 	const unknownRule = cssRule(cssSource, ".compact-slot[data-state='unknown']");
 	assert.doesNotMatch(unknownRule, /#f59e0b|var\(--chart-[12]\)/);
 });

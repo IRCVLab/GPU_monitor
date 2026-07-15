@@ -192,10 +192,11 @@
 	const activeTab = writable<Tab>(readTab());
 
 	const POLL_REFRESH_MS = 10_000;
-	const HIDDEN_REFRESH_MS = 60_000;
+	const POLL_REQUEST_LEAD_MS = 1_000;
+	const REFRESH_WARNING_FAILURE_COUNT = 2;
+	const REFRESH_WARNING_AFTER_MS = POLL_REFRESH_MS * 2;
 	const VISIBLE_TICK_MS = 1_000;
 	const HIDDEN_TICK_MS = 30_000;
-	const REFRESH_RETRY_MS = 250;
 
 	let nowMs = $state(Date.now());
 	let ticker: ReturnType<typeof setInterval> | null = null;
@@ -207,9 +208,7 @@
 	let lastRefreshAtMs = $state(0);
 	let nextRefreshAtMs = $state<number | null>(null);
 	let refreshInFlight = $state(false);
-	let refreshFailed = $state(false);
-	let refreshCycleKey = $state(0);
-	let refreshCycleDurationMs = $state(POLL_REFRESH_MS);
+	let refreshFailureCount = $state(0);
 	let headerCompact = $state(false);
 	let headerIndicatorVisible = $state(false);
 	let indicatorPanelOpen = $state(false);
@@ -342,10 +341,10 @@
 				await refreshDashboardStatusOnly();
 			}
 			lastRefreshAtMs = Date.now();
-			refreshFailed = false;
+			refreshFailureCount = 0;
 		} catch (error) {
 			loadError = error instanceof Error ? error.message : '대시보드 데이터를 불러오지 못했습니다.';
-			refreshFailed = true;
+			refreshFailureCount += 1;
 		} finally {
 			refreshInFlight = false;
 			finishLoading();
@@ -373,16 +372,6 @@
 		return document.visibilityState === 'hidden' ? HIDDEN_TICK_MS : VISIBLE_TICK_MS;
 	}
 
-	function currentRefreshIntervalMs(): number {
-		if (!browser) return POLL_REFRESH_MS;
-		if (document.visibilityState === 'hidden') return HIDDEN_REFRESH_MS;
-		return POLL_REFRESH_MS;
-	}
-
-	function nextAlignedRefreshAtMs(intervalMs = currentRefreshIntervalMs(), now = Date.now()): number {
-		return Math.floor(now / intervalMs) * intervalMs + intervalMs;
-	}
-
 	function startTicker() {
 		if (ticker !== null) {
 			clearInterval(ticker);
@@ -394,36 +383,26 @@
 		}, currentTickIntervalMs());
 	}
 
-	function scheduleNextRefresh(targetAtMs = nextAlignedRefreshAtMs()) {
+	function schedulePollingTick(delayMs: number): void {
 		if (autoRefreshTimer !== null) {
 			clearTimeout(autoRefreshTimer);
 		}
 
-		const cycleStartedAtMs = Date.now();
-		nextRefreshAtMs = targetAtMs;
-		const delayMs = Math.max(0, targetAtMs - cycleStartedAtMs);
-		refreshCycleDurationMs = Math.max(800, delayMs);
-		refreshCycleKey += 1;
+		nextRefreshAtMs = Date.now() + delayMs;
 		autoRefreshTimer = setTimeout(() => {
+			schedulePollingTick(POLL_REFRESH_MS);
 			void runAutoRefresh();
 		}, delayMs);
 	}
 
-	function scheduleRefreshRetry(): void {
-		if (autoRefreshTimer !== null) clearTimeout(autoRefreshTimer);
-		autoRefreshTimer = setTimeout(() => {
-			void runAutoRefresh();
-		}, REFRESH_RETRY_MS);
+	function startPollingCadence(): void {
+		schedulePollingTick(POLL_REFRESH_MS - POLL_REQUEST_LEAD_MS);
 	}
 
 	async function runAutoRefresh(): Promise<void> {
-		if (refreshInFlight) {
-			scheduleRefreshRetry();
-			return;
-		}
+		if (refreshInFlight) return;
 
 		await reloadDashboard();
-		scheduleNextRefresh();
 	}
 
 	function currentHeaderScrollPosition(): number {
@@ -533,7 +512,7 @@
 		headerScrollDistance = result.nextAccumulatedDelta;
 	}
 
-	function initPageRuntime() {
+	function initPageRuntime(): (() => void) | undefined {
 		if (!browser) return;
 
 		const runtime = globalThis as typeof globalThis & {
@@ -552,9 +531,6 @@
 		});
 		const handleVisibilityChange = () => {
 			startTicker();
-			if (!refreshInFlight) {
-				scheduleNextRefresh();
-			}
 		};
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 		headerPreviousY = currentHeaderScrollPosition();
@@ -565,11 +541,13 @@
 		window.addEventListener('touchmove', handleHeaderTouchMove, { passive: true });
 		window.addEventListener('touchend', handleHeaderTouchEnd, { passive: true });
 
-		void reloadDashboard(true).finally(() => {
-			scheduleNextRefresh();
-		});
+		startPollingCadence();
+		void reloadDashboard(true);
 
-		runtime.__monitoringV2PageCleanup = () => {
+		let cleaned = false;
+		const cleanup = () => {
+			if (cleaned) return;
+			cleaned = true;
 			unsubscribeTab();
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('scroll', handleHeaderScroll);
@@ -584,10 +562,15 @@
 				headerScrollFrame = null;
 			}
 			cleanupPageRuntime();
+			if (runtime.__monitoringV2PageCleanup === cleanup) {
+				delete runtime.__monitoringV2PageCleanup;
+			}
 		};
+		runtime.__monitoringV2PageCleanup = cleanup;
+		return cleanup;
 	}
 
-	initPageRuntime();
+	$effect(() => initPageRuntime());
 
 
 	function relativeTime(ms: number): string {
@@ -599,8 +582,6 @@
 	}
 
 	function nextRefreshText(): string {
-		if (refreshInFlight) return '갱신 중';
-		if (refreshFailed) return '지연';
 		if (nextRefreshAtMs === null) return '준비 중';
 
 		const delta = Math.ceil((nextRefreshAtMs - nowMs) / 1000);
@@ -608,11 +589,18 @@
 		return '곧 갱신';
 	}
 
+	function refreshWarningText(): string {
+		if (refreshFailureCount >= REFRESH_WARNING_FAILURE_COUNT) return '갱신 지연';
+		if (
+			!$wsConnected &&
+			lastRefreshAtMs > 0 &&
+			nowMs - lastRefreshAtMs >= REFRESH_WARNING_AFTER_MS
+		) return '연결 지연';
+		return '';
+	}
+
 	function refreshHealthText(): string {
-		if (refreshFailed) return '지연';
-		if (!$wsConnected) return '확인 중';
-		if (refreshInFlight) return '동기화';
-		return '정상';
+		return refreshWarningText() || '정상';
 	}
 
 	function orderServers(servers: ServerState[], order: number[]): ServerState[] {
@@ -711,7 +699,6 @@
 
 	async function handleSaved() {
 		await reloadDashboard(true);
-		scheduleNextRefresh();
 	}
 
 	async function retryInitialLoad() {
@@ -719,7 +706,6 @@
 		retryingInitialLoad = true;
 		try {
 			await reloadDashboard(true);
-			scheduleNextRefresh();
 		} finally {
 			retryingInitialLoad = false;
 		}
@@ -808,12 +794,7 @@
 					aria-controls={indicatorPanelId}
 					onclick={openIndicatorPanel}
 				>
-					<RefreshRing
-						cycleKey={refreshCycleKey}
-						durationMs={refreshCycleDurationMs}
-						attention={!$wsConnected || refreshFailed}
-						variant="floating"
-					/>
+					<RefreshRing attention={Boolean(refreshWarningText())} variant="floating" />
 				</button>
 				<div id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen}>
 					<span class="ops-indicator-status">{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
@@ -836,13 +817,10 @@
 						aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)} · ${nextRefreshText()}`}
 						title={`${relativeTime(lastRefreshAtMs)} · ${nextRefreshText()}`}
 					>
-						<RefreshRing
-							cycleKey={refreshCycleKey}
-							durationMs={refreshCycleDurationMs}
-							attention={!$wsConnected || refreshFailed}
-							variant="header"
-						/>
-						<span class="ops-status-label">{refreshHealthText()}</span>
+						<RefreshRing attention={Boolean(refreshWarningText())} variant="header" />
+						{#if refreshWarningText()}
+							<span class="ops-status-label">{refreshWarningText()}</span>
+						{/if}
 					</p>
 				</div>
 

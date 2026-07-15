@@ -167,13 +167,14 @@
 }
 
 .compact-slot[data-state='available'] {
-	border-color: var(--chart-2);
+	border-color: color-mix(in srgb, var(--chart-2) 58%, var(--ops-border));
 	background: color-mix(in srgb, var(--ops-card) 94%, #040609);
 }
 
 .compact-slot[data-state='occupied'] {
-	border-color: var(--chart-2);
-	background: var(--chart-2);
+	border-color: color-mix(in srgb, var(--chart-2) 36%, var(--ops-border));
+	background: color-mix(in srgb, var(--chart-2) 14%, var(--ops-card));
+	box-shadow: inset 0 1px 0 color-mix(in srgb, var(--chart-2) 10%, transparent);
 }
 
 .compact-slot[data-state='available'] .compact-slot__label {
@@ -181,7 +182,7 @@
 }
 
 .compact-slot[data-state='occupied'] .compact-slot__label {
-	color: #040609;
+	color: color-mix(in srgb, var(--chart-2) 82%, var(--ops-fg));
 }
 
 .compact-slot[data-state='unknown'] {
@@ -191,9 +192,9 @@
 
 .compact-slot[data-state='occupied'] .compact-avatar,
 .compact-slot[data-state='occupied'] .compact-avatar-count {
-	border-color: color-mix(in srgb, #040609 28%, transparent);
-	background: color-mix(in srgb, #040609 12%, transparent);
-	color: #040609;
+	border-color: color-mix(in srgb, var(--chart-2) 42%, var(--ops-border));
+	background: color-mix(in srgb, var(--chart-2) 18%, var(--ops-card));
+	color: color-mix(in srgb, var(--chart-2) 76%, var(--ops-fg));
 	box-shadow: none;
 }
 
@@ -424,7 +425,7 @@ html.light .compact-avatar-count {
 }
 
 .compact-detail__gpu[data-state='available'] {
-	border-color: var(--chart-2);
+	border-color: color-mix(in srgb, var(--chart-2) 58%, var(--ops-border));
 	background: color-mix(in srgb, var(--ops-card) 94%, #040609);
 }
 
@@ -434,13 +435,13 @@ html.light .compact-avatar-count {
 }
 
 .compact-detail__gpu[data-state='occupied'] {
-	border-color: var(--chart-2);
-	background: var(--chart-2);
+	border-color: color-mix(in srgb, var(--chart-2) 36%, var(--ops-border));
+	background: color-mix(in srgb, var(--chart-2) 14%, var(--ops-card));
 }
 
 .compact-detail__gpu[data-state='occupied'] .compact-detail__gpu-slot,
 .compact-detail__gpu[data-state='occupied'] .compact-detail__gpu-occupancy {
-	color: #040609;
+	color: color-mix(in srgb, var(--chart-2) 74%, var(--ops-fg));
 }
 
 .compact-detail__gpu[data-state='unknown'] {

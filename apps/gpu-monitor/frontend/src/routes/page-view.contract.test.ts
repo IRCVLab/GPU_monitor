@@ -208,11 +208,23 @@ test('persistent header shows semantic health and cadence without visible second
 
 	assert.match(statusMarkup, /\{refreshHealthText\(\)\}/);
 	assert.match(statusMarkup, /<RefreshRing/);
-	assert.match(statusMarkup, /cycleKey=\{refreshCycleKey\}/);
-	assert.match(statusMarkup, /durationMs=\{refreshCycleDurationMs\}/);
+	assert.doesNotMatch(statusMarkup, /cycleKey=|durationMs=/);
+	assert.match(statusMarkup, /\{#if refreshWarningText\(\)\}[\s\S]*ops-status-label[\s\S]*\{refreshWarningText\(\)\}/);
 	assert.doesNotMatch(statusBody, /relativeTime\(|nextRefreshText\(/);
 	assert.match(statusMarkup, /aria-label=\{`\$\{refreshHealthText\(\)\}[\s\S]*relativeTime\(lastRefreshAtMs\)[\s\S]*nextRefreshText\(\)/);
 	assert.doesNotMatch(pageSource, /ops-refresh-cadence|refreshCadencePct/);
+	assert.doesNotMatch(pageSource, /'갱신 중'|'동기화'/, 'ordinary in-flight requests must not create visible transient status copy');
+});
+
+test('header warning copy appears only after persistent refresh trouble', () => {
+	assert.match(pageSource, /let refreshFailureCount = \$state\(0\)/);
+	assert.match(pageSource, /const REFRESH_WARNING_FAILURE_COUNT = 2/);
+	assert.match(pageSource, /refreshFailureCount = 0/);
+	assert.match(pageSource, /refreshFailureCount \+= 1/);
+	const warningBody = functionBody(pageSource, 'refreshWarningText');
+	assert.match(warningBody, /refreshFailureCount >= REFRESH_WARNING_FAILURE_COUNT/);
+	assert.match(warningBody, /nowMs - lastRefreshAtMs >= REFRESH_WARNING_AFTER_MS/);
+	assert.doesNotMatch(warningBody, /refreshInFlight/);
 });
 
 test('GPU Monitor identity, refresh ring, and health label share one header row', () => {
@@ -224,25 +236,42 @@ test('GPU Monitor identity, refresh ring, and health label share one header row'
 	assert.match(pageSource, /<div class="ops-identity">[\s\S]*<h1>GPU Monitor<\/h1>[\s\S]*<p[\s\S]*class="ops-status"/);
 });
 
-test('header and collapsed indicator share a seamless response-synchronized orbit ring', () => {
+test('header and collapsed indicator share a continuous ten-second satellite cadence', () => {
 	assert.match(
 		dashboardCss,
 		/@media \(min-width: 921px\)[\s\S]*?\.ops-header-inner,[\s\S]*?padding-block:\s*0\.35rem;/
 	);
 	assert.equal((pageSource.match(/<RefreshRing/g) ?? []).length, 2);
-	assert.match(dashboardCss, /\.ops-refresh-ring__progress\s*\{[^}]*stroke-dasharray:\s*0\.28 0\.72;[^}]*animation:\s*ops-refresh-ring-orbit var\(--ops-refresh-duration\) linear forwards/);
-	assert.match(dashboardCss, /@keyframes ops-refresh-ring-orbit\s*\{[\s\S]*transform:\s*rotate\(0deg\);[\s\S]*transform:\s*rotate\(360deg\);/);
-	assert.doesNotMatch(dashboardCss, /@keyframes ops-refresh-ring-cycle|stroke-dashoffset:\s*1/);
+	assert.match(dashboardCss, /\.ops-refresh-ring__satellite\s*\{[^}]*animation:\s*ops-refresh-satellite-orbit 10s linear infinite/);
+	assert.match(dashboardCss, /@keyframes ops-refresh-satellite-orbit\s*\{[\s\S]*transform:\s*rotate\(0deg\);[\s\S]*transform:\s*rotate\(360deg\);/);
+	assert.match(dashboardCss, /\.ops-refresh-ring__dot\s*\{[^}]*animation:\s*ops-indicator-breathe 6(?:\.[0-9]+)?s ease-in-out infinite/);
+	assert.doesNotMatch(dashboardCss, /ops-refresh-ring-orbit|--ops-refresh-duration/);
 	assert.doesNotMatch(dashboardCss, /ops-refresh-cadence-flow/);
 });
 
-test('refresh scheduling restarts the visible cycle only when the next deadline is scheduled', () => {
-	assert.match(pageSource, /let refreshCycleKey = \$state\(0\)/);
-	assert.match(pageSource, /let refreshCycleDurationMs = \$state\(POLL_REFRESH_MS\)/);
-	const scheduleBody = functionBody(pageSource, 'scheduleNextRefresh');
-	assert.match(scheduleBody, /refreshCycleDurationMs\s*=\s*Math\.max\(/);
-	assert.match(scheduleBody, /refreshCycleKey\s*\+=\s*1/);
+test('refresh requests run on a fixed cadence independent of response completion', () => {
+	assert.match(pageSource, /const POLL_REFRESH_MS = 10_000/);
+	assert.match(pageSource, /const POLL_REQUEST_LEAD_MS = 1_000/);
+	assert.doesNotMatch(pageSource, /refreshCycleKey|refreshCycleDurationMs|scheduleRefreshRetry/);
+	const startBody = functionBody(pageSource, 'startPollingCadence');
+	assert.match(startBody, /schedulePollingTick\(POLL_REFRESH_MS - POLL_REQUEST_LEAD_MS\)/);
+	const scheduleBody = functionBody(pageSource, 'schedulePollingTick');
+	const nextSchedule = scheduleBody.indexOf('schedulePollingTick(POLL_REFRESH_MS)');
+	const refreshCall = scheduleBody.indexOf('void runAutoRefresh()');
+	assert.ok(nextSchedule >= 0 && refreshCall >= 0 && nextSchedule < refreshCall, 'next cadence must be scheduled before the request starts');
 	const autoBody = functionBody(pageSource, 'runAutoRefresh');
-	assert.match(autoBody, /if \(refreshInFlight\)[\s\S]*scheduleRefreshRetry\(\)[\s\S]*return/);
-	assert.match(autoBody, /await reloadDashboard\(\)[\s\S]*scheduleNextRefresh\(\)/);
+	assert.match(autoBody, /if \(refreshInFlight\) return/);
+	assert.match(autoBody, /await reloadDashboard\(\)/);
+	assert.doesNotMatch(autoBody, /schedulePollingTick|startPollingCadence/);
+});
+
+test('page runtime is mounted and destroyed through the Svelte 5 effect lifecycle', () => {
+	assert.doesNotMatch(pageSource, /import\s+\{\s*onMount\s*\}\s+from\s+'svelte'/);
+	assert.match(pageSource, /\$effect\(\(\) => initPageRuntime\(\)\)/);
+	assert.doesNotMatch(pageSource, /\n\s*initPageRuntime\(\);/);
+	const initBody = functionBody(pageSource, 'initPageRuntime');
+	assert.match(initBody, /const cleanup = \(\) =>/);
+	assert.match(initBody, /runtime\.__monitoringV2PageCleanup = cleanup/);
+	assert.match(initBody, /return cleanup/);
+	assert.match(initBody, /if \(runtime\.__monitoringV2PageCleanup === cleanup\)/);
 });

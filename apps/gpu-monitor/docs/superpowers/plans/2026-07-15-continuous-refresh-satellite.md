@@ -15,6 +15,7 @@
 - Preserve server order, Full/Compact view selection, Grid/Masonry selection, notes, and holds.
 - Visual cadence is exactly `10_000ms`; periodic request lead is exactly `1_000ms`.
 - Do not overlap duplicate status requests when one is already in flight.
+- Do not render `갱신 중` or `동기화` beside the header ring; show warning copy only after two consecutive failures or two stale cadence cycles.
 - Respect `prefers-reduced-motion: reduce`.
 
 ---
@@ -31,11 +32,11 @@
 
 **Interfaces:**
 - Consumes: existing `attention` and `variant` ring properties.
-- Produces: a response-independent `10s` satellite animation and `startPollingCadence()` lifecycle.
+- Produces: a response-independent `10s` satellite animation and `startPollingCadence()` lifecycle tied to Svelte mount/destroy cleanup.
 
 - [ ] **Step 1: Write failing contracts**
 
-Assert that `RefreshRing` has no `cycleKey`, renders a fixed top marker and satellite, and CSS uses `10s linear infinite`. Assert that polling schedules its next fixed tick before invoking `reloadDashboard()` and never restarts visual state after response completion.
+Assert that `RefreshRing` has no `cycleKey`, renders a fixed top marker and satellite, and CSS uses `10s linear infinite`. Assert that polling schedules its next fixed tick before invoking `reloadDashboard()` and never restarts visual state after response completion. Assert that transient request state cannot render header copy and persistent warning thresholds gate the warning label.
 
 - [ ] **Step 2: Run focused tests and verify RED**
 
@@ -47,7 +48,7 @@ Expected: existing keyed orbit and response-synchronized scheduler assertions fa
 
 - [ ] **Step 3: Implement the satellite and cadence**
 
-Remove keyed progress properties, render the SVG marker and satellite, and use `animation: ops-refresh-satellite-orbit 10s linear infinite`. Replace response-driven rescheduling with a lead timeout followed by a fixed ten-second interval. Keep the in-flight guard but never let it alter the next cadence tick.
+Remove keyed progress properties, render the SVG marker and satellite, and use `animation: ops-refresh-satellite-orbit 10s linear infinite`. Replace response-driven rescheduling with a lead timeout followed by a fixed ten-second interval. Keep the in-flight guard but never let it alter the next cadence tick. Start the page runtime through a Svelte 5 `$effect` and return its cleanup so timers and listeners stop immediately on route destruction.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -112,4 +113,3 @@ Expected: all frontend tests, Svelte diagnostics, build, and backend tests pass.
 git add frontend/src docs/superpowers/specs/2026-07-15-continuous-refresh-satellite-design.md docs/superpowers/plans/2026-07-15-continuous-refresh-satellite.md
 git commit -m "fix: clarify refresh cadence and compact occupancy"
 ```
-

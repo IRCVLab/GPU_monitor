@@ -1,5 +1,7 @@
 # Dashboard Motion and Refresh Semantics Design
 
+> **Current authority:** The refresh cadence, collapsed-indicator placement, and Compact occupied-surface decisions in this document are superseded by `2026-07-15-continuous-refresh-satellite-design.md`. The FLIP layout decisions remain applicable.
+
 ## Goal
 
 Make layout changes, scroll-state feedback, refresh timing, and GPU color meaning read as one coherent monitoring system rather than unrelated effects.
@@ -9,19 +11,18 @@ Make layout changes, scroll-state feedback, refresh timing, and GPU color meanin
 ### 1. One GPU color language
 
 - **Available:** a dark surface with the single occupancy accent used for its label and border.
-- **Occupied:** the same accent as a solid background with near-black text. The inverse treatment, not another hue, communicates the state change.
+- **Occupied:** Full may use an inverse accent treatment, while Compact uses a restrained accent tint so repeated slots do not become a solid color field.
 - **Unknown/stale:** neutral muted treatment. It must never look available or occupied.
-- Full and Compact both consume the same `getCompactGpuState(...)` result and expose the same `data-state` values.
+- Full and Compact consume the same `getCompactGpuState(...)` result and expose the same `data-state` values without requiring identical surface fills.
 - Utilization and memory graphs keep their independent chart colors; they describe measurements, not occupancy.
 
 ### 2. Refresh cadence is a circular state indicator
 
 - Remove the ambiguous horizontal marquee from the expanded header.
-- Use one shared visual in both expanded and collapsed states: a small center status dot surrounded by a circular progress ring.
-- A fixed-length arc travels around the ring linearly during each scheduled refresh interval.
-- When the deadline is reached, the arc remains parked at the top while the HTTP refresh is in flight.
-- The ring begins its next cycle only after the response has completed and the next deadline has been scheduled.
-- At the deadline the arc stops at the top while the request is in flight. The next completed response starts another orbit from that same top position, so the 360-to-0 boundary has no visible reset.
+- Use one shared visual in both expanded and collapsed states: a breathing center status dot, a faint track, a fixed top marker, and a small orbiting satellite.
+- The satellite travels linearly and continuously once every ten seconds.
+- Network response timing never parks, restarts, or delays the visual cycle.
+- The periodic request cadence is scheduled independently, beginning one second before the first visual boundary and continuing every ten seconds.
 - Normal uses green; delayed/disconnected uses amber. Exact relative times remain available to assistive text and the detail popover, not as constantly changing header copy.
 - The animation is CSS-driven so ordinary server-state updates do not restart it.
 
@@ -44,15 +45,12 @@ Make layout changes, scroll-state feedback, refresh timing, and GPU color meanin
 
 ## Refresh Data Flow
 
-1. A refresh deadline is scheduled.
-2. The fixed-length arc travels linearly toward one complete orbit at that deadline.
-3. At the deadline, the arc reaches the top and the request begins.
-4. The arc stays at the top for the complete request duration.
-5. Response data is merged without recreating the ring.
-6. A new deadline is scheduled from the completion point/aligned interval.
-7. The ring receives a new cycle key and starts the next orbit from the same top position.
-
-If a refresh is already active when another trigger arrives, the system retries shortly without scheduling a false new cadence cycle.
+1. The satellite begins an independent ten-second CSS orbit.
+2. The first periodic refresh request is issued after nine seconds.
+3. The next ten-second request tick is scheduled before the current request starts.
+4. Response data is merged whenever it arrives without recreating or restarting the ring.
+5. If a refresh is still active at a cadence tick, that duplicate request is skipped while the next fixed tick remains scheduled.
+6. Svelte 5 effect cleanup removes timers and listeners when the page is left.
 
 ## Accessibility and Motion
 
@@ -64,7 +62,7 @@ If a refresh is already active when another trigger arrives, the system retries 
 ## Verification
 
 - Contract tests prove there is no old horizontal cadence bar, both header states use the shared ring, and the floating indicator is left-aligned.
-- Scheduling tests prove a new visual cycle is started only after refresh completion.
+- Scheduling tests prove request timing is fixed and independent of refresh completion.
 - GPU component tests prove Full and Compact consume the same availability state and semantic color selectors.
 - Layout-motion tests prove document-space FLIP deltas and reduced-motion bypass.
-- Browser QA verifies Grid ↔ Gapless movement, header collapse/indicator visibility, ring hold/restart behavior, no content overlap, and no horizontal overflow.
+- Browser QA verifies Grid ↔ Gapless movement, header collapse/indicator visibility, continuous satellite motion, lifecycle cleanup, no content overlap, and no horizontal overflow.

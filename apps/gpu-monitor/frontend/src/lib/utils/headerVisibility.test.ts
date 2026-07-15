@@ -302,7 +302,11 @@ test('compact-scroll indicator has no responsive visibility cutoff', () => {
 	);
 	assert.match(
 		dashboardCss,
-		/@media\s*\(max-width:\s*1199px\)[\s\S]*?\.ops-indicator\s*\{[^}]*transform:\s*translateX\(-0\.25rem\)\s*;/
+		/@media\s*\(max-width:\s*1199px\)[\s\S]*?\.ops-indicator\s*\{[^}]*transform:\s*translateX\(0\)\s*;/
+	);
+	assert.match(
+		dashboardCss,
+		/@media\s*\(max-width:\s*640px\)[\s\S]*?\.ops-indicator\s*\{[^}]*transform:\s*translateX\(-2px\)\s*;/
 	);
 });
 
