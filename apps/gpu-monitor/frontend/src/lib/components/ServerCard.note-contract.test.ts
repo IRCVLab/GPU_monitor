@@ -25,3 +25,18 @@ test('ServerCard note preview and history use concise HOLD marker instead of lon
 	assert.match(source, /monitor-note-item__kind">HOLD<\/span>/);
 	assert.match(source, /monitor-note-item__gpu-chip">G\{gpuIndex\}<\/span>/);
 });
+
+test('ServerCard separates memo history from the composer and provides a deliberate empty state', () => {
+	assert.match(source, /monitor-card__memo-group monitor-card__memo-group--history/);
+	assert.match(source, /monitor-card__memo-group monitor-card__memo-group--composer/);
+	assert.match(source, /monitor-card__memo-group-title">기록<\/span>/);
+	assert.match(source, /monitor-card__memo-group-title">작성<\/span>/);
+	assert.match(source, /monitor-card__memo-empty/);
+});
+
+test('collapsed System and Memo controls use structural markers and CSS disclosure angles', () => {
+	assert.match(source, /monitor-card__footer-marker monitor-card__footer-marker--system/);
+	assert.match(source, /monitor-card__footer-marker monitor-card__footer-marker--memo/);
+	assert.match(source, /monitor-card__footer-disclosure/);
+	assert.doesNotMatch(source, />\s*[▾▸]\s*</);
+});
