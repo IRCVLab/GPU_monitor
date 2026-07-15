@@ -489,17 +489,22 @@
 }
 
 .monitor-card__metric-name,
-.monitor-card__storage-meta,
-.monitor-card__storage-time,
-.monitor-card__mount-path,
-.monitor-card__hardware-index,
-.monitor-card__hardware-value,
 .monitor-card__loading-state,
 .monitor-card__retry-button,
 .monitor-note-item__meta,
 .monitor-note-item__content,
 .monitor-note-item__delete {
   font-size: 0.74rem;
+}
+
+.monitor-card__storage-meta,
+.monitor-card__storage-time,
+.monitor-card__mount-path,
+.monitor-card__hardware-index,
+.monitor-card__hardware-value,
+.monitor-card__mount-usage,
+.monitor-card__mount-percent {
+  font-size: 0.7rem;
 }
 
 .monitor-card__metric-name,
@@ -608,7 +613,7 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding-top: 0.78rem;
+  padding-top: 0.45rem;
 }
 
 .monitor-card__error-row {
