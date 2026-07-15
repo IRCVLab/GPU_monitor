@@ -252,8 +252,6 @@
 	max-width: min(92vw, 34rem);
 }
 
-.ops-indicator:hover .ops-indicator-panel,
-.ops-indicator:focus-within .ops-indicator-panel,
 .ops-indicator-panel.ops-indicator-panel-open {
 	display: flex;
 }

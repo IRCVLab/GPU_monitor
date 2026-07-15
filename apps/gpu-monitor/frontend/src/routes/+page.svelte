@@ -687,8 +687,22 @@
 		if (actionsMenuOpen) revealHeader();
 	}
 
+	function openIndicatorPanel() {
+		indicatorPanelOpen = true;
+	}
+
+	function closeIndicatorPanel() {
+		indicatorPanelOpen = false;
+	}
+
 	function toggleIndicatorPanel() {
 		indicatorPanelOpen = !indicatorPanelOpen;
+	}
+
+	function handleIndicatorFocusOut(event: FocusEvent) {
+		const nextTarget = event.relatedTarget;
+		if (nextTarget instanceof Node && indicatorElement && indicatorElement.contains(nextTarget)) return;
+		indicatorPanelOpen = false;
 	}
 
 	function selectNetwork(tab: Tab) {
@@ -731,7 +745,7 @@
 <div class="dashboard-page min-h-screen bg-surface">
 	<div bind:this={headerShellElement} ontransitionend={handleHeaderTransitionEnd} class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible} class:ops-header-menu-open={viewMenuOpen || actionsMenuOpen}>
 		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerIndicatorVisible} style={headerIndicatorStyle}>
-			<div bind:this={indicatorElement} class="ops-indicator">
+			<div bind:this={indicatorElement} class="ops-indicator" role="group" aria-label="상태 표시기" onmouseenter={openIndicatorPanel} onmouseleave={closeIndicatorPanel} onfocusin={openIndicatorPanel} onfocusout={handleIndicatorFocusOut}>
 				<button
 					type="button"
 					class="ops-indicator-trigger"
