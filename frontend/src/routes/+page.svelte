@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { tick } from 'svelte';
+	import { cubicOut } from 'svelte/easing';
 	import { writable, derived, get } from 'svelte/store';
+	import { fly } from 'svelte/transition';
 	import '$lib/styles/monitor-dashboard.css';
 	import {
 		serverStates,
@@ -14,8 +16,8 @@
 		colorTheme,
 		colorThemeOptions,
 		setColorTheme,
-		setThemeMode,
-		themeMode
+		themeMode,
+		toggleThemeMode
 	} from '$lib/stores/theme';
 	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import {
@@ -25,6 +27,7 @@
 		setDashboardView
 	} from '$lib/stores/dashboardPrefs';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
+	import { resolveDashboardShortcut } from '$lib/utils/dashboardShortcuts';
 	import { placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
 	import { mergeServerRecordState } from '$lib/utils/serverStateMerge';
 	import {
@@ -53,6 +56,12 @@
 	type Tab = 'internal' | 'all' | 'external';
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
+	const dashboardViewTransition = {
+		y: browser && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 8,
+		opacity: browser && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 0.72,
+		duration: browser && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 210,
+		easing: cubicOut
+	};
 
 	function masonry(node: HTMLDivElement, initialEnabled: boolean) {
 		let frame = 0;
@@ -842,6 +851,27 @@
 		) {
 			revealHeader();
 		}
+
+		if (adminOpen || deleteOpen) return;
+		const shortcut = resolveDashboardShortcut(event);
+		if (!shortcut) return;
+
+		event.preventDefault();
+		viewMenuOpen = false;
+		actionsMenuOpen = false;
+		indicatorPanelOpen = false;
+
+		switch (shortcut.type) {
+			case 'toggle-view':
+				setDashboardView($dashboardView === 'compact' ? 'default' : 'compact');
+				break;
+			case 'select-network':
+				selectNetwork(shortcut.tab);
+				break;
+			case 'toggle-theme':
+				toggleThemeMode();
+				break;
+		}
 	}
 
 	const pageShellClass = 'max-w-7xl mx-auto';
@@ -947,7 +977,7 @@
 						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
 						{#if actionsMenuOpen}<div class="ops-overflow-menu"><button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button><a class="ops-menu-link" href="/logs">이벤트 로그</a><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
 					</div>
-					<button class="ops-mode-action" onclick={() => setThemeMode($themeMode === 'dark' ? 'light' : 'dark')} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}>
+					<button class="ops-mode-action" onclick={toggleThemeMode} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}>
 						{#if $themeMode === 'dark'}<span aria-hidden="true">☀</span>{:else}<span aria-hidden="true">☾</span>{/if}
 					</button>
 				</div>
@@ -990,36 +1020,42 @@
 			<section class="monitor-dashboard-state" aria-live="polite">
 				<p>{$activeTab === 'all' ? '표시할 서버가 없습니다' : '이 네트워크에 서버 없음'}</p>
 			</section>
-		{:else if $dashboardView === 'compact'}
-			<CompactDashboard servers={$currentServers} onOpenFull={handleOpenFull} />
 		{:else}
-			<div
-				class="monitor-dashboard-grid"
-				class:monitor-dashboard-grid--masonry={$dashboardLayout === 'masonry'}
-				style={serverGridStyle}
-				use:masonry={$dashboardLayout === 'masonry'}
-				role="list"
-			>
-				{#each $currentServers as server (server.server_id)}
-					<div
-						role="listitem"
-						tabindex="-1"
-						draggable="true"
-						ondragstart={() => dragStart(server.server_id)}
-						ondragover={(event) => handleDragOver(event, server.server_id)}
-						ondrop={drop}
-						ondragend={dragEnd}
-						use:trackServerCard={server.server_id}
-						class="monitor-dashboard-card-item cursor-grab active:cursor-grabbing"
-						class:monitor-dashboard-card-item--continuity-focus={continuityFocusServerId === server.server_id}
-						class:opacity-40={dragging === server.server_id}
-						class:ring-1={dragTarget === server.server_id && dragTarget !== dragging}
-						class:ring-blue-500={dragTarget === server.server_id && dragTarget !== dragging}
-					>
-						<ServerCard {server} onEdit={handleEditServer} showNetwork={$activeTab === 'all'} />
-					</div>
-				{/each}
-			</div>
+			{#key $dashboardView}
+				<div class="ops-dashboard-view-stage" in:fly={dashboardViewTransition}>
+					{#if $dashboardView === 'compact'}
+						<CompactDashboard servers={$currentServers} onOpenFull={handleOpenFull} />
+					{:else}
+						<div
+							class="monitor-dashboard-grid"
+							class:monitor-dashboard-grid--masonry={$dashboardLayout === 'masonry'}
+							style={serverGridStyle}
+							use:masonry={$dashboardLayout === 'masonry'}
+							role="list"
+						>
+							{#each $currentServers as server (server.server_id)}
+								<div
+									role="listitem"
+									tabindex="-1"
+									draggable="true"
+									ondragstart={() => dragStart(server.server_id)}
+									ondragover={(event) => handleDragOver(event, server.server_id)}
+									ondrop={drop}
+									ondragend={dragEnd}
+									use:trackServerCard={server.server_id}
+									class="monitor-dashboard-card-item cursor-grab active:cursor-grabbing"
+									class:monitor-dashboard-card-item--continuity-focus={continuityFocusServerId === server.server_id}
+									class:opacity-40={dragging === server.server_id}
+									class:ring-1={dragTarget === server.server_id && dragTarget !== dragging}
+									class:ring-blue-500={dragTarget === server.server_id && dragTarget !== dragging}
+								>
+									<ServerCard {server} onEdit={handleEditServer} showNetwork={$activeTab === 'all'} />
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/key}
 		{/if}
 	</main>
 </div>

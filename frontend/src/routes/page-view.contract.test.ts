@@ -309,3 +309,21 @@ test('View trigger names the current Full or Compact mode before the menu opens'
 	assert.ok(triggerMarkup.includes('{dashboardViewLabel($dashboardView)}'));
 	assert.ok(!triggerMarkup.includes('>보기 '));
 });
+
+test('dashboard keyboard shortcuts share the existing view network and theme actions', () => {
+	assert.match(pageSource, /resolveDashboardShortcut/);
+	assert.match(pageSource, /case 'toggle-view'/);
+	assert.match(pageSource, /setDashboardView\(\$dashboardView === 'compact' \? 'default' : 'compact'\)/);
+	assert.match(pageSource, /case 'select-network'/);
+	assert.match(pageSource, /selectNetwork\(shortcut\.tab\)/);
+	assert.match(pageSource, /case 'toggle-theme'/);
+	assert.match(pageSource, /toggleThemeMode\(\)/);
+});
+
+test('Full and Compact changes use a restrained keyed transition', () => {
+	assert.match(pageSource, /import \{ fly \} from 'svelte\/transition';/);
+	assert.match(pageSource, /\{#key \$dashboardView\}/);
+	assert.match(pageSource, /class="ops-dashboard-view-stage"/);
+	assert.match(pageSource, /in:fly=\{dashboardViewTransition\}/);
+	assert.match(pageSource, /prefers-reduced-motion/);
+});

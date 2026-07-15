@@ -397,15 +397,11 @@ test('desktop indicator is shrink-wrapped with a zero-translate gutter anchor', 
 });
 
 
-test("scroll frames do not run viewport alignment or schedule unchanged indicator lane state", () => {
-	assert.match(pageSource, /import\s*\{[^}]*shouldSyncIndicatorLane[^}]*\}\s*from\s*'\$lib\/utils\/headerIndicatorLane';/);
-	assert.doesNotMatch(pageSource, /function\s+alignDashboardContentBelowIndicatorLane\s*\(/);
+test('scroll frames never restore an indicator-owned layout lane', () => {
+	assert.doesNotMatch(pageSource, /headerIndicatorLane/);
+	assert.doesNotMatch(pageSource, /syncIndicatorLaneAfterDom|scheduleIndicatorLaneSync/);
+	assert.doesNotMatch(pageSource, /indicatorLaneHeightPx|--ops-indicator-lane-height/);
 
-	const syncBody = functionBody(pageSource, "syncIndicatorLaneAfterDom");
-	assert.doesNotMatch(syncBody, /window\.scrollTo/);
-	assert.doesNotMatch(syncBody, /alignDashboardContentBelowIndicatorLane/);
-
-	const scrollBody = functionBody(pageSource, "updateHeaderFromScroll");
-	assert.match(scrollBody, /shouldSyncIndicatorLane/);
-	assert.match(scrollBody, /if\s*\([^)]*shouldSyncIndicatorLane[\s\S]*scheduleIndicatorLaneSync\(\)/);
+	const scrollBody = functionBody(pageSource, 'updateHeaderFromScroll');
+	assert.doesNotMatch(scrollBody, /indicatorLane|scheduleIndicatorLaneSync/);
 });
