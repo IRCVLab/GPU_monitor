@@ -100,8 +100,15 @@ test('task 2 preserves masonry grid behavior', () => {
 	assertDeclaration(gridRule, 'grid-auto-rows', 'var(--monitor-dashboard-masonry-row)');
 });
 
-test('task 2 preserves manual current server order in Full view', () => {
-	assert.match(pageSource, /const currentServers = derived\([\s\S]*return orderServers\(selected, \$order\);[\s\S]*\);/);
+test('dashboard order is owned by the backend sequence in Full and Compact views', () => {
+	assert.doesNotMatch(pageSource, /from '\$lib\/stores\/order'/);
+	assert.doesNotMatch(pageSource, /\bserverOrder\b|\bsaveOrder\b|\borderServers\s*\(|\bmergeVisibleOrder\s*\(/);
+	assert.doesNotMatch(pageSource, /draggable="true"|ondragstart=|ondragover=|ondrop=|ondragend=/);
+	assert.match(
+		pageSource,
+		/const currentServers = derived\(\s*\[activeTab, allServers, internalServers, externalServers\],[\s\S]*return \$tab === 'all' \? \$all : \$tab === 'external' \? \$ext : \$int;[\s\S]*\);/
+	);
+	assert.match(pageSource, /<CompactDashboard servers=\{\$currentServers\} \/>/);
 	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
 });
 

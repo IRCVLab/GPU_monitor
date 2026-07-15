@@ -467,7 +467,12 @@
 	}
 
 	.ops-indicator-anchor {
-		display: none;
+		box-sizing: border-box;
+		padding-inline: 1rem;
+	}
+
+	.ops-indicator {
+		transform: translateX(0);
 	}
 }
 

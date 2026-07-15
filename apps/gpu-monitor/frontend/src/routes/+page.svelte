@@ -16,7 +16,6 @@
 		setThemeMode,
 		themeMode
 	} from '$lib/stores/theme';
-	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import { dashboardView, setDashboardView } from '$lib/stores/dashboardPrefs';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
 	import { placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
@@ -558,33 +557,6 @@
 		return '정상';
 	}
 
-	function orderServers(servers: ServerState[], order: number[]): ServerState[] {
-		return [...servers].sort((a, b) => {
-			const ai = order.indexOf(a.server_id);
-			const bi = order.indexOf(b.server_id);
-			if (ai === -1 && bi === -1) {
-				return (a.display_order ?? a.server_id) - (b.display_order ?? b.server_id);
-			}
-			if (ai === -1) return 1;
-			if (bi === -1) return -1;
-			return ai - bi;
-		});
-	}
-
-	function mergeVisibleOrder(globalIds: number[], visibleIds: number[]): number[] {
-		const visibleSet = new Set(visibleIds);
-		const merged = [...globalIds];
-		let nextVisibleIndex = 0;
-
-		for (let index = 0; index < merged.length; index += 1) {
-			if (!visibleSet.has(merged[index])) continue;
-			merged[index] = visibleIds[nextVisibleIndex] ?? merged[index];
-			nextVisibleIndex += 1;
-		}
-
-		return merged;
-	}
-
 	const allServers = derived(serverStates, ($map) =>
 		[...$map.values()].sort(
 			(a, b) => (a.display_order ?? a.server_id) - (b.display_order ?? b.server_id)
@@ -598,52 +570,11 @@
 	]);
 
 	const currentServers = derived(
-		[activeTab, allServers, internalServers, externalServers, serverOrder],
-		([$tab, $all, $int, $ext, $order]) => {
-			const selected = $tab === 'all' ? $all : $tab === 'external' ? $ext : $int;
-			return orderServers(selected, $order);
+		[activeTab, allServers, internalServers, externalServers],
+		([$tab, $all, $int, $ext]) => {
+			return $tab === 'all' ? $all : $tab === 'external' ? $ext : $int;
 		}
 	);
-
-	const globalOrderedIds = derived([allServers, serverOrder], ([$servers, $order]) =>
-		orderServers($servers, $order).map((server) => server.server_id)
-	);
-
-	let dragging = $state<number | null>(null);
-	let dragTarget = $state<number | null>(null);
-
-	function dragStart(id: number) {
-		dragging = id;
-	}
-
-	function dragOver(id: number) {
-		dragTarget = id;
-	}
-
-	function handleDragOver(event: DragEvent, id: number) {
-		event.preventDefault();
-		dragOver(id);
-	}
-
-	function drop() {
-		if (dragging === null || dragTarget === null || dragging === dragTarget) return;
-		const list = [...get(currentServers)];
-		const fromIdx = list.findIndex((s) => s.server_id === dragging);
-		const toIdx = list.findIndex((s) => s.server_id === dragTarget);
-		if (fromIdx === -1 || toIdx === -1) return;
-		const [moved] = list.splice(fromIdx, 1);
-		list.splice(toIdx, 0, moved);
-		const mergedIds = mergeVisibleOrder(
-			get(globalOrderedIds),
-			list.map((server) => server.server_id)
-		);
-		void saveOrder(mergedIds);
-	}
-
-	function dragEnd() {
-		dragging = null;
-		dragTarget = null;
-	}
 
 	let adminOpen = $state(false);
 	let deleteOpen = $state(false);
@@ -867,18 +798,7 @@
 		{:else}
 			<div class="monitor-dashboard-grid" style={serverGridStyle} use:masonry role="list">
 				{#each $currentServers as server (server.server_id)}
-					<div
-						role="listitem"
-						draggable="true"
-						ondragstart={() => dragStart(server.server_id)}
-						ondragover={(event) => handleDragOver(event, server.server_id)}
-						ondrop={() => drop()}
-						ondragend={() => dragEnd()}
-						class="monitor-dashboard-card-item cursor-grab active:cursor-grabbing"
-						class:opacity-40={dragging === server.server_id}
-						class:ring-1={dragTarget === server.server_id && dragTarget !== dragging}
-						class:ring-blue-500={dragTarget === server.server_id && dragTarget !== dragging}
-					>
+					<div role="listitem" class="monitor-dashboard-card-item">
 						<ServerCard {server} onEdit={handleEditServer} showNetwork={$activeTab === 'all'} />
 					</div>
 				{/each}
