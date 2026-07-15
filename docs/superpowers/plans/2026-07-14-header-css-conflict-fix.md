@@ -81,3 +81,11 @@ The fix keeps the layout-collapsing contract and derives direction from a compen
 - grid-row transition completion resynchronizes the direction baseline after scroll anchoring has settled, so a reveal can be followed immediately by another downward gesture.
 
 Regression coverage locks the compensation sequence, settled-top boundary, DOM bindings, listener cleanup, and input parity. Browser verification must cover both an 80px collapse followed by top reveal and a 50px collapse that clamps to zero followed by an upward wheel gesture.
+
+## Follow-up: header popover clipping
+
+Visual browser QA showed that the View and Management popovers existed in the accessibility tree but were invisible below the 65px header. The base header must keep overflow hidden so the grid-row collapse animation can reduce the in-flow header to zero, but that same clip also removed absolutely positioned popovers.
+
+The shell now receives an ops-header-menu-open state while either header menu is open. Only in that state does the header surface switch to overflow visible. The compact-state collapse clip remains the default at all other times. Regression coverage locks both the base hidden overflow and the menu-open escape rule.
+
+Browser verification covers Compact mode at 1440px and 390px: the menu is hit-testable, Full and Compact are visible, no horizontal overflow appears, and choosing Full updates the persisted dashboardView cookie.

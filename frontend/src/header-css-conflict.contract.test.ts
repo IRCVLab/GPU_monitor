@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 
 const appCss = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
 const dashboardCss = readFileSync(new URL('./lib/styles/monitor-dashboard.css', import.meta.url), 'utf8');
+const pageSource = readFileSync(new URL('./routes/+page.svelte', import.meta.url), 'utf8');
 
 function cssBlocks(css) {
 	return Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g)).map(([, selector, declarations]) => ({
@@ -142,6 +143,24 @@ test('monitor-dashboard.css owns header menu positioning and stacking', () => {
 	assert.match(menu, /top\s*:\s*calc\(100% \+ 0\.6rem\)/, 'header menus are anchored below their controls');
 	assert.match(menu, /right\s*:\s*0(?:;|\s)/, 'header menus align to their control edge');
 	assert.match(menu, /z-index\s*:\s*60(?:;|\s)/, 'header menus retain component-owned stacking above dashboard content');
+});
+
+test('open header menus escape the collapse clip without disabling the compact-state clip', () => {
+	assert.match(
+		pageSource,
+		/class:ops-header-menu-open=\{viewMenuOpen\s*\|\|\s*actionsMenuOpen\}/,
+		'page marks the header shell while either popover is open'
+	);
+
+	const baseHeader = declarationBlock(dashboardCss, '.ops-header', 'overflow');
+	assert.match(baseHeader, /overflow\s*:\s*hidden(?:;|\s)/, 'base header keeps the grid-collapse clip');
+
+	const openHeader = declarationBlock(
+		dashboardCss,
+		'.ops-header-shell.ops-header-menu-open .ops-header',
+		'overflow'
+	);
+	assert.match(openHeader, /overflow\s*:\s*visible(?:;|\s)/, 'an open menu is not clipped to the 65px header');
 });
 
 test('monitor-dashboard.css owns slow indicator breathing and reduced motion', () => {
