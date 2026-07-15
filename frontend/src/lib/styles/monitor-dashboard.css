@@ -286,7 +286,7 @@
 
 .ops-refresh-handoff {
 	position: fixed;
-	z-index: 85;
+	z-index: 83;
 	display: inline-grid;
 	place-items: center;
 	pointer-events: none;
