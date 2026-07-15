@@ -12,6 +12,19 @@ function cssRule(selector) {
 	return match.groups.body;
 }
 
+function mediaBlock(query) {
+	const start = css.indexOf(`@media ${query}`);
+	assert.notEqual(start, -1, `Missing @media ${query}`);
+	const open = css.indexOf('{', start);
+	let depth = 0;
+	for (let index = open; index < css.length; index += 1) {
+		if (css[index] === '{') depth += 1;
+		if (css[index] === '}') depth -= 1;
+		if (depth === 0) return css.slice(open + 1, index);
+	}
+	assert.fail(`Unterminated @media ${query}`);
+}
+
 
 function cssRuleWithDeclaration(selector, property) {
 	const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -55,6 +68,19 @@ test('task 4 dense full footer spacing uses exact compact tokens', () => {
 
 	const metricStackRule = cssRule('.monitor-card__metric-stack');
 	assertDeclaration(metricStackRule, 'gap', '0.32rem');
+});
+
+test('mobile full cards keep server identity and edit control on one dense row', () => {
+	const card = cssRule('.monitor-card');
+	assertDeclaration(card, 'min-width', '0');
+
+	const mobile = mediaBlock('(max-width: 640px)');
+	assert.match(mobile, /\.monitor-card__title-row\s*\{[^}]*flex-direction:\s*row;/s);
+	assert.match(mobile, /\.monitor-card__edit-button\s*\{[^}]*align-self:\s*flex-start;/s);
+	assert.doesNotMatch(
+		mobile,
+		/\.monitor-card__title-row\s*,\s*\.monitor-note-item\s*\{[^}]*flex-direction:\s*column;/s
+	);
 });
 
 test('task 4 hardware mounts and notes align to dense card scale', () => {

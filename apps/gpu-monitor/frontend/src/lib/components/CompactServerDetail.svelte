@@ -31,7 +31,7 @@
 
 	function occupancyText(gpu: GpuInfo): string {
 		const state = server ? getCompactGpuState(server.status, server.last_seen, gpu) : 'unknown';
-		if (state === 'available') return 'Available';
+		if (state === 'available') return '사용 가능';
 		if (state === 'unknown') return '상태 확인 필요';
 		return gpu.users.join(', ');
 	}
