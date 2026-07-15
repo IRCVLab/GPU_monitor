@@ -32,6 +32,24 @@ function assertAnyRuleDeclaration(source, selector, property, valuePattern) {
 	assert.ok(bodies.some((body) => declaration.test(body)), `Missing ${property}: ${valuePattern} on ${selector}`);
 }
 
+
+function cssMediaRule(source, mediaQuery, selector) {
+	const escapedMedia = mediaQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const match = source.match(
+		new RegExp(`@media\\s*${escapedMedia}\\s*\\{[\\s\\S]*?${escapedSelector}\\s*\\{(?<body>[^}]*)\\}`, 'm')
+	);
+	assert.ok(match?.groups?.body, `Missing CSS rule for ${selector} in @media ${mediaQuery}`);
+	return match.groups.body.replace(/\\s+/g, ' ').trim();
+}
+
+function numericRemValue(rule, property) {
+	const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const match = rule.match(new RegExp(`${escapedProperty}\\s*:\\s*(?<value>[0-9.]+)rem\\s*;`));
+	assert.ok(match?.groups?.value, `Missing ${property} rem declaration`);
+	return Number(match.groups.value);
+}
+
 test('task 4 compact renders temporary detail only; no persistent rail or placeholder contracts remain', () => {
 	assert.doesNotMatch(dashboardSource, /compact-dashboard__detail-panel/);
 	assert.doesNotMatch(detailSource, /compact-detail__placeholder/);
@@ -52,7 +70,7 @@ test('task 4 compact list is availability-only and does not expose network, ip, 
 	assert.doesNotMatch(pageSource, /<CompactDashboard[^>]*showNetwork=/);
 });
 
-test('task 4 compact CSS is full-width wrapping with no horizontal row or page scroll', () => {
+test('task 3 compact rows stay one-line through tablet widths and stack only on mobile', () => {
 	const dashboardRule = cssRule(cssSource, '.compact-dashboard');
 	assertDeclaration(dashboardRule, 'min-width', '0');
 	assertDeclaration(dashboardRule, 'overflow-x', 'clip');
@@ -65,7 +83,18 @@ test('task 4 compact CSS is full-width wrapping with no horizontal row or page s
 	const rowRule = cssRule(cssSource, '.compact-row');
 	assertDeclaration(rowRule, 'min-width', '0');
 	assertDeclaration(rowRule, 'overflow-x', 'clip');
-	assertDeclaration(rowRule, 'grid-template-columns', 'minmax\\(0, 1fr\\)');
+	assertDeclaration(rowRule, 'grid-template-columns', 'minmax\\(7rem, 8\\.5rem\\) minmax\\(0, 1fr\\)');
+	assert.ok(numericRemValue(rowRule, 'min-height') <= 2.7, 'Base compact row min-height must be <= 2.7rem');
+
+	const tabletRowRule = cssMediaRule(cssSource, '(max-width: 1199px)', '.compact-row');
+	assertDeclaration(tabletRowRule, 'grid-template-columns', 'minmax\\(7rem, 8\\.5rem\\) minmax\\(0, 1fr\\)');
+	assert.ok(numericRemValue(tabletRowRule, 'min-height') <= 2.7, 'Tablet compact row min-height must be <= 2.7rem so 1024px remains one visual server row');
+
+	const mobileRowRule = cssMediaRule(cssSource, '(max-width: 767px)', '.compact-row');
+	assertDeclaration(mobileRowRule, 'grid-template-columns', 'minmax\\(0, 1fr\\)');
+
+	const slotRule = cssRule(cssSource, '.compact-slot');
+	assert.ok(numericRemValue(slotRule, 'height') <= 1.8, 'Compact slot height must be <= 1.8rem');
 
 	assertAnyRuleDeclaration(
 		cssSource,
