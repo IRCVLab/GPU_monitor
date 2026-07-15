@@ -202,7 +202,7 @@ test('left indicator panel opens toward the page interior', () => {
 	assert.match(panel, /left\s*:\s*calc\(100% \+ 0\.5rem\)(?:;|\s)/);
 	assert.match(panel, /right\s*:\s*auto\b/);
 	assert.match(panel, /top\s*:\s*0(?:;|\s)/, 'desktop panel stays inside the safe top inset instead of centering above the trigger');
-	assert.match(panel, /transform\s*:\s*none(?:;|\s)/, 'desktop panel does not use a negative centering transform near the viewport edge');
+	assert.match(panel, /transform\s*:\s*translate3d\(-0\.25rem, -0\.08rem, 0\) scale\(0\.96\)(?:;|\s)/, 'desktop panel uses only a subtle inward reveal transform, not viewport-edge centering');
 	assert.match(panel, /max-width\s*:\s*calc\(100vw - 1\.5rem\)/, 'panel width is clamped to the viewport');
 });
 
@@ -218,7 +218,7 @@ test('collapsed indicator anchor remains mounted and viewport-safe across deskto
 	assert.match(mobilePanel, /left\s*:\s*0\b/, 'mobile panel stays aligned to the anchor');
 	assert.match(mobilePanel, /right\s*:\s*auto\b/, 'mobile panel still opens inward from the left edge');
 	assert.match(mobilePanel, /top\s*:\s*calc\(100% \+ 0\.5rem\)(?:;|\s)/, 'mobile panel drops below the trigger instead of covering content to the right');
-	assert.match(mobilePanel, /transform\s*:\s*none(?:;|\s)/, 'mobile panel removes the desktop centering transform');
+	assert.match(mobilePanel, /transform\s*:\s*translate3d\(0, -0\.2rem, 0\) scale\(0\.97\)(?:;|\s)/, 'mobile panel keeps a real closed reveal transform without desktop centering');
 	assert.match(mobilePanel, /max-width\s*:\s*calc\(100vw - 1\.5rem\)/, 'mobile panel remains viewport-clamped');
 });
 
