@@ -68,12 +68,14 @@ test('task 2 grid owns 22rem density while cards can shrink inside narrow viewpo
 test('full gpu state cues use one accent with inverse available and occupied treatments', () => {
 	const availableIndexRule = cssRule(cardCss, ".monitor-gpu-row[data-state='available'] .monitor-gpu-row__index");
 	assert.match(availableIndexRule, /background:\s*color-mix\(in srgb, var\(--ops-card\)/);
-	assertDeclaration(availableIndexRule, 'color', 'var(--ops-primary)');
+	assertDeclaration(availableIndexRule, 'color', 'var(--ops-fg)');
+	assert.doesNotMatch(availableIndexRule, /(?:^|[\n\r])\s*color:\s*var\(--ops-primary\)\s*;/);
 	assertDeclaration(availableIndexRule, 'border-color', 'var(--ops-primary)');
 	const occupiedIndexRule = cssRule(cardCss, ".monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index");
 	assertDeclaration(occupiedIndexRule, 'background', 'var(--ops-primary)');
 	assertDeclaration(occupiedIndexRule, 'border-color', 'var(--ops-primary)');
-	assertDeclaration(occupiedIndexRule, 'color', 'var(--ops-primary-fg)');
+	assertDeclaration(occupiedIndexRule, 'color', 'var(--ops-on-primary)');
+	assert.doesNotMatch(occupiedIndexRule, /(?:^|[\n\r])\s*color:\s*var\(--ops-primary-fg\)\s*;/);
 
 	const utilRule = cssRule(cardCss, '.monitor-gpu-metric__fill--util');
 	assertDeclaration(utilRule, 'background', 'var(--ops-primary)');
