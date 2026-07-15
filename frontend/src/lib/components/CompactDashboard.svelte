@@ -1,181 +1,170 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { tick } from 'svelte';
 	import '$lib/styles/monitor-compact.css';
-	import type { ServerState } from '$lib/types';
 	import CompactServerRow from '$lib/components/CompactServerRow.svelte';
-	import CompactServerDetail from '$lib/components/CompactServerDetail.svelte';
+	import type { ServerState } from '$lib/types';
+	import {
+		COMPACT_GPU_BANK_SIZE,
+		compactGpuBankCount,
+		compactGpuBankSlots
+	} from '$lib/utils/compactGpuMatrix';
 
-	type CompactTooltip = {
-		title: string;
+	type CompactPopoverItem = {
+		gpuIndex: number;
 		users: string[];
-		hiddenUserCount: number;
+	};
+
+	type CompactPopover = {
+		serverId: number;
+		serverName: string;
+		items: CompactPopoverItem[];
 		left: number;
 		top: number;
 	};
 
 	let {
-		servers
+		servers,
+		heldGpuIndicesByServer = undefined
 	}: {
 		servers: ServerState[];
+		heldGpuIndicesByServer?: ReadonlyMap<number, ReadonlySet<number>>;
 	} = $props();
 
-	const DESKTOP_MEDIA_QUERY = '(min-width: 1200px)';
 	const TOOLTIP_WIDTH_ESTIMATE = 220;
+	const TOOLTIP_HEIGHT_ESTIMATE = 120;
 	const TOOLTIP_VIEWPORT_MARGIN = 12;
 
-	let selectedServerId = $state<number | null>(null);
-	let lastTriggerRowId = $state<number | null>(null);
-	let isDesktop = $state(false);
-	let rowRefs = new Map<number, HTMLElement>();
-	let activeTooltip = $state<CompactTooltip | null>(null);
+	let activeBankIndex = $state(0);
+	let activeTooltip = $state<CompactPopover | null>(null);
 
-	const selectedServer = $derived(
-		selectedServerId === null
-			? null
-			: servers.find((server) => server.server_id === selectedServerId) ?? null
+	const bankCount = $derived(compactGpuBankCount(servers));
+	const bankOptions = $derived.by(() => Array.from({ length: bankCount }, (_, index) => index));
+	const bankStart = $derived(activeBankIndex * COMPACT_GPU_BANK_SIZE);
+	const activeBankHasHardware = $derived.by(() =>
+		servers.some((server) => compactGpuBankSlots(server.gpus, activeBankIndex).some(Boolean))
 	);
 
-	function registerRow(serverId: number, element: HTMLElement | null): void {
-		if (element) {
-			rowRefs.set(serverId, element);
-			return;
-		}
-		rowRefs.delete(serverId);
+	function clampTooltip(next: CompactPopover): CompactPopover {
+		const left = Math.min(
+			Math.max(next.left, TOOLTIP_VIEWPORT_MARGIN),
+			window.innerWidth - TOOLTIP_WIDTH_ESTIMATE - TOOLTIP_VIEWPORT_MARGIN
+		);
+		const top = Math.min(
+			Math.max(next.top, TOOLTIP_VIEWPORT_MARGIN),
+			window.innerHeight - TOOLTIP_HEIGHT_ESTIMATE - TOOLTIP_VIEWPORT_MARGIN
+		);
+		return { ...next, left, top };
 	}
 
-	function openServer(serverId: number): void {
-		selectedServerId = serverId;
-		lastTriggerRowId = serverId;
-	}
-
-	async function restoreFocus(): Promise<void> {
-		if (lastTriggerRowId === null) return;
-		await tick();
-		rowRefs.get(lastTriggerRowId)?.focus();
-	}
-
-	function closeSelection(): void {
-		activeTooltip = null;
-		selectedServerId = null;
-		void restoreFocus();
-	}
-
-	function updateTooltip(next: CompactTooltip | null): void {
+	function updateTooltip(next: CompactPopover | null): void {
 		if (!next) {
 			activeTooltip = null;
 			return;
 		}
+		activeTooltip = clampTooltip(next);
+	}
 
-		const clampedLeft = Math.min(
-			Math.max(next.left, TOOLTIP_VIEWPORT_MARGIN),
-			window.innerWidth - TOOLTIP_WIDTH_ESTIMATE - TOOLTIP_VIEWPORT_MARGIN
-		);
+	function closeTooltip(): void {
+		activeTooltip = null;
+	}
 
-		activeTooltip = {
-			...next,
-			left: clampedLeft,
-			top: Math.max(next.top, TOOLTIP_VIEWPORT_MARGIN)
-		};
+	function selectBank(index: number): void {
+		activeBankIndex = index;
+		closeTooltip();
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent): void {
-		if (event.key !== 'Escape') return;
-		if (selectedServerId !== null) {
-			event.preventDefault();
-			closeSelection();
-		}
+		if (event.key !== 'Escape' || !activeTooltip) return;
+		event.preventDefault();
+		closeTooltip();
 	}
 
-	function clearEphemeralUi(): void {
-		activeTooltip = null;
-	}
+	$effect(() => {
+		if (activeBankIndex < bankCount) return;
+		activeBankIndex = Math.max(0, bankCount - 1);
+	});
 
 	$effect(() => {
 		if (!browser) return;
 
-		const media = window.matchMedia(DESKTOP_MEDIA_QUERY);
-		const updateLayout = (): void => {
-			isDesktop = media.matches;
+		const closeOnViewportChange = (): void => {
+			closeTooltip();
+		};
+		const closeOnOutsidePointer = (event: PointerEvent): void => {
+			if (!(event.target instanceof HTMLElement)) return;
+			if (event.target.closest('[data-compact-popover="true"]')) return;
+			if (event.target.closest('[data-compact-trigger="true"]')) return;
+			closeTooltip();
 		};
 
-		updateLayout();
-		media.addEventListener('change', updateLayout);
-		window.addEventListener('scroll', clearEphemeralUi, true);
-		window.addEventListener('resize', clearEphemeralUi);
+		window.addEventListener('scroll', closeOnViewportChange, true);
+		window.addEventListener('resize', closeOnViewportChange);
+		window.addEventListener('pointerdown', closeOnOutsidePointer);
 		return () => {
-			media.removeEventListener('change', updateLayout);
-			window.removeEventListener('scroll', clearEphemeralUi, true);
-			window.removeEventListener('resize', clearEphemeralUi);
+			window.removeEventListener('scroll', closeOnViewportChange, true);
+			window.removeEventListener('resize', closeOnViewportChange);
+			window.removeEventListener('pointerdown', closeOnOutsidePointer);
 		};
-	});
-
-	$effect(() => {
-		if (selectedServerId === null) return;
-		if (servers.some((server) => server.server_id === selectedServerId)) return;
-		selectedServerId = null;
-		activeTooltip = null;
 	});
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
-<div class="compact-dashboard" class:has-inspector={Boolean(selectedServer && isDesktop)}>
-	<div class="compact-dashboard__list" role="list">
-		{#each servers as server (server.server_id)}
-			<div role="listitem">
-				<CompactServerRow
-					{server}
-					selected={selectedServerId === server.server_id}
-					onSelect={openServer}
-					onRegisterRow={registerRow}
-					onTooltipChange={updateTooltip}
-				/>
+<section class="compact-dashboard" aria-label="Compact GPU availability rack">
+	{#if bankCount > 1}
+		<div class="compact-dashboard__controls">
+			<div class="compact-dashboard__bank-selector" role="tablist" aria-label="GPU bank selector">
+				{#each bankOptions as bankIndex (bankIndex)}
+					<button
+						type="button"
+						class="compact-dashboard__bank-button"
+						class:is-active={bankIndex === activeBankIndex}
+						role="tab"
+						aria-selected={bankIndex === activeBankIndex}
+						onclick={() => selectBank(bankIndex)}
+					>
+						G{bankIndex * COMPACT_GPU_BANK_SIZE}-G{bankIndex * COMPACT_GPU_BANK_SIZE + COMPACT_GPU_BANK_SIZE - 1}
+					</button>
+				{/each}
 			</div>
+		</div>
+	{/if}
+
+	<div class="compact-dashboard__board" data-empty-bank={activeBankHasHardware ? 'false' : 'true'} role="list">
+		<div class="compact-dashboard__column-header" aria-hidden="true">
+			<span class="compact-dashboard__column-label">Server</span>
+			{#each Array.from({ length: COMPACT_GPU_BANK_SIZE }) as _, offset (`compact-column-${bankStart + offset}`)}
+				<span>G{bankStart + offset}</span>
+			{/each}
+		</div>
+
+		{#each servers as server (server.server_id)}
+			<CompactServerRow
+				{server}
+				bankIndex={activeBankIndex}
+				heldGpuIndices={heldGpuIndicesByServer?.get(server.server_id)}
+				onTooltipChange={updateTooltip}
+			/>
 		{/each}
 	</div>
-
-	{#if selectedServer && isDesktop}
-		<aside class="compact-dashboard__inspector" aria-labelledby="compact-detail-title-desktop">
-			<CompactServerDetail
-				server={selectedServer}
-				mode="inspector"
-				titleId="compact-detail-title-desktop"
-				onClose={closeSelection}
-			/>
-		</aside>
-	{/if}
 
 	{#if activeTooltip}
 		<div
 			class="compact-dashboard__tooltip"
+			data-compact-popover="true"
 			role="tooltip"
 			style={`left: ${activeTooltip.left}px; top: ${activeTooltip.top}px;`}
 		>
-			<p class="compact-dashboard__tooltip-title">{activeTooltip.title}</p>
+			<p class="compact-dashboard__tooltip-title">{activeTooltip.serverName}</p>
 			<ul class="compact-dashboard__tooltip-list">
-				{#each activeTooltip.users as user, index (`global-tooltip-${activeTooltip.title}-${user}-${index}`)}
-					<li>{user}</li>
+				{#each activeTooltip.items as item (`tooltip-${activeTooltip.serverId}-${item.gpuIndex}`)}
+					<li class="compact-dashboard__tooltip-entry">
+						<span class="compact-dashboard__tooltip-gpu">G{item.gpuIndex}</span>
+						<span class="compact-dashboard__tooltip-state">사용 중</span>
+						<span class="compact-dashboard__tooltip-users">{item.users.join(', ')}</span>
+					</li>
 				{/each}
 			</ul>
-			{#if activeTooltip.hiddenUserCount > 0}
-				<p class="compact-dashboard__tooltip-meta">+{activeTooltip.hiddenUserCount} hidden in row preview</p>
-			{/if}
 		</div>
 	{/if}
-</div>
-
-{#if selectedServer && !isDesktop}
-	<div class="compact-sheet-backdrop">
-		<button type="button" class="compact-sheet-dismiss" aria-label="상세 닫기" onclick={closeSelection}></button>
-		<div class="compact-sheet" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="compact-detail-title-mobile">
-			<CompactServerDetail
-				server={selectedServer}
-				mode="sheet"
-				titleId="compact-detail-title-mobile"
-				autofocusClose={true}
-				onClose={closeSelection}
-			/>
-		</div>
-	</div>
-{/if}
+</section>
