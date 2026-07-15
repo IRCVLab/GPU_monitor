@@ -18,11 +18,6 @@
 	background: transparent;
 }
 
-.ops-header-shell.ops-header-compact:hover,
-.ops-header-shell.ops-header-compact:focus-within {
-	grid-template-rows: 1fr;
-	background: color-mix(in srgb, var(--ops-bg) 78%, transparent);
-}
 
 .ops-header {
 	min-height: 0;
@@ -42,11 +37,6 @@
 	transform: translateY(-0.75rem);
 }
 
-.ops-header-shell.ops-header-compact:hover .ops-header,
-.ops-header-shell.ops-header-compact:focus-within .ops-header {
-	opacity: 1;
-	transform: translateY(0);
-}
 
 .ops-header-inner {
 	display: grid;
@@ -233,7 +223,7 @@
 	justify-content: flex-end;
 	width: max-content;
 	margin-left: auto;
-	transform: translateX(calc(2.5rem + 0.5rem));
+	transform: translateX(calc(-0.55rem - 0.5rem));
 }
 
 .ops-indicator-trigger {
@@ -241,11 +231,13 @@
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 2.5rem;
-	height: 2.5rem;
-	border-radius: 999px;
-	border: 1px solid color-mix(in srgb, var(--ops-border) 80%, transparent);
-	background: color-mix(in srgb, var(--ops-card) 88%, transparent);
+	width: 0.55rem;
+	height: 0.55rem;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
 }
 
 .ops-indicator-panel {
@@ -441,12 +433,12 @@
 	}
 }
 
-@media (max-width: 1199px) {
-	.ops-indicator-anchor {
-		display: none !important;
+
+@media (min-width: 1200px) {
+	.ops-indicator {
+		transform: translateX(calc(0.55rem + 0.5rem));
 	}
 }
-
 @media (max-width: 920px) {
 	.ops-header-inner {
 		grid-template-columns: 1fr;

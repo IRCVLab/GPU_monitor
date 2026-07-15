@@ -133,8 +133,21 @@ test('monitor-dashboard.css owns compact header rhythm and absolute indicator pl
 	assert.match(visibleAnchor, /display\s*:\s*block\b/, 'component controls indicator visibility');
 
 	const indicator = declarationBlock(dashboardCss, '.ops-indicator', 'transform');
-	assert.match(indicator, /margin-left\s*:\s*auto\b/, 'indicator is pushed to the right gutter');
-	assert.match(indicator, /transform\s*:\s*translateX\(calc\(2\.5rem \+ 0\.5rem\)\)/, 'indicator sits outside the content edge');
+	assert.match(indicator, /margin-left\s*:\s*auto\b/, 'indicator is pushed to the right edge');
+	assert.match(indicator, /transform\s*:\s*translateX\(calc\(-0\.55rem - 0\.5rem\)\)/, '921-1199px edge lane keeps the bare dot safely inside the page edge');
+
+	const desktopGutter = mediaBlock(dashboardCss, '(min-width: 1200px)');
+	const gutterIndicator = declarationBlock(desktopGutter, '.ops-indicator', 'transform');
+	assert.match(gutterIndicator, /transform\s*:\s*translateX\(calc\(0\.55rem \+ 0\.5rem\)\)/, '1200px+ gutter moves the bare dot outside the content edge');
+});
+
+test('compact indicator trigger is the dot only with no circular container surface', () => {
+	const trigger = declarationBlock(dashboardCss, '.ops-indicator-trigger', 'width');
+	assert.match(trigger, /width\s*:\s*0\.55rem\b/, 'trigger width matches the status dot');
+	assert.match(trigger, /height\s*:\s*0\.55rem\b/, 'trigger height matches the status dot');
+	assert.match(trigger, /border\s*:\s*0\b/, 'trigger has no circular border');
+	assert.match(trigger, /background\s*:\s*transparent\b/, 'trigger has no circular background');
+	assert.doesNotMatch(trigger, /border-radius\s*:\s*999px/, 'trigger must not draw a circular shell');
 });
 
 test('monitor-dashboard.css owns header menu positioning and stacking', () => {

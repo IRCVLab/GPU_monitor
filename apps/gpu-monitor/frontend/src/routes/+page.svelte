@@ -746,7 +746,7 @@
 				</div>
 			</div>
 		</div>
-		<header bind:this={headerSurfaceElement} class="ops-header border-b border-surface-border px-4 sm:px-6">
+		<header bind:this={headerSurfaceElement} class="ops-header border-b border-surface-border px-4 sm:px-6" inert={headerCompact} aria-hidden={headerCompact}>
 			<div class={`ops-header-inner ${pageShellClass}`}>
 				<div class="ops-identity">
 					<h1>GPU Monitor</h1>

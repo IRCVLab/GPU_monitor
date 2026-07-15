@@ -146,6 +146,39 @@ test('desktop indicator visibility is independent of scroll position', () => {
 	assert.equal(result.indicatorVisible, false);
 });
 
+
+test('compact indicator is visible at the 921px desktop lane edge without an outer gutter', () => {
+	const result = updateHeaderVisibility({
+		currentY: 80,
+		previousY: 40,
+		direction: 'down',
+		accumulatedDelta: 0,
+		currentCompact: false,
+		reducedMotion: false,
+		hasOuterGutter: false,
+		viewportWidth: 921
+	});
+
+	assert.equal(result.compact, true);
+	assert.equal(result.indicatorVisible, true);
+});
+
+test('compact indicator remains hidden at the 920px mobile cutoff', () => {
+	const result = updateHeaderVisibility({
+		currentY: 80,
+		previousY: 40,
+		direction: 'down',
+		accumulatedDelta: 0,
+		currentCompact: false,
+		reducedMotion: false,
+		hasOuterGutter: true,
+		viewportWidth: 920
+	});
+
+	assert.equal(result.compact, true);
+	assert.equal(result.indicatorVisible, false);
+});
+
 test('reduced motion preserves immediate threshold semantics without timers', () => {
 	const result = updateHeaderVisibility({
 		currentY: 60,
@@ -248,16 +281,28 @@ test('header transition completion resynchronizes direction baseline after layou
 	assert.match(body, /headerScrollDistance\s*=\s*0/);
 });
 
-test('desktop indicator has a defensive CSS cutoff below 1200px', () => {
-	assert.match(dashboardCss, /@media\s*\(max-width:\s*1199px\)[\s\S]*\.ops-indicator-anchor\s*\{[\s\S]*display:\s*none\s*!important\s*;/);
+test('desktop indicator has a defensive CSS cutoff only below the 921px desktop lane', () => {
+	assert.doesNotMatch(dashboardCss, /@media\s*\(max-width:\s*1199px\)[\s\S]*\.ops-indicator-anchor\s*\{[\s\S]*display:\s*none\s*!important\s*;/);
+	assert.match(dashboardCss, /@media\s*\(max-width:\s*920px\)[\s\S]*\.ops-indicator-anchor\s*\{[\s\S]*display:\s*none\s*;/);
 });
 
+test('compact CSS does not reopen the full header on hover or focus', () => {
+	assert.doesNotMatch(dashboardCss, /\.ops-header-shell\.ops-header-compact:(?:hover|focus-within)\s*\{/);
+	assert.doesNotMatch(dashboardCss, /\.ops-header-shell\.ops-header-compact:(?:hover|focus-within)\s+\.ops-header\s*\{/);
+});
 
-test('desktop indicator is shrink-wrapped and uses a fixed gutter shift instead of full-width translation', () => {
+test('header surface is hidden from interaction while the indicator remains independently focusable', () => {
+	assert.match(pageSource, /<div class=\{`ops-indicator-anchor \$\{pageShellClass\}`\} aria-hidden=\{!headerIndicatorVisible\}/);
+	assert.match(pageSource, /<button\s+[\s\S]*class="ops-indicator-trigger"[\s\S]*>/);
+	assert.match(pageSource, /<header\s+[\s\S]*inert=\{headerCompact\}[\s\S]*aria-hidden=\{headerCompact\}/);
+});
+
+test('desktop indicator is shrink-wrapped with separate edge and gutter lanes', () => {
 	const indicatorRule = dashboardCss.match(/\.ops-indicator\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
 
 	assert.match(indicatorRule, /width:\s*max-content\s*;/);
 	assert.match(indicatorRule, /margin-left:\s*auto\s*;/);
 	assert.doesNotMatch(indicatorRule, /translateX\(\s*calc\(\s*100%/);
-	assert.match(indicatorRule, /transform:\s*translateX\(\s*calc\(\s*2\.5rem\s*\+\s*0\.5rem\s*\)\s*\)\s*;/);
+	assert.match(indicatorRule, /transform:\s*translateX\(\s*calc\(\s*-0\.55rem\s*-\s*0\.5rem\s*\)\s*\)\s*;/);
+	assert.match(dashboardCss, /@media\s*\(min-width:\s*1200px\)[\s\S]*\.ops-indicator\s*\{[\s\S]*transform:\s*translateX\(\s*calc\(\s*0\.55rem\s*\+\s*0\.5rem\s*\)\s*\)\s*;/);
 });
