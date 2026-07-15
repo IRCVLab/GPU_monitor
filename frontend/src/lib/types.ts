@@ -15,9 +15,9 @@ export interface SystemInfo {
 	cpu_percent: number;
 	ram_used: number;       // MB
 	ram_total: number;      // MB
-	io_pressure_some?: number;
-	io_pressure_full?: number;
-	io_blocked_tasks?: number;
+	io_pressure_some?: number | null;
+	io_pressure_full?: number | null;
+	io_blocked_tasks?: number | null;
 	io_pressure_supported?: boolean;
 }
 
