@@ -77,8 +77,8 @@ test('task 2 card gpu list and footer use compact spacing', () => {
 	assertDeclaration(listRule, 'padding', '0 0.9rem 0.9rem');
 
 	const footerRule = cssRule(cardCss, '.monitor-card__footer');
-	assertDeclaration(footerRule, 'gap', '0.5rem');
-	assertDeclaration(footerRule, 'padding', '0.75rem 0.9rem 0.9rem');
+	assertDeclaration(footerRule, 'gap', '0.28rem');
+	assertDeclaration(footerRule, 'padding', '0.5rem 0.75rem 0.55rem');
 });
 
 
