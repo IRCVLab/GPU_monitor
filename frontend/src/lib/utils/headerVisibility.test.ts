@@ -155,7 +155,7 @@ test('compact indicator is visible at the 921px desktop lane edge', () => {
 	assert.equal(result.indicatorVisible, true);
 });
 
-test('compact indicator remains hidden at the 920px mobile cutoff', () => {
+test('compact indicator remains visible at the former 920px mobile cutoff', () => {
 	const result = updateHeaderVisibility({
 		currentY: 80,
 		previousY: 40,
@@ -167,7 +167,22 @@ test('compact indicator remains hidden at the 920px mobile cutoff', () => {
 	});
 
 	assert.equal(result.compact, true);
-	assert.equal(result.indicatorVisible, false);
+	assert.equal(result.indicatorVisible, true);
+});
+
+test('compact indicator remains visible on a narrow mobile viewport', () => {
+	const result = updateHeaderVisibility({
+		currentY: 80,
+		previousY: 40,
+		direction: 'down',
+		accumulatedDelta: 0,
+		currentCompact: false,
+		reducedMotion: false,
+		viewportWidth: 390
+	});
+
+	assert.equal(result.compact, true);
+	assert.equal(result.indicatorVisible, true);
 });
 
 
@@ -280,9 +295,15 @@ test('header transition completion resynchronizes direction baseline after layou
 	assert.match(body, /headerScrollDistance\s*=\s*0/);
 });
 
-test('desktop indicator has a defensive CSS cutoff only below the 921px desktop lane', () => {
-	assert.doesNotMatch(dashboardCss, /@media\s*\(max-width:\s*1199px\)[\s\S]*\.ops-indicator-anchor\s*\{[\s\S]*display:\s*none\s*!important\s*;/);
-	assert.match(dashboardCss, /@media\s*\(max-width:\s*920px\)[\s\S]*\.ops-indicator-anchor\s*\{[\s\S]*display:\s*none\s*;/);
+test('compact-scroll indicator has no responsive visibility cutoff', () => {
+	assert.doesNotMatch(
+		dashboardCss,
+		/@media\s*\(max-width:[^)]+\)[\s\S]*?\.ops-indicator-anchor\s*\{[^}]*display:\s*none\s*(?:!important)?\s*;/
+	);
+	assert.match(
+		dashboardCss,
+		/@media\s*\(max-width:\s*920px\)[\s\S]*?\.ops-indicator\s*\{[^}]*transform:\s*translateX\(0\)\s*;/
+	);
 });
 
 test('compact CSS does not reopen the full header on hover or focus', () => {
