@@ -58,6 +58,34 @@ test('collapsed System and Memo controls rely on the disclosure chevron only', (
 	assert.doesNotMatch(source, />\s*[▾▸]\s*</);
 });
 
+test('System and Memo disclosure panels stay mounted while closed with accessible controls', () => {
+	assert.match(source, /aria-expanded=\{sysExpanded\}/, 'System disclosure button should expose current expanded state');
+	assert.match(source, /aria-controls=\{`system-panel-\$\{server\.server_id\}`\}/, 'System disclosure button should control the mounted panel');
+	assert.match(source, /aria-expanded=\{notesExpanded\}/, 'Memo disclosure button should expose current expanded state');
+	assert.match(source, /aria-controls=\{`notes-panel-\$\{server\.server_id\}`\}/, 'Memo disclosure button should control the mounted panel');
+
+	const systemSection = source.match(/<section class="monitor-card__footer-section">[\s\S]*?system-panel-\$\{server\.server_id\}`[\s\S]*?<\/section>/)?.[0] ?? '';
+	assert.match(systemSection, /id=\{`system-panel-\$\{server\.server_id\}`\}/, 'System panel should be present in the section markup');
+	assert.doesNotMatch(systemSection, /\{#if sysExpanded\}[\s\S]*id=\{`system-panel-/, 'System panel must not be conditionally unmounted when closed');
+	assert.match(systemSection, /aria-hidden=\{!sysExpanded\}/, 'closed System panel should be hidden from assistive tech');
+	assert.match(systemSection, /inert=\{!sysExpanded\}/, 'closed System panel should make hidden descendants unfocusable');
+
+	const notesSection = source.match(/<section class="monitor-card__footer-section">[\s\S]*?notes-panel-\$\{server\.server_id\}`[\s\S]*?<\/section>/)?.[0] ?? '';
+	assert.match(notesSection, /id=\{`notes-panel-\$\{server\.server_id\}`\}/, 'Memo panel should be present in the section markup');
+	assert.doesNotMatch(notesSection, /\{#if notesExpanded\}[\s\S]*id=\{`notes-panel-/, 'Memo panel must not be conditionally unmounted when closed');
+	assert.match(notesSection, /aria-hidden=\{!notesExpanded\}/, 'closed Memo panel should be hidden from assistive tech');
+	assert.match(notesSection, /inert=\{!notesExpanded\}/, 'closed Memo panel should make hidden controls unfocusable');
+});
+
+test('System and Memo share the mounted disclosure shell and inner panel pattern', () => {
+	const shells = source.match(/class="monitor-card__disclosure-shell"/g) ?? [];
+	assert.equal(shells.length, 2, 'System and Memo should both use the shared mounted shell');
+	const inners = source.match(/class="monitor-card__disclosure-inner monitor-card__footer-panel"/g) ?? [];
+	assert.equal(inners.length, 2, 'System and Memo should both keep content in the shared inner panel');
+	assert.match(source, /data-expanded=\{sysExpanded \? 'true' : 'false'\}/, 'System shell should expose state for CSS motion');
+	assert.match(source, /data-expanded=\{notesExpanded \? 'true' : 'false'\}/, 'Memo shell should expose state for CSS motion');
+});
+
 test('ServerCard hides the normal status label while keeping exception labels visible', () => {
 	assert.match(source, /statusMeta\.label === '정상'/);
 	assert.match(source, /class="monitor-card__status-text monitor-card__sr-only"/);
