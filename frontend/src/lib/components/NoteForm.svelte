@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { GpuInfo, Note, ServerStatus } from '$lib/types';
 	import { createNote } from '$lib/api';
-	import { buildNotePayload, type NoteKind } from '$lib/utils/notePayload';
+	import { buildNotePayload } from '$lib/utils/notePayload';
 	import { isTelemetryStale } from '$lib/utils/telemetryFreshness';
 
 	interface NoteFormProps {
@@ -27,7 +27,6 @@
 	let showPrecisePicker = $state(false);
 	let nowMs = $state(Date.now());
 	let expiresAtLocal = $state(defaultExpiryLocal());
-	let kind = $state<NoteKind>('memo');
 	let selectedGpuIndices = $state<number[]>([]);
 
 	const telemetryStale = $derived(isTelemetryStale(lastSeen, nowMs, 60000));
@@ -62,11 +61,6 @@
 		const base = parseLocalDateTimeValue(expiresAtLocal) ?? new Date(Date.now() + DEFAULT_EXPIRY_MS);
 		const next = clampExpiry(new Date(base.getTime() + deltaMs));
 		expiresAtLocal = toLocalDateTimeValue(next);
-	}
-
-	function setKind(nextKind: NoteKind): void {
-		kind = nextKind;
-		if (kind === 'memo') selectedGpuIndices = [];
 	}
 
 	function toggleGpu(gpuIndex: number): void {
@@ -134,8 +128,8 @@
 					ssh_password: sshPassword.trim(),
 					content: content.trim(),
 					expires_at: expiresAtDate.toISOString(),
-					kind,
-					gpu_indices: kind === 'hold' ? selectedGpuIndices : []
+					kind: selectedGpuIndices.length > 0 ? 'hold' : 'memo',
+					gpu_indices: selectedGpuIndices
 				})
 			);
 			onCreated(note);
@@ -160,53 +154,40 @@
 </script>
 
 <div class="note-form flex flex-col gap-1.5 pt-1.5">
-	<div class="note-form-kind-row" role="group" aria-label="메모 종류">
-		<button
-			type="button"
-			class="note-form-kind-toggle"
-			aria-pressed={kind === 'memo'}
-			onclick={() => { kind = 'memo'; selectedGpuIndices = []; }}
-		>
-			메모
-		</button>
-		<button
-			type="button"
-			class="note-form-kind-toggle"
-			aria-pressed={kind === 'hold'}
-			onclick={() => setKind('hold')}
-		>
-			advisory soft hold
-		</button>
-	</div>
-
-	{#if kind === 'hold'}
-		<div class="note-form-hold-block" aria-live="polite">
-			<p class="note-form-hold-copy">advisory soft hold only; telemetry remains the source of truth.</p>
-			{#if telemetryStale || statusWarning}
-				<p class="note-form-hold-warning">
-					{#if statusWarning && telemetryStale}
-						Server is {serverStatus} and telemetry is stale; treat this advisory soft hold as guidance only.
-					{:else if statusWarning}
-						Server is {serverStatus}; treat this advisory soft hold as guidance only.
-					{:else}
-						Telemetry is stale; treat this advisory soft hold as guidance only.
-					{/if}
-				</p>
-			{/if}
-			<div class="note-form-hold-chip-row" role="group" aria-label="GPU 선택">
-				{#each sortedGpus as gpu (gpu.index)}
-					<button
-						type="button"
-						class="note-form-hold-chip"
-						aria-pressed={selectedGpuIndices.includes(gpu.index)}
-						onclick={() => toggleGpu(gpu.index)}
-					>
-						G{gpu.index}
-					</button>
-				{/each}
-			</div>
+	<div class="note-form-gpu-selector">
+		<div class="note-form-gpu-selector-head">
+			<span class="note-form-gpu-label">GPU 참고 홀드</span>
+			<span class="note-form-gpu-hint">선택 없으면 일반 메모</span>
 		</div>
-	{/if}
+		<div class="note-form-gpu-chip-row" role="group" aria-label="GPU 선택(선택 시 참고 홀드)">
+			{#each sortedGpus as gpu (gpu.index)}
+				<button
+					type="button"
+					class="note-form-gpu-chip"
+					aria-pressed={selectedGpuIndices.includes(gpu.index)}
+					onclick={() => toggleGpu(gpu.index)}
+				>
+					G{gpu.index}
+				</button>
+			{/each}
+		</div>
+		{#if selectedGpuIndices.length > 0}
+			<div class="note-form-hold-block" aria-live="polite">
+				<p class="note-form-hold-copy">선택한 GPU는 비독점 참고 홀드입니다. 실제 상태는 텔레메트리가 기준입니다.</p>
+				{#if selectedGpuIndices.length > 0 && (telemetryStale || statusWarning)}
+					<p class="note-form-hold-warning">
+						{#if statusWarning && telemetryStale}
+							서버 상태와 텔레메트리가 불안정합니다. 참고 안내로만 사용하세요.
+						{:else if statusWarning}
+							서버 상태가 {serverStatus}입니다. 참고 안내로만 사용하세요.
+						{:else}
+							텔레메트리가 오래되었습니다. 참고 안내로만 사용하세요.
+						{/if}
+					</p>
+				{/if}
+			</div>
+		{/if}
+	</div>
 
 	<div class="note-form-identity-row">
 		<input

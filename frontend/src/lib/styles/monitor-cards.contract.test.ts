@@ -71,11 +71,17 @@ test('task 4 hardware mounts and notes align to dense card scale', () => {
 	assertDeclaration(noteRule, 'border-radius', '0.55rem');
 });
 
-test('hold footer remains chip-based and compact', () => {
-	assert.match(css, /\.note-form-kind-row/);
-	assert.match(css, /\.note-form-kind-toggle/);
-	assert.match(css, /\.note-form-hold-chip-row/);
-	assert.match(css, /\.note-form-hold-chip/);
+test('unified GPU selector remains chip-based, compact, and visually integrated', () => {
+	assert.doesNotMatch(css, /\.note-form-kind-row|\.note-form-kind-toggle/);
+	const rowRule = cssRule('.monitor-card .note-form-gpu-chip-row');
+	assert.match(rowRule, /display:\s*flex/);
+	assert.match(rowRule, /flex-wrap:\s*wrap/);
+	assert.ok(remValues(declarationValue(rowRule, 'gap'))[0] <= 0.3);
+
+	const chipRule = cssRuleWithDeclaration('.monitor-card .note-form-gpu-chip', 'min-height');
+	assert.ok(remValues(declarationValue(chipRule, 'min-height'))[0] <= 1.45);
+	assert.ok(remValues(declarationValue(chipRule, 'padding'))[0] <= 0.16);
+	assert.match(css, /\.note-form-gpu-chip\[aria-pressed='true'\]/);
 	assert.match(css, /\.note-form-hold-warning/);
 	assert.match(css, /\.monitor-note-item__kind/);
 	assert.match(css, /\.monitor-note-item__gpu-chips/);
@@ -83,6 +89,7 @@ test('hold footer remains chip-based and compact', () => {
 });
 
 
-test('reduced motion disables hover translation for hold composer controls', () => {
-	assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.note-form-kind-toggle:hover[\s\S]*\.note-form-hold-chip:hover[\s\S]*transform:\s*none/);
+test('GPU chip hover has focus-visible and reduced-motion coverage', () => {
+	assert.match(css, /\.note-form-gpu-chip:focus-visible[\s\S]*box-shadow/);
+	assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.note-form-gpu-chip:hover[\s\S]*transform:\s*none/);
 });
