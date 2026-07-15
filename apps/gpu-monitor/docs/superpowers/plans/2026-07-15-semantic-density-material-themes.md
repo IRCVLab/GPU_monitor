@@ -114,11 +114,11 @@
 - Modify only files implicated by reproducible defects.
 - Add regression tests before each browser-discovered fix.
 
-- [ ] Run frontend unit/contract tests.
+- [ ] Run all frontend contracts exactly: `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use --silent 24; cd /home/ircv/workspace/monitoring_v2_dev/frontend && node --experimental-strip-types --test $(find src -name '*.test.ts' -o -name '*.contract.test.ts' | sort)`.
 - [ ] Run `npm run check`.
 - [ ] Run `npm run build`.
 - [ ] Run full backend tests.
-- [ ] Open only the development service with Playwright at `http://127.0.0.1:5174` at desktop and narrow widths.
+- [ ] Open only the isolated development service with Playwright at `http://127.0.0.1:5174` at desktop and narrow widths; its tmux command must explicitly set `MONITORING_API_TARGET=http://127.0.0.1:8101` and `MONITORING_WS_TARGET=ws://127.0.0.1:8101`.
 - [ ] Verify Full/Compact mode switching, exact server order, System/Memo expansion, hold rendering, hover/focus hint, header collapse/reveal, indicator panel, circular mode reveal, and all three style presets.
 - [ ] Capture screenshots and inspect console errors.
 - [ ] Request designer/code-reviewer verification and fix high-confidence issues.
@@ -130,5 +130,5 @@
 - Every edit, test, build, and Git command runs from `/home/ircv/workspace/monitoring_v2_dev`.
 - Do not modify `/home/ircv/workspace/monitoring_v2`.
 - Do not execute or edit `run_monitoring.sh`, deployment scripts, production tmux sessions, production ports, or the Slack bridge.
-- Use `run_development.sh`, port `5174`, and the development backend only when a restart is required.
+- The active development tmux endpoint is port `5174` and the development backend is `8101`. If the frontend is restarted, recreate only `monitoring_v2_dev_frontend` with explicit `MONITORING_API_TARGET` and `MONITORING_WS_TARGET` pointing to `8101`; do not fall back to Vite's live `8001` default.
 - Before implementation, record the live repo HEAD/status read-only. At completion, compare them and require no change.
