@@ -632,6 +632,31 @@
   color: color-mix(in srgb, var(--ops-fg) 74%, transparent);
 }
 
+.monitor-card__disclosure-shell {
+  display: grid;
+  grid-template-rows: 0fr;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-0.12rem);
+  visibility: hidden;
+  pointer-events: none;
+  transition: grid-template-rows 180ms ease, opacity 160ms ease, transform 180ms ease, visibility 0s linear 180ms, pointer-events 0s linear 180ms;
+}
+
+.monitor-card__disclosure-shell[data-expanded='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.monitor-card__disclosure-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .monitor-card__footer-panel {
   padding: 0;
 }
@@ -1230,6 +1255,8 @@
   .monitor-card,
   .monitor-card__edit-button,
   .monitor-card__footer-toggle,
+  .monitor-card__footer-disclosure,
+  .monitor-card__disclosure-shell,
   .monitor-gpu-metric__fill,
   .monitor-meter__fill,
   .monitor-note-item__delete,
@@ -1237,6 +1264,14 @@
   .monitor-card .note-form-expiry-toggle,
   .monitor-card .note-form-submit-primary {
     transition: none;
+  }
+
+  .monitor-card__footer-disclosure {
+    transition-duration: 1ms;
+  }
+
+  .monitor-card__disclosure-shell {
+    transition-duration: 1ms;
   }
 
   .monitor-card:hover,

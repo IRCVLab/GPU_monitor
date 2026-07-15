@@ -406,8 +406,14 @@
           </span>
         </button>
 
-        {#if sysExpanded}
-          <div id={`system-panel-${server.server_id}`} class="monitor-card__footer-panel">
+        <div
+          id={`system-panel-${server.server_id}`}
+          class="monitor-card__disclosure-shell"
+          data-expanded={sysExpanded ? 'true' : 'false'}
+          aria-hidden={!sysExpanded}
+          inert={!sysExpanded}
+        >
+          <div class="monitor-card__disclosure-inner monitor-card__footer-panel">
             <div class="monitor-card__system-facts">
               <span><small>CPU</small><strong>{cpuPreviewText}</strong></span>
               <span><small>RAM</small><strong>{ramPercentText}</strong></span>
@@ -476,7 +482,7 @@
               </div>
             {/if}
           </div>
-        {/if}
+        </div>
       </section>
     {/if}
 
@@ -517,8 +523,14 @@
         </span>
       </button>
 
-      {#if notesExpanded}
-        <div id={`notes-panel-${server.server_id}`} class="monitor-card__footer-panel">
+      <div
+        id={`notes-panel-${server.server_id}`}
+        class="monitor-card__disclosure-shell"
+        data-expanded={notesExpanded ? 'true' : 'false'}
+        aria-hidden={!notesExpanded}
+        inert={!notesExpanded}
+      >
+        <div class="monitor-card__disclosure-inner monitor-card__footer-panel">
           {#if notesLoading}
             <div class="monitor-card__loading-state">
               <span class="inline-block h-3 w-3 animate-spin rounded-full border border-white/20 border-t-white/60"></span>
@@ -611,7 +623,7 @@
             </div>
           {/if}
         </div>
-      {/if}
+      </div>
     </section>
   </div>
 </article>

@@ -123,6 +123,40 @@ test('mobile full cards keep server identity and edit control on one dense row',
 	assert.doesNotMatch(mobile, /\.monitor-card__title-row\s*\{[^}]*flex-direction:\s*column;/s);
 });
 
+test('System and Memo disclosure motion uses mounted grid-track animation without display or height shortcuts', () => {
+	const shellRule = cssRule('.monitor-card__disclosure-shell');
+	assertDeclaration(shellRule, 'display', 'grid');
+	assertDeclaration(shellRule, 'grid-template-rows', '0fr');
+	assertDeclaration(shellRule, 'overflow', 'hidden');
+	assertDeclaration(shellRule, 'opacity', '0');
+	assert.match(shellRule, /transform:\s*translateY\(-0\.12rem\)/);
+	assert.match(shellRule, /transition:[^;]*grid-template-rows[^;]*opacity[^;]*transform[^;]*visibility/s);
+	assert.match(shellRule, /visibility\s+0s\s+linear\s+180ms/, 'closing visibility should wait until collapse finishes');
+	assertDeclaration(shellRule, 'pointer-events', 'none');
+
+	const expandedRule = cssRule(".monitor-card__disclosure-shell[data-expanded='true']");
+	assertDeclaration(expandedRule, 'grid-template-rows', '1fr');
+	assertDeclaration(expandedRule, 'opacity', '1');
+	assertDeclaration(expandedRule, 'transform', 'translateY(0)');
+	assertDeclaration(expandedRule, 'visibility', 'visible');
+	assertDeclaration(expandedRule, 'pointer-events', 'auto');
+	assert.match(expandedRule, /transition-delay:\s*0s/);
+
+	const innerRule = cssRule('.monitor-card__disclosure-inner');
+	assertDeclaration(innerRule, 'min-height', '0');
+	assertDeclaration(innerRule, 'overflow', 'hidden');
+
+	assert.doesNotMatch(css, /\.monitor-card__disclosure-shell[^{]*\{[^}]*display:\s*none/s, 'mounted disclosure shell must not toggle display');
+	assert.doesNotMatch(css, /max-height\s*:/, 'Task 4a forbids hard-coded max-height disclosure animation');
+	assert.doesNotMatch(css, /transition[^;]*(?:height|top)/, 'Task 4a forbids height/top transition shortcuts');
+});
+
+test('reduced motion makes disclosure state changes effectively immediate', () => {
+	const reduced = mediaBlock('(prefers-reduced-motion: reduce)');
+	assert.match(reduced, /\.monitor-card__disclosure-shell\s*\{[^}]*transition-duration:\s*1ms;/s);
+	assert.match(reduced, /\.monitor-card__footer-disclosure\s*\{[^}]*transition-duration:\s*1ms;/s);
+});
+
 test('collapsed utility controls keep the chevron affordance and remove decorative markers', () => {
 	assert.doesNotMatch(css, /\.monitor-card__footer-marker\b/, 'decorative marker styles should be removed');
 
