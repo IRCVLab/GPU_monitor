@@ -253,7 +253,7 @@ letter-spacing 0em
 - Healthy server identity, host/IP, freshness, and edit action share one compact line.
 - Collapsed System is one baseline: CPU, RAM, PSI I/O pressure, and disk capacity. Expanded detail explains PSI and may show full pressure and blocked tasks.
 - Memo reads owner, authored content, then explicit Korean expiry. Hold reads exact GPUs, owner, reason, then expiry.
-- System and Memo expansion/collapse must be symmetric: panels remain mounted while closed and animate an intrinsic-height wrapper such as `grid-template-rows`, opacity, and a slight translate. Closing retains content until the transition finishes; reduced motion is immediate. Do not animate `top` or hard-coded `max-height`.
+- System and Memo expansion/collapse must be symmetric: disclosure controls own `aria-expanded` and `aria-controls`, panels remain mounted while closed, and the narrow approved exception to the generic no-layout-animation rule may animate mounted grid-track disclosure via `grid-template-rows`, opacity, and a slight translate. Closing retains content until the transition finishes; reduced motion is immediate. Do not animate `top`, arbitrary height, or hard-coded `max-height`.
 - A hold overlays a warm collar/notch on the exact GPU in both Full and Compact without changing telemetry state.
 - Compact row activation opens Full. GPU hover/focus is a non-interactive, pointer-transparent identity hint and contains no nested navigation.
 - The expanded header freshness orb morphs toward the collapsed indicator. Its detail panel stays mounted and animates opacity, transform, and visibility instead of toggling display.
@@ -391,7 +391,7 @@ These decisions turn the Apple/Ive/nudge direction into concrete hierarchy rules
 - Compact disclosure:
   - The board remains one row per server with eight fixed columns and no inspector.
   - The micro-popover uses G# and full username as its first readable unit; generic 사용 중 copy is removed.
-  - Deep detail remains an explicit Full에서 보기 action.
+  - Row activation switches to Full; the micro-popover contains identity only and no nested navigation.
 - Header precision:
   - The mode trigger always says Full or Compact; users do not open a menu to discover current state.
   - Header controls and card edges share one framed content gutter at desktop widths.

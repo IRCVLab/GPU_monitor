@@ -12,9 +12,9 @@
 
 ## Implementation audit, 2026-07-16 KST
 
-- Task 2 is completed by `bf28961` and nullable frontend alignment in `0c87ccc`: optional Linux PSI I/O pressure fields and backend tests exist.
-- Task 3 is partial by `2823fcb`: collapsed System/Memo/Hold hierarchy, explicit Korean expiry, and Full hold collar are present, but System and Memo disclosure panels still need symmetric close motion rather than conditional unmount.
-- Task 4 is completed by `c245313`: Compact row activation, pointer-transparent identity hint, held-cell collar, and manual-order protections are implemented.
+- Task 2 is completed by repository evidence in `bf28961` and nullable frontend alignment in `0c87ccc`: optional Linux PSI I/O pressure fields and backend tests exist. This docs-only pass did not rerun historical RED/GREEN commands.
+- Task 3 is partial by repository evidence in `2823fcb`: collapsed System/Memo/Hold hierarchy, explicit Korean expiry, and Full hold collar are present, but System and Memo disclosure panels still need symmetric close motion rather than conditional unmount.
+- Task 4 is completed by repository evidence in `c245313`: Compact row activation, pointer-transparent identity hint, held-cell collar, and manual-order protections are implemented. This docs-only pass did not rerun historical RED/GREEN commands.
 - Acceptance remains perceptual legibility in the running dashboard, not merely the presence of code, selectors, or tests.
 - Complete Task 4a before starting material presets so disclosure motion is resolved while the card hierarchy is still the active workstream.
 
@@ -41,13 +41,13 @@
 - Modify: `backend/collectors/server_collector.py`
 - Modify: `frontend/src/lib/types.ts`
 
-- [ ] Write failing `unittest` cases for six-field PSI output, malformed/missing PSI values, unsupported kernels, and legacy three-field output.
-- [ ] Run `cd /home/ircv/workspace/monitoring_v2_dev && .venv/bin/python -m unittest backend.tests.test_system_metrics -v` and verify the expected assertion failure caused by missing PSI behavior.
-- [ ] Add optional `io_pressure_some`, `io_pressure_full`, `io_blocked_tasks`, and `io_pressure_supported` fields.
-- [ ] Read `/proc/pressure/io` `some/full avg10` plus `/proc/stat` `procs_blocked` in the existing remote command.
-- [ ] Keep PSI absence non-degrading and legacy-compatible.
-- [ ] Run targeted tests, then `.venv/bin/python -m unittest discover -s backend/tests -v`.
-- [ ] Commit.
+- [x] Write failing `unittest` cases for six-field PSI output, malformed/missing PSI values, unsupported kernels, and legacy three-field output.
+- [x] Historical audit evidence: run `cd /home/ircv/workspace/monitoring_v2_dev && .venv/bin/python -m unittest backend.tests.test_system_metrics -v` and verify the expected assertion failure caused by missing PSI behavior.
+- [x] Add optional `io_pressure_some`, `io_pressure_full`, `io_blocked_tasks`, and `io_pressure_supported` fields.
+- [x] Read `/proc/pressure/io` `some/full avg10` plus `/proc/stat` `procs_blocked` in the existing remote command.
+- [x] Keep PSI absence non-degrading and legacy-compatible.
+- [x] Historical audit evidence: run targeted tests, then `.venv/bin/python -m unittest discover -s backend/tests -v`.
+- [x] Commit as `bf28961`; nullable frontend alignment followed in `0c87ccc`.
 
 ### Task 3: Rebuild collapsed System, Memo, and Hold hierarchy through TDD
 
@@ -61,13 +61,14 @@
 - Modify: `frontend/src/lib/components/ServerCard.note-contract.test.ts`
 - Modify: `frontend/src/lib/styles/monitor-cards.contract.test.ts`
 
-- [ ] Write failing assertions for no footer dots, one-row System preview, explicit Korean expiry, hold GPU/owner summary, and a Full hold collar.
-- [ ] Run `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use --silent 24; cd /home/ircv/workspace/monitoring_v2_dev/frontend && node --experimental-strip-types --test src/lib/components/GpuBar.contract.test.ts src/lib/components/ServerCard.note-contract.test.ts src/lib/styles/monitor-cards.contract.test.ts` and verify RED.
-- [ ] Compact healthy server metadata to one line.
-- [ ] Render CPU/RAM/I/O/Disk on one System baseline and detailed PSI in expanded content.
-- [ ] Normalize memo/hold content order and explicit expiry copy.
-- [ ] Add a visible, non-state-replacing hold collar/notch.
-- [ ] Run targeted tests and commit.
+- [x] Write assertions for no footer dots, one-row System preview, explicit Korean expiry, hold GPU/owner summary, and a Full hold collar.
+- [x] Historical audit evidence: run `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use --silent 24; cd /home/ircv/workspace/monitoring_v2_dev/frontend && node --experimental-strip-types --test src/lib/components/GpuBar.contract.test.ts src/lib/components/ServerCard.note-contract.test.ts src/lib/styles/monitor-cards.contract.test.ts` during the implementation slice.
+- [x] Compact healthy server metadata to one line.
+- [x] Render CPU/RAM/I/O/Disk on one System baseline and detailed PSI in expanded content.
+- [x] Normalize memo/hold content order and explicit expiry copy.
+- [x] Add a visible, non-state-replacing hold collar/notch.
+- [x] Commit as `2823fcb`.
+- [ ] Perceptual follow-up: make System and Memo close motion symmetric without conditional unmount; see Task 4a.
 
 ### Task 4: Make Compact interaction purposeful through TDD
 
@@ -79,12 +80,12 @@
 - Modify: `frontend/src/lib/styles/monitor-compact.css`
 - Modify: `frontend/src/lib/components/compact-dashboard-task4.contract.test.ts`
 
-- [ ] Invert the existing `Full에서 보기` expectation and write failing tests that row activation always opens Full while the hint remains non-interactive.
-- [ ] Verify RED.
-- [ ] Make the hint non-interactive and pointer-transparent.
-- [ ] Keep exact GPU, owner, state, and hold context only.
-- [ ] Strengthen held-cell collar using the same shape language as Full.
-- [ ] Verify server order is unchanged, run tests, and commit.
+- [x] Invert the existing `Full에서 보기` expectation and write tests that row activation always opens Full while the hint remains non-interactive.
+- [x] Historical audit evidence: verify RED during the implementation slice.
+- [x] Make the hint non-interactive and pointer-transparent.
+- [x] Keep exact GPU, owner, state, and hold context only.
+- [x] Strengthen held-cell collar using the same shape language as Full.
+- [x] Verify server order is unchanged, run tests, and commit as `c245313`.
 
 ### Task 4a: Make System and Memo disclosure close motion symmetric through TDD
 
@@ -94,12 +95,12 @@
 - Modify: `frontend/src/lib/components/ServerCard.note-contract.test.ts`
 - Modify: `frontend/src/lib/styles/monitor-cards.contract.test.ts`
 
-- [ ] Write failing assertions that System and Memo panels remain mounted for both open and closed states, expose `aria-expanded` accurately, and do not rely on `display` toggling for the close animation.
+- [ ] Write failing assertions that System and Memo panels remain mounted for both open and closed states, disclosure controls expose `aria-expanded` and `aria-controls` accurately, and close animation does not rely on `display` toggling.
 - [ ] Verify RED with the targeted ServerCard and monitor-card style contracts.
-- [ ] Replace conditional panel unmount with a disclosure wrapper that transitions intrinsic height, preferably `grid-template-rows: 0fr -> 1fr`, plus opacity and a slight `translateY`.
+- [ ] Replace conditional panel unmount with the narrow approved mounted grid-track disclosure animation: `grid-template-rows: 0fr -> 1fr`, plus opacity and a slight `translateY`.
 - [ ] Keep closing content mounted until the transition ends; after the transition, only disable visibility, focus, or pointer interaction as needed.
 - [ ] Respect `prefers-reduced-motion` with an immediate state change.
-- [ ] Do not animate `top` or hard-coded `max-height`.
+- [ ] Do not animate `top`, arbitrary height, or hard-coded `max-height`; the grid-track disclosure is the only approved exception to the generic no-layout-animation rule.
 - [ ] Verify System and Memo open and close with the same perceived smoothness before proceeding to material presets.
 - [ ] Run targeted tests and commit.
 
