@@ -5,6 +5,7 @@
 - Approved for implementation from the user's 2026-07-15 direction.
 - Supersedes conflicting portions of the Quiet Rack design concerning collapsed System/Memo presentation, Compact hover behavior, color-only themes, immediate theme switching, and the lack of I/O telemetry.
 - Scope is development only. The live repository and live service remain untouched.
+- Implementation audit as of commits `bf28961`, `0c87ccc`, `2823fcb`, and `c245313`: Tasks 2-4 are largely implemented. Continue judging the work by perceptual legibility in the running interface, not by the mere presence of matching code paths.
 
 ## Product judgment
 
@@ -43,6 +44,15 @@ Elements that answer none of these questions are removed. Decorative dots, repea
 - A hold is ordered as `HOLD G4·G5` → owner → reason/content → expiry.
 - Use explicit Korean relative time such as `9분 남음`, `2시간 남음`, or `만료됨`; never cryptic `D/H/M/S` output.
 - Long text is one-line clamped in the collapsed state and fully available when opened.
+
+### System and Memo disclosure motion
+
+- System and Memo expansion/collapse must be visually symmetric.
+- The current conditional unmount creates a smooth-enough open but an abrupt close; replace it with a mounted disclosure panel.
+- Animate an intrinsic-height wrapper, for example `grid-template-rows`, together with opacity and a slight `translateY`.
+- Closing must retain the panel content until the transition ends, then only disable interaction/visibility as needed.
+- Reduced motion should make the state change immediate.
+- Do not animate `top` or hard-coded `max-height`; those approaches either move unrelated layout or fail with variable memo/system content.
 
 ### Hold visual meaning
 
@@ -121,6 +131,7 @@ Dark: background `#1a1a1a`, foreground `#e5e5e5`, card `#202020`, card foregroun
 - No decorative marker circle appears before collapsed System or Memo.
 - Healthy System preview is one row and includes I/O pressure when supported.
 - Memo/hold owner, content, GPUs, and expiry are distinguishable without opening.
+- System and Memo panels open and close with the same mounted-content transition; closing is not an abrupt unmount, and reduced motion is immediate.
 - Exact held GPUs are visible in both Full and Compact.
 - Compact hover contains no nested navigation action; row activation opens Full.
 - Header orb visibly hands off to the collapsed indicator; indicator panel animates without `display` toggling.

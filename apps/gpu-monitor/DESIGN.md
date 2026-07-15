@@ -253,11 +253,13 @@ letter-spacing 0em
 - Healthy server identity, host/IP, freshness, and edit action share one compact line.
 - Collapsed System is one baseline: CPU, RAM, PSI I/O pressure, and disk capacity. Expanded detail explains PSI and may show full pressure and blocked tasks.
 - Memo reads owner, authored content, then explicit Korean expiry. Hold reads exact GPUs, owner, reason, then expiry.
+- System and Memo expansion/collapse must be symmetric: panels remain mounted while closed and animate an intrinsic-height wrapper such as `grid-template-rows`, opacity, and a slight translate. Closing retains content until the transition finishes; reduced motion is immediate. Do not animate `top` or hard-coded `max-height`.
 - A hold overlays a warm collar/notch on the exact GPU in both Full and Compact without changing telemetry state.
 - Compact row activation opens Full. GPU hover/focus is a non-interactive, pointer-transparent identity hint and contains no nested navigation.
 - The expanded header freshness orb morphs toward the collapsed indicator. Its detail panel stays mounted and animates opacity, transform, and visibility instead of toggling display.
 - The View menu offers Liquid Glass, Claude+, and AstroVista as complete material presets. Light/dark remains a separate sun/moon control.
 - Liquid Glass is reserved for functional layers such as header, menus, popovers, and indicator; content cards remain mostly opaque for hierarchy.
+- Implementation audit as of commits `bf28961`, `0c87ccc`, `2823fcb`, and `c245313`: Tasks 2-4 are largely implemented, but acceptance remains perceptual legibility, not merely code presence.
 - The sun/moon control originates a circular mode reveal, with activation locking, cleanup, and reduced-motion fallback.
 
 ## Accessibility
