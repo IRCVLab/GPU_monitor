@@ -275,6 +275,10 @@
 	height: max-content;
 }
 
+.ops-refresh-ring-wrap--handoff-active {
+	opacity: 0;
+}
+
 .ops-refresh-handoff {
 	position: fixed;
 	z-index: 85;
