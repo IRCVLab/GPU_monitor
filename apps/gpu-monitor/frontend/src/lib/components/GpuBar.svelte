@@ -46,7 +46,7 @@
 </script>
 
 <div class="monitor-gpu-row" data-state={state} aria-label={gpuAriaLabel}>
-  <span class="monitor-gpu-row__index">G{gpu.index}</span>
+  <span class="monitor-gpu-row__index" data-has-hold={primaryHold ? 'true' : 'false'}>G{gpu.index}</span>
 
   <div class="monitor-gpu-row__body">
     <div class="monitor-gpu-row__users">

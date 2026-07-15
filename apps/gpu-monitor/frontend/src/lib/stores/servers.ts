@@ -15,6 +15,10 @@ function toOptionalFiniteNumber(value: unknown): number | undefined {
 	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function toNullableFiniteNumber(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function toStringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
@@ -46,7 +50,11 @@ function sameSystemInfo(a: ServerState['system'], b: ServerState['system']): boo
 	return (
 		a.cpu_percent === b.cpu_percent &&
 		a.ram_used === b.ram_used &&
-		a.ram_total === b.ram_total
+		a.ram_total === b.ram_total &&
+		a.io_pressure_some === b.io_pressure_some &&
+		a.io_pressure_full === b.io_pressure_full &&
+		a.io_blocked_tasks === b.io_blocked_tasks &&
+		a.io_pressure_supported === b.io_pressure_supported
 	);
 }
 
@@ -155,7 +163,11 @@ export function normalizeServerState(value: unknown, fallbackId?: number): Serve
 		system = {
 			cpu_percent: toFiniteNumber(rawSystem.cpu_percent),
 			ram_used: toFiniteNumber(rawSystem.ram_used),
-			ram_total: toFiniteNumber(rawSystem.ram_total)
+			ram_total: toFiniteNumber(rawSystem.ram_total),
+			io_pressure_some: toNullableFiniteNumber(rawSystem.io_pressure_some),
+			io_pressure_full: toNullableFiniteNumber(rawSystem.io_pressure_full),
+			io_blocked_tasks: toNullableFiniteNumber(rawSystem.io_blocked_tasks),
+			io_pressure_supported: rawSystem.io_pressure_supported === true
 		};
 	}
 

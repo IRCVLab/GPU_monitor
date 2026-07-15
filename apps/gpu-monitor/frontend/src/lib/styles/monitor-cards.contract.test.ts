@@ -12,6 +12,15 @@ function cssRule(selector) {
 	return match.groups.body;
 }
 
+function cssRuleWithDeclaration(selector, property) {
+	const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const matches = [...css.matchAll(new RegExp(`${escaped}\\s*\\{(?<body>[^}]*)\\}`, 'gm'))];
+	const match = matches.find((candidate) => new RegExp(`${escapedProperty}\\s*:`).test(candidate.groups.body));
+	assert.ok(match?.groups?.body, `Missing ${property} declaration for ${selector}`);
+	return match.groups.body;
+}
+
 function mediaBlock(query) {
 	const start = css.indexOf(`@media ${query}`);
 	assert.notEqual(start, -1, `Missing @media ${query}`);
@@ -24,17 +33,6 @@ function mediaBlock(query) {
 	}
 	assert.fail(`Unterminated @media ${query}`);
 }
-
-
-function cssRuleWithDeclaration(selector, property) {
-	const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	const matches = [...css.matchAll(new RegExp(`${escaped}\\s*\\{(?<body>[^}]*)\\}`, 'gm'))];
-	const match = matches.find((candidate) => new RegExp(`${escapedProperty}\\s*:`).test(candidate.groups.body));
-	assert.ok(match?.groups?.body, `Missing ${property} declaration for ${selector}`);
-	return match.groups.body;
-}
-
 
 function assertDeclaration(rule, property, value) {
 	const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -55,90 +53,6 @@ function declarationValue(rule, property) {
 	return match.groups.value.trim();
 }
 
-test('task 4 dense full footer spacing uses exact compact tokens', () => {
-	const footerRule = cssRule('.monitor-card__footer');
-	assertDeclaration(footerRule, 'gap', '0.28rem');
-	assertDeclaration(footerRule, 'padding', '0.5rem 0.75rem 0.55rem');
-
-	const secondSectionRule = cssRule('.monitor-card__footer-section + .monitor-card__footer-section');
-	assert.ok(remValues(declarationValue(secondSectionRule, 'padding-top'))[0] <= 0.3);
-
-	const panelStackRule = cssRule('.monitor-card__footer-panel > .monitor-card__metric-stack,\n.monitor-card__footer-panel > .monitor-card__subsection,\n.monitor-card__footer-panel > .monitor-note-list,\n.monitor-card__footer-panel > .note-form');
-	assertDeclaration(panelStackRule, 'padding-top', '0.45rem');
-
-	const metricStackRule = cssRule('.monitor-card__metric-stack');
-	assertDeclaration(metricStackRule, 'gap', '0.32rem');
-});
-
-test('mobile full cards keep server identity and edit control on one dense row', () => {
-	const card = cssRule('.monitor-card');
-	assertDeclaration(card, 'min-width', '0');
-
-	const mobile = mediaBlock('(max-width: 640px)');
-	assert.match(mobile, /\.monitor-card__title-row\s*\{[^}]*flex-direction:\s*row;/s);
-	assert.match(mobile, /\.monitor-card__edit-button\s*\{[^}]*align-self:\s*flex-start;/s);
-	assert.doesNotMatch(
-		mobile,
-		/\.monitor-card__title-row\s*,\s*\.monitor-note-item\s*\{[^}]*flex-direction:\s*column;/s
-	);
-});
-
-test('mobile collapsed utility controls remain one horizontal line with protected disclosure', () => {
-	const mobile = mediaBlock('(max-width: 640px)');
-	assert.match(mobile, /\.monitor-card__footer-toggle\s*\{[^}]*flex-direction:\s*row;/s);
-	assert.match(mobile, /\.monitor-card__footer-toggle\s*\{[^}]*align-items:\s*center;/s);
-	assert.doesNotMatch(mobile, /\.monitor-card__footer-toggle\s*\{[^}]*flex-direction:\s*column;/s);
-
-	const mainRule = cssRule('.monitor-card__footer-toggle-main');
-	assertDeclaration(mainRule, 'flex', '0 0 auto');
-
-	const sideRule = cssRule('.monitor-card__footer-side');
-	assertDeclaration(sideRule, 'min-width', '0');
-	assertDeclaration(sideRule, 'flex', '1 1 0');
-
-	const previewRule = cssRule('.monitor-card__footer-preview');
-	assertDeclaration(previewRule, 'min-width', '0');
-	assertDeclaration(previewRule, 'flex', '1 1 0');
-	assertDeclaration(previewRule, 'overflow', 'hidden');
-	assertDeclaration(previewRule, 'text-overflow', 'ellipsis');
-	assertDeclaration(previewRule, 'white-space', 'nowrap');
-});
-
-test('mobile expanded system keeps hardware and mount telemetry dense without clipping', () => {
-	const mobile = mediaBlock('(max-width: 640px)');
-	assert.doesNotMatch(
-		mobile,
-		/\.monitor-card__mount-item\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/s
-	);
-	assert.doesNotMatch(
-		mobile,
-		/\.monitor-card__mount-usage\s*\{[^}]*grid-column:\s*1 \/ -1;/s
-	);
-
-	const hardwareRule = cssRule('.monitor-card__hardware-item');
-	assert.ok(Math.max(...remValues(declarationValue(hardwareRule, 'padding'))) <= 0.3);
-	assert.ok(Math.max(...remValues(declarationValue(hardwareRule, 'gap'))) <= 0.2);
-
-	const hardwareTypeRule = cssRule('.monitor-card__hardware-index,\n.monitor-card__hardware-value');
-	assert.ok(remValues(declarationValue(hardwareTypeRule, 'font-size'))[0] <= 0.66);
-});
-
-test('task 4 hardware mounts and notes align to dense card scale', () => {
-	const hardwareRule = cssRule('.monitor-card__hardware-item');
-	assert.ok(remValues(declarationValue(hardwareRule, 'padding'))[0] <= 0.3);
-	assert.ok(remValues(declarationValue(hardwareRule, 'border-radius'))[0] <= 0.5);
-
-	const mountRule = cssRule('.monitor-card__mount-item');
-	assert.ok(remValues(declarationValue(mountRule, 'padding'))[0] <= 0.3);
-	assert.ok(remValues(declarationValue(mountRule, 'border-radius'))[0] <= 0.5);
-
-	const noteRule = cssRuleWithDeclaration('.monitor-note-item', 'padding');
-	assertDeclaration(noteRule, 'padding', '0.46rem 0.55rem');
-	assertDeclaration(noteRule, 'border-radius', '0.55rem');
-});
-
-
-
 function cssRuleContainingSelectorWithDeclaration(selector, property) {
 	const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	const matches = [...css.matchAll(/(?<selectors>[^{}]+)\{(?<body>[^}]*)\}/gm)];
@@ -158,7 +72,129 @@ function assertFontSizeAtMost(selector, maxRem) {
 	);
 }
 
-test('task 4 expanded system secondary details stay under dense type scale', () => {
+test('task 3 dense full footer spacing keeps the approved compact tokens', () => {
+	const footerRule = cssRule('.monitor-card__footer');
+	assertDeclaration(footerRule, 'gap', '0.28rem');
+	assertDeclaration(footerRule, 'padding', '0.5rem 0.75rem 0.55rem');
+
+	const secondSectionRule = cssRule('.monitor-card__footer-section + .monitor-card__footer-section');
+	assert.ok(remValues(declarationValue(secondSectionRule, 'padding-top'))[0] <= 0.3);
+
+	const panelStackRule = cssRule(
+		'.monitor-card__footer-panel > .monitor-card__metric-stack,\n.monitor-card__footer-panel > .monitor-card__subsection,\n.monitor-card__footer-panel > .monitor-note-list,\n.monitor-card__footer-panel > .note-form'
+	);
+	assertDeclaration(panelStackRule, 'padding-top', '0.45rem');
+
+	const metricStackRule = cssRule('.monitor-card__metric-stack');
+	assertDeclaration(metricStackRule, 'gap', '0.32rem');
+});
+
+test('header baseline stays on one dense line without legacy meta or network pills', () => {
+	const titleRow = cssRule('.monitor-card__title-row');
+	assert.match(titleRow, /display:\s*flex/);
+	assert.match(titleRow, /align-items:\s*center/);
+
+	const titleLine = cssRule('.monitor-card__title-line');
+	assert.match(titleLine, /display:\s*flex/);
+	assert.match(titleLine, /flex-wrap:\s*nowrap/);
+	assert.match(titleLine, /min-width:\s*0/);
+
+	const hostRule = cssRule('.monitor-card__host');
+	assert.match(hostRule, /overflow:\s*hidden/);
+	assert.match(hostRule, /text-overflow:\s*ellipsis/);
+
+	assert.doesNotMatch(css, /\.monitor-card__meta\b/, 'legacy split meta row styles should be removed');
+	assert.doesNotMatch(css, /\.monitor-card__network\b/, 'legacy network pill styles should be removed');
+});
+
+test('mobile full cards keep server identity and edit control on one dense row', () => {
+	const card = cssRule('.monitor-card');
+	assertDeclaration(card, 'min-width', '0');
+
+	const mobile = mediaBlock('(max-width: 640px)');
+	assert.match(mobile, /\.monitor-card__title-row\s*\{[^}]*flex-direction:\s*row;/s);
+	assert.match(mobile, /\.monitor-card__edit-button\s*\{[^}]*align-self:\s*flex-start;/s);
+	assert.doesNotMatch(mobile, /\.monitor-card__title-row\s*\{[^}]*flex-direction:\s*column;/s);
+});
+
+test('collapsed utility controls keep the chevron affordance and remove decorative markers', () => {
+	assert.doesNotMatch(css, /\.monitor-card__footer-marker\b/, 'decorative marker styles should be removed');
+
+	const disclosureRule = cssRule('.monitor-card__footer-disclosure');
+	assert.match(disclosureRule, /border-right:\s*1px solid/);
+	assert.match(disclosureRule, /border-bottom:\s*1px solid/);
+	assertDeclaration(disclosureRule, 'box-sizing', 'border-box');
+	assertDeclaration(disclosureRule, 'transform', 'rotate(45deg)');
+
+	const expandedRule = cssRule('.monitor-card__footer-disclosure.is-expanded');
+	assertDeclaration(expandedRule, 'transform', 'rotate(225deg)');
+
+	const mobile = mediaBlock('(max-width: 640px)');
+	assert.match(mobile, /\.monitor-card__footer-toggle\s*\{[^}]*flex-direction:\s*row;/s);
+	assert.match(mobile, /\.monitor-card__footer-toggle\s*\{[^}]*align-items:\s*center;/s);
+
+	const previewRule = cssRule('.monitor-card__footer-preview');
+	assertDeclaration(previewRule, 'min-width', '0');
+	assertDeclaration(previewRule, 'flex', '1 1 0');
+	assertDeclaration(previewRule, 'overflow', 'hidden');
+	assertDeclaration(previewRule, 'text-overflow', 'ellipsis');
+	assertDeclaration(previewRule, 'white-space', 'nowrap');
+});
+
+test('collapsed system preview is a single inline baseline with explicit I/O segment', () => {
+	const previewRule = cssRule('.monitor-card__system-preview');
+	assert.match(previewRule, /display:\s*flex/);
+	assert.match(previewRule, /align-items:\s*center/);
+	assert.match(previewRule, /flex-wrap:\s*nowrap/);
+	assert.match(previewRule, /overflow:\s*hidden/);
+	assert.doesNotMatch(previewRule, /grid-template-columns:\s*repeat\(4/);
+
+	const segmentRule = cssRule('.monitor-card__system-preview-segment');
+	assert.match(segmentRule, /display:\s*inline-flex/);
+	assert.match(segmentRule, /align-items:\s*baseline/);
+	assert.match(segmentRule, /min-width:\s*0/);
+
+	const labelRule = cssRule('.monitor-card__system-preview-label');
+	assert.ok(remValues(declarationValue(labelRule, 'font-size'))[0] <= 0.6);
+
+	const valueRule = cssRule('.monitor-card__system-preview-value');
+	assert.ok(remValues(declarationValue(valueRule, 'font-size'))[0] <= 0.68);
+	assert.match(valueRule, /font-variant-numeric:\s*tabular-nums/);
+
+	assert.doesNotMatch(css, /\.monitor-card__system-preview-item\b/, 'old 4-item system tiles should not remain');
+});
+
+test('expanded system removes summary tiles and adds dense I/O pressure detail', () => {
+	assert.doesNotMatch(css, /\.monitor-card__system-summary\b/, 'old summary tile grid styles should be removed');
+	assert.doesNotMatch(css, /\.monitor-card__summary-item\b/, 'old summary tile styles should be removed');
+
+	const ioDetail = cssRule('.monitor-card__io-detail');
+	assert.match(ioDetail, /display:\s*grid|display:\s*flex/);
+	assert.match(ioDetail, /gap:\s*0\./);
+
+	const ioCopy = cssRule('.monitor-card__io-detail-copy');
+	assert.ok(remValues(declarationValue(ioCopy, 'font-size'))[0] <= 0.68);
+
+	const ioMetrics = cssRule('.monitor-card__io-detail-metrics');
+	assert.match(ioMetrics, /display:\s*flex|display:\s*grid/);
+	assert.match(ioMetrics, /font-variant-numeric:\s*tabular-nums/);
+});
+
+test('hardware mounts and notes align to the dense card scale', () => {
+	const hardwareRule = cssRule('.monitor-card__hardware-item');
+	assert.ok(remValues(declarationValue(hardwareRule, 'padding'))[0] <= 0.3);
+	assert.ok(remValues(declarationValue(hardwareRule, 'border-radius'))[0] <= 0.5);
+
+	const mountRule = cssRule('.monitor-card__mount-item');
+	assert.ok(remValues(declarationValue(mountRule, 'padding'))[0] <= 0.3);
+	assert.ok(remValues(declarationValue(mountRule, 'border-radius'))[0] <= 0.5);
+
+	const noteRule = cssRuleWithDeclaration('.monitor-note-item', 'padding');
+	assertDeclaration(noteRule, 'padding', '0.46rem 0.55rem');
+	assertDeclaration(noteRule, 'border-radius', '0.55rem');
+});
+
+test('expanded system secondary details stay under the dense type scale', () => {
 	for (const selector of [
 		'.monitor-card__storage-meta',
 		'.monitor-card__storage-time',
@@ -166,13 +202,15 @@ test('task 4 expanded system secondary details stay under dense type scale', () 
 		'.monitor-card__hardware-index',
 		'.monitor-card__hardware-value',
 		'.monitor-card__mount-usage',
-		'.monitor-card__mount-percent'
+		'.monitor-card__mount-percent',
+		'.monitor-card__io-detail-copy',
+		'.monitor-card__io-detail-metrics'
 	]) {
 		assertFontSizeAtMost(selector, 0.7);
 	}
 });
 
-test('task 4 memo loading and error expanded states use dense top padding', () => {
+test('task 3 memo loading and error expanded states use dense top padding', () => {
 	const stateRule = cssRuleWithDeclaration('.monitor-card__loading-state,\n.monitor-card__error-row', 'padding-top');
 	assert.ok(remValues(declarationValue(stateRule, 'padding-top'))[0] <= 0.45);
 });
@@ -194,21 +232,28 @@ test('unified GPU selector remains chip-based, compact, and visually integrated'
 	assert.match(css, /\.monitor-note-item__gpu-chip/);
 });
 
-
 test('GPU chip hover has focus-visible and reduced-motion coverage', () => {
 	assert.match(css, /\.note-form-gpu-chip:focus-visible[\s\S]*box-shadow/);
 	assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.note-form-gpu-chip:hover[\s\S]*transform:\s*none/);
 });
 
-test('GPU advisory hold cue is dense visible text with subtle noninteractive styling', () => {
-	const rule = cssRule('.monitor-gpu-row__hold-cue');
-	assert.match(rule, /display:\s*inline-flex/);
-	assert.match(rule, /font-size:\s*0\.6[0-9]rem/);
-	assert.match(rule, /line-height:\s*1/);
-	assert.match(rule, /pointer-events:\s*none/);
-	assert.doesNotMatch(rule, /min-height:\s*(?:1\.[2-9]|[2-9])/);
-	assert.match(rule, /color:\s*color-mix\(in srgb, #f59e0b/);
-	assert.match(css, /\.monitor-gpu-row__users[\s\S]*align-items:\s*center/);
+test('GPU advisory hold cue stays dense while the exact index gets a visible hold collar and notch', () => {
+	const cueRule = cssRule('.monitor-gpu-row__hold-cue');
+	assert.match(cueRule, /display:\s*inline-flex/);
+	assert.match(cueRule, /font-size:\s*0\.6[0-9]rem/);
+	assert.match(cueRule, /line-height:\s*1/);
+	assert.match(cueRule, /pointer-events:\s*none/);
+	assert.match(cueRule, /color:\s*color-mix\(in srgb, #f59e0b/);
+
+	const indexRule = cssRule('.monitor-gpu-row__index');
+	assert.match(indexRule, /position:\s*relative/);
+
+	const heldIndexRule = cssRule(".monitor-gpu-row__index[data-has-hold='true']");
+	assert.match(heldIndexRule, /box-shadow:\s*inset|outline:/);
+
+	const notchRule = cssRule(".monitor-gpu-row__index[data-has-hold='true']::after");
+	assert.match(notchRule, /content:\s*''/);
+	assert.match(notchRule, /position:\s*absolute/);
 });
 
 test('Mem receives the wider flexible track without wasting a 10ch value column', () => {
@@ -223,20 +268,6 @@ test('Mem receives the wider flexible track without wasting a 10ch value column'
 	assert.doesNotMatch(narrowMobile, /\.monitor-gpu-row__metrics\s*\{[^}]*grid-template-columns:\s*1fr;/s);
 });
 
-test('full gpu index uses the selected theme accent with inverted availability states', () => {
-	const availableRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-row__index");
-	assertDeclaration(availableRule, 'color', 'var(--ops-fg)');
-	assert.doesNotMatch(availableRule, /(?:^|[\n\r])\s*color:\s*var\(--ops-primary\)\s*;/);
-	assertDeclaration(availableRule, 'border-color', 'var(--ops-primary)');
-	const occupiedRule = cssRule(".monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index");
-	assertDeclaration(occupiedRule, 'background', 'var(--ops-primary)');
-	assertDeclaration(occupiedRule, 'border-color', 'var(--ops-primary)');
-	assertDeclaration(occupiedRule, 'color', 'var(--ops-on-primary)');
-	assert.doesNotMatch(occupiedRule, /(?:^|[\n\r])\s*color:\s*var\(--ops-primary-fg\)\s*;/);
-	const unknownRule = cssRule(".monitor-gpu-row[data-state='unknown'] .monitor-gpu-row__index");
-	assert.doesNotMatch(unknownRule, /#f59e0b|var\(--chart-[12]\)|var\(--ops-primary\)/);
-});
-
 test('full gpu metric fills share one accent while memory stays quieter than util', () => {
 	const utilRule = cssRule('.monitor-gpu-metric__fill--util');
 	assertDeclaration(utilRule, 'background', 'var(--ops-primary)');
@@ -244,172 +275,4 @@ test('full gpu metric fills share one accent while memory stays quieter than uti
 	const memoryRule = cssRule('.monitor-gpu-metric__fill--memory');
 	assert.match(memoryRule, /background:\s*color-mix\(in srgb, var\(--ops-primary\)/);
 	assert.doesNotMatch(memoryRule, /var\(--chart-1\)|var\(--chart-2\)/);
-});
-
-test('collapsed utility rows use subtle markers and CSS disclosure angles', () => {
-	const markerRule = cssRule('.monitor-card__footer-marker');
-	assertDeclaration(markerRule, 'width', '0.34rem');
-	assertDeclaration(markerRule, 'height', '0.34rem');
-
-	const disclosureRule = cssRule('.monitor-card__footer-disclosure');
-	assert.match(disclosureRule, /border-right:\s*1px solid/);
-	assert.match(disclosureRule, /border-bottom:\s*1px solid/);
-	assertDeclaration(disclosureRule, 'box-sizing', 'border-box');
-	assertDeclaration(disclosureRule, 'transform', 'rotate(45deg)');
-
-	const expandedRule = cssRule('.monitor-card__footer-disclosure.is-expanded');
-	assertDeclaration(expandedRule, 'transform', 'rotate(225deg)');
-});
-
-test('task 5 full card header and system density follow the quiet instrument contract', () => {
-	const statusTextRule = cssRule('.monitor-card__status-text');
-	assert.doesNotMatch(statusTextRule, /display:\s*none/);
-
-	const srOnlyRule = cssRule('.monitor-card__sr-only');
-	assert.match(srOnlyRule, /position:\s*absolute/);
-	assert.match(srOnlyRule, /width:\s*1px/);
-	assert.match(srOnlyRule, /height:\s*1px/);
-	assert.match(srOnlyRule, /clip:\s*rect\(0,\s*0,\s*0,\s*0\)/);
-
-	const headerMetaRule = cssRule('.monitor-card__meta');
-	assertDeclaration(headerMetaRule, 'flex-wrap', 'nowrap');
-	assertDeclaration(headerMetaRule, 'white-space', 'nowrap');
-
-	const previewRule = cssRule('.monitor-card__system-preview');
-	assert.match(previewRule, /display:\s*grid/);
-	assert.match(previewRule, /grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/);
-	assertDeclaration(previewRule, 'min-width', '0');
-	assertDeclaration(previewRule, 'flex', '1 1 0');
-	assert.doesNotMatch(previewRule, /width:\s*100%/);
-
-	const previewItemRule = cssRule('.monitor-card__system-preview-item');
-	assertDeclaration(previewItemRule, 'min-width', '0');
-	assert.match(previewItemRule, /display:\s*grid|display:\s*inline-grid/);
-	assertDeclaration(previewItemRule, 'gap', '0.08rem');
-
-	const previewLabelRule = cssRule('.monitor-card__system-preview-item small');
-	assert.match(previewLabelRule, /text-transform:\s*uppercase/);
-	assert.match(previewLabelRule, /font-size:\s*0\.5[0-9]rem/);
-
-	const previewValueRule = cssRule('.monitor-card__system-preview-item strong');
-	assertDeclaration(previewValueRule, 'min-width', '0');
-	assertDeclaration(previewValueRule, 'overflow', 'hidden');
-	assertDeclaration(previewValueRule, 'text-overflow', 'ellipsis');
-	assertDeclaration(previewValueRule, 'white-space', 'nowrap');
-	assert.match(previewValueRule, /font-size:\s*0\.6[0-9]rem/);
-	assert.match(previewValueRule, /font-variant-numeric:\s*tabular-nums/);
-
-	const footerToggleRule = cssRule('.monitor-card__footer-toggle');
-	assert.ok(remValues(declarationValue(footerToggleRule, 'min-height'))[0] <= 1.875);
-
-	const systemSummaryRule = cssRule('.monitor-card__system-summary');
-	assert.match(systemSummaryRule, /display:\s*grid/);
-	assert.match(systemSummaryRule, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-
-	const hardwareRule = cssRule('.monitor-card__hardware-item');
-	assertDeclaration(hardwareRule, 'min-height', '1.5rem');
-	assert.match(hardwareRule, /background:\s*transparent/);
-	assert.doesNotMatch(hardwareRule, /border-radius:\s*0\.[45]/);
-
-	const mountRule = cssRule('.monitor-card__mount-item');
-	assertDeclaration(mountRule, 'min-height', '1.5rem');
-	assert.match(mountRule, /background:\s*transparent/);
-
-	const mountListRule = cssRule('.monitor-card__mount-list');
-	assert.doesNotMatch(mountListRule, /background:/);
-
-	const mobile = mediaBlock('(max-width: 640px)');
-	assert.match(mobile, /\.monitor-card__hardware-item\s*\{[^}]*min-height:\s*1\.5rem;/s);
-	assert.match(mobile, /\.monitor-card__mount-item\s*\{[^}]*min-height:\s*1\.5rem;/s);
-	assert.doesNotMatch(mobile, /\.monitor-card__hardware-item\s*\{[^}]*min-height:\s*1\.[0-4]/s);
-	assert.doesNotMatch(mobile, /\.monitor-card__mount-item\s*\{[^}]*min-height:\s*1\.[0-4]/s);
-});
-
-test('memo history and composer are grouped without nested card surfaces', () => {
-	const groupRule = cssRule('.monitor-card__memo-group');
-	assertDeclaration(groupRule, 'background', 'transparent');
-	assert.match(groupRule, /border-top:\s*1px solid/);
-
-	const headRule = cssRule('.monitor-card__memo-group-head');
-	assert.match(headRule, /display:\s*flex/);
-	assert.match(headRule, /justify-content:\s*space-between/);
-
-	const emptyRule = cssRule('.monitor-card__memo-empty');
-	assert.match(emptyRule, /font-size:\s*0\.6[0-9]rem/);
-});
-
-
-test('collapsed note preview uses a fixed expiry column and plain text countdown instead of a pill badge', () => {
-	const previewRule = cssRule('.monitor-card__footer-preview--notes');
-	assertDeclaration(previewRule, 'display', 'grid');
-	assertDeclaration(previewRule, 'grid-template-columns', 'minmax(0, 1fr) auto');
-	assertDeclaration(previewRule, 'align-items', 'center');
-
-	const mainRule = cssRule('.monitor-card__note-preview-main');
-	assertDeclaration(mainRule, 'min-width', '0');
-	assertDeclaration(mainRule, 'display', 'inline-flex');
-
-	const expiryRule = cssRule('.monitor-card__note-preview-expiry');
-	assertDeclaration(expiryRule, 'justify-self', 'end');
-	assertDeclaration(expiryRule, 'font-variant-numeric', 'tabular-nums');
-	assert.doesNotMatch(expiryRule, /background\s*:/);
-	assert.doesNotMatch(expiryRule, /border\s*:/);
-	assert.doesNotMatch(expiryRule, /border-radius\s*:/);
-});
-
-test('note composer uses three dense rows with shared-surface note history styling', () => {
-	const formRule = cssRule('.monitor-card .note-form');
-	assertDeclaration(formRule, 'gap', '0.34rem');
-
-	const rowRule = cssRule('.monitor-card .note-form-row');
-	assertDeclaration(rowRule, 'min-width', '0');
-
-	const scopeRule = cssRule('.monitor-card .note-form-scope-row');
-	assertDeclaration(scopeRule, 'display', 'grid');
-
-	const entryRule = cssRule('.monitor-card .note-form-entry-row');
-	assertDeclaration(entryRule, 'display', 'grid');
-	assertDeclaration(entryRule, 'grid-template-columns', 'minmax(0, 0.9fr) minmax(0, 1.6fr)');
-
-	const identityRule = cssRule('.monitor-card .note-form-identity-stack');
-	assertDeclaration(identityRule, 'display', 'grid');
-
-	const submitRule = cssRule('.monitor-card .note-form-submit-row');
-	assertDeclaration(submitRule, 'display', 'grid');
-	assertDeclaration(submitRule, 'grid-template-columns', 'minmax(0, 1fr) auto');
-
-	const textareaRule = cssRule('.monitor-card .note-form-textarea');
-	assertDeclaration(textareaRule, 'min-height', '2.35rem');
-	assertDeclaration(textareaRule, 'resize', 'none');
-
-	const noteRule = cssRule('.monitor-note-item');
-	assertDeclaration(noteRule, 'background', 'transparent');
-
-	const listRule = cssRule('.monitor-note-item + .monitor-note-item');
-	assert.match(listRule, /border-top\s*:/);
-});
-
-
-test('Full cards nudge availability with one restrained accent rail', () => {
-	const railRule = cssRule('.monitor-card::before');
-	assertDeclaration(railRule, 'position', 'absolute');
-	assertDeclaration(railRule, 'background', 'var(--ops-primary)');
-	assertDeclaration(railRule, 'opacity', '0');
-	assert.ok(remValues(declarationValue(railRule, 'width'))[0] <= 0.2);
-
-	const activeRule = cssRule(".monitor-card[data-has-available='true']::before");
-	const activeOpacity = Number(declarationValue(activeRule, 'opacity'));
-	assert.ok(activeOpacity >= 0.7 && activeOpacity <= 0.9);
-	assertDeclaration(activeRule, 'transform', 'scaleY(1)');
-});
-
-test('available GPU zero telemetry recedes behind the outlined GPU identity cue', () => {
-	const trackRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-metric__track");
-	assert.ok(trackRule.includes('background: color-mix(in srgb, var(--ops-fg) 6%, transparent)'));
-
-	const labelRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-metric__label");
-	assert.ok(labelRule.includes('color: color-mix(in srgb, var(--ops-fg) 28%, transparent)'));
-
-	const valueRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-metric__value");
-	assert.ok(valueRule.includes('color: color-mix(in srgb, var(--ops-fg) 44%, transparent)'));
 });

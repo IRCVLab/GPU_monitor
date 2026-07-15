@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mergeServerRecordState } from './serverStateMerge.ts';
+import { isServerStateEqual, normalizeServerState } from '../stores/servers.ts';
 
 function record(id, name, displayOrder) {
 	return {
@@ -61,4 +62,78 @@ test('catalog identity stays authoritative while normalized telemetry is retaine
 	assert.equal(merged.display_order, 3);
 	assert.equal(merged.status, 'online');
 	assert.equal(merged.gpus[0].users[0], 'alice');
+});
+
+test('normalizeServerState preserves PSI telemetry fields on system snapshots', () => {
+	const normalized = normalizeServerState({
+		server_id: 11,
+		server_name: 'Atlas',
+		host: 'atlas.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 41,
+			ram_used: 64000,
+			ram_total: 128000,
+			io_pressure_some: 0.27,
+			io_pressure_full: 0.04,
+			io_blocked_tasks: 3,
+			io_pressure_supported: true
+		},
+		storage: null
+	});
+
+	assert.equal(normalized?.system?.io_pressure_some, 0.27);
+	assert.equal(normalized?.system?.io_pressure_full, 0.04);
+	assert.equal(normalized?.system?.io_blocked_tasks, 3);
+	assert.equal(normalized?.system?.io_pressure_supported, true);
+});
+
+test('isServerStateEqual treats PSI changes as meaningful telemetry updates', () => {
+	const baseline = normalizeServerState({
+		server_id: 11,
+		server_name: 'Atlas',
+		host: 'atlas.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 41,
+			ram_used: 64000,
+			ram_total: 128000,
+			io_pressure_some: 0.27,
+			io_pressure_full: 0.04,
+			io_blocked_tasks: 3,
+			io_pressure_supported: true
+		},
+		storage: null
+	});
+
+	const changedPsi = normalizeServerState({
+		server_id: 11,
+		server_name: 'Atlas',
+		host: 'atlas.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 41,
+			ram_used: 64000,
+			ram_total: 128000,
+			io_pressure_some: 0.51,
+			io_pressure_full: 0.04,
+			io_blocked_tasks: 3,
+			io_pressure_supported: true
+		},
+		storage: null
+	});
+
+	assert.equal(isServerStateEqual(baseline, changedPsi), false);
 });
