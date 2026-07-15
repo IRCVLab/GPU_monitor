@@ -12,13 +12,10 @@
 					try { return decodeURIComponent(match[1]).toLowerCase(); } catch { return ''; }
 				};
 				const materialValues = ['liquid', 'claude', 'astro'];
-				const oldMaterialValues = ['blue', 'violet', 'emerald', 'rose', 'pink'];
 				const legacy = read('theme');
 				const mode = read('themeMode') || (legacy === 'light' || legacy === 'rose' || legacy === 'pink' ? 'light' : 'dark');
 				const requestedMaterial = read('materialTheme') || read('colorTheme') || legacy;
-				const material = materialValues.includes(requestedMaterial)
-					? requestedMaterial
-					: oldMaterialValues.includes(requestedMaterial) ? 'liquid' : 'liquid';
+				const material = materialValues.includes(requestedMaterial) ? requestedMaterial : 'liquid';
 				document.documentElement.classList.remove('dark', 'light', 'rose');
 				document.documentElement.classList.add(mode === 'light' ? 'light' : 'dark');
 				document.documentElement.dataset.material = material;

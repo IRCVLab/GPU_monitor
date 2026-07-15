@@ -17,7 +17,6 @@ const MODE_COOKIE = 'themeMode';
 const MATERIAL_COOKIE = 'materialTheme';
 const LEGACY_COLOR_COOKIE = 'colorTheme';
 const LEGACY_THEME_COOKIE = 'theme';
-const oldMaterialValues = ['blue', 'violet', 'emerald', 'rose', 'pink'] as const;
 
 function normalizeMode(value: string): ThemeMode | null {
 	return value === 'light' || value === 'dark' ? value : null;
@@ -35,15 +34,13 @@ function readMode(): ThemeMode {
 }
 
 function readMaterial(): MaterialTheme {
-	const direct = (readCookie(MATERIAL_COOKIE) ?? '').toLowerCase();
-	const normalized = normalizeMaterial(direct);
-	if (normalized) return normalized;
-
-	const legacyColor = (readCookie(LEGACY_COLOR_COOKIE) ?? '').toLowerCase();
-	if (oldMaterialValues.includes(legacyColor as (typeof oldMaterialValues)[number])) return 'liquid';
-
-	const legacyTheme = (readCookie(LEGACY_THEME_COOKIE) ?? '').toLowerCase();
-	return oldMaterialValues.includes(legacyTheme as (typeof oldMaterialValues)[number]) ? 'liquid' : 'liquid';
+	const requestedMaterial = (
+		readCookie(MATERIAL_COOKIE) ??
+		readCookie(LEGACY_COLOR_COOKIE) ??
+		readCookie(LEGACY_THEME_COOKIE) ??
+		''
+	).toLowerCase();
+	return normalizeMaterial(requestedMaterial) ?? 'liquid';
 }
 
 function applyTheme(mode: ThemeMode, material: MaterialTheme): void {
