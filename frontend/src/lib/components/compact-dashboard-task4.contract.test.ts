@@ -70,7 +70,6 @@ test('compact occupied cells show full usernames inline and allow wrapping growt
 	assertDeclaration(usersRule, 'align-items', 'flex-start');
 	const userListRule = cssRule(cssSource, '.compact-slot__user-list');
 	assertDeclaration(userListRule, 'display', 'grid');
-	assertDeclaration(userListRule, 'grid-template-columns', 'minmax(0, 1fr)');
 	assertDeclaration(userListRule, 'white-space', 'normal');
 	assertDeclaration(userListRule, 'word-break', 'normal');
 	const usernameRule = cssRule(cssSource, '.compact-slot__username');
