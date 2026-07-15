@@ -617,6 +617,7 @@
                   gpus={server.gpus}
                   serverStatus={server.status}
                   lastSeen={server.last_seen}
+                  active={notesExpanded}
                   onCreated={onNoteCreated}
                 />
               </div>

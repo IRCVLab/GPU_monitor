@@ -5,8 +5,16 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./NoteForm.svelte', import.meta.url), 'utf8');
 
+test('NoteForm pauses its one-second ticker when inactive and preserves active behavior', () => {
+	assert.match(source, /active\??:\s*boolean/, 'NoteForm should accept an active boolean prop');
+	assert.match(source, /active\s*=\s*true/, 'NoteForm should default active to true for existing callers');
+	const effect = source.match(/\$effect\(\(\) => \{[\s\S]*?return \(\) => clearInterval\(timer\);[\s\S]*?\}\);/)?.[0] ?? '';
+	assert.match(effect, /if \(!active\) return;/, 'inactive mounted forms must not start a ticker');
+	assert.match(effect, /setInterval\(\(\) => \{[\s\S]*nowMs\s*=\s*Date\.now\(\)/, 'active forms should keep the existing one-second nowMs ticker');
+	assert.match(effect, /clearInterval\(timer\)/, 'active ticker should still clean up');
+});
 test('NoteForm keeps server props, stale helper, payload validation, and Korean advisory copy', () => {
-	assert.match(source, /let \{\s*serverId,\s*gpus,\s*serverStatus,\s*lastSeen,\s*onCreated\s*\}(?::\s*NoteFormProps)?\s*=\s*\$props\(\);/s);
+	assert.match(source, /let \{\s*serverId,\s*gpus,\s*serverStatus,\s*lastSeen,\s*active\s*=\s*true,\s*onCreated\s*\}(?::\s*NoteFormProps)?\s*=\s*\$props\(\);/s);
 	assert.match(source, /isTelemetryStale\(lastSeen, nowMs, \d+\)/);
 	assert.match(source, /toggleGpu/);
 	assert.match(source, /buildNotePayload\(/);
