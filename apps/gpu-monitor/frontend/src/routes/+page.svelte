@@ -53,37 +53,38 @@
 			frame = requestAnimationFrame(layout);
 		}
 
-		function rowSize(): number {
-			const value = Number.parseFloat(
-				getComputedStyle(node).getPropertyValue('--monitor-dashboard-masonry-row')
-			);
+		function rowSize(styles: CSSStyleDeclaration): number {
+			const value = Number.parseFloat(styles.getPropertyValue('--monitor-dashboard-masonry-row'));
 			return Number.isFinite(value) && value > 0 ? value : 8;
 		}
 
-		function rowGap(): number {
-			const value = Number.parseFloat(getComputedStyle(node).rowGap);
+		function rowGap(styles: CSSStyleDeclaration): number {
+			const value = Number.parseFloat(styles.rowGap);
 			return Number.isFinite(value) && value >= 0 ? value : 16;
-		}
-
-		function columnCount(): number {
-			const template = getComputedStyle(node).gridTemplateColumns.trim();
-			if (template === '' || template === 'none') return 1;
-			return template.split(/\s+/).length;
 		}
 
 		function layout(): void {
 			frame = 0;
-			const currentRowSize = rowSize();
-			const currentGap = rowGap();
 			const items = Array.from(node.children).filter(
 				(child): child is HTMLElement => child instanceof HTMLElement
 			);
-			const spans = items.map((child) => {
+
+			for (const child of items) {
+				child.style.removeProperty('grid-column-start');
+				child.style.removeProperty('grid-row-start');
 				child.style.gridRowEnd = 'span 1';
+			}
+
+			const styles = getComputedStyle(node);
+			const template = styles.gridTemplateColumns.trim();
+			const currentColumnCount = template === '' || template === 'none' ? 1 : template.split(/\s+/).length;
+			const currentRowSize = rowSize(styles);
+			const currentGap = rowGap(styles);
+			const spans = items.map((child) => {
 				const height = child.getBoundingClientRect().height;
 				return Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
 			});
-			const placements = placeOrderedMasonryItems({ columnCount: columnCount(), spans });
+			const placements = placeOrderedMasonryItems({ columnCount: currentColumnCount, spans });
 
 			items.forEach((child, index) => {
 				const placement = placements[index];

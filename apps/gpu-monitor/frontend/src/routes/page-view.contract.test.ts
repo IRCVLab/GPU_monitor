@@ -27,6 +27,19 @@ function assertDeclaration(rule, property, value) {
 	assert.match(rule, new RegExp(`${escapedProperty}\\s*:\\s*${escapedValue}\\s*;`));
 }
 
+function functionBody(source, name, fromIndex = 0) {
+	const start = source.indexOf(`function ${name}`, fromIndex);
+	assert.notEqual(start, -1, `Missing function ${name}`);
+	const open = source.indexOf('{', start);
+	let depth = 0;
+	for (let index = open; index < source.length; index += 1) {
+		if (source[index] === '{') depth += 1;
+		if (source[index] === '}') depth -= 1;
+		if (depth === 0) return source.slice(open + 1, index);
+	}
+	throw new Error(`Could not parse function ${name}`);
+}
+
 test('task 2 full cards use 22rem density on the page shell and grid', () => {
 	assert.match(pageSource, /const serverGridStyle = '--monitor-dashboard-card-min: 22rem;';/);
 
@@ -121,4 +134,24 @@ test('task 2 does not change system meter fill semantics to exact chart tokens',
 	const systemMemoryRule = cssRuleBody(cardCss, '.monitor-meter__fill--memory');
 	assert.match(systemMemoryRule, /background:\s*color-mix\(in srgb, var\(--ops-primary\) 46%, transparent\);/);
 	assert.doesNotMatch(systemMemoryRule, /var\(--chart-1\)/);
+});
+
+test('task 1 masonry layout clears stale placement before resize column detection and measurement', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const layoutBody = functionBody(pageSource, 'layout', masonryStart);
+	const resetColumn = layoutBody.indexOf("style.removeProperty('grid-column-start')");
+	const resetRowStart = layoutBody.indexOf("style.removeProperty('grid-row-start')");
+	const resetRowEnd = layoutBody.indexOf("style.gridRowEnd = 'span 1'");
+	const columnRead = layoutBody.indexOf('gridTemplateColumns');
+	const heightRead = layoutBody.indexOf('getBoundingClientRect().height');
+
+	assert.ok(resetColumn !== -1, 'layout must clear stale grid-column-start');
+	assert.ok(resetRowStart !== -1, 'layout must clear stale grid-row-start');
+	assert.ok(resetRowEnd !== -1, 'layout must reset grid-row-end before measuring');
+	assert.ok(columnRead !== -1, 'layout must read actual gridTemplateColumns');
+	assert.ok(heightRead !== -1, 'layout must measure item height');
+	assert.ok(resetColumn < columnRead, 'grid-column-start must be cleared before column detection');
+	assert.ok(resetRowStart < columnRead, 'grid-row-start must be cleared before column detection');
+	assert.ok(resetRowEnd < heightRead, 'grid-row-end must be reset before measuring height');
 });
