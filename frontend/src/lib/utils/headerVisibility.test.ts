@@ -395,3 +395,17 @@ test('desktop indicator is shrink-wrapped with a zero-translate gutter anchor', 
 	assert.doesNotMatch(indicatorRule, /translateX\(/);
 	assert.doesNotMatch(dashboardCss, /@media\s*\(min-width:\s*1200px\)[\s\S]*\.ops-indicator\s*\{[\s\S]*transform\s*:/);
 });
+
+
+test("scroll frames do not run viewport alignment or schedule unchanged indicator lane state", () => {
+	assert.match(pageSource, /import\s*\{[^}]*shouldSyncIndicatorLane[^}]*\}\s*from\s*'\$lib\/utils\/headerIndicatorLane';/);
+	assert.doesNotMatch(pageSource, /function\s+alignDashboardContentBelowIndicatorLane\s*\(/);
+
+	const syncBody = functionBody(pageSource, "syncIndicatorLaneAfterDom");
+	assert.doesNotMatch(syncBody, /window\.scrollTo/);
+	assert.doesNotMatch(syncBody, /alignDashboardContentBelowIndicatorLane/);
+
+	const scrollBody = functionBody(pageSource, "updateHeaderFromScroll");
+	assert.match(scrollBody, /shouldSyncIndicatorLane/);
+	assert.match(scrollBody, /if\s*\([^)]*shouldSyncIndicatorLane[\s\S]*scheduleIndicatorLaneSync\(\)/);
+});

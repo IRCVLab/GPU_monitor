@@ -22,3 +22,16 @@ export function resolveIndicatorLaneHeight(input: IndicatorLaneHeightInput): num
 		Math.ceil(input.panelBottom + INDICATOR_PANEL_CLEARANCE_PX)
 	);
 }
+
+
+export function shouldSyncIndicatorLane(
+	previousCompact: boolean,
+	previousIndicatorVisible: boolean,
+	nextCompact: boolean,
+	nextIndicatorVisible: boolean
+): boolean {
+	return (
+		previousCompact !== nextCompact ||
+		previousIndicatorVisible !== nextIndicatorVisible
+	);
+}
