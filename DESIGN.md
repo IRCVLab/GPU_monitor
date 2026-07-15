@@ -366,7 +366,7 @@ letter-spacing 0em
 
 ## Open questions
 
-- [x] Active contracts resolved: only root `DESIGN.md` and `docs/superpowers/specs/2026-07-15-quiet-rack-gpu-monitor-design.md` are active; prior specs/plans are historical where conflicting.
+- [x] Active contracts resolved: root `DESIGN.md`, Quiet Rack, and the semantic-density/material-theme spec are active; the newest semantic contract wins where conflicting.
 - [x] User-facing naming resolved: `Full`, not `Default`.
 - [x] Compact detail resolved: bounded micro-popover only; no inspector, side rail, bottom sheet, reserved column, or large overlay.
 - [x] Soft-hold scope resolved: backward-compatible advisory Note extension only, no scheduler/status/cancelled_at/hard lock.
