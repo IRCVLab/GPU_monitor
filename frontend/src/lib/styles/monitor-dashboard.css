@@ -91,14 +91,35 @@
 }
 
 .ops-refresh-cadence__fill {
+	width: 42%;
 	height: 100%;
 	border-radius: inherit;
-	background: color-mix(in srgb, #2fb36f 78%, var(--ops-fg));
-	transition: width 320ms linear, background-color 180ms ease;
+	background: linear-gradient(
+		90deg,
+		color-mix(in srgb, #2fb36f 12%, transparent),
+		color-mix(in srgb, #2fb36f 88%, var(--ops-fg)),
+		color-mix(in srgb, #2fb36f 12%, transparent)
+	);
+	animation: ops-refresh-cadence-flow 2.4s linear infinite;
+	will-change: transform;
 }
 
 .ops-refresh-cadence__fill.attention {
-	background: #f2ae43;
+	background: linear-gradient(
+		90deg,
+		color-mix(in srgb, #f2ae43 12%, transparent),
+		#f2ae43,
+		color-mix(in srgb, #f2ae43 12%, transparent)
+	);
+}
+
+@keyframes ops-refresh-cadence-flow {
+	from {
+		transform: translate3d(-120%, 0, 0);
+	}
+	to {
+		transform: translate3d(340%, 0, 0);
+	}
 }
 
 .ops-status-dot,
@@ -406,9 +427,13 @@
 	--monitor-dashboard-masonry-row: 8px;
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--monitor-dashboard-card-min)), 1fr));
-	grid-auto-rows: var(--monitor-dashboard-masonry-row);
+	grid-auto-rows: auto;
 	gap: 0.9rem;
 	align-items: start;
+}
+
+.monitor-dashboard-grid--masonry {
+	grid-auto-rows: var(--monitor-dashboard-masonry-row);
 }
 
 .monitor-dashboard-card-item {
@@ -560,9 +585,14 @@
 	.ops-mode-action,
 	.monitor-dashboard-button,
 	.monitor-dashboard-spinner,
-	.ops-indicator-dot {
+	.ops-indicator-dot,
+	.ops-refresh-cadence__fill {
 		transition: none;
 		animation: none;
+	}
+
+	.ops-refresh-cadence__fill {
+		transform: translate3d(70%, 0, 0);
 	}
 
 	.monitor-dashboard-spinner {

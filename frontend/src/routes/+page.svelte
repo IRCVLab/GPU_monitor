@@ -16,7 +16,13 @@
 		setThemeMode,
 		themeMode
 	} from '$lib/stores/theme';
-	import { dashboardView, setDashboardView } from '$lib/stores/dashboardPrefs';
+	import { serverOrder, saveOrder } from '$lib/stores/order';
+	import {
+		dashboardLayout,
+		dashboardView,
+		setDashboardLayout,
+		setDashboardView
+	} from '$lib/stores/dashboardPrefs';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
 	import { placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
 	import {
@@ -40,8 +46,9 @@
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
 
-	function masonry(node: HTMLDivElement) {
+	function masonry(node: HTMLDivElement, initialEnabled: boolean) {
 		let frame = 0;
+		let enabled = initialEnabled;
 		let itemObserver: ResizeObserver | null = null;
 		const containerObserver = new ResizeObserver(() => schedule());
 		const mutationObserver = new MutationObserver(() => observeItems());
@@ -70,8 +77,10 @@
 			for (const child of items) {
 				child.style.removeProperty('grid-column-start');
 				child.style.removeProperty('grid-row-start');
-				child.style.gridRowEnd = 'span 1';
+				child.style.removeProperty('grid-row-end');
 			}
+			if (!enabled) return;
+			for (const child of items) child.style.gridRowEnd = 'span 1';
 
 			const styles = getComputedStyle(node);
 			const template = styles.gridTemplateColumns.trim();
@@ -107,6 +116,10 @@
 		observeItems();
 
 		return {
+			update(nextEnabled: boolean) {
+				enabled = nextEnabled;
+				schedule();
+			},
 			destroy() {
 				if (frame !== 0) cancelAnimationFrame(frame);
 				itemObserver?.disconnect();
@@ -557,12 +570,32 @@
 		return '정상';
 	}
 
-	const refreshCadencePct = $derived.by(() => {
-		if (refreshInFlight) return 100;
-		if (lastRefreshAtMs === 0 || nextRefreshAtMs === null) return 0;
-		const cadenceWindowMs = Math.max(1, nextRefreshAtMs - lastRefreshAtMs);
-		return Math.min(100, Math.max(0, ((nowMs - lastRefreshAtMs) / cadenceWindowMs) * 100));
-	});
+	function orderServers(servers: ServerState[], order: number[]): ServerState[] {
+		return [...servers].sort((a, b) => {
+			const ai = order.indexOf(a.server_id);
+			const bi = order.indexOf(b.server_id);
+			if (ai === -1 && bi === -1) {
+				return (a.display_order ?? a.server_id) - (b.display_order ?? b.server_id);
+			}
+			if (ai === -1) return 1;
+			if (bi === -1) return -1;
+			return ai - bi;
+		});
+	}
+
+	function mergeVisibleOrder(globalIds: number[], visibleIds: number[]): number[] {
+		const visibleSet = new Set(visibleIds);
+		const merged = [...globalIds];
+		let nextVisibleIndex = 0;
+
+		for (let index = 0; index < merged.length; index += 1) {
+			if (!visibleSet.has(merged[index])) continue;
+			merged[index] = visibleIds[nextVisibleIndex] ?? merged[index];
+			nextVisibleIndex += 1;
+		}
+
+		return merged;
+	}
 
 	const allServers = derived(serverStates, ($map) =>
 		[...$map.values()].sort(
@@ -577,11 +610,51 @@
 	]);
 
 	const currentServers = derived(
-		[activeTab, allServers, internalServers, externalServers],
-		([$tab, $all, $int, $ext]) => {
-			return $tab === 'all' ? $all : $tab === 'external' ? $ext : $int;
+		[activeTab, allServers, internalServers, externalServers, serverOrder],
+		([$tab, $all, $int, $ext, $order]) => {
+			const selected = $tab === 'all' ? $all : $tab === 'external' ? $ext : $int;
+			return orderServers(selected, $order);
 		}
 	);
+
+	const globalOrderedIds = derived([allServers, serverOrder], ([$servers, $order]) =>
+		orderServers($servers, $order).map((server) => server.server_id)
+	);
+
+	let dragging = $state<number | null>(null);
+	let dragTarget = $state<number | null>(null);
+
+	function dragStart(id: number) {
+		dragging = id;
+	}
+
+	function handleDragOver(event: DragEvent, id: number) {
+		event.preventDefault();
+		dragTarget = id;
+	}
+
+	function drop() {
+		if (dragging === null || dragTarget === null || dragging === dragTarget) return;
+		const list = [...get(currentServers)];
+		const fromIndex = list.findIndex((server) => server.server_id === dragging);
+		const toIndex = list.findIndex((server) => server.server_id === dragTarget);
+		if (fromIndex === -1 || toIndex === -1) return;
+		const [moved] = list.splice(fromIndex, 1);
+		list.splice(toIndex, 0, moved);
+		void saveOrder(
+			mergeVisibleOrder(
+				get(globalOrderedIds),
+				list.map((server) => server.server_id)
+			)
+		);
+		dragging = null;
+		dragTarget = null;
+	}
+
+	function dragEnd() {
+		dragging = null;
+		dragTarget = null;
+	}
 
 	let adminOpen = $state(false);
 	let deleteOpen = $state(false);
@@ -717,7 +790,6 @@
 							<span
 								class="ops-refresh-cadence__fill"
 								class:attention={!$wsConnected || refreshFailed}
-								style={`width: ${refreshCadencePct}%`}
 							></span>
 						</span>
 					</p>
@@ -740,6 +812,12 @@
 									<span>보기</span>
 									<button class:active={$dashboardView === 'default'} onclick={() => { setDashboardView('default'); viewMenuOpen = false; }}>{dashboardViewLabel('default')}</button>
 									<button class:active={$dashboardView === 'compact'} onclick={() => { setDashboardView('compact'); viewMenuOpen = false; }}>{dashboardViewLabel('compact')}</button>
+								</div>
+								<div class="ops-view-divider"></div>
+								<div class="ops-menu-row" role="group" aria-label="카드 배치">
+									<span>배치</span>
+									<button class:active={$dashboardLayout === 'grid'} aria-pressed={$dashboardLayout === 'grid'} onclick={() => { setDashboardLayout('grid'); viewMenuOpen = false; }}>그리드</button>
+									<button class:active={$dashboardLayout === 'masonry'} aria-pressed={$dashboardLayout === 'masonry'} onclick={() => { setDashboardLayout('masonry'); viewMenuOpen = false; }}>빈틈 없이</button>
 								</div>
 								<div class="ops-view-divider"></div>
 								<span class="ops-menu-label">색상 테마</span>
@@ -813,9 +891,26 @@
 		{:else if $dashboardView === 'compact'}
 			<CompactDashboard servers={$currentServers} />
 		{:else}
-			<div class="monitor-dashboard-grid" style={serverGridStyle} use:masonry role="list">
+			<div
+				class="monitor-dashboard-grid"
+				class:monitor-dashboard-grid--masonry={$dashboardLayout === 'masonry'}
+				style={serverGridStyle}
+				use:masonry={$dashboardLayout === 'masonry'}
+				role="list"
+			>
 				{#each $currentServers as server (server.server_id)}
-					<div role="listitem" class="monitor-dashboard-card-item">
+					<div
+						role="listitem"
+						draggable="true"
+						ondragstart={() => dragStart(server.server_id)}
+						ondragover={(event) => handleDragOver(event, server.server_id)}
+						ondrop={drop}
+						ondragend={dragEnd}
+						class="monitor-dashboard-card-item cursor-grab active:cursor-grabbing"
+						class:opacity-40={dragging === server.server_id}
+						class:ring-1={dragTarget === server.server_id && dragTarget !== dragging}
+						class:ring-blue-500={dragTarget === server.server_id && dragTarget !== dragging}
+					>
 						<ServerCard {server} onEdit={handleEditServer} showNetwork={$activeTab === 'all'} />
 					</div>
 				{/each}
