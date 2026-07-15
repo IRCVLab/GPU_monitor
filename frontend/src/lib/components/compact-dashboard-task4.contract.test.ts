@@ -70,6 +70,11 @@ test('task 4 compact list is availability-only and does not expose network, ip, 
 	assert.doesNotMatch(pageSource, /<CompactDashboard[^>]*showNetwork=/);
 });
 
+test('compact detail uses the Korean availability vocabulary consistently', () => {
+	assert.match(detailSource, /if \(state === 'available'\) return '사용 가능';/);
+	assert.doesNotMatch(detailSource, /return 'Available';/);
+});
+
 test('task 3 compact rows stay one-line through tablet widths and stack only on mobile', () => {
 	const dashboardRule = cssRule(cssSource, '.compact-dashboard');
 	assertDeclaration(dashboardRule, 'min-width', '0');

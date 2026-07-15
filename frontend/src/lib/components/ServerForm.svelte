@@ -164,7 +164,7 @@
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onClose();
+		if (open && e.key === 'Escape') onClose();
 	}
 
 	const externalFirewallIps = [
@@ -248,6 +248,7 @@
 <aside
 	class="fixed top-0 right-0 z-50 h-full w-full max-w-[480px] bg-surface border-l border-surface-border flex flex-col
 		transition-transform duration-150 {open ? 'translate-x-0' : 'translate-x-full'}"
+	inert={!open}
 	aria-hidden={!open}
 >
 	<!-- Header -->

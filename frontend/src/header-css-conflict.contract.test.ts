@@ -115,6 +115,29 @@ test('monitor-dashboard.css keeps the one-row desktop header inside a 56px borde
 	assert.match(compactShell, /grid-template-rows\s*:\s*0fr(?:;|\s)/, 'compact shell still reserves zero row height');
 });
 
+test('tablet and mobile header keeps controls to two rows until the narrow fallback', () => {
+	const tablet = mediaBlock(dashboardCss, '(max-width: 920px)');
+	const headerInner = declarationBlock(tablet, '.ops-header-inner', 'grid-template-columns');
+	assert.match(
+		headerInner,
+		/grid-template-columns\s*:\s*minmax\(0,\s*1fr\)\s+auto(?:;|\s)/,
+		'tablet header keeps identity and actions on the first row'
+	);
+
+	const actions = declarationBlock(tablet, '.ops-actions', 'justify-content');
+	assert.match(actions, /justify-content\s*:\s*flex-end(?:;|\s)/, 'actions stay aligned to the right');
+	assert.match(actions, /flex-wrap\s*:\s*nowrap(?:;|\s)/, 'actions do not create a third row');
+
+	const mobileNetwork = declarationBlock(tablet, '.ops-network-mobile', 'grid-column');
+	assert.match(mobileNetwork, /grid-column\s*:\s*1\s*\/\s*-1(?:;|\s)/, 'network filter owns the second row');
+
+	const narrow = mediaBlock(dashboardCss, '(max-width: 340px)');
+	const narrowHeader = declarationBlock(narrow, '.ops-header-inner', 'grid-template-columns');
+	assert.match(narrowHeader, /grid-template-columns\s*:\s*1fr(?:;|\s)/, 'very narrow screens may fall back to one column');
+	const narrowNetwork = declarationBlock(narrow, '.ops-network-mobile', 'grid-column');
+	assert.match(narrowNetwork, /grid-column\s*:\s*auto(?:;|\s)/, 'narrow fallback releases the spanning network row');
+});
+
 test('monitor-dashboard.css owns compact header rhythm and fixed left indicator placement', () => {
 	const headerInner = declarationBlock(dashboardCss, '.ops-header-inner', 'min-height');
 	assert.match(headerInner, /min-height\s*:\s*3\.5rem\b/, 'expanded header rhythm stays in the 56px class');
@@ -171,7 +194,7 @@ test('narrow indicator stays in the outer gutter while its panel stays on screen
 	const mobileIndicator = declarationBlock(mobile, '.ops-indicator', 'transform');
 	const mobilePanel = declarationBlock(mobile, '.ops-indicator-panel', 'left');
 	const mobileRing = declarationBlock(mobile, ".ops-refresh-ring[data-variant='floating']", 'width');
-	assert.match(mobileIndicator, /transform\s*:\s*translateX\(-2px\)/, 'mobile ring stays inside the 16px content gutter');
+	assert.match(mobileIndicator, /transform\s*:\s*translateX\(0\)/, 'mobile ring keeps a visible inset from the viewport edge');
 	assert.match(mobilePanel, /left\s*:\s*2px\b/, 'mobile panel begins at the viewport edge');
 	assert.match(mobileRing, /width\s*:\s*0\.75rem\b/, 'mobile painted ring fits wholly inside the 16px page gutter');
 	assert.match(mobileRing, /height\s*:\s*0\.75rem\b/, 'mobile ring remains circular');

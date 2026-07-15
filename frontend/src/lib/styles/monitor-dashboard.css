@@ -509,8 +509,10 @@
 }
 @media (max-width: 920px) {
 	.ops-header-inner {
-		grid-template-columns: 1fr;
-		align-items: stretch;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
+		column-gap: 0.75rem;
+		row-gap: 0.55rem;
 	}
 
 	.ops-network-desktop {
@@ -519,6 +521,7 @@
 
 	.ops-network-mobile {
 		display: flex;
+		grid-column: 1 / -1;
 		overflow-x: auto;
 		padding-bottom: 0.2rem;
 		scrollbar-width: none;
@@ -529,9 +532,25 @@
 	}
 
 	.ops-actions {
+		justify-content: flex-end;
+		flex-wrap: nowrap;
+	}
+
+}
+
+@media (max-width: 340px) {
+	.ops-header-inner {
+		grid-template-columns: 1fr;
+		align-items: stretch;
+	}
+
+	.ops-actions {
 		justify-content: flex-start;
 	}
 
+	.ops-network-mobile {
+		grid-column: auto;
+	}
 }
 
 @media (max-width: 1199px) {
@@ -574,7 +593,7 @@
 	}
 
 	.ops-indicator {
-		transform: translateX(-2px);
+		transform: translateX(0);
 	}
 
 	.ops-indicator-panel {

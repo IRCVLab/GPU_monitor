@@ -40,7 +40,7 @@ function functionBody(source, name, fromIndex = 0) {
 	throw new Error(`Could not parse function ${name}`);
 }
 
-test('task 2 full cards use 22rem density on the page shell and grid', () => {
+test('task 2 grid owns 22rem density while cards can shrink inside narrow viewports', () => {
 	assert.match(pageSource, /const serverGridStyle = '--monitor-dashboard-card-min: 22rem;';/);
 
 	const gridRule = cssRule(dashboardCss, '.monitor-dashboard-grid');
@@ -48,7 +48,7 @@ test('task 2 full cards use 22rem density on the page shell and grid', () => {
 	assertDeclaration(gridRule, 'gap', '0.9rem');
 
 	const cardRule = cssRule(cardCss, '.monitor-card');
-	assertDeclaration(cardRule, 'min-width', '22rem');
+	assertDeclaration(cardRule, 'min-width', '0');
 });
 
 test('full gpu state cues use one accent with inverse available and occupied treatments', () => {
