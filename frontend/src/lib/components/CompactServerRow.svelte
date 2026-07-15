@@ -21,11 +21,13 @@
 		server,
 		bankIndex,
 		heldGpuIndices = undefined,
+		onOpenFull = () => {},
 		onTooltipChange = () => {}
 	}: {
 		server: ServerState;
 		bankIndex: number;
 		heldGpuIndices?: ReadonlySet<number>;
+		onOpenFull?: (serverId: number) => void;
 		onTooltipChange?: (tooltip: CompactTooltip | null) => void;
 	} = $props();
 
@@ -76,8 +78,9 @@
 		onTooltipChange(null);
 	}
 
-	function activateRow(event: MouseEvent): void {
-		openTooltip(event.currentTarget, popoverItems(occupiedSlots));
+	function openFull(): void {
+		hideTooltip();
+		onOpenFull(server.server_id);
 	}
 
 	function handleSlotClick(event: MouseEvent, gpu: GpuInfo): void {
@@ -112,7 +115,7 @@
 		class="compact-row__select"
 		aria-label={rowAriaLabel()}
 		data-compact-trigger="true"
-		onclick={activateRow}
+		onclick={openFull}
 	></button>
 
 	<div class="compact-row__identity">

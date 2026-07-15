@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
+	import { tick } from 'svelte';
 	import { writable, derived, get } from 'svelte/store';
 	import '$lib/styles/monitor-dashboard.css';
 	import {
@@ -561,6 +562,7 @@
 				cancelAnimationFrame(headerScrollFrame);
 				headerScrollFrame = null;
 			}
+			clearContinuityFocus();
 			cleanupPageRuntime();
 			if (runtime.__monitoringV2PageCleanup === cleanup) {
 				delete runtime.__monitoringV2PageCleanup;
@@ -696,6 +698,11 @@
 	let viewMenuEl = $state<HTMLDivElement | null>(null);
 	let actionsMenuOpen = $state(false);
 	let actionsMenuEl = $state<HTMLDivElement | null>(null);
+	let focusedServerId = $state<number | null>(null);
+	let continuityFocusServerId = $state<number | null>(null);
+
+	const serverCardElements = new Map<number, HTMLDivElement>();
+	let continuityFocusTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async function handleSaved() {
 		await reloadDashboard(true);
@@ -729,6 +736,66 @@
 	function toggleActionsMenu() {
 		actionsMenuOpen = !actionsMenuOpen;
 		if (actionsMenuOpen) revealHeader();
+	}
+
+	function trackServerCard(node: HTMLDivElement, serverId: number) {
+		serverCardElements.set(serverId, node);
+		return {
+			update(nextServerId: number) {
+				if (nextServerId === serverId) return;
+				serverCardElements.delete(serverId);
+				serverId = nextServerId;
+				serverCardElements.set(serverId, node);
+			},
+			destroy() {
+				serverCardElements.delete(serverId);
+			}
+		};
+	}
+
+	function clearContinuityFocus(): void {
+		if (continuityFocusTimer !== null) {
+			clearTimeout(continuityFocusTimer);
+			continuityFocusTimer = null;
+		}
+		continuityFocusServerId = null;
+	}
+
+	function nextFrame(): Promise<void> {
+		return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+	}
+
+	async function focusServerCard(serverId: number): Promise<void> {
+		if (!browser) return;
+		await tick();
+		await nextFrame();
+
+		const card = serverCardElements.get(serverId);
+		if (!card) return;
+
+		card.scrollIntoView({
+			block: 'nearest',
+			inline: 'nearest',
+			behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+		});
+		card.focus({ preventScroll: true });
+
+		continuityFocusServerId = serverId;
+		if (continuityFocusTimer !== null) clearTimeout(continuityFocusTimer);
+		continuityFocusTimer = window.setTimeout(() => {
+			continuityFocusTimer = null;
+			if (continuityFocusServerId === serverId) continuityFocusServerId = null;
+			if (focusedServerId === serverId) focusedServerId = null;
+		}, 1400);
+	}
+
+	async function handleOpenFull(serverId: number): Promise<void> {
+		revealHeader();
+		viewMenuOpen = false;
+		actionsMenuOpen = false;
+		focusedServerId = serverId;
+		setDashboardView('default');
+		await focusServerCard(serverId);
 	}
 
 	function openIndicatorPanel() {
@@ -842,13 +909,15 @@
 									<button class:active={$dashboardView === 'default'} onclick={() => { setDashboardView('default'); viewMenuOpen = false; }}>{dashboardViewLabel('default')}</button>
 									<button class:active={$dashboardView === 'compact'} onclick={() => { setDashboardView('compact'); viewMenuOpen = false; }}>{dashboardViewLabel('compact')}</button>
 								</div>
-								<div class="ops-view-divider"></div>
-								<div class="ops-menu-row" role="group" aria-label="카드 배치">
-									<span>배치</span>
-									<button class:active={$dashboardLayout === 'grid'} aria-pressed={$dashboardLayout === 'grid'} onclick={() => { setDashboardLayout('grid'); viewMenuOpen = false; }}>그리드</button>
-									<button class:active={$dashboardLayout === 'masonry'} aria-pressed={$dashboardLayout === 'masonry'} onclick={() => { setDashboardLayout('masonry'); viewMenuOpen = false; }}>빈틈 없이</button>
-								</div>
-								<div class="ops-view-divider"></div>
+								{#if $dashboardView === 'default'}
+									<div class="ops-view-divider"></div>
+									<div class="ops-menu-row" role="group" aria-label="카드 배치">
+										<span>배치</span>
+										<button class:active={$dashboardLayout === 'grid'} aria-pressed={$dashboardLayout === 'grid'} onclick={() => { setDashboardLayout('grid'); viewMenuOpen = false; }}>그리드</button>
+										<button class:active={$dashboardLayout === 'masonry'} aria-pressed={$dashboardLayout === 'masonry'} onclick={() => { setDashboardLayout('masonry'); viewMenuOpen = false; }}>빈틈 없이</button>
+									</div>
+									<div class="ops-view-divider"></div>
+								{/if}
 								<span class="ops-menu-label">색상 테마</span>
 								<div class="ops-color-options" role="group" aria-label="색상 테마">
 									{#each colorThemeOptions as option}
@@ -918,7 +987,7 @@
 				<p>{$activeTab === 'all' ? '표시할 서버가 없습니다' : '이 네트워크에 서버 없음'}</p>
 			</section>
 		{:else if $dashboardView === 'compact'}
-			<CompactDashboard servers={$currentServers} />
+			<CompactDashboard servers={$currentServers} onOpenFull={handleOpenFull} />
 		{:else}
 			<div
 				class="monitor-dashboard-grid"
@@ -930,12 +999,15 @@
 				{#each $currentServers as server (server.server_id)}
 					<div
 						role="listitem"
+						tabindex="-1"
 						draggable="true"
 						ondragstart={() => dragStart(server.server_id)}
 						ondragover={(event) => handleDragOver(event, server.server_id)}
 						ondrop={drop}
 						ondragend={dragEnd}
+						use:trackServerCard={server.server_id}
 						class="monitor-dashboard-card-item cursor-grab active:cursor-grabbing"
+						class:monitor-dashboard-card-item--continuity-focus={continuityFocusServerId === server.server_id}
 						class:opacity-40={dragging === server.server_id}
 						class:ring-1={dragTarget === server.server_id && dragTarget !== dragging}
 						class:ring-blue-500={dragTarget === server.server_id && dragTarget !== dragging}
@@ -963,3 +1035,19 @@
 	onClose={() => (deleteOpen = false)}
 	onDeleted={handleSaved}
 />
+
+<style>
+	.monitor-dashboard-card-item--continuity-focus {
+		border-radius: 1.25rem;
+		box-shadow:
+			0 0 0 2px color-mix(in srgb, var(--ops-primary) 44%, transparent),
+			0 0 0 8px color-mix(in srgb, var(--ops-primary) 10%, transparent);
+		transition: box-shadow 220ms ease;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.monitor-dashboard-card-item--continuity-focus {
+			transition: none;
+		}
+	}
+</style>

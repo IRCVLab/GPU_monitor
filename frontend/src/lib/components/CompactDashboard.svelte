@@ -24,10 +24,12 @@
 
 	let {
 		servers,
-		heldGpuIndicesByServer = undefined
+		heldGpuIndicesByServer = undefined,
+		onOpenFull = () => {}
 	}: {
 		servers: ServerState[];
 		heldGpuIndicesByServer?: ReadonlyMap<number, ReadonlySet<number>>;
+		onOpenFull?: (serverId: number) => void;
 	} = $props();
 
 	const TOOLTIP_WIDTH_ESTIMATE = 220;
@@ -66,6 +68,11 @@
 
 	function closeTooltip(): void {
 		activeTooltip = null;
+	}
+
+	function openFull(serverId: number): void {
+		closeTooltip();
+		onOpenFull(serverId);
 	}
 
 	function selectBank(index: number): void {
@@ -143,6 +150,7 @@
 				{server}
 				bankIndex={activeBankIndex}
 				heldGpuIndices={heldGpuIndicesByServer?.get(server.server_id)}
+				onOpenFull={openFull}
 				onTooltipChange={updateTooltip}
 			/>
 		{/each}
