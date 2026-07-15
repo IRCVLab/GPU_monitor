@@ -540,6 +540,20 @@ test('Task 6 C shortcut uses exact visible button center and cached measured cen
 	assert.match(pageSource, /function fallbackThemeRevealCenter[\s\S]*lastThemeModeButtonCenter/);
 });
 
+
+test('Task 6 hidden compact header mode control is not a visible reveal source or proxy source', () => {
+	assert.match(pageSource, /function isVisibleThemeRevealSource/);
+	const visibilityBody = functionBody(pageSource, 'isVisibleThemeRevealSource');
+	assert.match(visibilityBody, /originElement\.closest\('\.ops-header-compact'\)/);
+	assert.match(visibilityBody, /return false/);
+	const visibleCenterBody = functionBody(pageSource, 'readVisibleThemeButtonCenter');
+	assert.match(visibleCenterBody, /isVisibleThemeRevealSource\(originElement\)/);
+	assert.match(visibleCenterBody, /return null/);
+	const proxyBody = functionBody(pageSource, 'createThemeToggleProxy');
+	assert.match(proxyBody, /isVisibleThemeRevealSource\(originElement\)/);
+	assert.match(pageSource, /const visibleOrigin = readVisibleThemeButtonCenter\(originElement\);\s*const origin = originOverride \?\? visibleOrigin \?\? fallbackThemeRevealCenter\(\)/);
+});
+
 test('Task 6 FLIP handoff suppresses live source and target ring visuals until cleanup', () => {
 	assert.match(pageSource, /let headerIndicatorHandoffActive = \$state\(false\)/);
 	assert.match(pageSource, /headerIndicatorHandoffActive = true/);
