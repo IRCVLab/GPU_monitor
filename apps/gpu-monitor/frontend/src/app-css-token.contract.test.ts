@@ -209,6 +209,22 @@ test('Task 5 active controls use the contrast-safe foreground across every mater
 	}
 });
 
+test('Task 5 active network counts override the muted descendant color through the cascade', () => {
+	const mutedSelector = '.ops-network button span:last-child,';
+	const activeSelector = '.ops-network button.active span:last-child,';
+	const mutedRule = ruleBody(dashboardCss, mutedSelector);
+	const activeRule = ruleBody(dashboardCss, activeSelector);
+	const activeStart = dashboardCss.indexOf(activeSelector);
+	const activeOpen = dashboardCss.indexOf('{', activeStart);
+	const activeSelectors = dashboardCss.slice(activeStart, activeOpen);
+
+	assert.match(mutedRule, /color:\s*color-mix\(/);
+	assert.ok(activeStart > dashboardCss.indexOf(mutedSelector), 'active descendant override must follow the muted count rule');
+	assert.match(activeSelectors, /\.ops-indicator-network button\.active span:last-child/);
+	assert.match(activeRule, /color:\s*inherit/);
+	assert.match(ruleBody(dashboardCss, '.ops-network button.active,'), /color:\s*var\(--ops-on-primary\)/);
+});
+
 const claudeLightTokens = {
 	'--background': '#faf9f5',
 	'--foreground': '#3d3929',
