@@ -554,6 +554,16 @@ test('Task 6 hidden compact header mode control is not a visible reveal source o
 	assert.match(pageSource, /const visibleOrigin = readVisibleThemeButtonCenter\(originElement\);\s*const origin = originOverride \?\? visibleOrigin \?\? fallbackThemeRevealCenter\(\)/);
 });
 
+
+test('Task 6 stacking keeps refresh handoff below theme reveal while toggle proxy stays above', () => {
+	const handoffRule = cssRule(dashboardCss, '.ops-refresh-handoff');
+	const revealRule = cssRule(appCss, '.theme-mode-reveal');
+	const proxyRule = cssRule(appCss, 'body > .theme-mode-toggle-proxy.ops-mode-action');
+	assert.match(handoffRule, /z-index:\s*83\s*;/);
+	assert.match(revealRule, /z-index:\s*84\s*;/);
+	assert.match(proxyRule, /z-index:\s*94\s*;/);
+});
+
 test('Task 6 FLIP handoff suppresses live source and target ring visuals until cleanup', () => {
 	assert.match(pageSource, /let headerIndicatorHandoffActive = \$state\(false\)/);
 	assert.match(pageSource, /headerIndicatorHandoffActive = true/);
