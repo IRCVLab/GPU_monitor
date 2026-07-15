@@ -388,3 +388,28 @@ test('note composer uses three dense rows with shared-surface note history styli
 	const listRule = cssRule('.monitor-note-item + .monitor-note-item');
 	assert.match(listRule, /border-top\s*:/);
 });
+
+
+test('Full cards nudge availability with one restrained accent rail', () => {
+	const railRule = cssRule('.monitor-card::before');
+	assertDeclaration(railRule, 'position', 'absolute');
+	assertDeclaration(railRule, 'background', 'var(--ops-primary)');
+	assertDeclaration(railRule, 'opacity', '0');
+	assert.ok(remValues(declarationValue(railRule, 'width'))[0] <= 0.2);
+
+	const activeRule = cssRule(".monitor-card[data-has-available='true']::before");
+	const activeOpacity = Number(declarationValue(activeRule, 'opacity'));
+	assert.ok(activeOpacity >= 0.7 && activeOpacity <= 0.9);
+	assertDeclaration(activeRule, 'transform', 'scaleY(1)');
+});
+
+test('available GPU zero telemetry recedes behind the outlined GPU identity cue', () => {
+	const trackRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-metric__track");
+	assert.ok(trackRule.includes('background: color-mix(in srgb, var(--ops-fg) 6%, transparent)'));
+
+	const labelRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-metric__label");
+	assert.ok(labelRule.includes('color: color-mix(in srgb, var(--ops-fg) 28%, transparent)'));
+
+	const valueRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-metric__value");
+	assert.ok(valueRule.includes('color: color-mix(in srgb, var(--ops-fg) 44%, transparent)'));
+});

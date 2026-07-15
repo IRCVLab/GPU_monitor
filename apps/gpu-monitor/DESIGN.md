@@ -361,6 +361,31 @@ letter-spacing 0em
 - [x] Token export resolved: no standalone surface-opacity or gradient-stop tokens; frost is component treatment only.
 - [x] Self-review resolved: no placeholder markers or unresolved ambiguity remain in the active design contract.
 
+## Deep refinement decisions — 2026-07-15
+
+These decisions turn the Apple/Ive/nudge direction into concrete hierarchy rules rather than extra decoration.
+
+- Availability nudge:
+  - Full cards with at least one truly available GPU receive one narrow selected-accent rail at the title edge.
+  - The rail is supplemental, carries no free-count copy, never changes manual server order, and never replaces exact outlined G# states.
+  - Compact keeps the same rail grammar, so availability can be recognized before reading cell details.
+- GPU row hierarchy:
+  - G# state geometry and username remain primary.
+  - Available zero-telemetry tracks, labels, and values recede; occupied usernames and real telemetry retain contrast.
+  - Util and Mem keep one hue, with Mem receiving more width and a quieter fill.
+- Compact disclosure:
+  - The board remains one row per server with eight fixed columns and no inspector.
+  - The micro-popover uses G# and full username as its first readable unit; generic 사용 중 copy is removed.
+  - Deep detail remains an explicit Full에서 보기 action.
+- Header precision:
+  - The mode trigger always says Full or Compact; users do not open a menu to discover current state.
+  - Header controls and card edges share one framed content gutter at desktop widths.
+  - After collapse, a measured 36px status lane masks passing card content with a restrained semantic surface; it does not restore the full header or run scroll-position correction.
+  - Repeated wheel, touch, and direct scrolling must continue naturally while compact.
+- System, memo, and hold:
+  - Current dense collapsed rows and compact expanded matrices are the ceiling for density; do not add nested cards or larger typography.
+  - Hold scope precedes owner and content where hold data exists, and telemetry occupancy remains visually distinct from advisory hold.
+
 ## Historical docs
 
 - Historical where conflicting:

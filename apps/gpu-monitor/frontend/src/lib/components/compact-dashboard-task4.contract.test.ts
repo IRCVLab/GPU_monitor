@@ -77,7 +77,23 @@ test('compact row primary activation preserves disclosure for occupied rows and 
 	assert.match(rowSource, /openTooltip\(event\.currentTarget, popoverItems\(occupiedSlots\)\)/);
 	assert.doesNotMatch(rowSource, /class="compact-row__select"[\s\S]*onclick=\{openFull\}/);
 	assert.match(dashboardSource, />Full에서 보기</);
+	assert.match(dashboardSource, /onmousedown=\{\(event\) => event\.preventDefault\(\)\}/);
 	assert.match(dashboardSource, /onclick=\{\(\) => openFull\((activeTooltip\.serverId|tooltipServerId)\)\}/);
 	assert.match(dashboardSource, /closeTooltip\(\);\s*onOpenFull\(serverId\);/);
 });
 
+
+
+test('compact occupied popover prioritizes GPU identity and full usernames', () => {
+	assert.ok(!dashboardSource.includes('compact-dashboard__tooltip-state">사용 중'));
+	const entryStart = dashboardSource.indexOf('class="compact-dashboard__tooltip-entry"');
+	assert.notEqual(entryStart, -1);
+	const entryMarkup = dashboardSource.slice(entryStart, dashboardSource.indexOf('</li>', entryStart));
+	assert.doesNotMatch(entryMarkup, /aria-label=.*사용 중/);
+	assert.ok(entryMarkup.indexOf('compact-dashboard__tooltip-gpu') < entryMarkup.indexOf('compact-dashboard__tooltip-users'));
+	const entryRule = cssRule(cssSource, '.compact-dashboard__tooltip-entry');
+	assert.ok(entryRule.includes('grid-template-columns: auto minmax(0, 1fr)'));
+	assertDeclaration(entryRule, 'align-items', 'baseline');
+	const usersRule = cssRule(cssSource, '.compact-dashboard__tooltip-users');
+	assertDeclaration(usersRule, 'font-weight', '650');
+});

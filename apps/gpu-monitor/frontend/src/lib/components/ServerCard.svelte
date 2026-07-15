@@ -167,6 +167,12 @@
   const hostText = $derived(server.port ? `${server.host}:${server.port}` : server.host);
   const statusReasonText = $derived(server.status_reason?.message ?? '');
   const statusTooltip = $derived(statusReasonText ? `${statusMeta.label} · ${statusReasonText}` : statusMeta.label);
+  const availableGpuCount = $derived.by(() =>
+    server.gpus.filter(
+      (gpu) => getCompactGpuState(server.status, server.last_seen, gpu) === 'available'
+    ).length
+  );
+  const hasAvailableGpu = $derived(availableGpuCount > 0);
 
   const cpuPct = $derived(server.system?.cpu_percent ?? 0);
   const ramUsed = $derived(server.system ? (server.system.ram_used / 1024).toFixed(1) : '–');
@@ -304,7 +310,7 @@
   });
 </script>
 
-<article class="monitor-card bg-surface-card border border-surface-border" data-status={server.status}>
+<article class="monitor-card bg-surface-card border border-surface-border" data-status={server.status} data-has-available={hasAvailableGpu ? 'true' : 'false'}>
   <header class="monitor-card__header">
     <div class="monitor-card__title-row">
       <div class="monitor-card__title-stack">

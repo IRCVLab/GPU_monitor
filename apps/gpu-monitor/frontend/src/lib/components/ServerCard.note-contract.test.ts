@@ -72,3 +72,11 @@ test('ServerCard collapsed hold preview leads with GPU scope and keeps expiry ou
 	assert.match(preview, /monitor-card__note-preview-scope[\s\S]*monitor-card__note-preview-user[\s\S]*monitor-card__note-preview-content/);
 	assert.match(preview, /monitor-card__note-preview-expiry/);
 });
+
+
+test('ServerCard exposes a non-text availability nudge without reordering cards', () => {
+	assert.ok(source.includes('const availableGpuCount = $derived.by'));
+	assert.ok(source.includes("getCompactGpuState(server.status, server.last_seen, gpu) === 'available'"));
+	assert.ok(source.includes('const hasAvailableGpu = $derived(availableGpuCount > 0)'));
+	assert.ok(source.includes("data-has-available={hasAvailableGpu ? 'true' : 'false'}"));
+});

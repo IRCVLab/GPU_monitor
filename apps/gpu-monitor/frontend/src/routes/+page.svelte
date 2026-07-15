@@ -956,8 +956,8 @@
 				</div>
 			</div>
 		</div>
-		<header bind:this={headerSurfaceElement} class="ops-header border-b border-surface-border px-4 sm:px-6" inert={headerCompact} aria-hidden={headerCompact}>
-			<div class={`ops-header-inner ${pageShellClass}`}>
+		<header bind:this={headerSurfaceElement} class="ops-header border-b border-surface-border" inert={headerCompact} aria-hidden={headerCompact}>
+			<div class={`ops-header-inner ${pageShellClass} px-4 sm:px-6`}>
 				<div class="ops-identity">
 					<h1>GPU Monitor</h1>
 					<p
@@ -983,11 +983,11 @@
 
 				<div class="ops-actions">
 					<div class="relative ops-direct-control" bind:this={viewMenuEl}>
-						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen}>보기 <span aria-hidden="true">⌄</span></button>
+						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen}>{dashboardViewLabel($dashboardView)} <span aria-hidden="true">⌄</span></button>
 						{#if viewMenuOpen}
 							<div class="ops-popover ops-view-menu">
 								<div class="ops-menu-row" role="group" aria-label="대시보드 보기">
-									<span>보기</span>
+									<span>모드</span>
 									<button class:active={$dashboardView === 'default'} onclick={() => { setDashboardView('default'); viewMenuOpen = false; }}>{dashboardViewLabel('default')}</button>
 									<button class:active={$dashboardView === 'compact'} onclick={() => { setDashboardView('compact'); viewMenuOpen = false; }}>{dashboardViewLabel('compact')}</button>
 								</div>
