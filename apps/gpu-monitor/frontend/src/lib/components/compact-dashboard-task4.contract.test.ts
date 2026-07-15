@@ -70,11 +70,15 @@ test('compact occupied cells show full usernames inline and allow wrapping growt
 	assertDeclaration(usersRule, 'align-items', 'flex-start');
 	const userListRule = cssRule(cssSource, '.compact-slot__user-list');
 	assertDeclaration(userListRule, 'display', 'grid');
+	assertDeclaration(userListRule, 'grid-template-columns', 'minmax(0, 1fr)');
 	assertDeclaration(userListRule, 'white-space', 'normal');
-	assertDeclaration(userListRule, 'word-break', 'break-word');
+	assertDeclaration(userListRule, 'word-break', 'normal');
 	const usernameRule = cssRule(cssSource, '.compact-slot__username');
 	assertDeclaration(usernameRule, 'font-size', '0\.58rem');
 	assertDeclaration(usernameRule, 'line-height', '1\.1');
+	assertDeclaration(usernameRule, 'white-space', 'nowrap');
+	assertDeclaration(usernameRule, 'overflow', 'hidden');
+	assertDeclaration(usernameRule, 'text-overflow', 'ellipsis');
 });
 
 test('compact rack css keeps eight fixed gpu columns and passive absent slots', () => {

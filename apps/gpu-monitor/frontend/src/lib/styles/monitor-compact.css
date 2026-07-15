@@ -285,10 +285,12 @@
 
 .compact-slot__user-list {
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	gap: 0.08rem;
 	width: 100%;
+	min-width: 0;
 	white-space: normal;
-	word-break: break-word;
+	word-break: normal;
 	line-height: 1.1;
 }
 
@@ -298,6 +300,9 @@
 	line-height: 1.1;
 	font-weight: 700;
 	color: inherit;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .compact-dashboard__tooltip {
