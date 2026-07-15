@@ -252,12 +252,37 @@
 }
 
 .ops-mode-action {
+	position: relative;
+	z-index: 90;
 	min-width: 2.85rem;
 	justify-content: center;
 	border-radius: var(--material-control-radius);
 	background: color-mix(in srgb, var(--ops-popover) var(--material-surface-mix), transparent);
 	box-shadow: var(--material-shadow);
 	backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation));
+}
+
+.ops-mode-icon {
+	display: block;
+	width: 1rem;
+	height: 1rem;
+}
+
+.ops-refresh-ring-wrap {
+	display: inline-grid;
+	place-items: center;
+	width: max-content;
+	height: max-content;
+}
+
+.ops-refresh-handoff {
+	position: fixed;
+	z-index: 85;
+	display: inline-grid;
+	place-items: center;
+	pointer-events: none;
+	transform-origin: top left;
+	will-change: transform, opacity;
 }
 
 .ops-view-menu,
@@ -332,17 +357,25 @@
 	left: calc(100% + 0.5rem);
 	right: auto;
 	top: 0;
-	transform: none;
-	pointer-events: auto;
-	display: none;
+	transform: translate3d(-0.25rem, -0.08rem, 0) scale(0.96);
+	transform-origin: left top;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	display: flex;
 	align-items: center;
 	gap: 0.75rem;
 	width: max-content;
 	max-width: calc(100vw - 1.5rem);
+	transition: opacity 200ms ease, transform 200ms ease, visibility 0s linear 200ms;
 }
 
 .ops-indicator-panel.ops-indicator-panel-open {
-	display: flex;
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+	transform: translate3d(0, 0, 0) scale(1);
+	transition-delay: 0s;
 }
 
 .ops-indicator-status {
@@ -635,7 +668,7 @@
 		left: 0;
 		right: auto;
 		top: calc(100% + 0.5rem);
-		transform: none;
+		transform: translate3d(0, -0.2rem, 0) scale(0.97);
 		max-width: calc(100vw - 1.5rem);
 	}
 
@@ -673,7 +706,8 @@
 		.monitor-dashboard-button,
 		.monitor-dashboard-spinner,
 		.ops-refresh-ring__dot,
-		.ops-refresh-ring__satellite {
+		.ops-refresh-ring__satellite,
+		.ops-indicator-panel {
 		transition: none;
 		animation: none;
 	}

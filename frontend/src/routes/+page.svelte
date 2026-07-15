@@ -16,8 +16,9 @@
 		materialTheme,
 		materialThemeOptions,
 		setMaterialTheme,
+		setThemeMode,
 		themeMode,
-		toggleThemeMode
+		type ThemeMode
 	} from '$lib/stores/theme';
 	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import {
@@ -232,6 +233,18 @@
 	let headerIndicatorVisible = $state(false);
 	let indicatorPanelOpen = $state(false);
 	let indicatorElement = $state<HTMLDivElement | null>(null);
+	let fixedRefreshRingElement = $state<HTMLSpanElement | null>(null);
+	let headerRefreshRingElement = $state<HTMLSpanElement | null>(null);
+	let headerIndicatorHandoffAnimation = $state<Animation | null>(null);
+	let headerIndicatorHandoffFrame: number | null = null;
+	let headerIndicatorHandoffOverlay: HTMLElement | null = null;
+	let headerIndicatorHandoffSourceRect: DOMRect | null = null;
+	let themeModeButtonElement = $state<HTMLButtonElement | null>(null);
+	let themeRevealLocked = $state(false);
+	let themeRevealOverlay: HTMLDivElement | null = null;
+	let themeRevealAnimation: Animation | null = null;
+	let themeRevealEdgeAnimation: Animation | null = null;
+	let lastThemeModeButtonCenter = $state<ThemeRevealOrigin | null>(null);
 	let headerShellElement = $state<HTMLDivElement | null>(null);
 	let headerSurfaceElement = $state<HTMLElement | null>(null);
 	let headerScrollFrame: number | null = null;
@@ -477,7 +490,77 @@
 		headerScrollDistance = 0;
 	}
 
+	type HeaderIndicatorHandoffDirection = 'collapse' | 'reveal';
+	type ThemeRevealOrigin = { x: number; y: number };
+
+	function cleanupHeaderIndicatorHandoff(): void {
+		if (headerIndicatorHandoffFrame !== null) {
+			cancelAnimationFrame(headerIndicatorHandoffFrame);
+			headerIndicatorHandoffFrame = null;
+		}
+		headerIndicatorHandoffAnimation?.cancel();
+		headerIndicatorHandoffAnimation = null;
+		headerIndicatorHandoffOverlay?.remove();
+		headerIndicatorHandoffOverlay = null;
+		headerIndicatorHandoffSourceRect = null;
+	}
+
+	function scheduleHeaderIndicatorHandoff(direction: HeaderIndicatorHandoffDirection): void {
+		if (!browser) return;
+		const sourceElement = direction === 'collapse' ? headerRefreshRingElement : fixedRefreshRingElement;
+		const targetElement = direction === 'collapse' ? fixedRefreshRingElement : headerRefreshRingElement;
+		if (!sourceElement || !targetElement) return;
+		cleanupHeaderIndicatorHandoff();
+		headerIndicatorHandoffSourceRect = sourceElement.getBoundingClientRect();
+		headerIndicatorHandoffFrame = requestAnimationFrame(() => {
+			headerIndicatorHandoffFrame = null;
+			void runHeaderIndicatorHandoff(direction);
+		});
+	}
+
+	async function runHeaderIndicatorHandoff(direction: HeaderIndicatorHandoffDirection): Promise<void> {
+		const sourceRect = headerIndicatorHandoffSourceRect;
+		const targetElement = direction === 'collapse' ? fixedRefreshRingElement : headerRefreshRingElement;
+		if (!browser || !sourceRect || !targetElement) return;
+		await tick();
+		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+			cleanupHeaderIndicatorHandoff();
+			return;
+		}
+		const targetRect = targetElement.getBoundingClientRect();
+		if (sourceRect.width <= 0 || sourceRect.height <= 0 || targetRect.width <= 0 || targetRect.height <= 0) {
+			cleanupHeaderIndicatorHandoff();
+			return;
+		}
+		const overlay = (direction === 'collapse' ? headerRefreshRingElement : fixedRefreshRingElement)?.cloneNode(true) as HTMLElement | null;
+		if (!overlay) return;
+		overlay.classList.add('ops-refresh-handoff');
+		overlay.setAttribute('aria-hidden', 'true');
+		overlay.style.left = `${sourceRect.left}px`;
+		overlay.style.top = `${sourceRect.top}px`;
+		overlay.style.width = `${sourceRect.width}px`;
+		overlay.style.height = `${sourceRect.height}px`;
+		document.body.appendChild(overlay);
+		headerIndicatorHandoffOverlay = overlay;
+
+		const deltaX = targetRect.left - sourceRect.left;
+		const deltaY = targetRect.top - sourceRect.top;
+		const scaleX = targetRect.width / sourceRect.width;
+		const scaleY = targetRect.height / sourceRect.height;
+		headerIndicatorHandoffAnimation = overlay.animate([
+			{ opacity: 0.96, transform: 'translate3d(0, 0, 0) scale(1, 1)' },
+			{ opacity: 0.98, offset: 0.78, transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(${scaleX}, ${scaleY})` },
+			{ opacity: 0, transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(${scaleX}, ${scaleY})` }
+		], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+		headerIndicatorHandoffAnimation.addEventListener('finish', cleanupHeaderIndicatorHandoff, { once: true });
+		headerIndicatorHandoffAnimation.addEventListener('cancel', () => {
+			headerIndicatorHandoffOverlay?.remove();
+			headerIndicatorHandoffOverlay = null;
+		}, { once: true });
+	}
+
 	function revealHeader(): void {
+		if (headerCompact || headerIndicatorVisible) scheduleHeaderIndicatorHandoff('reveal');
 		headerCompact = false;
 		headerIndicatorVisible = false;
 		indicatorPanelOpen = false;
@@ -501,6 +584,8 @@
 			viewportWidth: window.innerWidth
 		});
 
+		if (!headerCompact && result.compact && result.indicatorVisible) scheduleHeaderIndicatorHandoff('collapse');
+		if (headerCompact && !result.compact) scheduleHeaderIndicatorHandoff('reveal');
 		headerCompact = result.compact;
 		headerIndicatorVisible = result.indicatorVisible;
 		if (!result.indicatorVisible) indicatorPanelOpen = false;
@@ -583,6 +668,8 @@
 				headerScrollFrame = null;
 			}
 			clearContinuityFocus();
+			cleanupHeaderIndicatorHandoff();
+			cleanupThemeReveal();
 			cleanupPageRuntime();
 			if (runtime.__monitoringV2PageCleanup === cleanup) {
 				delete runtime.__monitoringV2PageCleanup;
@@ -843,6 +930,112 @@
 	}
 
 
+	function farthestCornerRadius(originX: number, originY: number): number {
+		return Math.max(
+			Math.hypot(originX, originY),
+			Math.hypot(window.innerWidth - originX, originY),
+			Math.hypot(originX, window.innerHeight - originY),
+			Math.hypot(window.innerWidth - originX, window.innerHeight - originY)
+		);
+	}
+
+	function cleanupThemeReveal(): void {
+		themeRevealAnimation?.cancel();
+		themeRevealAnimation = null;
+		themeRevealEdgeAnimation?.cancel();
+		themeRevealEdgeAnimation = null;
+		themeRevealOverlay?.remove();
+		themeRevealOverlay = null;
+		themeRevealLocked = false;
+	}
+
+	function fallbackThemeRevealCenter(): ThemeRevealOrigin {
+		return lastThemeModeButtonCenter ?? {
+			x: Math.max(24, window.innerWidth - 32),
+			y: Math.max(24, HEADER_INDICATOR_TOP_MAX_PX + 16)
+		};
+	}
+
+	function readVisibleThemeButtonCenter(originElement: HTMLElement | null): ThemeRevealOrigin | null {
+		if (!originElement) return null;
+		const rect = originElement.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.left >= window.innerWidth || rect.top >= window.innerHeight) return null;
+		const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+		lastThemeModeButtonCenter = center;
+		return center;
+	}
+
+	async function runThemeModeReveal(
+		originElement: HTMLElement | null = themeModeButtonElement,
+		originOverride: ThemeRevealOrigin | null = null,
+		shouldRestoreFocus = true
+	): Promise<void> {
+		if (!browser || themeRevealLocked) return;
+		const nextMode: ThemeMode = $themeMode === 'dark' ? 'light' : 'dark';
+		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		const visibleOrigin = readVisibleThemeButtonCenter(originElement);
+		const origin = originOverride ?? visibleOrigin ?? fallbackThemeRevealCenter();
+		themeRevealLocked = true;
+		if (reducedMotion) {
+			setThemeMode(nextMode);
+			if (shouldRestoreFocus && visibleOrigin && originElement) originElement.focus({ preventScroll: true });
+			themeRevealLocked = false;
+			return;
+		}
+
+		cleanupThemeReveal();
+		themeRevealLocked = true;
+		let covered = false;
+		const originX = origin.x;
+		const originY = origin.y;
+		const radius = farthestCornerRadius(originX, originY);
+		const overlay = document.createElement('div');
+		const edge = document.createElement('div');
+		overlay.className = 'theme-mode-reveal';
+		edge.className = 'theme-mode-reveal__edge';
+		overlay.setAttribute('data-theme-mode', nextMode);
+		overlay.setAttribute('data-material', $materialTheme);
+		overlay.style.clipPath = `circle(0px at ${originX}px ${originY}px)`;
+		overlay.style.setProperty('--theme-reveal-origin-x', `${originX}px`);
+		overlay.style.setProperty('--theme-reveal-origin-y', `${originY}px`);
+		edge.style.left = `${originX}px`;
+		edge.style.top = `${originY}px`;
+		overlay.appendChild(edge);
+		document.body.appendChild(overlay);
+		themeRevealOverlay = overlay;
+
+		const animation = overlay.animate([
+			{ clipPath: `circle(0px at ${originX}px ${originY}px)`, opacity: 1 },
+			{ clipPath: `circle(${radius}px at ${originX}px ${originY}px)`, opacity: 1 }
+		], { duration: 480, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+		themeRevealAnimation = animation;
+		themeRevealEdgeAnimation = edge.animate([
+			{ opacity: 0.48, transform: 'translate(-50%, -50%) scale(0)' },
+			{ opacity: 0.22, offset: 0.82, transform: `translate(-50%, -50%) scale(${radius / 36})` },
+			{ opacity: 0, transform: `translate(-50%, -50%) scale(${radius / 36})` }
+		], { duration: 520, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
+		try {
+			await animation.finished;
+			covered = true;
+		} catch {
+			cleanupThemeReveal();
+			return;
+		}
+		if (!covered) {
+			cleanupThemeReveal();
+			return;
+		}
+		setThemeMode(nextMode);
+		if (shouldRestoreFocus && visibleOrigin && originElement) originElement.focus({ preventScroll: true });
+		const fade = overlay.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: 'ease-out', fill: 'forwards' });
+		themeRevealAnimation = fade;
+		try {
+			await fade.finished;
+		} finally {
+			cleanupThemeReveal();
+		}
+	}
+
 	function handleWindowClick(event: MouseEvent) {
 		const target = event.target;
 		if (!(target instanceof Node)) return;
@@ -880,9 +1073,11 @@
 			case 'select-network':
 				selectNetwork(shortcut.tab);
 				break;
-			case 'toggle-theme':
-				toggleThemeMode();
+			case 'toggle-theme': {
+				const shortcutOrigin = fallbackThemeRevealCenter();
+				void runThemeModeReveal(themeModeButtonElement, shortcutOrigin, false);
 				break;
+			}
 		}
 	}
 
@@ -907,9 +1102,9 @@
 					aria-controls={indicatorPanelId}
 					onclick={openIndicatorPanel}
 				>
-					<RefreshRing attention={Boolean(refreshWarningText())} variant="floating" />
+					<span bind:this={fixedRefreshRingElement} class="ops-refresh-ring-wrap"><RefreshRing attention={Boolean(refreshWarningText())} variant="floating" /></span>
 				</button>
-				<div id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen}>
+				<div id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen} aria-hidden={!indicatorPanelOpen} inert={!indicatorPanelOpen}>
 					{#if refreshWarningText()}
 						<span class="ops-indicator-status">{refreshIssueText()}</span>
 						<span class="ops-indicator-divider" aria-hidden="true"></span>
@@ -932,7 +1127,7 @@
 						aria-label={refreshIssueText() || '정상'}
 						title={refreshIssueText() || undefined}
 					>
-						<RefreshRing attention={Boolean(refreshWarningText())} variant="header" />
+						<span bind:this={headerRefreshRingElement} class="ops-refresh-ring-wrap"><RefreshRing attention={Boolean(refreshWarningText())} variant="header" /></span>
 						{#if refreshWarningText()}
 							<span class="ops-status-label">{refreshWarningText()}</span>
 						{/if}
@@ -991,8 +1186,12 @@
 						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
 						{#if actionsMenuOpen}<div class="ops-overflow-menu"><button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button><a class="ops-menu-link" href="/logs">이벤트 로그</a><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
 					</div>
-					<button class="ops-mode-action" onclick={toggleThemeMode} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}>
-						{#if $themeMode === 'dark'}<span aria-hidden="true">☀</span>{:else}<span aria-hidden="true">☾</span>{/if}
+					<button bind:this={themeModeButtonElement} class="ops-mode-action" onclick={() => void runThemeModeReveal(themeModeButtonElement)} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'} aria-busy={themeRevealLocked}>
+						{#if $themeMode === 'dark'}
+							<svg class="ops-mode-icon ops-mode-icon--sun" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
+						{:else}
+							<svg class="ops-mode-icon ops-mode-icon--moon" aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M20.2 14.3A7.9 7.9 0 0 1 9.7 3.8a.8.8 0 0 0-.8-1.1 9.6 9.6 0 1 0 12.4 12.4.8.8 0 0 0-1.1-.8Z"></path></svg>
+						{/if}
 					</button>
 				</div>
 
