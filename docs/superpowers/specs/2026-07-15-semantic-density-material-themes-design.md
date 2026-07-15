@@ -49,10 +49,10 @@ Elements that answer none of these questions are removed. Decorative dots, repea
 
 - System and Memo expansion/collapse must be visually symmetric.
 - The current conditional unmount creates a smooth-enough open but an abrupt close; replace it with a mounted disclosure panel.
-- Animate an intrinsic-height wrapper, for example `grid-template-rows`, together with opacity and a slight `translateY`.
+- Animate a mounted grid-track disclosure wrapper, for example `grid-template-rows: 0fr -> 1fr`, together with opacity and a slight `translateY`. This is the narrow approved exception to the generic no-layout-animation rule because it is intrinsic-height disclosure motion, scoped to System and Memo panels.
 - Closing must retain the panel content until the transition ends, then only disable interaction/visibility as needed.
 - Reduced motion should make the state change immediate.
-- Do not animate `top` or hard-coded `max-height`; those approaches either move unrelated layout or fail with variable memo/system content.
+- Do not animate `top`, arbitrary height, or hard-coded `max-height`; those approaches either move unrelated layout or fail with variable memo/system content.
 
 ### Hold visual meaning
 
@@ -123,7 +123,7 @@ Dark: background `#1a1a1a`, foreground `#e5e5e5`, card `#202020`, card foregroun
 - All controls retain visible focus.
 - Hover hints have focus equivalents.
 - Respect `prefers-reduced-motion`.
-- Animate transform, opacity, clip-path, and CSS variables; avoid layout-triggering height/top animation.
+- Animate transform, opacity, clip-path, and CSS variables; avoid layout-triggering height/top animation except the explicitly scoped mounted grid-track disclosure for System and Memo panels.
 - No animation may make update timing appear more precise than the telemetry actually is.
 
 ## Acceptance criteria
@@ -131,7 +131,7 @@ Dark: background `#1a1a1a`, foreground `#e5e5e5`, card `#202020`, card foregroun
 - No decorative marker circle appears before collapsed System or Memo.
 - Healthy System preview is one row and includes I/O pressure when supported.
 - Memo/hold owner, content, GPUs, and expiry are distinguishable without opening.
-- System and Memo panels open and close with the same mounted-content transition; closing is not an abrupt unmount, and reduced motion is immediate.
+- System and Memo disclosure controls own `aria-expanded` and `aria-controls`; their panels remain mounted and open/close with the same mounted-content grid-track transition. Closing is not an abrupt unmount, and reduced motion is immediate.
 - Exact held GPUs are visible in both Full and Compact.
 - Compact hover contains no nested navigation action; row activation opens Full.
 - Header orb visibly hands off to the collapsed indicator; indicator panel animates without `display` toggling.
