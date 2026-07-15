@@ -232,6 +232,17 @@ test('persistent header shows semantic health and cadence without visible second
 	assert.doesNotMatch(pageSource, /'갱신 중'|'동기화'/, 'ordinary in-flight requests must not create visible transient status copy');
 });
 
+test('compact indicator lane is measured from live geometry instead of fixed padding constants', () => {
+	assert.match(pageSource, /import \{[\s\S]*resolveIndicatorLaneHeight[\s\S]*\} from '\$lib\/utils\/headerIndicatorLane';/);
+	assert.match(pageSource, /let indicatorLaneHeightPx = \$state\(0\);/);
+	assert.match(pageSource, /bind:this=\{indicatorTriggerElement\}/);
+	assert.match(pageSource, /bind:this=\{indicatorPanelElement\}/);
+	assert.match(pageSource, /function syncIndicatorLaneAfterDom\(/);
+	assert.match(pageSource, /window\.scrollTo\(\{\s*top:\s*scrollYBeforeSync,\s*behavior:\s*'auto'\s*\}\)/);
+	assert.match(pageSource, /class:ops-page-compact=\{headerCompact\}/);
+	assert.match(pageSource, /class:ops-page-indicator-panel-open=\{headerCompact && indicatorPanelOpen\}/);
+});
+
 test('header warning copy appears only after persistent refresh trouble', () => {
 	assert.match(pageSource, /let refreshFailureCount = \$state\(0\)/);
 	assert.match(pageSource, /const REFRESH_WARNING_FAILURE_COUNT = 2/);
@@ -291,4 +302,3 @@ test('page runtime is mounted and destroyed through the Svelte 5 effect lifecycl
 	assert.match(initBody, /return cleanup/);
 	assert.match(initBody, /if \(runtime\.__monitoringV2PageCleanup === cleanup\)/);
 });
-
