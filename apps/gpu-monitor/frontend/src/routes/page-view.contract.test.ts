@@ -4,12 +4,23 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const pageSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+const compactDashboardSource = readFileSync(new URL('../lib/components/CompactDashboard.svelte', import.meta.url), 'utf8');
+const compactServerRowSource = readFileSync(new URL('../lib/components/CompactServerRow.svelte', import.meta.url), 'utf8');
 
 test('page menu uses the helper and never renders Default', () => {
 	assert.match(pageSource, /dashboardViewLabel/);
 	assert.doesNotMatch(pageSource, /\bDefault\b/);
 });
 
+test('task 3 keeps view layout controls contextual and wires compact-to-full continuity focus', () => {
+	assert.match(pageSource, /\{#if \$dashboardView === 'default'\}[\s\S]*카드 배치/);
+	assert.match(pageSource, /<CompactDashboard[\s\S]*onOpenFull=/);
+	assert.match(pageSource, /focusedServerId/);
+	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
+	assert.match(compactDashboardSource, /<CompactServerRow[\s\S]*onOpenFull=/);
+	assert.match(compactServerRowSource, /onOpenFull\?: \(serverId: number\) => void/);
+	assert.match(compactServerRowSource, /onclick=\{openFull\}/);
+});
 
 const dashboardCss = readFileSync(new URL('../lib/styles/monitor-dashboard.css', import.meta.url), 'utf8');
 const cardCss = readFileSync(new URL('../lib/styles/monitor-cards.css', import.meta.url), 'utf8');
@@ -111,7 +122,7 @@ test('user server order remains movable and is shared by Full and Compact views'
 	assert.match(pageSource, /ondragover=/);
 	assert.match(pageSource, /ondrop=/);
 	assert.match(pageSource, /ondragend=/);
-	assert.match(pageSource, /<CompactDashboard servers=\{\$currentServers\} \/>/);
+	assert.match(pageSource, /<CompactDashboard[\s\S]*servers=\{\$currentServers\}[\s\S]*onOpenFull=/);
 	assert.match(pageSource, /\{#each \$currentServers as server \(server\.server_id\)\}/);
 });
 
@@ -275,3 +286,4 @@ test('page runtime is mounted and destroyed through the Svelte 5 effect lifecycl
 	assert.match(initBody, /return cleanup/);
 	assert.match(initBody, /if \(runtime\.__monitoringV2PageCleanup === cleanup\)/);
 });
+
