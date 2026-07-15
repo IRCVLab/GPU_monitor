@@ -31,6 +31,8 @@
   const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
   const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
+  type GpuHoldCue = { owner: string; remaining: string; memo: string };
+
   const statusConfig: Record<ServerStatus, { label: string }> = {
     online: { label: '정상' },
     offline: { label: '오프라인' },
@@ -195,6 +197,28 @@
   const hasSystemSection = $derived(Boolean(server.system || server.storage || server.gpus.length > 0));
 
   const visibleNotes = $derived.by(() => notes.filter((note) => noteVisible(note)));
+  const activeHoldNotesByGpu = $derived.by(() => {
+    const holds: Record<number, GpuHoldCue[]> = {};
+
+    for (const note of notes) {
+      if (note.kind !== 'hold' || !noteVisible(note)) continue;
+
+      const gpuIndices = holdGpuIndices(note);
+      if (gpuIndices.length === 0) continue;
+
+      const cue: GpuHoldCue = {
+        owner: note.username,
+        remaining: noteRemainingText(note),
+        memo: note.content
+      };
+
+      for (const gpuIndex of gpuIndices) {
+        holds[gpuIndex] = [...(holds[gpuIndex] ?? []), cue];
+      }
+    }
+
+    return holds;
+  });
   const previewNotes = $derived(visibleNotes.slice(0, 1));
 
   async function loadNotes(force = false) {
@@ -324,7 +348,7 @@
   {#if server.gpus.length > 0}
     <div class="monitor-card__gpu-list">
       {#each server.gpus as gpu (gpu.index)}
-        <GpuBar {gpu} />
+        <GpuBar {gpu} advisoryHolds={activeHoldNotesByGpu[gpu.index] ?? []} />
       {/each}
     </div>
   {/if}
@@ -448,7 +472,7 @@
               {/if}
               <span class="monitor-card__note-preview-user">{previewNotes[0].username}</span>
               {#if previewNotes[0].kind === 'hold'}
-                <span class="monitor-note-item__kind">advisory soft hold</span>
+                <span class="monitor-note-item__kind">HOLD</span>
                 <span class="monitor-note-item__gpu-chips" aria-label="Selected GPUs">
                   {#each holdGpuIndices(previewNotes[0]) as gpuIndex (gpuIndex)}
                     <span class="monitor-note-item__gpu-chip">G{gpuIndex}</span>
@@ -493,7 +517,7 @@
                     </div>
                     {#if note.kind === 'hold'}
                       <div class="monitor-note-item__hold">
-                        <span class="monitor-note-item__kind">advisory soft hold</span>
+                        <span class="monitor-note-item__kind">HOLD</span>
                         <span class="monitor-note-item__gpu-chips" aria-label="Selected GPUs">
                           {#each holdGpuIndices(note) as gpuIndex (gpuIndex)}
                             <span class="monitor-note-item__gpu-chip">G{gpuIndex}</span>
