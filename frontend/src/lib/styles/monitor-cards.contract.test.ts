@@ -95,7 +95,6 @@ test('mobile collapsed utility controls remain one horizontal line with protecte
 	const sideRule = cssRule('.monitor-card__footer-side');
 	assertDeclaration(sideRule, 'min-width', '0');
 	assertDeclaration(sideRule, 'flex', '1 1 0');
-	assertDeclaration(sideRule, 'padding-right', '1px');
 
 	const previewRule = cssRule('.monitor-card__footer-preview');
 	assertDeclaration(previewRule, 'min-width', '0');

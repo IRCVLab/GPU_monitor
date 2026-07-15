@@ -156,3 +156,10 @@ Note: Vite logged standard `node:async_hooks` browser-externalization notices fr
 - The collapsed system preview no longer overrides its child text with a generic `시스템 요약` label, so the button’s accessible name now naturally includes CPU/RAM/GPU/Disk values.
 - Collapsed RAM now shows percentage (`ramPct.toFixed(0)%`) while expanded system detail still keeps full used/total GB formatting.
 - The collapsed preview now uses four shrink-safe equal columns with `minmax(0, 1fr)`, `min-width: 0`, tabular numeric values, and value `title` text so mobile widths can compress without internal horizontal overflow.
+
+## Final 360px footer flex correction
+- Replaced auto-basis allocation with flex: 1 1 0 on footer side and preview.
+- Removed the system preview width: 100%; it now consumes only remaining inline space.
+- Kept four equal minmax(0, 1fr) metric columns and a fixed disclosure glyph.
+- Playwright/WebKit at 360px measured every sampled footer side with scrollWidth equal to clientWidth, no overflowing cards, and document width 360.
+- Targeted tests: 23/23 passed. Full Node tests, npm run check, and npm run build passed.
