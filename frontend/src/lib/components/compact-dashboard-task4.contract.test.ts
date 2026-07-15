@@ -50,13 +50,29 @@ function numericRemValue(rule, property) {
 	return Number(match.groups.value);
 }
 
-test('task 4 compact renders temporary detail only; no persistent rail or placeholder contracts remain', () => {
-	assert.doesNotMatch(dashboardSource, /compact-dashboard__detail-panel/);
-	assert.doesNotMatch(detailSource, /compact-detail__placeholder/);
-	assert.doesNotMatch(detailSource, /mode\??:\s*'panel'/);
+test('desktop compact detail is an in-flow inspector while mobile remains modal', () => {
+	assert.doesNotMatch(dashboardSource, /compact-detail-overlay/);
+	assert.doesNotMatch(detailSource, /mode\??:\s*'overlay'/);
+	assert.match(dashboardSource, /class:has-inspector=\{Boolean\(selectedServer\s*&&\s*isDesktop\)\}/);
 	assert.match(dashboardSource, /selectedServer\s*&&\s*isDesktop/);
-	assert.match(dashboardSource, /class="compact-detail-overlay"/);
-	assert.match(dashboardSource, /mode="overlay"/);
+	assert.match(dashboardSource, /class="compact-dashboard__inspector"/);
+	assert.match(dashboardSource, /mode="inspector"/);
+	assert.match(dashboardSource, /aria-labelledby="compact-detail-title-desktop"/);
+
+	const selectedDashboardRule = cssRule(cssSource, '.compact-dashboard.has-inspector');
+	assertDeclaration(
+		selectedDashboardRule,
+		'grid-template-columns',
+		'minmax\\(0, 1fr\\) minmax\\(16rem, 18rem\\)'
+	);
+	const inspectorRule = cssRule(cssSource, '.compact-dashboard__inspector');
+	assertDeclaration(inspectorRule, 'position', 'sticky');
+	assertDeclaration(inspectorRule, 'top', '4.25rem');
+	assertDeclaration(inspectorRule, 'max-height', 'calc\\(100vh - 5rem\\)');
+	assertDeclaration(inspectorRule, 'overflow-y', 'auto');
+	assertDeclaration(inspectorRule, 'min-width', '0');
+	assert.doesNotMatch(inspectorRule, /position:\s*fixed/);
+
 	assert.match(dashboardSource, /selectedServer\s*&&\s*!isDesktop/);
 	assert.match(dashboardSource, /class="compact-sheet"[^>]*role="dialog"[^>]*aria-modal="true"/);
 });

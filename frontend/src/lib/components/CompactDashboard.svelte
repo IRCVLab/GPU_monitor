@@ -120,7 +120,7 @@
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
-<div class="compact-dashboard">
+<div class="compact-dashboard" class:has-inspector={Boolean(selectedServer && isDesktop)}>
 	<div class="compact-dashboard__list" role="list">
 		{#each servers as server (server.server_id)}
 			<div role="listitem">
@@ -136,14 +136,14 @@
 	</div>
 
 	{#if selectedServer && isDesktop}
-		<div class="compact-detail-overlay">
+		<aside class="compact-dashboard__inspector" aria-labelledby="compact-detail-title-desktop">
 			<CompactServerDetail
 				server={selectedServer}
-				mode="overlay"
+				mode="inspector"
 				titleId="compact-detail-title-desktop"
 				onClose={closeSelection}
 			/>
-		</div>
+		</aside>
 	{/if}
 
 	{#if activeTooltip}

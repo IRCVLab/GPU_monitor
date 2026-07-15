@@ -29,19 +29,23 @@
 - [ ] Remove the column layout and make the label/side shrink behavior explicit.
 - [ ] Run the targeted contract and confirm GREEN.
 
-### Task 2: Lock non-obscuring Compact desktop detail
+### Task 2: Lock expanded Full system density and non-obscuring Compact desktop detail
 
 **Files:**
+- Modify: `frontend/src/lib/styles/monitor-cards.contract.test.ts`
+- Modify: `frontend/src/lib/styles/monitor-cards.css`
 - Modify: `frontend/src/lib/components/compact-dashboard-task4.contract.test.ts`
 - Modify: `frontend/src/lib/components/CompactDashboard.svelte`
 - Modify: `frontend/src/lib/components/CompactServerDetail.svelte`
 - Modify: `frontend/src/lib/styles/monitor-compact.css`
 
-- [ ] Replace the old overlay contract with failing assertions for an in-flow inspector, inspector mode, and desktop two-column selected state.
+- [ ] Add failing mobile contracts that reject multi-line mount rows and clipped four-column GPU hardware cells.
+- [ ] Replace the old overlay contract with failing assertions for an in-flow sticky inspector, inspector mode, desktop two-column selected state, and viewport bounds.
 - [ ] Keep assertions for the mobile modal sheet and one-row server list.
 - [ ] Run the targeted contract and confirm RED against `.compact-detail-overlay` / `mode="overlay"`.
 - [ ] Add a selected-state class to the Compact dashboard, render a labelled inspector region in flow, and rename the desktop detail mode.
-- [ ] Add desktop-only grid columns and restrained inspector entrance motion; remove fixed overlay positioning.
+- [ ] Keep mobile mount telemetry on one row and tighten hardware cell padding/type without removing data.
+- [ ] Add desktop-only grid columns, sticky viewport bounds, and restrained inspector entrance motion; remove fixed overlay positioning.
 - [ ] Run the targeted contract and confirm GREEN.
 
 ### Task 3: Browser verification and correction loop

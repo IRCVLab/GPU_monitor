@@ -393,6 +393,7 @@
 
 .monitor-card__footer-toggle {
   width: 100%;
+  min-height: 1.65rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -411,6 +412,7 @@
 
 .monitor-card__footer-toggle-main {
   min-width: 0;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 0.24rem;
@@ -655,9 +657,14 @@
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 0.28rem;
-  padding: 0.26rem 0.42rem;
+  gap: 0.18rem;
+  padding: 0.22rem 0.28rem;
   border-radius: 0.48rem;
+}
+
+.monitor-card__hardware-index,
+.monitor-card__hardware-value {
+  font-size: 0.64rem;
 }
 
 .monitor-card__hardware-index,
@@ -986,26 +993,19 @@
   }
 
   .monitor-card__footer-toggle {
-    flex-direction: column;
-    align-items: flex-start;
+    flex-direction: row;
+    align-items: center;
   }
 
   .monitor-card__footer-preview {
-    width: 100%;
-    text-align: left;
+    width: auto;
+    text-align: right;
   }
 
   .monitor-card__footer-preview--notes {
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 
-  .monitor-card__mount-item {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .monitor-card__mount-usage {
-    grid-column: 1 / -1;
-  }
 }
 
 @media (max-width: 520px) {
