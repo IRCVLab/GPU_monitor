@@ -3,15 +3,15 @@
 ## Source of truth
 
 - Status: Active.
-- Last refreshed: 2026-07-14.
+- Last refreshed: 2026-07-15.
 - Primary product surfaces: GPU monitoring dashboard `Full` card view, `Compact` availability-only view, adaptive header, server administration, notes/memos/soft holds, event logs, and diagnostics.
 - Repository/branch: `~/workspace/monitoring_v2_dev`, `feature/compact-gpu-dashboard`.
-- Active contracts: this root `DESIGN.md` and `docs/superpowers/specs/2026-07-14-dense-apple-gpu-monitor-design.md` are the only active design contracts.
-- Supersession: every earlier dashboard/header/compact spec or plan under `docs/superpowers/specs/` and `docs/superpowers/plans/` is historical where it conflicts with this document or the dense Apple GPU monitor spec. Prior terms such as `Default`, persistent right rail, scrollable GPU strip, density setting UI, density cookies, or layout-width preference are superseded. The user-facing card-dashboard name is `Full`, not `Default`.
+- Active contracts: this root `DESIGN.md` and `docs/superpowers/specs/2026-07-15-quiet-rack-gpu-monitor-design.md` are the only active design contracts.
+- Supersession: every earlier dashboard/header/compact spec or plan is historical where it conflicts with this document or the Quiet Rack spec. Prior Compact wrapping, large inspectors/sheets, visible free-count emphasis, green-free/blue-occupied colors, two-hue Util/Mem graphs, density setting UI, density cookies, or layout-width preference are superseded. The user-facing card-dashboard name is `Full`, not `Default`.
 - Product job: researchers scan independent, non-high-speed-networked GPU servers to find an empty server or exact GPU and identify who is already using occupied GPUs.
 - Evidence reviewed:
   - `DESIGN.md`
-  - `docs/superpowers/specs/2026-07-14-dense-apple-gpu-monitor-design.md`
+  - `docs/superpowers/specs/2026-07-15-quiet-rack-gpu-monitor-design.md`
   - `docs/superpowers/specs/2026-07-14-adaptive-dashboard-header-design.md`
   - `docs/superpowers/specs/2026-07-14-compact-gpu-dashboard-design.md`
   - `docs/superpowers/specs/2026-07-14-apple-dashboard-refinement-design.md`
@@ -38,6 +38,7 @@
   - `backend/note_expiry.py`
   - `backend/collectors/gpu.py`
   - `backend/ws_manager.py`
+- Backend evidence paths are verified in the canonical remote development repository; the local frontend QA mirror may omit the `backend/` directory.
 - Exact theme/token source: `https://tweakcn.com/themes/cmr2flrsp000304ih46yj4y1b?p=marketing` (`Apple Liquid Glass`). The listed values were extracted from the theme payload and are authoritative.
 - Secondary design-language reference: Apple Human Interface Guidelines, `https://developer.apple.com/design/human-interface-guidelines/`. This informs restraint and platform feel only; it does not override the extracted theme tokens.
 - Reference baseline: `cf70ad0` small-density Full-card screenshot/behavior.
@@ -55,7 +56,7 @@
   - Keep manually ordered `currentServers`; never auto-sort.
   - Let researchers find an empty server or exact GPU and identify current users quickly.
   - Keep Full fixed at the old `작게` density and use dense masonry aiming for three columns at 1440px framed width.
-  - Make Compact an availability-only full-width matrix/list with exact slot labels, no persistent rail, and no horizontal page scroll.
+  - Make Compact an availability-only fixed-column rack with one shared GPU header, one server per row, no large detail surface, and no ordinary horizontal/page scrolling.
   - Add phase-1 advisory GPU soft holds as a backward-compatible Note extension only.
 - Non-goals:
   - Slack profiles, Slack avatars, Linux-to-Slack mapping, email matching, hard scheduling, hard locks, share/export, new dependencies, collector changes, WebSocket payload changes, production repo edits, pushes, and deployment.
@@ -81,7 +82,7 @@
 
 - Primary navigation:
   - Adaptive header contains status/freshness on the left, network selector, `View`, `Manage`, and far-right sun/moon mode toggle.
-  - `View` contains dashboard mode (`Full` / `Compact`) and color theme.
+  - `View` contains dashboard mode (`Full` / `Compact`), Full-only `Grid` / `Masonry`, and color theme. Density remains fixed and is not a user setting.
   - `Manage` contains registration, logs, debug, and delete management.
 - Core routes/screens:
   - Dashboard route hosts `Full` and `Compact`.
@@ -98,8 +99,9 @@
 
 - Exactness beats summary: preserve `G#`, user lists, and telemetry truth.
 - Manual order is admin intent: filtering may hide servers, but no view sorts automatically.
-- Density beats marketing: cards, rows, popovers, and overlays are compact and operational.
-- Progressive detail: Full cards expose richer server detail; Compact shows availability first and uses temporary detail only when selected.
+- Density serves comprehension: cards and rows are compact only when alignment and hierarchy improve scan speed.
+- Progressive detail: Full cards expose rich server detail; Compact shows availability and uses only a bounded micro-popover when identity disclosure is necessary.
+- Material contrast is the primary nudge: occupied GPUs feel filled, available GPUs feel like precise open apertures, and rows with availability receive a restrained left rail instead of a textual count headline.
 - Advisory holds are annotations: telemetry remains truth and holds do not enforce exclusivity.
 - Tradeoffs: prefer less decorative glass and fewer layout modes over visual novelty; prefer backward-compatible notes changes over a scheduling subsystem.
 
@@ -107,10 +109,10 @@
 
 - Color:
   - Use exact light/dark tokens below.
-  - Availability/free: strong semantic green.
-  - Utilization: strong restrained emerald.
-  - Memory: restrained blue.
-  - Occupied: neutral/blue with deterministic initials.
+  - Normal server health: semantic green, limited to status indicators.
+  - GPU state and Util/Mem graphs: the selected color-theme accent, differentiated by fill, outline, opacity, and geometry rather than competing hues.
+  - Available: dark/open aperture with the clearest accent outline.
+  - Occupied: restrained accent fill with deterministic dark initials.
   - Unknown/stale: amber warning treatment.
   - Offline/destructive: semantic red.
   - Do not invent gradient-stop tokens, standalone surface-opacity tokens, or decorative gradients from the reference export.
@@ -121,7 +123,7 @@
 - Spacing/layout rhythm:
   - Base spacing token is `0.25rem`.
   - Full targets dense three-column masonry at 1440px framed width.
-  - Compact uses a full-width wrapping matrix/list with no page or row horizontal scroll.
+  - Compact uses a centered fixed-column matrix with one shared `G#` header, eight aligned GPU columns, absent placeholders, and one server per row at 390px.
 - Shape/radius/elevation:
   - Radius token is `1.5rem`.
   - Shadows use supplied color, opacity, blur, offset, and `shadow-spread 0px`.
@@ -231,13 +233,13 @@ letter-spacing 0em
   - `ServerCard`, `GpuBar`, `StatusBadge`, `NoteForm`, `ServerForm`, `ServerDeleteModal`, stores, API wrappers, and existing dashboard CSS layers.
 - New/changed components:
   - `Full` mode display and label semantics where prior copy says `Default`.
-  - Compact server matrix/list rows and viewport-safe temporary detail overlay/popover.
+  - Compact fixed-column rack rows, absent placeholders, mandatory GPU-bank control whenever an index exceeds `G7`, and viewport-safe micro-popover.
   - Notes rendering for `kind='memo'|'hold'` while preserving existing memo behavior.
   - Header adaptive flow/collapse behavior and control grouping.
 - Variants and states:
   - View: `Full`, `Compact`.
   - Server: online, degraded, offline, unknown, stale telemetry.
-  - GPU: free, occupied, held advisory overlay, unknown, stale telemetry.
+  - GPU base states: available, occupied, unknown, absent. Stale telemetry resolves to unknown; a hold is an advisory overlay and never a fifth base state.
   - Note: memo, active hold, near-expiry hold, expired/omitted hold.
   - Header: expanded in flow, collapsed with translated/faded header, restored on upward scroll, locked/restored for hover/focus/menu.
 - Token/component ownership:
@@ -250,7 +252,7 @@ letter-spacing 0em
 - Target standard: WCAG 2.2 AA where practical.
 - Keyboard/focus behavior:
   - Network selector, `View`, `Manage`, sun/moon, Full cards, Compact rows, GPU groups, notes, hold controls, overlays, and dialogs are keyboard reachable.
-  - Hover-only username reveal must have focus and touch equivalents.
+  - Username disclosure has hover/focus and row-level touch equivalents; mobile GPU marks remain passive so tiny cells are not false touch targets.
   - Upward scroll restores the header; focus/hover details must keep controls reachable.
 - Contrast/readability:
   - State is not color-only; pair with text, icon, shape, or label.
@@ -265,17 +267,17 @@ letter-spacing 0em
 ## Responsive behavior
 
 - Supported breakpoints/devices:
-  - Desktop: Full targets three dense masonry columns at 1440px framed width; Compact is full-width matrix/list.
-  - Tablet: Compact wraps GPU groups and keeps header controls reachable.
-  - Mobile: viewport-safe overlay/sheet for selected Compact details; no page/row horizontal scroll.
+  - Desktop: Full targets three dense columns at 1440px framed width; Compact is a centered `880-960px` fixed-column rack that does not stretch GPU cells across the page.
+  - Tablet: Compact keeps fixed columns and one-line rows while reducing the identity column.
+  - Mobile: Compact keeps one server per row and eight non-wrapping GPU columns; the row is the touch target and no large overlay/sheet is used.
+  - At `390x844`, the current fleet of up to 11 visible servers must fit without ordinary Compact page scrolling; larger future fleets may scroll vertically without changing row geometry.
 - Layout adaptations:
   - Expanded header participates in normal flow.
   - On intentional down scroll, the reserved header block collapses while the header translates/fades.
-  - Desktop indicator dot is allowed only when an outer gutter exists, with 12-16px top offset.
-  - On narrow widths, no floating dot is shown.
+  - Collapsed indicator uses viewport-safe top/left insets at every supported width and never clips outside the browser.
 - Touch/hover differences:
-  - Hover/focus detail temporarily reserves its own slim row or restores the header; it never overlays cards.
-  - Mobile uses tap/focus overlays instead of hover-only affordances.
+  - Desktop uses a bounded micro-popover for identity disclosure.
+  - Mobile uses the whole row as its touch target and switches intentionally to Full for deep detail.
 
 ## Interaction states
 
@@ -293,10 +295,11 @@ letter-spacing 0em
   - Upward scroll restores the header.
   - Hover/focus detail reserves a slim row or restores the header; it never overlays cards.
 - Compact selection:
-  - Desktop selection opens only a conditional temporary anchored popover/overlay.
-  - No aside, placeholder, reserved second column, or persistent empty region is rendered when unselected.
-  - Mobile selection opens a viewport-safe overlay/sheet.
-  - Compact never causes page or row horizontal scroll.
+  - No aside, inspector, reserved column, bottom sheet, or large overlay exists.
+  - Desktop cell hover/focus and row/cell activation may open a `180-220px` micro-popover for exact usernames.
+  - Mobile uses the whole row as the touch target; GPU marks are passive.
+  - Deep detail switches intentionally to Full and focuses the same server.
+  - Compact never causes page or row horizontal scroll for the current eight-GPU fleet.
 
 ## Content voice
 
@@ -335,8 +338,7 @@ letter-spacing 0em
 - Header no-overlap contract:
   - Expanded header participates in flow.
   - On intentional down scroll, the reserved block collapses while header translates/fades.
-  - Desktop indicator dot is allowed only with an outer gutter and 12-16px top offset.
-  - No floating dot on narrow widths.
+  - Collapsed indicator remains inside the viewport with explicit top/left safe insets at all widths.
   - Hover/focus detail reserves a slim row or restores the header; it never overlays cards.
   - Upward scroll restores the header.
 - Performance constraints:
@@ -351,9 +353,9 @@ letter-spacing 0em
 
 ## Open questions
 
-- [x] Active contracts resolved: only root `DESIGN.md` and `docs/superpowers/specs/2026-07-14-dense-apple-gpu-monitor-design.md` are active; prior specs/plans are historical where conflicting.
+- [x] Active contracts resolved: only root `DESIGN.md` and `docs/superpowers/specs/2026-07-15-quiet-rack-gpu-monitor-design.md` are active; prior specs/plans are historical where conflicting.
 - [x] User-facing naming resolved: `Full`, not `Default`.
-- [x] Compact detail resolved: temporary anchored desktop popover/overlay only; mobile viewport-safe overlay/sheet; no persistent rail or reserved second column.
+- [x] Compact detail resolved: bounded micro-popover only; no inspector, side rail, bottom sheet, reserved column, or large overlay.
 - [x] Soft-hold scope resolved: backward-compatible advisory Note extension only, no scheduler/status/cancelled_at/hard lock.
 - [x] Header overlap resolved: in-flow expanded header, collapsing reserved block, no card overlay by hover/focus details.
 - [x] Token export resolved: no standalone surface-opacity or gradient-stop tokens; frost is component treatment only.
@@ -365,7 +367,8 @@ letter-spacing 0em
   - `docs/superpowers/specs/2026-07-14-adaptive-dashboard-header-design.md`
   - `docs/superpowers/specs/2026-07-14-compact-gpu-dashboard-design.md`
   - `docs/superpowers/specs/2026-07-14-apple-dashboard-refinement-design.md`
+  - `docs/superpowers/specs/2026-07-14-dense-apple-gpu-monitor-design.md`
   - `docs/superpowers/plans/2026-07-14-adaptive-dashboard-header.md`
   - `docs/superpowers/plans/2026-07-14-compact-gpu-dashboard-implementation.md`
   - `docs/superpowers/plans/2026-07-14-apple-gpu-monitor-dashboard.md`
-- Keep useful evidence from those files only when it does not conflict with this document or the dense Apple GPU monitor spec.
+- Keep useful evidence from those files only when it does not conflict with this document or the Quiet Rack spec.
