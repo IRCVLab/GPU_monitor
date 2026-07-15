@@ -13,9 +13,9 @@
 		normalizeServerState
 	} from '$lib/stores/servers';
 	import {
-		colorTheme,
-		colorThemeOptions,
-		setColorTheme,
+		materialTheme,
+		materialThemeOptions,
+		setMaterialTheme,
 		themeMode,
 		toggleThemeMode
 	} from '$lib/stores/theme';
@@ -966,21 +966,21 @@
 									</div>
 									<div class="ops-view-divider"></div>
 								{/if}
-								<span class="ops-menu-label">색상 테마</span>
-								<div class="ops-color-options" role="group" aria-label="색상 테마">
-									{#each colorThemeOptions as option}
+								<span class="ops-menu-label">재질</span>
+								<div class="ops-material-options" role="group" aria-label="재질 프리셋">
+									{#each materialThemeOptions as option}
 										<button
-											class:active={$colorTheme === option.value}
+											class:active={$materialTheme === option.value}
 											type="button"
 											aria-label={option.label}
-											aria-pressed={$colorTheme === option.value}
-											style={`--swatch: ${option.color}`}
+											aria-pressed={$materialTheme === option.value}
+											data-material-preview={option.value}
 											onclick={() => {
-												setColorTheme(option.value);
+												setMaterialTheme(option.value);
 												viewMenuOpen = false;
 											}}
 										>
-											<span></span><em>{option.label}</em>
+											<span class="ops-material-tile" aria-hidden="true"><i></i></span><em>{option.label}</em>
 										</button>
 									{/each}
 								</div>

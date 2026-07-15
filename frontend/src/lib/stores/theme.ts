@@ -3,58 +3,74 @@ import type { Writable } from 'svelte/store';
 import { readCookie, writeCookie } from '$lib/utils/cookies';
 
 export const themeModes = ['dark', 'light'] as const;
-export const colorThemes = ['blue', 'violet', 'emerald'] as const;
+export const materialThemes = ['liquid', 'claude', 'astro'] as const;
 export type ThemeMode = (typeof themeModes)[number];
-export type ColorTheme = (typeof colorThemes)[number];
+export type MaterialTheme = (typeof materialThemes)[number];
 
-export const colorThemeOptions = [
-	{ value: 'blue', label: 'Blue', color: '#297cef' },
-	{ value: 'violet', label: 'Violet', color: '#864ad2' },
-	{ value: 'emerald', label: 'Emerald', color: '#00a381' }
-] as const satisfies ReadonlyArray<{ value: ColorTheme; label: string; color: string }>;
+export const materialThemeOptions = [
+	{ value: 'liquid', label: 'Liquid Glass', description: 'Cool translucent glass' },
+	{ value: 'claude', label: 'Claude+', description: 'Warm paper-soft material' },
+	{ value: 'astro', label: 'AstroVista', description: 'Cool crisp depth' }
+] as const satisfies ReadonlyArray<{ value: MaterialTheme; label: string; description: string }>;
 
 const MODE_COOKIE = 'themeMode';
-const COLOR_COOKIE = 'colorTheme';
+const MATERIAL_COOKIE = 'materialTheme';
+const LEGACY_COLOR_COOKIE = 'colorTheme';
 const LEGACY_THEME_COOKIE = 'theme';
+const oldMaterialValues = ['blue', 'violet', 'emerald', 'rose', 'pink'] as const;
+
+function normalizeMode(value: string): ThemeMode | null {
+	return value === 'light' || value === 'dark' ? value : null;
+}
+
+function normalizeMaterial(value: string): MaterialTheme | null {
+	return materialThemes.includes(value as MaterialTheme) ? (value as MaterialTheme) : null;
+}
 
 function readMode(): ThemeMode {
-	const direct = (readCookie(MODE_COOKIE) ?? '').toLowerCase();
-	if (direct === 'light' || direct === 'dark') return direct;
+	const direct = normalizeMode((readCookie(MODE_COOKIE) ?? '').toLowerCase());
+	if (direct) return direct;
 	const legacy = (readCookie(LEGACY_THEME_COOKIE) ?? '').toLowerCase();
 	return legacy === 'light' || legacy === 'rose' || legacy === 'pink' ? 'light' : 'dark';
 }
 
-function readColor(): ColorTheme {
-	const direct = (readCookie(COLOR_COOKIE) ?? '').toLowerCase();
-	if (colorThemes.includes(direct as ColorTheme)) return direct as ColorTheme;
-	const legacy = (readCookie(LEGACY_THEME_COOKIE) ?? '').toLowerCase();
-	return legacy === 'rose' || legacy === 'pink' ? 'violet' : 'blue';
+function readMaterial(): MaterialTheme {
+	const direct = (readCookie(MATERIAL_COOKIE) ?? '').toLowerCase();
+	const normalized = normalizeMaterial(direct);
+	if (normalized) return normalized;
+
+	const legacyColor = (readCookie(LEGACY_COLOR_COOKIE) ?? '').toLowerCase();
+	if (oldMaterialValues.includes(legacyColor as (typeof oldMaterialValues)[number])) return 'liquid';
+
+	const legacyTheme = (readCookie(LEGACY_THEME_COOKIE) ?? '').toLowerCase();
+	return oldMaterialValues.includes(legacyTheme as (typeof oldMaterialValues)[number]) ? 'liquid' : 'liquid';
 }
 
-function applyTheme(mode: ThemeMode, color: ColorTheme): void {
+function applyTheme(mode: ThemeMode, material: MaterialTheme): void {
 	if (typeof document === 'undefined') return;
 	const classes = document.documentElement.classList;
 	classes.remove(...themeModes, 'rose');
 	classes.add(mode);
-	document.documentElement.dataset.colorTheme = color;
+	document.documentElement.dataset.material = material;
+	delete document.documentElement.dataset.colorTheme;
 }
 
 export const themeMode: Writable<ThemeMode> = writable(readMode());
-export const colorTheme: Writable<ColorTheme> = writable(readColor());
+export const materialTheme: Writable<MaterialTheme> = writable(readMaterial());
 
 function persistAndApply(): void {
 	let mode: ThemeMode = 'dark';
-	let color: ColorTheme = 'blue';
+	let material: MaterialTheme = 'liquid';
 	themeMode.subscribe((value) => (mode = value))();
-	colorTheme.subscribe((value) => (color = value))();
-	applyTheme(mode, color);
+	materialTheme.subscribe((value) => (material = value))();
+	applyTheme(mode, material);
 	writeCookie(MODE_COOKIE, mode);
-	writeCookie(COLOR_COOKIE, color);
+	writeCookie(MATERIAL_COOKIE, material);
 }
 
 themeMode.subscribe(() => persistAndApply());
-colorTheme.subscribe(() => persistAndApply());
+materialTheme.subscribe(() => persistAndApply());
 
 export function setThemeMode(value: ThemeMode): void { themeMode.set(value); }
 export function toggleThemeMode(): void { themeMode.update((mode) => (mode === 'dark' ? 'light' : 'dark')); }
-export function setColorTheme(value: ColorTheme): void { colorTheme.set(value); }
+export function setMaterialTheme(value: MaterialTheme): void { materialTheme.set(value); }

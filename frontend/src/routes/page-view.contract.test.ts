@@ -331,3 +331,28 @@ test('Full and Compact changes use a restrained keyed transition', () => {
 	assert.match(pageSource, /in:fly=\{dashboardViewTransition\}/);
 	assert.match(pageSource, /prefers-reduced-motion/);
 });
+
+test('Task 5 View menu exposes material presets instead of accent color swatches', () => {
+	assert.match(pageSource, /materialThemeOptions/);
+	assert.match(pageSource, /setMaterialTheme/);
+	assert.doesNotMatch(pageSource, /colorTheme|setColorTheme|colorThemeOptions/);
+	assert.match(pageSource, />재질<\/span>|ops-menu-label">재질/);
+	assert.match(pageSource, /ops-material-options/);
+	assert.match(pageSource, /ops-material-tile/);
+	assert.match(pageSource, /data-material-preview=\{option\.value\}/);
+	assert.match(pageSource, /setMaterialTheme\(option\.value\);\s*viewMenuOpen = false;/);
+	assert.doesNotMatch(pageSource, /--swatch|ops-color-options|색상 테마/);
+});
+
+test('Task 5 functional layers use material variables while cards remain mostly opaque', () => {
+	for (const selector of ['.ops-header', '.ops-mode-action']) {
+		const rule = cssRule(dashboardCss, selector);
+		assert.match(rule, /--material-|backdrop-filter/, `${selector} should consume material variables`);
+	}
+	assert.match(
+		dashboardCss,
+		/\.ops-view-menu,\s*\.ops-overflow-menu,\s*\.ops-indicator-panel\s*\{[\s\S]*var\(--material-blur\)[\s\S]*var\(--material-shadow\)/,
+		'header menus and indicator panel share functional material variables'
+	);
+	assert.doesNotMatch(cardCss, /--material-blur|backdrop-filter/, 'server cards should not get functional glass treatment');
+});

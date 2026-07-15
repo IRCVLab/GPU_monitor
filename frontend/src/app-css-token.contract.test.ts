@@ -173,30 +173,165 @@ test('theme blocks expose compatibility aliases and literal shadows', () => {
 	}
 });
 
-test('semantic on-primary token is declared centrally with the required light-violet exception', () => {
-	assert.equal(declarationsFor('html.rose')['--ops-on-primary'], '#040609');
-	assert.equal(declarationsFor("html[data-color-theme='violet']")['--ops-on-primary'], '#ffffff');
-	assert.equal(declarationsFor("html.dark[data-color-theme='violet']")['--ops-on-primary'], '#040609');
-});
-
-test('primary fill foreground stays AA across shipped accent combinations', () => {
-	const scenarios = [
-		{ name: 'default light', selectors: ['html.light'], expected: '5.05' },
-		{ name: 'emerald light', selectors: ['html.light', "html[data-color-theme='emerald']"], expected: '6.33' },
-		{ name: 'violet light', selectors: ['html.light', "html[data-color-theme='violet']"], expected: '5.35' },
-		{ name: 'default dark', selectors: ['html.dark'], expected: '6.16' },
-		{ name: 'emerald dark', selectors: ['html.dark', "html.dark[data-color-theme='emerald']"], expected: '7.92' },
-		{ name: 'violet dark', selectors: ['html.dark', "html.dark[data-color-theme='violet']"], expected: '5.11' },
-		{ name: 'rose', selectors: ['html.rose'], expected: '5.44' }
-	];
-
-	for (const scenario of scenarios) {
+test('base liquid primary fill foreground stays AA in light and dark', () => {
+	for (const scenario of [
+		{ name: 'liquid light', selectors: ['html.light'], expected: '5.05' },
+		{ name: 'liquid dark', selectors: ['html.dark'], expected: '6.16' }
+	]) {
 		const declarations = mergedDeclarations(...scenario.selectors);
 		const ratio = contrastRatio(declarations['--primary'], declarations['--ops-on-primary']);
 		assert.equal(ratio.toFixed(2), scenario.expected, `${scenario.name} contrast ratio`);
 		assert.ok(ratio >= 4.5, `${scenario.name} must satisfy AA for small text`);
 	}
+});
 
-	const lightVioletDarkText = contrastRatio('#864ad2', '#040609');
-	assert.ok(lightVioletDarkText < 4.5, 'light violet needs a white override; dark text is insufficient');
+const claudeLightTokens = {
+	'--background': '#faf9f5',
+	'--foreground': '#3d3929',
+	'--card': '#f5f4ef',
+	'--card-foreground': '#141413',
+	'--popover': '#ffffff',
+	'--popover-foreground': '#28261b',
+	'--primary': '#c96442',
+	'--primary-foreground': '#ffffff',
+	'--secondary': '#e9e6dc',
+	'--secondary-foreground': '#535146',
+	'--muted': '#ede9de',
+	'--muted-foreground': '#6e6d68',
+	'--accent': '#e9e6dc',
+	'--accent-foreground': '#28261b',
+	'--destructive': '#141413',
+	'--destructive-foreground': '#ffffff',
+	'--border': '#dad9d4',
+	'--input': '#b4b2a7',
+	'--ring': '#c96442',
+	'--chart-1': '#b05730',
+	'--chart-2': '#9c87f5',
+	'--chart-3': '#ded8c4',
+	'--chart-4': '#dbd3f0',
+	'--chart-5': '#b4552d',
+	'--radius': '1rem'
+};
+
+const claudeDarkTokens = {
+	'--background': '#262624',
+	'--foreground': '#f1f1ef',
+	'--card': '#2c2c2b',
+	'--card-foreground': '#faf9f5',
+	'--popover': '#30302e',
+	'--popover-foreground': '#e5e5e2',
+	'--primary': '#d97757',
+	'--primary-foreground': '#141413',
+	'--secondary': '#faf9f5',
+	'--secondary-foreground': '#30302e',
+	'--muted': '#1b1b19',
+	'--muted-foreground': '#b7b5a9',
+	'--accent': '#1a1915',
+	'--accent-foreground': '#f5f4ee',
+	'--destructive': '#ef4444',
+	'--destructive-foreground': '#ffffff',
+	'--border': '#3e3e38',
+	'--input': '#52514a',
+	'--ring': '#d97757',
+	'--chart-1': '#b05730',
+	'--chart-2': '#9c87f5',
+	'--chart-3': '#1a1915',
+	'--chart-4': '#2f2b48',
+	'--chart-5': '#b4552d',
+	'--radius': '1rem'
+};
+
+const astroLightTokens = {
+	'--background': '#e8ebed',
+	'--foreground': '#333333',
+	'--card': '#ffffff',
+	'--card-foreground': '#333333',
+	'--popover': '#ffffff',
+	'--popover-foreground': '#333333',
+	'--primary': '#df6035',
+	'--primary-foreground': '#ffffff',
+	'--secondary': '#2f4b79',
+	'--secondary-foreground': '#ffffff',
+	'--muted': '#f9fafb',
+	'--muted-foreground': '#6b7280',
+	'--accent': '#d6e4f0',
+	'--accent-foreground': '#1e3a8a',
+	'--destructive': '#ef4444',
+	'--destructive-foreground': '#ffffff',
+	'--border': '#cccccc',
+	'--input': '#f4f5f7',
+	'--ring': '#e05d38',
+	'--chart-1': '#7399bf',
+	'--chart-2': '#e16f41',
+	'--chart-3': '#d54450',
+	'--chart-4': '#e2b146',
+	'--chart-5': '#3c4c76',
+	'--radius': '.5rem'
+};
+
+const astroDarkTokens = {
+	'--background': '#1a1a1a',
+	'--foreground': '#e5e5e5',
+	'--card': '#202020',
+	'--card-foreground': '#e5e5e5',
+	'--popover': '#202020',
+	'--popover-foreground': '#e5e5e5',
+	'--primary': '#df6035',
+	'--primary-foreground': '#ffffff',
+	'--secondary': '#284167',
+	'--secondary-foreground': '#e5e5e5',
+	'--muted': '#2a2a2a',
+	'--muted-foreground': '#808080',
+	'--accent': '#2a3656',
+	'--accent-foreground': '#bfdbfe',
+	'--destructive': '#ef4444',
+	'--destructive-foreground': '#ffffff',
+	'--border': '#353535',
+	'--input': '#303030',
+	'--ring': '#e05d38',
+	'--chart-1': '#85a6c7',
+	'--chart-2': '#e16f41',
+	'--chart-3': '#d54450',
+	'--chart-4': '#e2b146',
+	'--chart-5': '#3c4c76',
+	'--radius': '.5rem'
+};
+
+function assertTokenSet(selector, expected) {
+	const declarations = declarationsFor(selector);
+	for (const [name, value] of Object.entries(expected)) {
+		assert.equal(declarations[name], value, `${selector} ${name}`);
+	}
+}
+
+test('Task 5 material presets expose exact Claude+ and AstroVista light/dark semantic token blocks', () => {
+	assertTokenSet("html.light[data-material='claude']", claudeLightTokens);
+	assertTokenSet("html.dark[data-material='claude']", claudeDarkTokens);
+	assertTokenSet("html.light[data-material='astro']", astroLightTokens);
+	assertTokenSet("html.dark[data-material='astro']", astroDarkTokens);
+});
+
+test('Task 5 material presets centralize functional-layer material variables', () => {
+	const liquid = declarationsFor("html[data-material='liquid']");
+	assert.equal(liquid['--material-surface-alpha'], '0.72');
+	assert.equal(liquid['--material-surface-mix'], '72%');
+	assert.equal(liquid['--material-blur'], '24px');
+	assert.equal(liquid['--material-saturation'], '145%');
+	assert.equal(liquid['--material-radius'], '24px');
+	assert.ok(liquid['--material-shadow'].includes('color-mix(in srgb, var(--ops-primary)'), 'liquid shadow is tinted by semantic primary');
+
+	const claude = declarationsFor("html[data-material='claude']");
+	assert.equal(claude['--material-blur'], '14px');
+	assert.equal(claude['--material-saturation'], '112%');
+	assert.equal(claude['--material-radius'], '1rem');
+
+	const astro = declarationsFor("html[data-material='astro']");
+	assert.equal(astro['--material-blur'], '18px');
+	assert.equal(astro['--material-saturation'], '128%');
+	assert.equal(astro['--material-radius'], '.75rem');
+});
+
+test('Task 5 removes obsolete accent color selectors from global CSS', () => {
+	assert.doesNotMatch(css, /data-color-theme/);
+	assert.doesNotMatch(css, /html\.rose/);
 });
