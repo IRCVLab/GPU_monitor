@@ -12,6 +12,28 @@
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
 }
 
+.monitor-card::before {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  top: 1rem;
+  width: 0.15rem;
+  height: 1.5rem;
+  border-radius: 0 999px 999px 0;
+  background: var(--ops-primary);
+  opacity: 0;
+  transform: scaleY(0.45);
+  transform-origin: center;
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+
+.monitor-card[data-has-available='true']::before {
+  opacity: 0.82;
+  transform: scaleY(1);
+}
+
 .monitor-card:hover {
   transform: translateY(-1px);
   box-shadow: 0 14px 30px color-mix(in srgb, var(--ops-fg) 13%, transparent);
@@ -381,6 +403,18 @@
   background: color-mix(in srgb, var(--ops-card) 92%, #040609);
   border-color: var(--ops-primary);
   color: var(--ops-fg);
+}
+
+.monitor-gpu-row[data-state='available'] .monitor-gpu-metric__track {
+  background: color-mix(in srgb, var(--ops-fg) 6%, transparent);
+}
+
+.monitor-gpu-row[data-state='available'] .monitor-gpu-metric__label {
+  color: color-mix(in srgb, var(--ops-fg) 28%, transparent);
+}
+
+.monitor-gpu-row[data-state='available'] .monitor-gpu-metric__value {
+  color: color-mix(in srgb, var(--ops-fg) 44%, transparent);
 }
 
 .monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index {

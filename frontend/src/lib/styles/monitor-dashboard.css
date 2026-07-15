@@ -21,8 +21,13 @@
 .ops-header-shell.ops-header-compact {
 	grid-template-rows: minmax(0, 0fr);
 	padding-top: var(--ops-indicator-lane-height, 0px);
-	backdrop-filter: none;
-	background: transparent;
+	backdrop-filter: blur(12px);
+	background: linear-gradient(
+		to bottom,
+		color-mix(in srgb, var(--ops-bg) 98%, transparent) 0,
+		color-mix(in srgb, var(--ops-bg) 94%, transparent) calc(100% - 0.35rem),
+		transparent 100%
+	);
 }
 
 

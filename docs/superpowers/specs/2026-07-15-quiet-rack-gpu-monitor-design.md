@@ -253,3 +253,14 @@ The user must perceive availability without reading a count:
 - System and memo expansions add information without destroying the dashboard’s density.
 - Header motion reclaims space and the collapsed indicator never overlaps or clips.
 - Every change preserves manual server order and leaves the live repository/processes untouched.
+## 14. Deep refinement acceptance
+
+- Full card availability is hinted by one narrow accent rail only when at least one GPU is truly available.
+- The rail never includes free-count text and never reorders cards.
+- Available zero telemetry is quieter than occupied telemetry, while exact values remain readable.
+- Compact occupied disclosure uses two-column G# and full-username rows without redundant 사용 중 text.
+- The Full에서 보기 action survives pointer focus changes, remains keyboard-operable, and focuses the same server in Full mode.
+- The View trigger exposes the current Full or Compact mode before opening.
+- Desktop header content and card outer edges share one exact horizontal gutter.
+- The collapsed indicator lane uses a restrained semantic mask so passing card content never visibly collides with the status dot or panel.
+- Indicator lane synchronization runs only for actual compact, visibility, or panel geometry changes and never fights normal scrolling.

@@ -304,3 +304,13 @@ test('page runtime is mounted and destroyed through the Svelte 5 effect lifecycl
 	assert.match(initBody, /return cleanup/);
 	assert.match(initBody, /if \(runtime\.__monitoringV2PageCleanup === cleanup\)/);
 });
+
+
+test('View trigger names the current Full or Compact mode before the menu opens', () => {
+	const triggerStart = pageSource.indexOf('class="ops-utility-action"');
+	assert.notEqual(triggerStart, -1);
+	const triggerEnd = pageSource.indexOf('</button>', triggerStart);
+	const triggerMarkup = pageSource.slice(triggerStart, triggerEnd);
+	assert.ok(triggerMarkup.includes('{dashboardViewLabel($dashboardView)}'));
+	assert.ok(!triggerMarkup.includes('>보기 '));
+});

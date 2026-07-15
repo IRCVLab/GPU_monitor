@@ -197,7 +197,6 @@
 				{#each activeTooltip.items as item (`tooltip-${activeTooltip.serverId}-${item.gpuIndex}`)}
 					<li class="compact-dashboard__tooltip-entry">
 						<span class="compact-dashboard__tooltip-gpu">G{item.gpuIndex}</span>
-						<span class="compact-dashboard__tooltip-state">사용 중</span>
 						<span class="compact-dashboard__tooltip-users">{item.users.join(', ')}</span>
 					</li>
 				{/each}
@@ -207,6 +206,7 @@
 					type="button"
 					class="compact-dashboard__tooltip-action"
 					bind:this={tooltipActionButton}
+					onmousedown={(event) => event.preventDefault()}
 					onclick={() => openFull(tooltipServerId)}
 				>Full에서 보기</button>
 			</div>

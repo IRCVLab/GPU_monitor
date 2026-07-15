@@ -294,3 +294,29 @@ test('monitor-dashboard.css owns slow indicator breathing and reduced motion', (
 		'reduced motion disables indicator breathing in the component stylesheet'
 	);
 });
+
+
+test('compact indicator lane masks passing card content without restoring a full header surface', () => {
+	const compactShell = declarationBlock(
+		dashboardCss,
+		'.ops-header-shell.ops-header-compact',
+		'background'
+	);
+	assert.ok(compactShell.includes('background: linear-gradient('));
+	assert.ok(compactShell.includes('var(--ops-bg)'));
+	assert.ok(
+		['blur(10px)', 'blur(12px)', 'blur(14px)'].some((value) =>
+			compactShell.includes('backdrop-filter: ' + value)
+		)
+	);
+	assert.ok(!compactShell.includes('background: transparent'));
+});
+
+
+test('header controls and dashboard cards share the same framed content gutter', () => {
+	assert.ok(pageSource.includes('class="ops-header border-b border-surface-border"'));
+	assert.ok(pageSource.includes('ops-header-inner $' + '{pageShellClass} px-4 sm:px-6'));
+	assert.ok(
+		pageSource.includes("const pageMainClass = 'max-w-7xl mx-auto px-4 py-4 sm:px-6';")
+	);
+});

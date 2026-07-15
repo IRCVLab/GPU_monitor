@@ -359,20 +359,24 @@ html.light .compact-slot__badge {
 
 .compact-dashboard__tooltip-entry {
 	display: grid;
-	gap: 0.08rem;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: baseline;
+	gap: 0.45rem;
 }
 
-.compact-dashboard__tooltip-gpu,
-.compact-dashboard__tooltip-state {
+.compact-dashboard__tooltip-gpu {
 	font-size: 0.63rem;
 	font-weight: 650;
-	color: color-mix(in srgb, var(--ops-fg) 56%, transparent);
+	color: color-mix(in srgb, var(--ops-fg) 54%, transparent);
+	font-variant-numeric: tabular-nums;
 }
 
 .compact-dashboard__tooltip-users {
-	font-size: 0.7rem;
+	min-width: 0;
+	font-size: 0.72rem;
+	font-weight: 650;
 	line-height: 1.3;
-	color: color-mix(in srgb, var(--ops-fg) 90%, transparent);
+	color: color-mix(in srgb, var(--ops-fg) 94%, transparent);
 	word-break: break-word;
 }
 
