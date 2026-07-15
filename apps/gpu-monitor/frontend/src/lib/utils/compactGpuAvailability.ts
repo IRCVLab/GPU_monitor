@@ -1,5 +1,5 @@
 import type { GpuInfo, ServerStatus } from '$lib/types';
-import { isTelemetryStale } from './telemetryFreshness';
+import { isTelemetryStale } from './telemetryFreshness.js';
 
 export type CompactGpuState = 'available' | 'occupied' | 'unknown';
 
