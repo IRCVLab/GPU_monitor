@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
+	import { tick } from 'svelte';
 	import '$lib/styles/monitor-compact.css';
 	import CompactServerRow from '$lib/components/CompactServerRow.svelte';
 	import type { ServerState } from '$lib/types';
@@ -20,6 +21,8 @@
 		items: CompactPopoverItem[];
 		left: number;
 		top: number;
+		trigger: HTMLElement | null;
+		focusAction: boolean;
 	};
 
 	let {
@@ -38,6 +41,7 @@
 
 	let activeBankIndex = $state(0);
 	let activeTooltip = $state<CompactPopover | null>(null);
+	let tooltipActionButton = $state<HTMLButtonElement | null>(null);
 
 	const bankCount = $derived(compactGpuBankCount(servers));
 	const bankOptions = $derived.by(() => Array.from({ length: bankCount }, (_, index) => index));
@@ -66,8 +70,12 @@
 		activeTooltip = clampTooltip(next);
 	}
 
-	function closeTooltip(): void {
+	function closeTooltip({ restoreFocus = false }: { restoreFocus?: boolean } = {}): void {
+		const currentTooltip = activeTooltip;
 		activeTooltip = null;
+		if (restoreFocus && currentTooltip?.trigger?.isConnected) {
+			currentTooltip.trigger.focus();
+		}
 	}
 
 	function openFull(serverId: number): void {
@@ -83,12 +91,29 @@
 	function handleWindowKeydown(event: KeyboardEvent): void {
 		if (event.key !== 'Escape' || !activeTooltip) return;
 		event.preventDefault();
+		closeTooltip({ restoreFocus: true });
+	}
+
+	function handlePopoverFocusOut(event: FocusEvent): void {
+		const nextTarget = event.relatedTarget;
+		if (
+			nextTarget instanceof Node &&
+			event.currentTarget instanceof HTMLElement &&
+			event.currentTarget.contains(nextTarget)
+		) {
+			return;
+		}
 		closeTooltip();
 	}
 
 	$effect(() => {
 		if (activeBankIndex < bankCount) return;
 		activeBankIndex = Math.max(0, bankCount - 1);
+	});
+
+	$effect(() => {
+		if (!browser || !activeTooltip?.focusAction) return;
+		void tick().then(() => tooltipActionButton?.focus());
 	});
 
 	$effect(() => {
@@ -157,11 +182,15 @@
 	</div>
 
 	{#if activeTooltip}
+		{@const tooltipServerId = activeTooltip.serverId}
 		<div
 			class="compact-dashboard__tooltip"
 			data-compact-popover="true"
-			role="tooltip"
+			role="dialog"
+			aria-modal="false"
+			aria-label={`${activeTooltip.serverName} GPU 점유 정보`}
 			style={`left: ${activeTooltip.left}px; top: ${activeTooltip.top}px;`}
+			onfocusout={handlePopoverFocusOut}
 		>
 			<p class="compact-dashboard__tooltip-title">{activeTooltip.serverName}</p>
 			<ul class="compact-dashboard__tooltip-list">
@@ -173,6 +202,14 @@
 					</li>
 				{/each}
 			</ul>
+			<div class="compact-dashboard__tooltip-footer">
+				<button
+					type="button"
+					class="compact-dashboard__tooltip-action"
+					bind:this={tooltipActionButton}
+					onclick={() => openFull(tooltipServerId)}
+				>Full에서 보기</button>
+			</div>
 		</div>
 	{/if}
 </section>
