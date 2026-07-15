@@ -8,7 +8,16 @@
 
 .compact-dashboard__controls {
 	display: flex;
+	align-items: center;
 	justify-content: flex-end;
+	gap: 0.5rem;
+}
+
+.compact-dashboard__hold-warning {
+	margin-right: auto;
+	font-size: 0.64rem;
+	font-weight: 650;
+	color: color-mix(in srgb, #f59e0b 84%, var(--ops-fg));
 }
 
 .compact-dashboard__bank-selector {
@@ -117,11 +126,26 @@
 	cursor: pointer;
 }
 
-.compact-row__identity,
+.compact-row__identity {
+	position: relative;
+	z-index: 1;
+	pointer-events: none;
+}
+
 .compact-slot {
 	position: relative;
 	z-index: 1;
 	pointer-events: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 0;
+	min-height: 1.72rem;
+	height: auto;
+	border: 1px solid color-mix(in srgb, var(--ops-border) 92%, transparent);
+	border-radius: 0.46rem;
+	background: color-mix(in srgb, var(--ops-card) 92%, transparent);
+	overflow: hidden;
 }
 
 .compact-row__identity {
@@ -169,18 +193,6 @@
 	background: color-mix(in srgb, #ef4444 80%, var(--ops-card));
 }
 
-.compact-slot {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	min-width: 0;
-	height: 1.72rem;
-	border: 1px solid color-mix(in srgb, var(--ops-border) 92%, transparent);
-	border-radius: 0.46rem;
-	background: color-mix(in srgb, var(--ops-card) 92%, transparent);
-	overflow: hidden;
-}
-
 .compact-slot[data-state='available'] {
 	border-color: color-mix(in srgb, var(--ops-primary) 82%, var(--ops-border));
 	background: color-mix(in srgb, var(--ops-card) 97%, #04070d);
@@ -188,9 +200,9 @@
 }
 
 .compact-slot[data-state='occupied'] {
-	border-color: color-mix(in srgb, var(--ops-primary) 24%, var(--ops-border));
-	background: color-mix(in srgb, var(--ops-primary) 22%, var(--ops-card));
-	color: color-mix(in srgb, #0b1220 84%, var(--ops-fg));
+	border-color: var(--ops-primary);
+	background: var(--ops-primary);
+	color: var(--ops-on-primary);
 }
 
 .compact-slot[data-state='unknown'] {
@@ -209,27 +221,50 @@
 	background: transparent;
 }
 
+.compact-slot[data-held='true'] {
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, #f59e0b 70%, transparent);
+}
+
 .compact-slot[data-held='true']::after {
 	content: '';
 	position: absolute;
-	top: 0.18rem;
-	right: 0.18rem;
-	width: 0.44rem;
-	height: 0.44rem;
-	border-top: 2px solid #f59e0b;
-	border-right: 2px solid #f59e0b;
-	border-top-right-radius: 0.2rem;
+	top: -1px;
+	right: 0.32rem;
+	width: 0.56rem;
+	height: 2px;
+	border-radius: 999px;
+	background: #f59e0b;
 	pointer-events: none;
 }
 
 .compact-slot__free,
-.compact-slot__unknown,
+.compact-slot__unknown {
+	display: flex;
+	width: 100%;
+}
+
 .compact-slot__users {
 	display: flex;
+	width: 100%;
+	appearance: none;
+	align-items: flex-start;
+	justify-content: flex-start;
+	height: auto;
+	min-height: 1.72rem;
+	padding: 0.18rem;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+	pointer-events: auto;
+}
+
+.compact-slot__free,
+.compact-slot__unknown {
 	align-items: center;
 	justify-content: center;
-	width: 100%;
-	height: 100%;
+	min-height: 1.72rem;
 }
 
 .compact-slot__free-dot {
@@ -247,57 +282,31 @@
 	background: color-mix(in srgb, var(--ops-fg) 34%, transparent);
 }
 
-.compact-slot__users {
-	appearance: none;
-	padding: 0.16rem;
-	border: 0;
-	background: transparent;
-	color: inherit;
-	cursor: pointer;
-	pointer-events: auto;
+
+.compact-slot__user-list {
+	display: grid;
+	gap: 0.08rem;
+	width: 100%;
+	white-space: normal;
+	word-break: break-word;
+	line-height: 1.1;
 }
 
-.compact-slot__occupants {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: 0.14rem;
+.compact-slot__username {
 	min-width: 0;
-}
-
-.compact-slot__badge {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	min-width: 0.96rem;
-	height: 0.96rem;
-	padding-inline: 0.18rem;
-	border-radius: 999px;
-	background: color-mix(in srgb, white 58%, var(--ops-card));
-	color: #0f172a;
-	font-size: 0.46rem;
-	font-weight: 800;
-	letter-spacing: 0.02em;
-	text-transform: uppercase;
-	font-variant-numeric: tabular-nums;
-}
-
-html.light .compact-slot__badge {
-	background: color-mix(in srgb, white 24%, var(--ops-card));
-}
-
-.compact-slot__badge--count {
-	background: color-mix(in srgb, var(--ops-card) 82%, transparent);
-	color: color-mix(in srgb, #0f172a 88%, var(--ops-fg));
+	font-size: 0.58rem;
+	line-height: 1.1;
+	font-weight: 700;
+	color: inherit;
 }
 
 .compact-dashboard__tooltip {
 	position: fixed;
 	z-index: 70;
+	pointer-events: none;
 	display: grid;
-	grid-template-rows: auto minmax(0, 1fr) auto;
 	gap: 0.44rem;
-	width: clamp(11.25rem, 28vw, 13.75rem);
+	width: clamp(12rem, 30vw, 15rem);
 	max-height: 7.5rem;
 	overflow: hidden;
 	padding: 0.56rem 0.66rem;
@@ -323,40 +332,6 @@ html.light .compact-slot__badge {
 	overflow: auto;
 }
 
-.compact-dashboard__tooltip-footer {
-	display: flex;
-	justify-content: flex-end;
-}
-
-.compact-dashboard__tooltip-action {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	min-height: 1.68rem;
-	padding: 0.24rem 0.72rem;
-	border-radius: 999px;
-	border: 1px solid color-mix(in srgb, var(--ops-primary) 36%, var(--ops-border));
-	background: color-mix(in srgb, var(--ops-primary) 12%, var(--ops-popover));
-	color: color-mix(in srgb, var(--ops-fg) 92%, transparent);
-	font-size: 0.68rem;
-	font-weight: 700;
-	line-height: 1.1;
-	transition:
-		background 140ms ease,
-		border-color 140ms ease,
-		box-shadow 140ms ease,
-		transform 140ms ease;
-}
-
-.compact-dashboard__tooltip-action:hover {
-	background: color-mix(in srgb, var(--ops-primary) 18%, var(--ops-popover));
-}
-
-.compact-dashboard__tooltip-action:focus-visible {
-	outline: none;
-	box-shadow: 0 0 0 2px color-mix(in srgb, var(--ops-primary) 28%, transparent);
-}
-
 .compact-dashboard__tooltip-entry {
 	display: grid;
 	grid-template-columns: auto minmax(0, 1fr);
@@ -369,6 +344,31 @@ html.light .compact-slot__badge {
 	font-weight: 650;
 	color: color-mix(in srgb, var(--ops-fg) 54%, transparent);
 	font-variant-numeric: tabular-nums;
+}
+
+.compact-dashboard__tooltip-body {
+	min-width: 0;
+	display: grid;
+	gap: 0.12rem;
+}
+
+.compact-dashboard__tooltip-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.35rem;
+}
+
+.compact-dashboard__tooltip-state {
+	font-size: 0.63rem;
+	font-weight: 650;
+	color: color-mix(in srgb, var(--ops-fg) 62%, transparent);
+}
+
+.compact-dashboard__tooltip-hold {
+	font-size: 0.63rem;
+	font-weight: 700;
+	color: color-mix(in srgb, #f59e0b 82%, var(--ops-fg));
 }
 
 .compact-dashboard__tooltip-users {

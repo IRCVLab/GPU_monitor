@@ -31,6 +31,8 @@
   const ONE_MINUTE_MS = 60 * 1000;
   const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
   const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+  const DEFAULT_SSH_PORT = 22;
+  const FRESHNESS_WARNING_AFTER_MS = 30_000;
 
   type GpuHoldCue = { owner: string; remaining: string; memo: string };
   type MetricLevel = 'normal' | 'medium' | 'high';
@@ -67,6 +69,25 @@
       second: '2-digit',
       hour12: false
     }).format(new Date(iso));
+  }
+
+  function freshnessIssueText(iso: string | null, now: number): string {
+    if (!iso) return '갱신 정보 없음';
+    const timestamp = Date.parse(iso);
+    if (Number.isNaN(timestamp)) return '갱신 시간 오류';
+
+    const elapsedMs = Math.max(0, now - timestamp);
+    if (elapsedMs < FRESHNESS_WARNING_AFTER_MS) return '';
+
+    const elapsedSeconds = Math.floor(elapsedMs / 1000);
+    if (elapsedSeconds < 60) return `마지막 갱신 ${elapsedSeconds}초 전`;
+
+    const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+    if (elapsedMinutes < 60) return `마지막 갱신 ${elapsedMinutes}분 전`;
+
+    const elapsedHours = Math.floor(elapsedMinutes / 60);
+    if (elapsedHours < 24) return `마지막 갱신 ${elapsedHours}시간 전`;
+    return `마지막 갱신 ${Math.floor(elapsedHours / 24)}일 전`;
   }
 
   function metricLevel(percent: number | null | undefined): MetricLevel {
@@ -136,8 +157,10 @@
 
   const statusMeta = $derived(statusConfig[server.status] ?? statusConfig.unknown);
   const lastSeenAbsoluteText = $derived(absoluteTime(server.last_seen));
-  const refreshText = $derived(lastSeenAbsoluteText);
-  const hostText = $derived(server.host);
+  const refreshText = $derived(freshnessIssueText(server.last_seen, noteNowMs));
+  const endpointText = $derived(
+    server.port && server.port !== DEFAULT_SSH_PORT ? `${server.host}:${server.port}` : server.host
+  );
   const statusReasonText = $derived(server.status_reason?.message ?? '');
   const statusTooltip = $derived(statusReasonText ? `${statusMeta.label} · ${statusReasonText}` : statusMeta.label);
   const availableGpuCount = $derived.by(() =>
@@ -305,9 +328,11 @@
             <span class="monitor-card__status-text">{statusMeta.label}</span>
           {/if}
         </span>
-        <span class="monitor-card__host" title={server.port ? `${server.host}:${server.port}` : server.host}>{hostText}</span>
-        <span class="monitor-card__separator" aria-hidden="true">·</span>
-        <span class="monitor-card__refresh" title={`마지막 갱신 ${lastSeenAbsoluteText}`}>{refreshText}</span>
+        <span class="monitor-card__host" title={server.port ? `${server.host}:${server.port}` : server.host}>{endpointText}</span>
+        {#if refreshText}
+          <span class="monitor-card__separator" aria-hidden="true">·</span>
+          <span class="monitor-card__refresh" title={`마지막 갱신 ${lastSeenAbsoluteText}`}>{refreshText}</span>
+        {/if}
       </div>
 
       {#if onEdit}
@@ -385,7 +410,7 @@
           <div id={`system-panel-${server.server_id}`} class="monitor-card__footer-panel">
             <div class="monitor-card__system-facts">
               <span><small>CPU</small><strong>{cpuPreviewText}</strong></span>
-              <span><small>RAM</small><strong>{ramPreviewText}</strong></span>
+              <span><small>RAM</small><strong>{ramPercentText}</strong></span>
               <span><small>GPU</small><strong>{totalGpuPowerText}</strong></span>
               <span><small>Disk</small><strong>{diskPreviewText}</strong></span>
             </div>
@@ -475,8 +500,8 @@
                       HOLD {#each holdGpuIndices(previewNotes[0]) as gpuIndex, index (gpuIndex)}{index > 0 ? '·' : ''}G{gpuIndex}{/each}
                     </span>
                   {/if}
-                  <span class="monitor-card__note-preview-user">{previewNotes[0].username}</span>
-                  <span class="monitor-card__note-preview-content">{previewNotes[0].content}</span>
+                  <span class="monitor-card__note-preview-user">@{previewNotes[0].username}</span>
+                  <span class="monitor-card__note-preview-content" title={previewNotes[0].content}>{previewNotes[0].content}</span>
                 </span>
                 {#if previewNotes[0].expires_at}
                   <span class={`monitor-card__note-preview-expiry ${notePreviewBadgeClass(previewNotes[0])}`}>
@@ -518,8 +543,8 @@
                       <div class="monitor-note-item">
                         <div class="monitor-note-item__body">
                           <div class="monitor-note-item__meta">
-                            <span class="monitor-note-item__user">{note.username}</span>
-                            <span class="monitor-note-item__time">{noteDate(note.created_at)}</span>
+                            <span class="monitor-note-item__user">@{note.username}</span>
+                            <span class="monitor-note-item__time" title={absoluteTime(note.created_at)}>{noteDate(note.created_at)}</span>
                             {#if note.expires_at}
                               <span class="monitor-card__separator" aria-hidden="true">·</span>
                               <span class={`monitor-note-item__expiry ${noteExpiryTextClass(note)}`}>

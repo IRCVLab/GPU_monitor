@@ -26,7 +26,9 @@
 		setDashboardLayout,
 		setDashboardView
 	} from '$lib/stores/dashboardPrefs';
+	import { activeDevScenario, resetDevScenario } from '$lib/stores/devScenario';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
+	import { applyDevScenario, type DevScenario } from '$lib/utils/devScenario';
 	import { resolveDashboardShortcut } from '$lib/utils/dashboardShortcuts';
 	import { placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
 	import { mergeServerRecordState } from '$lib/utils/serverStateMerge';
@@ -56,6 +58,13 @@
 	type Tab = 'internal' | 'all' | 'external';
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
+	const devMode = import.meta.env.DEV;
+	const devScenarioLabels: Record<Exclude<DevScenario, 'normal'>, string> = {
+		stale: '갱신 지연',
+		io: 'I/O 병목',
+		offline: 'SSH 연결 실패',
+		mixed: '복합 장애'
+	};
 	const dashboardViewTransition = {
 		y: browser && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 8,
 		opacity: browser && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 0.72,
@@ -594,13 +603,6 @@
 		return `${Math.floor(diff / 3600)}시간 전`;
 	}
 
-	function nextRefreshText(): string {
-		if (nextRefreshAtMs === null) return '준비 중';
-
-		const delta = Math.ceil((nextRefreshAtMs - nowMs) / 1000);
-		if (delta > 0) return `${delta}초 뒤`;
-		return '곧 갱신';
-	}
 
 	function refreshWarningText(): string {
 		if (refreshFailureCount >= REFRESH_WARNING_FAILURE_COUNT) return '갱신 지연';
@@ -614,6 +616,11 @@
 
 	function refreshHealthText(): string {
 		return refreshWarningText() || '정상';
+	}
+
+	function refreshIssueText(): string {
+		const warning = refreshWarningText();
+		return warning ? `${warning} · ${relativeTime(lastRefreshAtMs)}` : '';
 	}
 
 	function orderServers(servers: ServerState[], order: number[]): ServerState[] {
@@ -661,6 +668,11 @@
 			const selected = $tab === 'all' ? $all : $tab === 'external' ? $ext : $int;
 			return orderServers(selected, $order);
 		}
+	);
+
+	const displayServers = derived(
+		[currentServers, activeDevScenario],
+		([$servers, $scenario]) => applyDevScenario($servers, $scenario, Date.now())
 	);
 
 	const globalOrderedIds = derived([allServers, serverOrder], ([$servers, $order]) =>
@@ -890,7 +902,7 @@
 				<button
 					type="button"
 					class="ops-indicator-trigger"
-					aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)}. 상세 상태 보기`}
+					aria-label={refreshIssueText() ? `${refreshIssueText()}. 상세 상태 보기` : '정상. 상세 상태 보기'}
 					aria-expanded={indicatorPanelOpen}
 					aria-controls={indicatorPanelId}
 					onclick={openIndicatorPanel}
@@ -898,8 +910,10 @@
 					<RefreshRing attention={Boolean(refreshWarningText())} variant="floating" />
 				</button>
 				<div id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen}>
-					<span class="ops-indicator-status">{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
-					<span class="ops-indicator-divider" aria-hidden="true"></span>
+					{#if refreshWarningText()}
+						<span class="ops-indicator-status">{refreshIssueText()}</span>
+						<span class="ops-indicator-divider" aria-hidden="true"></span>
+					{/if}
 					<div class="ops-indicator-network" role="group" aria-label="네트워크 필터">
 						{#each $tabOptions as tab}
 							<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>
@@ -915,8 +929,8 @@
 					<p
 						class="ops-status"
 						aria-live="polite"
-						aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)} · ${nextRefreshText()}`}
-						title={`${relativeTime(lastRefreshAtMs)} · ${nextRefreshText()}`}
+						aria-label={refreshIssueText() || '정상'}
+						title={refreshIssueText() || undefined}
 					>
 						<RefreshRing attention={Boolean(refreshWarningText())} variant="header" />
 						{#if refreshWarningText()}
@@ -992,6 +1006,19 @@
 	</div>
 
 	<main class={pageMainClass}>
+		{#if devMode && $activeDevScenario !== 'normal'}
+			<aside class="monitor-dev-simulation" role="status" aria-live="polite">
+				<div class="monitor-dev-simulation__copy">
+					<strong>SIMULATION · {devScenarioLabels[$activeDevScenario]}</strong>
+					<span>실제 서버 데이터는 변경되지 않습니다.</span>
+				</div>
+				<div class="monitor-dev-simulation__actions">
+					<a href="/debug">시나리오 설정</a>
+					<button type="button" onclick={resetDevScenario}>실제 상태로 복귀</button>
+				</div>
+			</aside>
+		{/if}
+
 		{#if !loaded}
 			<section class="monitor-dashboard-state" role="status" aria-live="polite">
 				<div class="monitor-dashboard-spinner" aria-hidden="true"></div>
@@ -1024,7 +1051,7 @@
 			{#key $dashboardView}
 				<div class="ops-dashboard-view-stage" in:fly={dashboardViewTransition}>
 					{#if $dashboardView === 'compact'}
-						<CompactDashboard servers={$currentServers} onOpenFull={handleOpenFull} />
+						<CompactDashboard servers={$displayServers} onOpenFull={handleOpenFull} />
 					{:else}
 						<div
 							class="monitor-dashboard-grid"
@@ -1033,7 +1060,7 @@
 							use:masonry={$dashboardLayout === 'masonry'}
 							role="list"
 						>
-							{#each $currentServers as server (server.server_id)}
+							{#each $displayServers as server (server.server_id)}
 								<div
 									role="listitem"
 									tabindex="-1"
@@ -1077,12 +1104,64 @@
 />
 
 <style>
+	.monitor-dev-simulation {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		margin-bottom: 0.75rem;
+		padding: 0.55rem 0.7rem;
+		border: 1px solid color-mix(in srgb, #f59e0b 32%, var(--ops-border));
+		border-radius: 0.8rem;
+		background: color-mix(in srgb, #f59e0b 8%, var(--ops-card));
+		color: var(--ops-fg);
+	}
+
+	.monitor-dev-simulation__copy,
+	.monitor-dev-simulation__actions {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+	}
+
+	.monitor-dev-simulation__copy strong {
+		font-size: 0.7rem;
+		letter-spacing: 0.08em;
+		color: color-mix(in srgb, #f59e0b 82%, var(--ops-fg));
+	}
+
+	.monitor-dev-simulation__copy span,
+	.monitor-dev-simulation__actions {
+		font-size: 0.68rem;
+		color: color-mix(in srgb, var(--ops-fg) 66%, transparent);
+	}
+
+	.monitor-dev-simulation__actions a,
+	.monitor-dev-simulation__actions button {
+		min-height: 1.8rem;
+		padding: 0.32rem 0.62rem;
+		border: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--ops-card) 92%, transparent);
+		color: color-mix(in srgb, var(--ops-fg) 88%, transparent);
+		font: inherit;
+		cursor: pointer;
+	}
+
 	.monitor-dashboard-card-item--continuity-focus {
 		border-radius: 1.25rem;
 		box-shadow:
 			0 0 0 2px color-mix(in srgb, var(--ops-primary) 44%, transparent),
 			0 0 0 8px color-mix(in srgb, var(--ops-primary) 10%, transparent);
 		transition: box-shadow 220ms ease;
+	}
+
+	@media (max-width: 720px) {
+		.monitor-dev-simulation,
+		.monitor-dev-simulation__copy {
+			align-items: flex-start;
+			flex-direction: column;
+		}
 	}
 
 	@media (prefers-reduced-motion: reduce) {

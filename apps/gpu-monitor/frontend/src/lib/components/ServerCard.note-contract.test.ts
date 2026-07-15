@@ -43,6 +43,13 @@ test('ServerCard header collapses identity into one dense baseline with inline h
 	assert.match(titleRow, /monitor-card__edit-button/, 'edit control should stay in the compact header row');
 	assert.doesNotMatch(source, /monitor-card__meta/, 'separate meta row should be removed');
 	assert.doesNotMatch(source, /monitor-card__network/, 'decorative network chip should not remain in the header');
+	assert.match(source, /const endpointText = \$derived/, 'visible endpoint should be derived once');
+	assert.match(source, /server\.port !== DEFAULT_SSH_PORT/, 'non-default SSH ports must remain visible');
+	assert.match(source, /\{endpointText\}/, 'the compact header should render the operational endpoint');
+	assert.match(source, /freshnessIssueText\(server\.last_seen, noteNowMs\)/, 'freshness should be derived as exception-only copy');
+	assert.match(source, /FRESHNESS_WARNING_AFTER_MS/, 'healthy sub-threshold updates must not emit second-by-second copy');
+	assert.match(titleRow, /\{#if refreshText\}[\s\S]*monitor-card__refresh[\s\S]*\{\/if\}/, 'freshness markup should exist only for stale telemetry');
+	assert.doesNotMatch(source, /const refreshText = \$derived\(lastSeenAbsoluteText\)/);
 });
 
 test('collapsed System and Memo controls rely on the disclosure chevron only', () => {
@@ -77,6 +84,8 @@ test('expanded System keeps a dense expert I/O detail row with stall-pressure he
 	assert.match(source, /ioSomeText/, 'expanded system should surface PSI some avg10');
 	assert.match(source, /ioFullText/, 'expanded system should surface PSI full avg10');
 	assert.match(source, /ioBlockedText/, 'expanded system should surface blocked task count');
+	const facts = source.match(/<div class="monitor-card__system-facts">[\s\S]*?<\/div>/)?.[0] ?? '';
+	assert.match(facts, /<small>RAM<\/small><strong>\{ramPercentText\}<\/strong>/, 'summary facts should use compact RAM percent instead of truncating capacity text');
 	assert.doesNotMatch(source, /monitor-card__system-summary/, 'old summary tile grid should be removed from the dense system panel');
 	assert.doesNotMatch(source, /monitor-card__summary-item/, 'old summary tiles should not remain');
 });
@@ -91,6 +100,8 @@ test('collapsed memo preview uses explicit Korean relative expiry instead of cry
 	assert.match(preview, /monitor-card__note-preview-expiry/);
 	assert.match(preview, /\{noteRemainingText\(previewNotes\[0\]\)\}/, 'collapsed memo preview should use explicit Korean relative expiry');
 	assert.match(preview, /monitor-card__note-preview-hold/, 'hold preview should lead with explicit HOLD GPU scope');
+	assert.match(preview, /@\{previewNotes\[0\]\.username\}/, 'memo owner must be unmistakable as a user identity');
+	assert.match(preview, /title=\{previewNotes\[0\]\.content\}/, 'truncated memo content must retain its full text');
 	assert.doesNotMatch(source, /notePreviewCountdownText/, 'cryptic D\/H\/M\/S countdown helper should be removed');
 });
 
@@ -105,6 +116,7 @@ test('ServerCard note preview and history keep concise HOLD markers and GPU chip
 	assert.doesNotMatch(source, /advisory soft hold/);
 	assert.match(source, /monitor-note-item__kind">HOLD<\/span>/);
 	assert.match(source, /monitor-note-item__gpu-chip">G\{gpuIndex\}<\/span>/);
+	assert.match(source, /monitor-note-item__user">@\{note\.username\}<\/span>/, 'history must distinguish author from memo copy');
 });
 
 test('ServerCard separates memo history from the composer and provides a deliberate empty state', () => {
