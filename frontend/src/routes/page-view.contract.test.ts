@@ -294,13 +294,24 @@ test('refresh requests run on a fixed cadence independent of response completion
 
 test('page runtime is mounted and destroyed through the Svelte 5 effect lifecycle', () => {
 	assert.doesNotMatch(pageSource, /import\s+\{\s*onMount\s*\}\s+from\s+'svelte'/);
-	assert.match(pageSource, /\$effect\(\(\) => initPageRuntime\(\)\)/);
+	assert.match(pageSource, /\$effect\(\(\) => untrack\(\(\) => initPageRuntime\(\)\)\)/);
 	assert.doesNotMatch(pageSource, /\n\s*initPageRuntime\(\);/);
 	const initBody = functionBody(pageSource, 'initPageRuntime');
 	assert.match(initBody, /const cleanup = \(\) =>/);
 	assert.match(initBody, /runtime\.__monitoringV2PageCleanup = cleanup/);
 	assert.match(initBody, /return cleanup/);
 	assert.match(initBody, /if \(runtime\.__monitoringV2PageCleanup === cleanup\)/);
+});
+
+
+test('page runtime init is untracked so header visibility changes cannot remount and cancel handoff RAF', () => {
+	assert.match(pageSource, /import \{\s*tick,\s*untrack\s*\} from 'svelte';/);
+	assert.match(pageSource, /\$effect\(\(\) => untrack\(\(\) => initPageRuntime\(\)\)\)/);
+	const initBody = functionBody(pageSource, 'initPageRuntime');
+	assert.match(initBody, /headerPreviousY = currentHeaderScrollPosition\(\)/);
+	assert.match(initBody, /runtime\.__monitoringV2PageCleanup\?\.\(\)/);
+	assert.match(pageSource, /scheduleHeaderIndicatorHandoff\('collapse'\)/);
+	assert.match(pageSource, /cleanupHeaderIndicatorHandoff\(\)/);
 });
 
 
@@ -459,7 +470,7 @@ test('Task 6 reveal overlay resolves destination theme tokens through app css, n
 	assert.match(appCss, /\.theme-mode-reveal\[data-material='claude'\]/);
 	assert.match(appCss, /\.theme-mode-reveal\[data-material='astro'\]/);
 	const revealRule = cssRule(appCss, '.theme-mode-reveal');
-	assert.match(revealRule, /z-index:\s*2[0-9]\s*;/);
+	assert.match(revealRule, /z-index:\s*8[0-9]\s*;/);
 	assert.match(revealRule, /background:\s*var\(--ops-bg\)/);
 	assert.match(appCss, /\.theme-mode-reveal__edge\s*\{[\s\S]*border:[\s\S]*color-mix/);
 	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
@@ -487,7 +498,53 @@ test('Task 6 reveal cleanup releases lock after animation rejection without appl
 test('Task 6 shortcut theme reveal uses cached or logical origin instead of focusing a hidden header button', () => {
 	const shortcutStart = pageSource.indexOf("case 'toggle-theme'");
 	const themeCase = pageSource.slice(shortcutStart, pageSource.indexOf('break;', shortcutStart));
-	assert.match(themeCase, /fallbackThemeRevealCenter\(\)/);
-	assert.match(themeCase, /void runThemeModeReveal\(themeModeButtonElement, shortcutOrigin, false\)/);
+	assert.match(themeCase, /void runThemeModeReveal\(themeModeButtonElement, null, false\)/);
+	assert.doesNotMatch(themeCase, /fallbackThemeRevealCenter\(\)/);
 	assert.doesNotMatch(themeCase, /themeModeButtonElement\.getBoundingClientRect\(\)/);
+});
+
+
+test('Task 6 reveal overlay covers header while a body-level toggle proxy stays above it', () => {
+	const revealRule = cssRule(appCss, '.theme-mode-reveal');
+	assert.match(revealRule, /z-index:\s*8[0-9]\s*;/);
+	assert.doesNotMatch(appCss, /(?:^|\n)\.theme-mode-toggle-proxy\s*\{[\s\S]*position:\s*fixed/);
+	const proxyRule = cssRule(appCss, 'body > .theme-mode-toggle-proxy.ops-mode-action');
+	assert.match(proxyRule, /position:\s*fixed\s*;/);
+	assert.match(proxyRule, /z-index:\s*9[0-9]\s*;/);
+	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
+	assert.match(revealBody, /const toggleProxy = createThemeToggleProxy\(originElement\)/);
+	assert.match(pageSource, /themeRevealToggleProxy\?\.remove\(\)/);
+	const proxyBody = functionBody(pageSource, 'createThemeToggleProxy');
+	assert.match(proxyBody, /originElement\.cloneNode\(true\)/);
+	assert.match(proxyBody, /proxy\.style\.left = `\$\{rect\.left\}px`/);
+	assert.match(proxyBody, /proxy\.style\.top = `\$\{rect\.top\}px`/);
+	assert.match(proxyBody, /proxy\.style\.width = `\$\{rect\.width\}px`/);
+	assert.match(proxyBody, /proxy\.style\.height = `\$\{rect\.height\}px`/);
+	assert.match(proxyBody, /document\.body\.appendChild\(proxy\)/);
+});
+
+test('Task 6 C shortcut uses exact visible button center and cached measured center only when hidden', () => {
+	const shortcutStart = pageSource.indexOf("case 'toggle-theme'");
+	const themeCase = pageSource.slice(shortcutStart, pageSource.indexOf('break;', shortcutStart));
+	assert.match(themeCase, /void runThemeModeReveal\(themeModeButtonElement, null, false\)/);
+	assert.doesNotMatch(themeCase, /fallbackThemeRevealCenter\(\)/);
+	const visibleCenterBody = functionBody(pageSource, 'readVisibleThemeButtonCenter');
+	assert.match(visibleCenterBody, /originElement\.getBoundingClientRect\(\)/);
+	assert.match(visibleCenterBody, /lastThemeModeButtonCenter = center/);
+	assert.match(pageSource, /cacheVisibleThemeButtonCenter\(\)/);
+	const initBody = functionBody(pageSource, 'initPageRuntime');
+	assert.match(initBody, /let themeButtonCacheFrame: number \| null = requestAnimationFrame\(cacheVisibleThemeButtonCenter\)/);
+	assert.match(initBody, /if \(themeButtonCacheFrame !== null\) \{\s*cancelAnimationFrame\(themeButtonCacheFrame\);\s*themeButtonCacheFrame = null;\s*\}/);
+	const cleanupBody = initBody.slice(initBody.indexOf('const cleanup = () =>'));
+	assert.doesNotMatch(cleanupBody, /requestAnimationFrame\(cacheVisibleThemeButtonCenter\)/);
+	assert.match(pageSource, /function fallbackThemeRevealCenter[\s\S]*lastThemeModeButtonCenter/);
+});
+
+test('Task 6 FLIP handoff suppresses live source and target ring visuals until cleanup', () => {
+	assert.match(pageSource, /let headerIndicatorHandoffActive = \$state\(false\)/);
+	assert.match(pageSource, /headerIndicatorHandoffActive = true/);
+	const cleanupBody = functionBody(pageSource, 'cleanupHeaderIndicatorHandoff');
+	assert.match(cleanupBody, /headerIndicatorHandoffActive = false/);
+	assert.match(pageSource, /class:ops-refresh-ring-wrap--handoff-active=\{headerIndicatorHandoffActive\}/);
+	assert.match(dashboardCss, /\.ops-refresh-ring-wrap--handoff-active\s*\{[\s\S]*opacity:\s*0/);
 });

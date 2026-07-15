@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { cubicOut } from 'svelte/easing';
 	import { writable, derived, get } from 'svelte/store';
 	import { fly } from 'svelte/transition';
@@ -236,12 +236,14 @@
 	let fixedRefreshRingElement = $state<HTMLSpanElement | null>(null);
 	let headerRefreshRingElement = $state<HTMLSpanElement | null>(null);
 	let headerIndicatorHandoffAnimation = $state<Animation | null>(null);
+	let headerIndicatorHandoffActive = $state(false);
 	let headerIndicatorHandoffFrame: number | null = null;
 	let headerIndicatorHandoffOverlay: HTMLElement | null = null;
 	let headerIndicatorHandoffSourceRect: DOMRect | null = null;
 	let themeModeButtonElement = $state<HTMLButtonElement | null>(null);
 	let themeRevealLocked = $state(false);
 	let themeRevealOverlay: HTMLDivElement | null = null;
+	let themeRevealToggleProxy: HTMLElement | null = null;
 	let themeRevealAnimation: Animation | null = null;
 	let themeRevealEdgeAnimation: Animation | null = null;
 	let lastThemeModeButtonCenter = $state<ThemeRevealOrigin | null>(null);
@@ -500,6 +502,7 @@
 		}
 		headerIndicatorHandoffAnimation?.cancel();
 		headerIndicatorHandoffAnimation = null;
+		headerIndicatorHandoffActive = false;
 		headerIndicatorHandoffOverlay?.remove();
 		headerIndicatorHandoffOverlay = null;
 		headerIndicatorHandoffSourceRect = null;
@@ -534,6 +537,7 @@
 		}
 		const overlay = (direction === 'collapse' ? headerRefreshRingElement : fixedRefreshRingElement)?.cloneNode(true) as HTMLElement | null;
 		if (!overlay) return;
+		headerIndicatorHandoffActive = true;
 		overlay.classList.add('ops-refresh-handoff');
 		overlay.setAttribute('aria-hidden', 'true');
 		overlay.style.left = `${sourceRect.left}px`;
@@ -600,6 +604,7 @@
 	}
 
 	function handleHeaderResize(): void {
+		cacheVisibleThemeButtonCenter();
 		const currentY = currentHeaderScrollPosition();
 		const result = updateHeaderVisibility({
 			currentY,
@@ -641,6 +646,7 @@
 		};
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 		headerPreviousY = currentHeaderScrollPosition();
+		let themeButtonCacheFrame: number | null = requestAnimationFrame(cacheVisibleThemeButtonCenter);
 		window.addEventListener('scroll', handleHeaderScroll, { passive: true });
 		window.addEventListener('resize', handleHeaderResize, { passive: true });
 		window.addEventListener('wheel', handleHeaderWheel, { passive: true });
@@ -663,6 +669,10 @@
 			window.removeEventListener('touchmove', handleHeaderTouchMove);
 			window.removeEventListener('touchend', handleHeaderTouchEnd);
 			headerTouchY = null;
+			if (themeButtonCacheFrame !== null) {
+				cancelAnimationFrame(themeButtonCacheFrame);
+				themeButtonCacheFrame = null;
+			}
 			if (headerScrollFrame !== null) {
 				cancelAnimationFrame(headerScrollFrame);
 				headerScrollFrame = null;
@@ -679,7 +689,7 @@
 		return cleanup;
 	}
 
-	$effect(() => initPageRuntime());
+	$effect(() => untrack(() => initPageRuntime()));
 
 
 	function relativeTime(ms: number): string {
@@ -944,6 +954,8 @@
 		themeRevealAnimation = null;
 		themeRevealEdgeAnimation?.cancel();
 		themeRevealEdgeAnimation = null;
+		themeRevealToggleProxy?.remove();
+		themeRevealToggleProxy = null;
 		themeRevealOverlay?.remove();
 		themeRevealOverlay = null;
 		themeRevealLocked = false;
@@ -954,6 +966,26 @@
 			x: Math.max(24, window.innerWidth - 32),
 			y: Math.max(24, HEADER_INDICATOR_TOP_MAX_PX + 16)
 		};
+	}
+
+	function cacheVisibleThemeButtonCenter(): void {
+		readVisibleThemeButtonCenter(themeModeButtonElement);
+	}
+
+	function createThemeToggleProxy(originElement: HTMLElement | null): HTMLElement | null {
+		if (!originElement) return null;
+		const rect = originElement.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.left >= window.innerWidth || rect.top >= window.innerHeight) return null;
+		const proxy = originElement.cloneNode(true) as HTMLElement;
+		proxy.classList.add('theme-mode-toggle-proxy');
+		proxy.setAttribute('aria-hidden', 'true');
+		proxy.setAttribute('tabindex', '-1');
+		proxy.style.left = `${rect.left}px`;
+		proxy.style.top = `${rect.top}px`;
+		proxy.style.width = `${rect.width}px`;
+		proxy.style.height = `${rect.height}px`;
+		document.body.appendChild(proxy);
+		return proxy;
 	}
 
 	function readVisibleThemeButtonCenter(originElement: HTMLElement | null): ThemeRevealOrigin | null {
@@ -991,6 +1023,8 @@
 		const radius = farthestCornerRadius(originX, originY);
 		const overlay = document.createElement('div');
 		const edge = document.createElement('div');
+		const toggleProxy = createThemeToggleProxy(originElement);
+		themeRevealToggleProxy = toggleProxy;
 		overlay.className = 'theme-mode-reveal';
 		edge.className = 'theme-mode-reveal__edge';
 		overlay.setAttribute('data-theme-mode', nextMode);
@@ -1074,8 +1108,7 @@
 				selectNetwork(shortcut.tab);
 				break;
 			case 'toggle-theme': {
-				const shortcutOrigin = fallbackThemeRevealCenter();
-				void runThemeModeReveal(themeModeButtonElement, shortcutOrigin, false);
+				void runThemeModeReveal(themeModeButtonElement, null, false);
 				break;
 			}
 		}
@@ -1102,7 +1135,7 @@
 					aria-controls={indicatorPanelId}
 					onclick={openIndicatorPanel}
 				>
-					<span bind:this={fixedRefreshRingElement} class="ops-refresh-ring-wrap"><RefreshRing attention={Boolean(refreshWarningText())} variant="floating" /></span>
+					<span bind:this={fixedRefreshRingElement} class="ops-refresh-ring-wrap" class:ops-refresh-ring-wrap--handoff-active={headerIndicatorHandoffActive}><RefreshRing attention={Boolean(refreshWarningText())} variant="floating" /></span>
 				</button>
 				<div id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen} aria-hidden={!indicatorPanelOpen} inert={!indicatorPanelOpen}>
 					{#if refreshWarningText()}
@@ -1127,7 +1160,7 @@
 						aria-label={refreshIssueText() || '정상'}
 						title={refreshIssueText() || undefined}
 					>
-						<span bind:this={headerRefreshRingElement} class="ops-refresh-ring-wrap"><RefreshRing attention={Boolean(refreshWarningText())} variant="header" /></span>
+						<span bind:this={headerRefreshRingElement} class="ops-refresh-ring-wrap" class:ops-refresh-ring-wrap--handoff-active={headerIndicatorHandoffActive}><RefreshRing attention={Boolean(refreshWarningText())} variant="header" /></span>
 						{#if refreshWarningText()}
 							<span class="ops-status-label">{refreshWarningText()}</span>
 						{/if}
