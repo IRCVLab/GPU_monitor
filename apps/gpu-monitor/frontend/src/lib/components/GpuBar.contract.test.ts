@@ -9,6 +9,10 @@ function normalized() {
 	return source.replace(/\s+/g, ' ');
 }
 
+test('GPU memory metric retains the compact GB value', () => {
+	assert.match(source, /\{memUsedGB\}\/\{memTotalGB\}GB/);
+});
+
 test('GpuBar accepts advisory hold cues without changing telemetry activity semantics', () => {
 	assert.match(source, /advisoryHolds\s*=\s*\[\]/, 'GpuBar should accept default-empty advisory hold cues');
 	assert.match(source, /const\s+isActive\s*=\s*\$derived\(gpu\.users\.length\s*>\s*0\)/, 'active state must remain based only on telemetry users');

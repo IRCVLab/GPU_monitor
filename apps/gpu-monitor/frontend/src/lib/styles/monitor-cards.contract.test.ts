@@ -144,3 +144,12 @@ test('GPU advisory hold cue is dense visible text with subtle noninteractive sty
 	assert.match(rule, /color:\s*color-mix\(in srgb, #f59e0b/);
 	assert.match(css, /\.monitor-gpu-row__users[\s\S]*align-items:\s*center/);
 });
+
+test('Mem receives the wider flexible track without wasting a 10ch value column', () => {
+	const metricsRule = cssRule('.monitor-gpu-row__metrics');
+	assertDeclaration(metricsRule, 'grid-template-columns', 'minmax(0, 0.78fr) minmax(0, 1.22fr)');
+
+	const memoryValueRule = cssRule('.monitor-gpu-metric__value--memory');
+	assertDeclaration(memoryValueRule, 'min-width', '8ch');
+	assert.doesNotMatch(memoryValueRule, /10ch/);
+});

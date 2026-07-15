@@ -289,8 +289,8 @@
 
 .monitor-gpu-row__metrics {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.55rem 0.8rem;
+  grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+  gap: 0.55rem;
   min-width: 0;
 }
 
@@ -299,7 +299,7 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.35rem;
 }
 
 .monitor-gpu-metric__label {
@@ -362,7 +362,7 @@
 }
 
 .monitor-gpu-metric__value--memory {
-  min-width: 10ch;
+  min-width: 8ch;
 }
 
 .monitor-card__footer {

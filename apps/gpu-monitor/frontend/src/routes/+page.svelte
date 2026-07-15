@@ -557,6 +557,13 @@
 		return '정상';
 	}
 
+	const refreshCadencePct = $derived.by(() => {
+		if (refreshInFlight) return 100;
+		if (lastRefreshAtMs === 0 || nextRefreshAtMs === null) return 0;
+		const cadenceWindowMs = Math.max(1, nextRefreshAtMs - lastRefreshAtMs);
+		return Math.min(100, Math.max(0, ((nowMs - lastRefreshAtMs) / cadenceWindowMs) * 100));
+	});
+
 	const allServers = derived(serverStates, ($map) =>
 		[...$map.values()].sort(
 			(a, b) => (a.display_order ?? a.server_id) - (b.display_order ?? b.server_id)
@@ -698,11 +705,21 @@
 			<div class={`ops-header-inner ${pageShellClass}`}>
 				<div class="ops-identity">
 					<h1>GPU Monitor</h1>
-					<p class="ops-status" aria-live="polite">
+					<p
+						class="ops-status"
+						aria-live="polite"
+						aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)} · ${nextRefreshText()}`}
+						title={`${relativeTime(lastRefreshAtMs)} · ${nextRefreshText()}`}
+					>
 						<span class:ops-status-attention={!$wsConnected || refreshFailed} class="ops-status-dot"></span>
-						<span>{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
-						<span class="ops-status-separator" aria-hidden="true">•</span>
-						<span>{nextRefreshText()}</span>
+						<span class="ops-status-label">{refreshHealthText()}</span>
+						<span class="ops-refresh-cadence" aria-hidden="true">
+							<span
+								class="ops-refresh-cadence__fill"
+								class:attention={!$wsConnected || refreshFailed}
+								style={`width: ${refreshCadencePct}%`}
+							></span>
+						</span>
 					</p>
 				</div>
 
