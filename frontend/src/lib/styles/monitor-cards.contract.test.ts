@@ -153,3 +153,30 @@ test('Mem receives the wider flexible track without wasting a 10ch value column'
 	assertDeclaration(memoryValueRule, 'min-width', '8ch');
 	assert.doesNotMatch(memoryValueRule, /10ch/);
 });
+
+test('collapsed utility rows use subtle markers and CSS disclosure angles', () => {
+	const markerRule = cssRule('.monitor-card__footer-marker');
+	assertDeclaration(markerRule, 'width', '0.34rem');
+	assertDeclaration(markerRule, 'height', '0.34rem');
+
+	const disclosureRule = cssRule('.monitor-card__footer-disclosure');
+	assert.match(disclosureRule, /border-right:\s*1px solid/);
+	assert.match(disclosureRule, /border-bottom:\s*1px solid/);
+	assertDeclaration(disclosureRule, 'transform', 'rotate(45deg)');
+
+	const expandedRule = cssRule('.monitor-card__footer-disclosure.is-expanded');
+	assertDeclaration(expandedRule, 'transform', 'rotate(225deg)');
+});
+
+test('memo history and composer are grouped without nested card surfaces', () => {
+	const groupRule = cssRule('.monitor-card__memo-group');
+	assertDeclaration(groupRule, 'background', 'transparent');
+	assert.match(groupRule, /border-top:\s*1px solid/);
+
+	const headRule = cssRule('.monitor-card__memo-group-head');
+	assert.match(headRule, /display:\s*flex/);
+	assert.match(headRule, /justify-content:\s*space-between/);
+
+	const emptyRule = cssRule('.monitor-card__memo-empty');
+	assert.match(emptyRule, /font-size:\s*0\.6[0-9]rem/);
+});

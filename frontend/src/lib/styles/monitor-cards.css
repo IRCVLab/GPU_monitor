@@ -404,11 +404,43 @@
   gap: 0.24rem;
 }
 
-.monitor-card__footer-chevron {
-  width: 0.58rem;
-  font-size: 0.62rem;
-  line-height: 1;
-  color: color-mix(in srgb, var(--ops-fg) 34%, transparent);
+.monitor-card__footer-marker {
+	width: 0.34rem;
+	height: 0.34rem;
+	flex: 0 0 auto;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--ops-fg) 28%, transparent);
+}
+
+.monitor-card__footer-marker--system {
+	background: color-mix(in srgb, var(--chart-1) 54%, var(--ops-fg));
+}
+
+.monitor-card__footer-marker--memo {
+	background: color-mix(in srgb, var(--ops-primary) 58%, var(--ops-fg));
+}
+
+.monitor-card__footer-side {
+	min-width: 0;
+	flex: 1 1 auto;
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.42rem;
+}
+
+.monitor-card__footer-disclosure {
+	width: 0.38rem;
+	height: 0.38rem;
+	flex: 0 0 auto;
+	border-right: 1px solid color-mix(in srgb, var(--ops-fg) 34%, transparent);
+	border-bottom: 1px solid color-mix(in srgb, var(--ops-fg) 34%, transparent);
+	transform: rotate(45deg);
+	transition: transform 160ms ease, border-color 160ms ease;
+}
+
+.monitor-card__footer-disclosure.is-expanded {
+	transform: rotate(225deg);
 }
 
 .monitor-card__footer-label,
@@ -472,7 +504,15 @@
 }
 
 .monitor-card__note-preview-user {
-  color: color-mix(in srgb, var(--ops-fg) 78%, transparent);
+	color: color-mix(in srgb, var(--ops-fg) 78%, transparent);
+	font-weight: 620;
+}
+
+.monitor-card__note-preview-scope {
+	flex: 0 0 auto;
+	font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace;
+	font-size: 0.62rem;
+	color: color-mix(in srgb, #f59e0b 72%, var(--ops-fg));
 }
 
 .monitor-card__note-preview-content {
@@ -484,6 +524,53 @@
 
 .monitor-card__footer-panel {
   padding: 0;
+}
+
+.monitor-card__memo-group {
+	background: transparent;
+	border-top: 1px solid color-mix(in srgb, var(--ops-border) 78%, transparent);
+	padding-top: 0.42rem;
+}
+
+.monitor-card__memo-group + .monitor-card__memo-group {
+	margin-top: 0.45rem;
+}
+
+.monitor-card__memo-group-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	margin-bottom: 0.32rem;
+}
+
+.monitor-card__memo-group-title,
+.monitor-card__memo-group-meta {
+	font-size: 0.62rem;
+	line-height: 1;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.monitor-card__memo-group-title {
+	font-weight: 650;
+	color: color-mix(in srgb, var(--ops-fg) 64%, transparent);
+}
+
+.monitor-card__memo-group-meta {
+	color: color-mix(in srgb, var(--ops-fg) 34%, transparent);
+	font-variant-numeric: tabular-nums;
+}
+
+.monitor-card__memo-empty {
+	margin: 0;
+	padding: 0.2rem 0 0.08rem;
+	font-size: 0.66rem;
+	color: color-mix(in srgb, var(--ops-fg) 34%, transparent);
+}
+
+.monitor-card__memo-group--composer .note-form {
+	padding-top: 0.1rem;
 }
 
 .monitor-card__footer-panel > .monitor-card__metric-stack,
