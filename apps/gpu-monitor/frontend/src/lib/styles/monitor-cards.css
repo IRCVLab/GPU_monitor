@@ -292,7 +292,7 @@
 .monitor-gpu-metric__track,
 .monitor-meter {
   position: relative;
-  height: 0.34rem;
+  height: 0.28rem;
   min-width: 0;
   overflow: hidden;
   border-radius: 999px;
@@ -347,16 +347,16 @@
 
 .monitor-card__footer {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.28rem;
   margin-top: auto;
-  padding: 0.75rem 0.9rem 0.9rem;
+  padding: 0.5rem 0.75rem 0.55rem;
   border-top: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
   background: color-mix(in srgb, var(--ops-card) 92%, var(--ops-muted));
 }
 
 .monitor-card__footer-section + .monitor-card__footer-section {
   border-top: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
-  padding-top: 0.5rem;
+  padding-top: 0.28rem;
 }
 
 .monitor-card__footer-toggle {
@@ -364,7 +364,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.36rem;
   padding: 0;
   background: transparent;
   color: color-mix(in srgb, var(--ops-fg) 62%, transparent);
@@ -381,16 +381,19 @@
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 0.38rem;
+  gap: 0.24rem;
 }
 
 .monitor-card__footer-chevron {
+  width: 0.58rem;
+  font-size: 0.62rem;
+  line-height: 1;
   color: color-mix(in srgb, var(--ops-fg) 34%, transparent);
 }
 
 .monitor-card__footer-label,
 .monitor-card__subheading {
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -403,7 +406,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: color-mix(in srgb, var(--ops-fg) 44%, transparent);
 }
 
@@ -422,9 +425,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 1.1rem;
-  padding: 0 0.35rem;
-  border-radius: 0.5rem;
+  min-height: 0.95rem;
+  padding: 0 0.28rem;
+  border-radius: 0.42rem;
   border: 1px solid transparent;
   font-size: 0.64rem;
   font-weight: 650;
@@ -463,24 +466,24 @@
   padding: 0;
 }
 
-.monitor-card__metric-stack,
-.monitor-card__subsection,
-.monitor-note-list,
-.monitor-card .note-form {
-  padding-top: 0.78rem;
+.monitor-card__footer-panel > .monitor-card__metric-stack,
+.monitor-card__footer-panel > .monitor-card__subsection,
+.monitor-card__footer-panel > .monitor-note-list,
+.monitor-card__footer-panel > .note-form {
+  padding-top: 0.45rem;
   border-top: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
 }
 
 .monitor-card__metric-row {
   display: grid;
-  grid-template-columns: 2.6rem minmax(0, 1fr) auto;
+  grid-template-columns: 2.15rem minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.65rem;
+  gap: 0.38rem;
 }
 
 .monitor-card__metric-stack {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.32rem;
 }
 
 .monitor-card__metric-name,
@@ -508,13 +511,13 @@
 
 .monitor-card__subsection {
   display: grid;
-  gap: 0.72rem;
+  gap: 0.36rem;
 }
 
 .monitor-card__hardware-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(6.4rem, 1fr));
-  gap: 0.45rem;
+  grid-template-columns: repeat(auto-fit, minmax(4.8rem, 1fr));
+  gap: 0.24rem;
 }
 
 .monitor-card__hardware-item,
@@ -528,9 +531,9 @@
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.55rem 0.7rem;
-  border-radius: 0.85rem;
+  gap: 0.28rem;
+  padding: 0.26rem 0.42rem;
+  border-radius: 0.48rem;
 }
 
 .monitor-card__hardware-index,
@@ -562,16 +565,25 @@
 
 .monitor-card__mount-list {
   display: grid;
-  gap: 0.45rem;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
+  border-radius: 0.48rem;
 }
 
 .monitor-card__mount-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.58rem 0.7rem;
-  border-radius: 0.85rem;
+  gap: 0.42rem;
+  padding: 0.26rem 0.42rem;
+  border-width: 1px 0 0;
+  border-radius: 0.48rem;
+  background: transparent;
+}
+
+.monitor-card__mount-item:first-child {
+  border-top: 0;
 }
 
 .monitor-card__mount-path {
@@ -616,16 +628,16 @@
 
 .monitor-note-list {
   display: grid;
-  gap: 0.6rem;
+  gap: 0.38rem;
 }
 
 .monitor-note-item {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 0.85rem;
-  padding: 0.78rem 0.85rem;
-  border-radius: 0.95rem;
+  gap: 0.55rem;
+  padding: 0.46rem 0.55rem;
+  border-radius: 0.55rem;
 }
 
 .monitor-note-item__body {
@@ -637,8 +649,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.2rem 0.45rem;
-  margin-bottom: 0.35rem;
+  gap: 0.16rem 0.32rem;
+  margin-bottom: 0.18rem;
 }
 
 .monitor-note-item__user {
@@ -649,7 +661,7 @@
 
 .monitor-note-item__content {
   margin: 0;
-  line-height: 1.5;
+  line-height: 1.35;
   color: color-mix(in srgb, var(--ops-fg) 74%, transparent);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -660,7 +672,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.45rem;
+  gap: 0.3rem;
   flex: 0 0 auto;
 }
 
@@ -685,9 +697,9 @@
 }
 
 .monitor-note-item__password {
-  width: 4.5rem;
-  padding: 0.44rem 0.55rem;
-  font-size: 0.72rem;
+  width: 4rem;
+  padding: 0.32rem 0.42rem;
+  font-size: 0.68rem;
 }
 
 .monitor-note-item__password::placeholder,
@@ -708,9 +720,9 @@
 }
 
 .monitor-note-item__delete {
-  min-width: 3rem;
-  min-height: 1.85rem;
-  padding: 0 0.72rem;
+  min-width: 2.55rem;
+  min-height: 1.55rem;
+  padding: 0 0.52rem;
   color: color-mix(in srgb, #ef4444 72%, var(--ops-fg));
   border-color: color-mix(in srgb, #ef4444 18%, var(--ops-border));
   background: color-mix(in srgb, #ef4444 8%, var(--ops-card));
@@ -735,7 +747,7 @@
 
 .monitor-card .note-form {
   display: grid;
-  gap: 0.6rem;
+  gap: 0.42rem;
 }
 
 .monitor-card .note-form-identity-row {
