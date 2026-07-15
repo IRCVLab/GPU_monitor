@@ -972,10 +972,17 @@
 		readVisibleThemeButtonCenter(themeModeButtonElement);
 	}
 
-	function createThemeToggleProxy(originElement: HTMLElement | null): HTMLElement | null {
-		if (!originElement) return null;
+	function isVisibleThemeRevealSource(originElement: HTMLElement | null): originElement is HTMLElement {
+		if (!originElement) return false;
+		if (originElement.closest('.ops-header-compact')) return false;
 		const rect = originElement.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.left >= window.innerWidth || rect.top >= window.innerHeight) return null;
+		if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.left >= window.innerWidth || rect.top >= window.innerHeight) return false;
+		return true;
+	}
+
+	function createThemeToggleProxy(originElement: HTMLElement | null): HTMLElement | null {
+		if (!isVisibleThemeRevealSource(originElement)) return null;
+		const rect = originElement.getBoundingClientRect();
 		const proxy = originElement.cloneNode(true) as HTMLElement;
 		proxy.classList.add('theme-mode-toggle-proxy');
 		proxy.setAttribute('aria-hidden', 'true');
@@ -989,9 +996,8 @@
 	}
 
 	function readVisibleThemeButtonCenter(originElement: HTMLElement | null): ThemeRevealOrigin | null {
-		if (!originElement) return null;
+		if (!isVisibleThemeRevealSource(originElement)) return null;
 		const rect = originElement.getBoundingClientRect();
-		if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 || rect.right <= 0 || rect.left >= window.innerWidth || rect.top >= window.innerHeight) return null;
 		const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 		lastThemeModeButtonCenter = center;
 		return center;
