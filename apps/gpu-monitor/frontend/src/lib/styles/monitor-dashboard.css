@@ -33,6 +33,10 @@
 	transition: opacity 180ms ease, transform 180ms ease;
 }
 
+.ops-header-shell.ops-header-menu-open .ops-header {
+	overflow: visible;
+}
+
 .ops-header-shell.ops-header-compact .ops-header {
 	opacity: 0;
 	transform: translateY(-0.75rem);
