@@ -43,3 +43,19 @@ test('collapsed System and Memo controls use structural markers and CSS disclosu
 	assert.match(source, /monitor-card__footer-disclosure/);
 	assert.doesNotMatch(source, />\s*[▾▸]\s*</);
 });
+
+test('ServerCard hides the normal status label while keeping exception labels visible', () => {
+	assert.match(source, /statusMeta\.label === '정상'/);
+	assert.match(source, /class="monitor-card__status-text monitor-card__sr-only"/);
+	assert.match(source, /\{:else\}\s*<span class="monitor-card__status-text">\{statusMeta\.label\}<\/span>/);
+});
+
+test('ServerCard renders collapsed system preview as four named micro-items', () => {
+	assert.match(source, /monitor-card__system-preview/);
+	assert.match(source, /monitor-card__system-preview-item/);
+	assert.match(source, /<small>CPU<\/small>[\s\S]*?<strong>\{[\s\S]*?\}<\/strong>/);
+	assert.match(source, /<small>RAM<\/small>[\s\S]*?<strong>\{[\s\S]*?\}<\/strong>/);
+	assert.match(source, /<small>GPU<\/small>[\s\S]*?<strong>\{[\s\S]*?\}<\/strong>/);
+	assert.match(source, /<small>Disk<\/small>[\s\S]*?<strong>\{[\s\S]*?\}<\/strong>/);
+	assert.doesNotMatch(source, /segments\.join\(' · '\)/);
+});
