@@ -71,6 +71,46 @@ test('task 4 hardware mounts and notes align to dense card scale', () => {
 	assertDeclaration(noteRule, 'border-radius', '0.55rem');
 });
 
+
+
+function cssRuleContainingSelectorWithDeclaration(selector, property) {
+	const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const matches = [...css.matchAll(/(?<selectors>[^{}]+)\{(?<body>[^}]*)\}/gm)];
+	const match = matches.find((candidate) =>
+		candidate.groups.selectors.split(',').map((item) => item.trim()).includes(selector) &&
+		new RegExp(`${escapedProperty}\\s*:`).test(candidate.groups.body)
+	);
+	assert.ok(match?.groups?.body, `Missing ${property} declaration for ${selector}`);
+	return match.groups.body;
+}
+
+function assertFontSizeAtMost(selector, maxRem) {
+	const rule = cssRuleContainingSelectorWithDeclaration(selector, 'font-size');
+	assert.ok(
+		remValues(declarationValue(rule, 'font-size'))[0] <= maxRem,
+		`${selector} font-size must be <= ${maxRem}rem`
+	);
+}
+
+test('task 4 expanded system secondary details stay under dense type scale', () => {
+	for (const selector of [
+		'.monitor-card__storage-meta',
+		'.monitor-card__storage-time',
+		'.monitor-card__mount-path',
+		'.monitor-card__hardware-index',
+		'.monitor-card__hardware-value',
+		'.monitor-card__mount-usage',
+		'.monitor-card__mount-percent'
+	]) {
+		assertFontSizeAtMost(selector, 0.7);
+	}
+});
+
+test('task 4 memo loading and error expanded states use dense top padding', () => {
+	const stateRule = cssRuleWithDeclaration('.monitor-card__loading-state,\n.monitor-card__error-row', 'padding-top');
+	assert.ok(remValues(declarationValue(stateRule, 'padding-top'))[0] <= 0.45);
+});
+
 test('unified GPU selector remains chip-based, compact, and visually integrated', () => {
 	assert.doesNotMatch(css, /\.note-form-kind-row|\.note-form-kind-toggle/);
 	const rowRule = cssRule('.monitor-card .note-form-gpu-chip-row');
