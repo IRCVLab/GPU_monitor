@@ -66,7 +66,7 @@ export function updateHeaderVisibility(input: HeaderVisibilityInput): HeaderVisi
 
 	return {
 		compact,
-		indicatorVisible: compact && input.hasOuterGutter && input.viewportWidth >= 1200,
+		indicatorVisible: compact && input.viewportWidth >= 921,
 		nextPreviousY: input.currentY,
 		nextDirection,
 		nextAccumulatedDelta
