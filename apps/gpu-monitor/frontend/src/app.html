@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko" class="dark" data-color-theme="blue">
+<html lang="ko" class="dark" data-material="liquid">
 	<head>
 		<meta charset="utf-8" />
 		<link rel="icon" href="%sveltekit.assets%/favicon.svg" />
@@ -7,16 +7,21 @@
 		<script>
 			(() => {
 				const read = (name) => {
-					const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+					const match = document.cookie.match(new RegExp(`(?:^|;\s*)${name}=([^;]+)`));
 					if (!match) return '';
 					try { return decodeURIComponent(match[1]).toLowerCase(); } catch { return ''; }
 				};
+				const materialValues = ['liquid', 'claude', 'astro'];
+				const oldMaterialValues = ['blue', 'violet', 'emerald', 'rose', 'pink'];
 				const legacy = read('theme');
 				const mode = read('themeMode') || (legacy === 'light' || legacy === 'rose' || legacy === 'pink' ? 'light' : 'dark');
-				const color = read('colorTheme') || (legacy === 'rose' || legacy === 'pink' ? 'violet' : 'blue');
+				const requestedMaterial = read('materialTheme') || read('colorTheme') || legacy;
+				const material = materialValues.includes(requestedMaterial)
+					? requestedMaterial
+					: oldMaterialValues.includes(requestedMaterial) ? 'liquid' : 'liquid';
 				document.documentElement.classList.remove('dark', 'light', 'rose');
 				document.documentElement.classList.add(mode === 'light' ? 'light' : 'dark');
-				document.documentElement.dataset.colorTheme = ['blue', 'violet', 'emerald'].includes(color) ? color : 'blue';
+				document.documentElement.dataset.material = material;
 			})();
 		</script>
 		%sveltekit.head%

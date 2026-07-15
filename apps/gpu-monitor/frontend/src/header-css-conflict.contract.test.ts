@@ -290,9 +290,7 @@ test('compact indicator lane masks passing card content without restoring a full
 	assert.ok(compactShell.includes('background: linear-gradient('));
 	assert.ok(compactShell.includes('var(--ops-bg)'));
 	assert.ok(
-		['blur(10px)', 'blur(12px)', 'blur(14px)'].some((value) =>
-			compactShell.includes('backdrop-filter: ' + value)
-		)
+		compactShell.includes('backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation))')
 	);
 	assert.ok(!compactShell.includes('background: transparent'));
 });
