@@ -6,7 +6,7 @@
 - Last refreshed: 2026-07-15.
 - Primary product surfaces: GPU monitoring dashboard `Full` card view, `Compact` availability-only view, adaptive header, server administration, notes/memos/soft holds, event logs, and diagnostics.
 - Repository/branch: `~/workspace/monitoring_v2_dev`, `feature/compact-gpu-dashboard`.
-- Active contracts: this root `DESIGN.md` and `docs/superpowers/specs/2026-07-15-quiet-rack-gpu-monitor-design.md` are the only active design contracts.
+- Active contracts: this root `DESIGN.md`, `docs/superpowers/specs/2026-07-15-quiet-rack-gpu-monitor-design.md`, and `docs/superpowers/specs/2026-07-15-semantic-density-material-themes-design.md` are the active design contracts. The semantic-density spec wins where they conflict.
 - Supersession: every earlier dashboard/header/compact spec or plan is historical where it conflicts with this document or the Quiet Rack spec. Prior Compact wrapping, large inspectors/sheets, visible free-count emphasis, green-free/blue-occupied colors, two-hue Util/Mem graphs, density setting UI, density cookies, or layout-width preference are superseded. The user-facing card-dashboard name is `Full`, not `Default`.
 - Product job: researchers scan independent, non-high-speed-networked GPU servers to find an empty server or exact GPU and identify who is already using occupied GPUs.
 - Evidence reviewed:
@@ -39,7 +39,7 @@
   - `backend/collectors/gpu.py`
   - `backend/ws_manager.py`
 - Backend evidence paths are verified in the canonical remote development repository; the local frontend QA mirror may omit the `backend/` directory.
-- Exact theme/token source: `https://tweakcn.com/themes/cmr2flrsp000304ih46yj4y1b?p=marketing` (`Apple Liquid Glass`). The listed values were extracted from the theme payload and are authoritative.
+- Exact theme/token sources: the existing cool Liquid Glass baseline; Claude+ `https://tweakcn.com/themes/cmdght103000n04lh3e2ae93r`; and AstroVista `https://tweakcn.com/themes/cmlk6zefr000004lbe9jygsqc`. Exact Claude+ and AstroVista light/dark tokens are recorded in the semantic-density spec.
 - Secondary design-language reference: Apple Human Interface Guidelines, `https://developer.apple.com/design/human-interface-guidelines/`. This informs restraint and platform feel only; it does not override the extracted theme tokens.
 - Reference baseline: `cf70ad0` small-density Full-card screenshot/behavior.
 
