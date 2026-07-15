@@ -296,12 +296,12 @@ test('header surface is hidden from interaction while the indicator remains inde
 	assert.match(pageSource, /<header\s+[\s\S]*inert=\{headerCompact\}[\s\S]*aria-hidden=\{headerCompact\}/);
 });
 
-test('compact indicator panel is pointer-interactive and can be opened without hover', () => {
+test('compact indicator panel visibility is state-owned without CSS hover or focus display rules', () => {
 	const panelRule = dashboardCss.match(/\.ops-indicator-panel\s*\{(?<body>[^}]*)\}/m)?.groups?.body ?? '';
 
 	assert.match(panelRule, /pointer-events:\s*auto\s*;/);
 	assert.match(dashboardCss, /\.ops-indicator-panel\.ops-indicator-panel-open\s*\{[\s\S]*display:\s*flex\s*;/);
-	assert.match(dashboardCss, /\.ops-indicator:hover \.ops-indicator-panel,\s*\.ops-indicator:focus-within \.ops-indicator-panel/);
+	assert.doesNotMatch(dashboardCss, /\.ops-indicator:(?:hover|focus-within)\s+\.ops-indicator-panel/);
 });
 
 test('compact indicator trigger keeps dot visual size with an invisible minimum hit area', () => {
@@ -317,15 +317,24 @@ test('compact indicator trigger keeps dot visual size with an invisible minimum 
 	assert.match(dotRule, /height:\s*0\.55rem\s*;/);
 });
 
-test('compact indicator has explicit accessible activation and closes on reveal, Escape, and outside click', () => {
+test('compact indicator uses one state source for click, pointer, focus, Escape, and outside close', () => {
 	assert.match(pageSource, /let indicatorPanelOpen\s*=\s*\$state\(false\)/);
 	assert.match(pageSource, /const indicatorPanelId\s*=\s*'ops-indicator-panel'/);
 	assert.match(pageSource, /bind:this=\{indicatorElement\}/);
 	assert.match(pageSource, /onclick=\{toggleIndicatorPanel\}/);
+	assert.match(pageSource, /onmouseenter=\{openIndicatorPanel\}/);
+	assert.match(pageSource, /onmouseleave=\{closeIndicatorPanel\}/);
+	assert.match(pageSource, /onfocusin=\{openIndicatorPanel\}/);
+	assert.match(pageSource, /onfocusout=\{handleIndicatorFocusOut\}/);
 	assert.match(pageSource, /aria-expanded=\{indicatorPanelOpen\}/);
 	assert.match(pageSource, /aria-controls=\{indicatorPanelId\}/);
 	assert.match(pageSource, /id=\{indicatorPanelId\}/);
 	assert.match(pageSource, /class:ops-indicator-panel-open=\{indicatorPanelOpen\}/);
+
+	const focusOutBody = functionBody(pageSource, 'handleIndicatorFocusOut');
+	assert.match(focusOutBody, /event\.relatedTarget/);
+	assert.match(focusOutBody, /indicatorElement\.contains\(nextTarget\)/);
+	assert.match(focusOutBody, /indicatorPanelOpen\s*=\s*false/);
 
 	const revealBody = functionBody(pageSource, 'revealHeader');
 	assert.match(revealBody, /indicatorPanelOpen\s*=\s*false/);

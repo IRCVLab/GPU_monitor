@@ -150,10 +150,11 @@ test('compact indicator trigger has an invisible 24px hit target around the dot'
 	assert.doesNotMatch(trigger, /border-radius\s*:\s*999px/, 'trigger must not draw a circular shell');
 });
 
-test('compact indicator panel and its network buttons are hit-testable when opened', () => {
+test('compact indicator panel and its network buttons are hit-testable only through the open state class', () => {
 	const panel = declarationBlock(dashboardCss, '.ops-indicator-panel', 'pointer-events');
 	assert.match(panel, /pointer-events\s*:\s*auto\b/, 'open panel must receive pointer events');
-	assert.match(dashboardCss, /\.ops-indicator-panel\.ops-indicator-panel-open\s*\{[\s\S]*display\s*:\s*flex\b/, 'click-open class displays the panel');
+	assert.match(dashboardCss, /\.ops-indicator-panel\.ops-indicator-panel-open\s*\{[\s\S]*display\s*:\s*flex\b/, 'open state class displays the panel');
+	assert.doesNotMatch(dashboardCss, /\.ops-indicator:(?:hover|focus-within)\s+\.ops-indicator-panel/, 'CSS hover/focus must not own panel visibility');
 	assert.match(pageSource, /class:ops-indicator-panel-open=\{indicatorPanelOpen\}/, 'page binds the open class');
 	assert.match(pageSource, /onclick=\{\(\) => selectNetwork\(tab\.value\)\}/, 'network buttons retain click handlers');
 });
