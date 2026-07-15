@@ -211,23 +211,35 @@ test('GPU advisory hold cue is dense visible text with subtle noninteractive sty
 
 test('Mem receives the wider flexible track without wasting a 10ch value column', () => {
 	const metricsRule = cssRule('.monitor-gpu-row__metrics');
-	assertDeclaration(metricsRule, 'grid-template-columns', 'minmax(0, 0.78fr) minmax(0, 1.22fr)');
+	assertDeclaration(metricsRule, 'grid-template-columns', 'minmax(0, 0.72fr) minmax(0, 1.28fr)');
 
 	const memoryValueRule = cssRule('.monitor-gpu-metric__value--memory');
 	assertDeclaration(memoryValueRule, 'min-width', '8ch');
 	assert.doesNotMatch(memoryValueRule, /10ch/);
+
+	const narrowMobile = mediaBlock('(max-width: 520px)');
+	assert.doesNotMatch(narrowMobile, /\.monitor-gpu-row__metrics\s*\{[^}]*grid-template-columns:\s*1fr;/s);
 });
 
-test('full gpu index uses a single inverted occupancy accent', () => {
+test('full gpu index uses the selected theme accent with inverted availability states', () => {
 	const availableRule = cssRule(".monitor-gpu-row[data-state='available'] .monitor-gpu-row__index");
-	assertDeclaration(availableRule, 'color', 'var(--chart-2)');
-	assertDeclaration(availableRule, 'border-color', 'var(--chart-2)');
+	assertDeclaration(availableRule, 'color', 'var(--ops-primary)');
+	assertDeclaration(availableRule, 'border-color', 'var(--ops-primary)');
 	const occupiedRule = cssRule(".monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index");
-	assertDeclaration(occupiedRule, 'background', 'var(--chart-2)');
-	assertDeclaration(occupiedRule, 'border-color', 'var(--chart-2)');
-	assertDeclaration(occupiedRule, 'color', '#040609');
+	assertDeclaration(occupiedRule, 'background', 'var(--ops-primary)');
+	assertDeclaration(occupiedRule, 'border-color', 'var(--ops-primary)');
+	assertDeclaration(occupiedRule, 'color', 'var(--ops-primary-fg)');
 	const unknownRule = cssRule(".monitor-gpu-row[data-state='unknown'] .monitor-gpu-row__index");
-	assert.doesNotMatch(unknownRule, /#f59e0b|var\(--chart-[12]\)/);
+	assert.doesNotMatch(unknownRule, /#f59e0b|var\(--chart-[12]\)|var\(--ops-primary\)/);
+});
+
+test('full gpu metric fills share one accent while memory stays quieter than util', () => {
+	const utilRule = cssRule('.monitor-gpu-metric__fill--util');
+	assertDeclaration(utilRule, 'background', 'var(--ops-primary)');
+
+	const memoryRule = cssRule('.monitor-gpu-metric__fill--memory');
+	assert.match(memoryRule, /background:\s*color-mix\(in srgb, var\(--ops-primary\)/);
+	assert.doesNotMatch(memoryRule, /var\(--chart-1\)|var\(--chart-2\)/);
 });
 
 test('collapsed utility rows use subtle markers and CSS disclosure angles', () => {

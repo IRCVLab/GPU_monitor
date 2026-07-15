@@ -289,7 +289,7 @@
 
 .monitor-gpu-row__metrics {
   display: grid;
-  grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
   gap: 0.55rem;
   min-width: 0;
 }
@@ -327,7 +327,7 @@
 }
 
 .monitor-gpu-metric__fill--util {
-  background: var(--chart-2);
+  background: var(--ops-primary);
 }
 
 .monitor-meter__fill--util {
@@ -335,7 +335,7 @@
 }
 
 .monitor-gpu-metric__fill--memory {
-  background: var(--chart-1);
+  background: color-mix(in srgb, var(--ops-primary) 56%, transparent);
 }
 
 .monitor-meter__fill--memory {
@@ -348,14 +348,14 @@
 
 .monitor-gpu-row[data-state='available'] .monitor-gpu-row__index {
   background: color-mix(in srgb, var(--ops-card) 92%, #040609);
-  border-color: var(--chart-2);
-  color: var(--chart-2);
+  border-color: var(--ops-primary);
+  color: var(--ops-primary);
 }
 
 .monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index {
-  background: var(--chart-2);
-  border-color: var(--chart-2);
-  color: #040609;
+  background: var(--ops-primary);
+  border-color: var(--ops-primary);
+  color: var(--ops-primary-fg);
 }
 
 .monitor-gpu-row[data-state='unknown'] .monitor-gpu-row__index {
@@ -1009,10 +1009,6 @@
 }
 
 @media (max-width: 520px) {
-  .monitor-gpu-row__metrics {
-    grid-template-columns: 1fr;
-  }
-
   .monitor-card .note-form-identity-row {
     grid-template-columns: 1fr;
   }
