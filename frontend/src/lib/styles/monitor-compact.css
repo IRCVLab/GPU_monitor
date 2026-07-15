@@ -167,18 +167,34 @@
 }
 
 .compact-slot[data-state='available'] {
-	border-color: color-mix(in srgb, #22c55e 44%, var(--ops-border));
-	background: color-mix(in srgb, #22c55e 12%, var(--ops-card));
+	border-color: var(--chart-2);
+	background: color-mix(in srgb, var(--ops-card) 94%, #040609);
 }
 
 .compact-slot[data-state='occupied'] {
-	border-color: color-mix(in srgb, var(--ops-border) 94%, transparent);
-	background: color-mix(in srgb, var(--ops-card) 90%, transparent);
+	border-color: var(--chart-2);
+	background: var(--chart-2);
+}
+
+.compact-slot[data-state='available'] .compact-slot__label {
+	color: var(--chart-2);
+}
+
+.compact-slot[data-state='occupied'] .compact-slot__label {
+	color: #040609;
 }
 
 .compact-slot[data-state='unknown'] {
-	border-color: color-mix(in srgb, #f59e0b 30%, var(--ops-border));
-	background: color-mix(in srgb, #f59e0b 10%, var(--ops-card));
+	border-color: color-mix(in srgb, var(--ops-border) 92%, transparent);
+	background: color-mix(in srgb, var(--ops-muted) 72%, var(--ops-card));
+}
+
+.compact-slot[data-state='occupied'] .compact-avatar,
+.compact-slot[data-state='occupied'] .compact-avatar-count {
+	border-color: color-mix(in srgb, #040609 28%, transparent);
+	background: color-mix(in srgb, #040609 12%, transparent);
+	color: #040609;
+	box-shadow: none;
 }
 
 .compact-slot__label,
@@ -287,13 +303,13 @@ html.light .compact-avatar-count {
 }
 
 .compact-slot__free-dot {
-	background: color-mix(in srgb, #22c55e 94%, var(--ops-card));
-	box-shadow: 0 0 0 1px color-mix(in srgb, #22c55e 38%, transparent);
+	background: transparent;
+	box-shadow: 0 0 0 1px var(--chart-2);
 }
 
 .compact-slot__unknown-dot {
-	background: color-mix(in srgb, #f59e0b 84%, var(--ops-card));
-	box-shadow: 0 0 0 1px color-mix(in srgb, #f59e0b 26%, transparent);
+	background: color-mix(in srgb, var(--ops-fg) 30%, transparent);
+	box-shadow: none;
 }
 
 .compact-dashboard__tooltip {
@@ -408,13 +424,28 @@ html.light .compact-avatar-count {
 }
 
 .compact-detail__gpu[data-state='available'] {
-	border-color: color-mix(in srgb, #22c55e 40%, var(--ops-border));
-	background: color-mix(in srgb, #22c55e 9%, var(--ops-card));
+	border-color: var(--chart-2);
+	background: color-mix(in srgb, var(--ops-card) 94%, #040609);
+}
+
+.compact-detail__gpu[data-state='available'] .compact-detail__gpu-slot,
+.compact-detail__gpu[data-state='available'] .compact-detail__gpu-occupancy {
+	color: var(--chart-2);
+}
+
+.compact-detail__gpu[data-state='occupied'] {
+	border-color: var(--chart-2);
+	background: var(--chart-2);
+}
+
+.compact-detail__gpu[data-state='occupied'] .compact-detail__gpu-slot,
+.compact-detail__gpu[data-state='occupied'] .compact-detail__gpu-occupancy {
+	color: #040609;
 }
 
 .compact-detail__gpu[data-state='unknown'] {
-	border-color: color-mix(in srgb, #f59e0b 28%, var(--ops-border));
-	background: color-mix(in srgb, #f59e0b 8%, var(--ops-card));
+	border-color: color-mix(in srgb, var(--ops-border) 92%, transparent);
+	background: color-mix(in srgb, var(--ops-muted) 72%, var(--ops-card));
 }
 
 .compact-detail__gpu-slot {

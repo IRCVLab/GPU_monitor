@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./GpuBar.svelte', import.meta.url), 'utf8');
+const serverCardSource = readFileSync(new URL('./ServerCard.svelte', import.meta.url), 'utf8');
 
 function normalized() {
 	return source.replace(/\s+/g, ' ');
@@ -13,11 +14,14 @@ test('GPU memory metric retains the compact GB value', () => {
 	assert.match(source, /\{memUsedGB\}\/\{memTotalGB\}GB/);
 });
 
-test('GpuBar accepts advisory hold cues without changing telemetry activity semantics', () => {
+test('GpuBar accepts the shared availability state without letting holds alter it', () => {
 	assert.match(source, /advisoryHolds\s*=\s*\[\]/, 'GpuBar should accept default-empty advisory hold cues');
-	assert.match(source, /const\s+isActive\s*=\s*\$derived\(gpu\.users\.length\s*>\s*0\)/, 'active state must remain based only on telemetry users');
-	assert.match(source, /data-active=\{isActive\s*\?\s*'true'\s*:\s*'false'\}/, 'data-active should remain wired to telemetry activity only');
-	assert.doesNotMatch(source, /const\s+isActive[^{;]*(?:advisoryHolds|hold)/, 'advisory holds must not alter active/availability semantics');
+	assert.match(source, /state:\s*CompactGpuState/);
+	assert.match(source, /data-state=\{state\}/);
+	assert.doesNotMatch(source, /data-active=/);
+	assert.match(serverCardSource, /getCompactGpuState\(server\.status, server\.last_seen, gpu\)/);
+	assert.match(serverCardSource, /<GpuBar[\s\S]*state=\{getCompactGpuState\(server\.status, server\.last_seen, gpu\)\}/);
+	assert.doesNotMatch(source, /state\s*=.*(?:advisoryHolds|hold)/, 'advisory holds must not alter availability semantics');
 });
 
 test('GpuBar renders compact visible noninteractive HOLD text beside identity line', () => {

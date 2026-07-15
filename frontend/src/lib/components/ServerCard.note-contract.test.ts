@@ -17,7 +17,10 @@ test('ServerCard derives active unexpired hold notes per GPU and passes cues int
 	assert.match(source, /note\.kind\s*===\s*'hold'/, 'hold cue map should only use hold notes');
 	assert.match(source, /noteVisible\(note\)/, 'hold cue map should ignore expired notes');
 	assert.match(source, /holdGpuIndices\(note\)/, 'hold cue map should validate GPU indices');
-	assert.match(source, /<GpuBar\s+\{gpu\}\s+advisoryHolds=\{activeHoldNotesByGpu\[gpu\.index\]\s*\?\?\s*\[\]\}\s*\/>/, 'each GPU row should receive only its own hold cues');
+	const gpuBar = source.match(/<GpuBar[\s\S]*?\/>/)?.[0] ?? '';
+	assert.match(gpuBar, /\{gpu\}/, 'GPU row should receive its telemetry record');
+	assert.match(gpuBar, /state=\{getCompactGpuState\(server\.status, server\.last_seen, gpu\)\}/, 'GPU row should receive the shared availability state');
+	assert.match(gpuBar, /advisoryHolds=\{activeHoldNotesByGpu\[gpu\.index\]\s*\?\?\s*\[\]\}/, 'each GPU row should receive only its own hold cues');
 });
 
 test('ServerCard note preview and history use concise HOLD marker instead of long advisory phrase', () => {

@@ -13,7 +13,7 @@
 - Do not modify or restart the live `monitoring_v2` service on port 5173.
 - Add no dependencies.
 - Preserve saved server order and both Full/Compact view preferences.
-- Available is green, occupied is blue, and unknown/stale is amber in every view.
+- Available and occupied use one shared accent in inverse treatments in every view: available is dark with accent text/border; occupied is accent-filled with near-black text; unknown/stale is neutral.
 - Respect `prefers-reduced-motion: reduce`.
 
 ---
@@ -33,7 +33,7 @@
 
 - [ ] **Step 1: Write failing contract tests**
 
-Assert that `RefreshRing.svelte` uses SVG circles with `pathLength="1"`, the page renders it in header and floating locations, the old `.ops-refresh-cadence` markup is absent, and CSS uses a linear forwards cycle animation.
+Assert that `RefreshRing.svelte` uses SVG circles with `pathLength="1"`, the page renders it in header and floating locations, the old `.ops-refresh-cadence` markup is absent, and CSS uses a fixed-length arc with a linear forwards orbit animation.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -118,7 +118,7 @@ git commit -m "fix: keep collapsed status on the left"
 
 - [ ] **Step 1: Write failing semantic tests**
 
-Assert Full receives the shared state from `ServerCard`, Full and Compact both emit the same `data-state`, and CSS maps available to green, occupied to `var(--chart-1)`, and unknown to amber.
+Assert Full receives the shared state from `ServerCard`, Full and Compact both emit the same `data-state`, and CSS maps available and occupied to inverse treatments of one accent while unknown remains neutral.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -128,11 +128,11 @@ Run:
 node --experimental-strip-types --test src/lib/components/GpuBar.contract.test.ts src/lib/components/compact-dashboard-task4.contract.test.ts src/lib/styles/monitor-cards.contract.test.ts
 ```
 
-Expected: Full shared-state and occupied-blue assertions fail.
+Expected: Full shared-state and inverse-accent assertions fail.
 
 - [ ] **Step 3: Implement the shared state mapping**
 
-Compute the state in `ServerCard`, pass it into `GpuBar`, replace `data-active` styling with `data-state`, and update Compact occupied styling to use the same blue semantic cue.
+Compute the state in `ServerCard`, pass it into `GpuBar`, replace `data-active` styling with `data-state`, and update Full and Compact styling to use the same single-accent inverse cue.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -174,7 +174,7 @@ Expected: missing utility and action integration assertions fail.
 
 - [ ] **Step 3: Implement FLIP in the Masonry action**
 
-Store final document-space rectangles after initial layout. On later Grid/Masonry/reflow layouts, cancel stale animations, apply placement, measure final rectangles, and animate non-zero inverse offsets for 360ms. Skip all movement for reduced-motion.
+Store final document-space rectangles after initial layout. On later Grid/Masonry/reflow layouts, capture current visual positions, apply placement, measure final rectangles, cancel only animations for elements that actually move, and animate non-zero inverse offsets for 360ms. Skip all movement for reduced-motion.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -194,7 +194,7 @@ git commit -m "feat: animate dashboard layout reflow"
 
 - [ ] **Step 1: Run browser interaction checks**
 
-Verify at 1440px, 900px, and 390px that the left indicator appears after downward scroll, its panel stays on screen, Grid ↔ Gapless visibly moves cards, the refresh ring remains full during an artificially delayed response, and Full/Compact colors have identical meanings.
+Verify at 1440px, 900px, and 390px that the left indicator appears after downward scroll, its panel stays on screen, Grid ↔ Gapless visibly moves cards, the refresh arc holds at the top during an artificially delayed response, and Full/Compact colors have identical meanings.
 
 - [ ] **Step 2: Run complete frontend and backend verification**
 
@@ -218,4 +218,3 @@ Confirm dev `5174`, dev `/api/health`, live `5173`, and live `/api/health` all r
 git add <only-files-modified-by-qa>
 git commit -m "fix: polish dashboard motion edge cases"
 ```
-

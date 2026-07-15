@@ -4,6 +4,7 @@
   import { getNotes, deleteNote } from '$lib/api';
   import GpuBar from '$lib/components/GpuBar.svelte';
   import NoteForm from '$lib/components/NoteForm.svelte';
+  import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
 
   let {
     server,
@@ -348,7 +349,11 @@
   {#if server.gpus.length > 0}
     <div class="monitor-card__gpu-list">
       {#each server.gpus as gpu (gpu.index)}
-        <GpuBar {gpu} advisoryHolds={activeHoldNotesByGpu[gpu.index] ?? []} />
+        <GpuBar
+          {gpu}
+          state={getCompactGpuState(server.status, server.last_seen, gpu)}
+          advisoryHolds={activeHoldNotesByGpu[gpu.index] ?? []}
+        />
       {/each}
     </div>
   {/if}

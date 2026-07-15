@@ -25,6 +25,12 @@
 	} from '$lib/stores/dashboardPrefs';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
 	import { placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
+	import { mergeServerRecordState } from '$lib/utils/serverStateMerge';
+	import {
+		animateFlip,
+		documentRect,
+		type FlipRect
+	} from '$lib/utils/layoutFlip';
 	import {
 		compensateHeaderScrollPosition,
 		HEADER_INDICATOR_TOP_MAX_PX,
@@ -41,6 +47,7 @@
 	import CompactDashboard from '$lib/components/CompactDashboard.svelte';
 	import ServerForm from '$lib/components/ServerForm.svelte';
 	import ServerDeleteModal from '$lib/components/ServerDeleteModal.svelte';
+	import RefreshRing from '$lib/components/RefreshRing.svelte';
 
 	type Tab = 'internal' | 'all' | 'external';
 	const TAB_COOKIE = 'activeTab';
@@ -50,6 +57,8 @@
 		let frame = 0;
 		let enabled = initialEnabled;
 		let itemObserver: ResizeObserver | null = null;
+		let previousRects = new Map<HTMLElement, FlipRect>();
+		const layoutAnimations = new Map<HTMLElement, Animation>();
 		const containerObserver = new ResizeObserver(() => schedule());
 		const mutationObserver = new MutationObserver(() => observeItems());
 
@@ -73,32 +82,68 @@
 			const items = Array.from(node.children).filter(
 				(child): child is HTMLElement => child instanceof HTMLElement
 			);
+			const visualRects = new Map(
+				items.map((child) => {
+					const rect = child.getBoundingClientRect();
+					return [child, { left: rect.left + window.scrollX, top: rect.top + window.scrollY }];
+				})
+			);
 
 			for (const child of items) {
 				child.style.removeProperty('grid-column-start');
 				child.style.removeProperty('grid-row-start');
 				child.style.removeProperty('grid-row-end');
 			}
-			if (!enabled) return;
-			for (const child of items) child.style.gridRowEnd = 'span 1';
 
-			const styles = getComputedStyle(node);
-			const template = styles.gridTemplateColumns.trim();
-			const currentColumnCount = template === '' || template === 'none' ? 1 : template.split(/\s+/).length;
-			const currentRowSize = rowSize(styles);
-			const currentGap = rowGap(styles);
-			const spans = items.map((child) => {
-				const height = child.getBoundingClientRect().height;
-				return Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
-			});
-			const placements = placeOrderedMasonryItems({ columnCount: currentColumnCount, spans });
+			if (enabled) {
+				for (const child of items) child.style.gridRowEnd = 'span 1';
 
-			items.forEach((child, index) => {
-				const placement = placements[index];
-				child.style.gridColumnStart = String(placement.gridColumnStart);
-				child.style.gridRowStart = String(placement.gridRowStart);
-				child.style.gridRowEnd = placement.gridRowEnd;
+				const styles = getComputedStyle(node);
+				const template = styles.gridTemplateColumns.trim();
+				const currentColumnCount = template === '' || template === 'none' ? 1 : template.split(/\s+/).length;
+				const currentRowSize = rowSize(styles);
+				const currentGap = rowGap(styles);
+				const spans = items.map((child) => {
+					const height = child.getBoundingClientRect().height;
+					return Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
+				});
+				const placements = placeOrderedMasonryItems({ columnCount: currentColumnCount, spans });
+
+				items.forEach((child, index) => {
+					const placement = placements[index];
+					child.style.gridColumnStart = String(placement.gridColumnStart);
+					child.style.gridRowStart = String(placement.gridRowStart);
+					child.style.gridRowEnd = placement.gridRowEnd;
+				});
+			}
+
+			const nextRects = new Map(items.map((child) => [child, documentRect(child)]));
+			const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+			const moves = items.flatMap((child) => {
+				const previousFinal = previousRects.get(child);
+				const next = nextRects.get(child);
+				if (!previousFinal || !next) return [];
+				if (
+					Math.abs(previousFinal.left - next.left) < 0.5 &&
+					Math.abs(previousFinal.top - next.top) < 0.5
+				) return [];
+				const previous = layoutAnimations.has(child) ? visualRects.get(child) ?? previousFinal : previousFinal;
+				return [{ child, previous, next }];
 			});
+
+			if (moves.length > 0) {
+				for (const animation of layoutAnimations.values()) animation.cancel();
+				layoutAnimations.clear();
+			}
+
+			for (const { child, previous, next } of moves) {
+				const animation = animateFlip(child, previous, next, reducedMotion);
+				if (!animation) continue;
+				layoutAnimations.set(child, animation);
+				animation.addEventListener('finish', () => layoutAnimations.delete(child), { once: true });
+				animation.addEventListener('cancel', () => layoutAnimations.delete(child), { once: true });
+			}
+			previousRects = nextRects;
 		}
 
 		function observeItems(): void {
@@ -122,6 +167,9 @@
 			},
 			destroy() {
 				if (frame !== 0) cancelAnimationFrame(frame);
+				for (const animation of layoutAnimations.values()) animation.cancel();
+				layoutAnimations.clear();
+				previousRects.clear();
 				itemObserver?.disconnect();
 				containerObserver.disconnect();
 				mutationObserver.disconnect();
@@ -143,6 +191,12 @@
 
 	const activeTab = writable<Tab>(readTab());
 
+	const POLL_REFRESH_MS = 10_000;
+	const HIDDEN_REFRESH_MS = 60_000;
+	const VISIBLE_TICK_MS = 1_000;
+	const HIDDEN_TICK_MS = 30_000;
+	const REFRESH_RETRY_MS = 250;
+
 	let nowMs = $state(Date.now());
 	let ticker: ReturnType<typeof setInterval> | null = null;
 	let autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -154,6 +208,8 @@
 	let nextRefreshAtMs = $state<number | null>(null);
 	let refreshInFlight = $state(false);
 	let refreshFailed = $state(false);
+	let refreshCycleKey = $state(0);
+	let refreshCycleDurationMs = $state(POLL_REFRESH_MS);
 	let headerCompact = $state(false);
 	let headerIndicatorVisible = $state(false);
 	let indicatorPanelOpen = $state(false);
@@ -166,27 +222,6 @@
 	let headerScrollDistance = 0;
 	let headerTouchY: number | null = null;
 	let retryingInitialLoad = $state(false);
-	const POLL_REFRESH_MS = 10_000;
-	const HIDDEN_REFRESH_MS = 60_000;
-	const VISIBLE_TICK_MS = 1_000;
-	const HIDDEN_TICK_MS = 30_000;
-
-	function makeFallbackState(record: ServerRecord, existing?: ServerState): ServerState {
-		return {
-			server_id: record.id,
-			server_name: record.name,
-			host: record.host,
-			port: record.port,
-			network: record.network,
-			status: existing?.status ?? 'unknown',
-			status_reason: existing?.status_reason ?? null,
-			last_seen: existing?.last_seen ?? null,
-			gpus: existing?.gpus ?? [],
-			system: existing?.system ?? null,
-			storage: existing?.storage ?? null,
-			display_order: record.display_order
-		};
-	}
 
 	function mergeStatusSnapshot(
 		current: Map<number, ServerState>,
@@ -246,7 +281,7 @@
 		for (const record of servers) {
 			const normalized = normalizeServerState(statusMap[record.id], record.id);
 			const existing = current.get(record.id);
-			const candidate = normalized ?? makeFallbackState(record, existing);
+			const candidate = mergeServerRecordState(record, normalized, existing);
 			const resolved = existing && isServerStateEqual(existing, candidate) ? existing : candidate;
 			next.set(record.id, resolved);
 			if (resolved !== existing) {
@@ -364,16 +399,26 @@
 			clearTimeout(autoRefreshTimer);
 		}
 
+		const cycleStartedAtMs = Date.now();
 		nextRefreshAtMs = targetAtMs;
-		const delayMs = Math.max(0, targetAtMs - Date.now());
+		const delayMs = Math.max(0, targetAtMs - cycleStartedAtMs);
+		refreshCycleDurationMs = Math.max(800, delayMs);
+		refreshCycleKey += 1;
 		autoRefreshTimer = setTimeout(() => {
 			void runAutoRefresh();
 		}, delayMs);
 	}
 
+	function scheduleRefreshRetry(): void {
+		if (autoRefreshTimer !== null) clearTimeout(autoRefreshTimer);
+		autoRefreshTimer = setTimeout(() => {
+			void runAutoRefresh();
+		}, REFRESH_RETRY_MS);
+	}
+
 	async function runAutoRefresh(): Promise<void> {
 		if (refreshInFlight) {
-			scheduleNextRefresh();
+			scheduleRefreshRetry();
 			return;
 		}
 
@@ -666,6 +711,7 @@
 
 	async function handleSaved() {
 		await reloadDashboard(true);
+		scheduleNextRefresh();
 	}
 
 	async function retryInitialLoad() {
@@ -673,6 +719,7 @@
 		retryingInitialLoad = true;
 		try {
 			await reloadDashboard(true);
+			scheduleNextRefresh();
 		} finally {
 			retryingInitialLoad = false;
 		}
@@ -761,7 +808,12 @@
 					aria-controls={indicatorPanelId}
 					onclick={openIndicatorPanel}
 				>
-					<span class:attention={!$wsConnected || refreshFailed} class="ops-indicator-dot" aria-hidden="true"></span>
+					<RefreshRing
+						cycleKey={refreshCycleKey}
+						durationMs={refreshCycleDurationMs}
+						attention={!$wsConnected || refreshFailed}
+						variant="floating"
+					/>
 				</button>
 				<div id={indicatorPanelId} class="ops-indicator-panel" class:ops-indicator-panel-open={indicatorPanelOpen}>
 					<span class="ops-indicator-status">{refreshHealthText()} · {relativeTime(lastRefreshAtMs)}</span>
@@ -784,14 +836,13 @@
 						aria-label={`${refreshHealthText()} · ${relativeTime(lastRefreshAtMs)} · ${nextRefreshText()}`}
 						title={`${relativeTime(lastRefreshAtMs)} · ${nextRefreshText()}`}
 					>
-						<span class:ops-status-attention={!$wsConnected || refreshFailed} class="ops-status-dot"></span>
+						<RefreshRing
+							cycleKey={refreshCycleKey}
+							durationMs={refreshCycleDurationMs}
+							attention={!$wsConnected || refreshFailed}
+							variant="header"
+						/>
 						<span class="ops-status-label">{refreshHealthText()}</span>
-						<span class="ops-refresh-cadence" aria-hidden="true">
-							<span
-								class="ops-refresh-cadence__fill"
-								class:attention={!$wsConnected || refreshFailed}
-							></span>
-						</span>
 					</p>
 				</div>
 

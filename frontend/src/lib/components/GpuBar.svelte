@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { GpuInfo } from '$lib/types';
+  import type { CompactGpuState } from '$lib/utils/compactGpuAvailability';
 
   type AdvisoryHoldCue = {
     owner: string;
@@ -7,7 +8,15 @@
     memo: string;
   };
 
-  let { gpu, advisoryHolds = [] }: { gpu: GpuInfo; advisoryHolds?: AdvisoryHoldCue[] } = $props();
+  let {
+    gpu,
+    state,
+    advisoryHolds = []
+  }: {
+    gpu: GpuInfo;
+    state: CompactGpuState;
+    advisoryHolds?: AdvisoryHoldCue[];
+  } = $props();
 
   const memUsedGB = $derived(Math.round(gpu.memory_used / 1024));
   const memTotalGB = $derived(Math.round(gpu.memory_total / 1024));
@@ -18,7 +27,6 @@
       ? Math.min(100, (gpu.memory_used / gpu.memory_total) * 100)
       : 0
   );
-  const isActive = $derived(gpu.users.length > 0);
   const primaryHold = $derived(advisoryHolds[0] ?? null);
   const holdDetailText = $derived.by(() =>
     advisoryHolds
@@ -37,7 +45,7 @@
   });
 </script>
 
-<div class="monitor-gpu-row" data-active={isActive ? 'true' : 'false'} aria-label={gpuAriaLabel}>
+<div class="monitor-gpu-row" data-state={state} aria-label={gpuAriaLabel}>
   <span class="monitor-gpu-row__index">G{gpu.index}</span>
 
   <div class="monitor-gpu-row__body">

@@ -8,9 +8,9 @@ Make layout changes, scroll-state feedback, refresh timing, and GPU color meanin
 
 ### 1. One GPU color language
 
-- **Available:** green. This is the primary resource-acquisition cue and must mean the same thing in Full and Compact.
-- **Occupied:** blue. Full keeps a strongly colored GPU index for active jobs, but it no longer competes with the green availability meaning.
-- **Unknown/stale:** amber. It must never look available.
+- **Available:** a dark surface with the single occupancy accent used for its label and border.
+- **Occupied:** the same accent as a solid background with near-black text. The inverse treatment, not another hue, communicates the state change.
+- **Unknown/stale:** neutral muted treatment. It must never look available or occupied.
 - Full and Compact both consume the same `getCompactGpuState(...)` result and expose the same `data-state` values.
 - Utilization and memory graphs keep their independent chart colors; they describe measurements, not occupancy.
 
@@ -18,10 +18,10 @@ Make layout changes, scroll-state feedback, refresh timing, and GPU color meanin
 
 - Remove the ambiguous horizontal marquee from the expanded header.
 - Use one shared visual in both expanded and collapsed states: a small center status dot surrounded by a circular progress ring.
-- The ring fills linearly toward the next scheduled refresh.
-- When the deadline is reached, it remains full while the HTTP refresh is in flight.
+- A fixed-length arc travels around the ring linearly during each scheduled refresh interval.
+- When the deadline is reached, the arc remains parked at the top while the HTTP refresh is in flight.
 - The ring begins its next cycle only after the response has completed and the next deadline has been scheduled.
-- At cycle restart, it contracts from full to empty briefly and then begins the next linear fill. There is no visible 100-to-0 snap.
+- At the deadline the arc stops at the top while the request is in flight. The next completed response starts another orbit from that same top position, so the 360-to-0 boundary has no visible reset.
 - Normal uses green; delayed/disconnected uses amber. Exact relative times remain available to assistive text and the detail popover, not as constantly changing header copy.
 - The animation is CSS-driven so ordinary server-state updates do not restart it.
 
@@ -45,12 +45,12 @@ Make layout changes, scroll-state feedback, refresh timing, and GPU color meanin
 ## Refresh Data Flow
 
 1. A refresh deadline is scheduled.
-2. The ring fills linearly toward that deadline.
-3. At the deadline, the ring reaches full and the request begins.
-4. The ring stays full for the complete request duration.
+2. The fixed-length arc travels linearly toward one complete orbit at that deadline.
+3. At the deadline, the arc reaches the top and the request begins.
+4. The arc stays at the top for the complete request duration.
 5. Response data is merged without recreating the ring.
 6. A new deadline is scheduled from the completion point/aligned interval.
-7. The ring receives a new cycle key, contracts, and starts the next fill.
+7. The ring receives a new cycle key and starts the next orbit from the same top position.
 
 If a refresh is already active when another trigger arrives, the system retries shortly without scheduling a false new cadence cycle.
 
@@ -68,4 +68,3 @@ If a refresh is already active when another trigger arrives, the system retries 
 - GPU component tests prove Full and Compact consume the same availability state and semantic color selectors.
 - Layout-motion tests prove document-space FLIP deltas and reduced-motion bypass.
 - Browser QA verifies Grid ↔ Gapless movement, header collapse/indicator visibility, ring hold/restart behavior, no content overlap, and no horizontal overflow.
-

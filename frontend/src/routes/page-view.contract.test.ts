@@ -51,11 +51,15 @@ test('task 2 full cards use 22rem density on the page shell and grid', () => {
 	assertDeclaration(cardRule, 'min-width', '22rem');
 });
 
-test('task 2 gpu fills and active G cue use exact chart tokens', () => {
-	const activeIndexRule = cssRule(cardCss, ".monitor-gpu-row[data-active='true'] .monitor-gpu-row__index");
-	assertDeclaration(activeIndexRule, 'background', 'var(--chart-2)');
-	assertDeclaration(activeIndexRule, 'border-color', 'var(--chart-2)');
-	assertDeclaration(activeIndexRule, 'color', '#040609');
+test('full gpu state cues use one accent with inverse available and occupied treatments', () => {
+	const availableIndexRule = cssRule(cardCss, ".monitor-gpu-row[data-state='available'] .monitor-gpu-row__index");
+	assert.match(availableIndexRule, /background:\s*color-mix\(in srgb, var\(--ops-card\)/);
+	assertDeclaration(availableIndexRule, 'color', 'var(--chart-2)');
+	assertDeclaration(availableIndexRule, 'border-color', 'var(--chart-2)');
+	const occupiedIndexRule = cssRule(cardCss, ".monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index");
+	assertDeclaration(occupiedIndexRule, 'background', 'var(--chart-2)');
+	assertDeclaration(occupiedIndexRule, 'border-color', 'var(--chart-2)');
+	assertDeclaration(occupiedIndexRule, 'color', '#040609');
 
 	const utilRule = cssRule(cardCss, '.monitor-gpu-metric__fill--util');
 	assertDeclaration(utilRule, 'background', 'var(--chart-2)');
@@ -135,6 +139,23 @@ test('task 1 masonry action writes and cleans stable grid placement properties',
 	assert.match(pageSource, /style\.removeProperty\('grid-row-end'\)/);
 });
 
+test('masonry action retains document-space card positions and animates later reflows', () => {
+	assert.match(pageSource, /import \{[\s\S]*animateFlip[\s\S]*\} from '\$lib\/utils\/layoutFlip';/);
+	assert.match(pageSource, /import \{[\s\S]*documentRect[\s\S]*\} from '\$lib\/utils\/layoutFlip';/);
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1);
+	const masonryBody = pageSource.slice(masonryStart, pageSource.indexOf('\n\tfunction readTab', masonryStart));
+	assert.match(masonryBody, /let previousRects = new Map<HTMLElement, FlipRect>\(\)/);
+	assert.match(masonryBody, /previousRects\.get\(child\)/);
+	assert.match(masonryBody, /documentRect\(child\)/);
+	assert.match(masonryBody, /animateFlip\(child, previous, next/);
+	assert.match(masonryBody, /previousRects = nextRects/);
+	const nextRectsIndex = masonryBody.indexOf('const nextRects');
+	const cancelIndex = masonryBody.indexOf('animation.cancel()');
+	assert.ok(cancelIndex > nextRectsIndex, 'active FLIP animations must not be cancelled before a new non-zero layout shift is known');
+	assert.match(masonryBody, /if \(moves\.length > 0\)/);
+});
+
 test('task 2 leaves inactive gpu fills without desaturation overrides', () => {
 	assert.doesNotMatch(
 		cardCss,
@@ -186,24 +207,42 @@ test('persistent header shows semantic health and cadence without visible second
 	const statusBody = statusMarkup.slice(statusMarkup.indexOf('>') + 1);
 
 	assert.match(statusMarkup, /\{refreshHealthText\(\)\}/);
-	assert.match(statusMarkup, /class="ops-refresh-cadence"/);
-	assert.match(statusMarkup, /class="ops-refresh-cadence__fill"/);
-	assert.doesNotMatch(statusMarkup, /style=\{`width:/);
+	assert.match(statusMarkup, /<RefreshRing/);
+	assert.match(statusMarkup, /cycleKey=\{refreshCycleKey\}/);
+	assert.match(statusMarkup, /durationMs=\{refreshCycleDurationMs\}/);
 	assert.doesNotMatch(statusBody, /relativeTime\(|nextRefreshText\(/);
 	assert.match(statusMarkup, /aria-label=\{`\$\{refreshHealthText\(\)\}[\s\S]*relativeTime\(lastRefreshAtMs\)[\s\S]*nextRefreshText\(\)/);
-	assert.doesNotMatch(pageSource, /refreshCadencePct/);
+	assert.doesNotMatch(pageSource, /ops-refresh-cadence|refreshCadencePct/);
 });
 
-test('desktop header reserves breathing room below the compact cadence line', () => {
+test('GPU Monitor identity, refresh ring, and health label share one header row', () => {
+	const identityRule = cssRule(dashboardCss, '.ops-identity');
+	assertDeclaration(identityRule, 'display', 'flex');
+	assertDeclaration(identityRule, 'align-items', 'center');
+	const statusRule = cssRule(dashboardCss, '.ops-status');
+	assertDeclaration(statusRule, 'margin', '0');
+	assert.match(pageSource, /<div class="ops-identity">[\s\S]*<h1>GPU Monitor<\/h1>[\s\S]*<p[\s\S]*class="ops-status"/);
+});
+
+test('header and collapsed indicator share a seamless response-synchronized orbit ring', () => {
 	assert.match(
 		dashboardCss,
-		/@media \(min-width: 921px\)[\s\S]*?\.ops-header-inner,[\s\S]*?padding-block:\s*0\.45rem 0\.65rem;/
+		/@media \(min-width: 921px\)[\s\S]*?\.ops-header-inner,[\s\S]*?padding-block:\s*0\.35rem;/
 	);
-	const cadenceRule = cssRule(dashboardCss, '.ops-refresh-cadence');
-	assertDeclaration(cadenceRule, 'width', '2.4rem');
-	assertDeclaration(cadenceRule, 'height', '0.2rem');
-	const cadenceFillRule = cssRule(dashboardCss, '.ops-refresh-cadence__fill');
-	assertDeclaration(cadenceFillRule, 'width', '42%');
-	assert.match(cadenceFillRule, /animation:\s*ops-refresh-cadence-flow 2\.4s linear infinite/);
-	assert.match(dashboardCss, /@keyframes ops-refresh-cadence-flow\s*\{[\s\S]*translate3d\(-120%, 0, 0\)[\s\S]*translate3d\(340%, 0, 0\)/);
+	assert.equal((pageSource.match(/<RefreshRing/g) ?? []).length, 2);
+	assert.match(dashboardCss, /\.ops-refresh-ring__progress\s*\{[^}]*stroke-dasharray:\s*0\.28 0\.72;[^}]*animation:\s*ops-refresh-ring-orbit var\(--ops-refresh-duration\) linear forwards/);
+	assert.match(dashboardCss, /@keyframes ops-refresh-ring-orbit\s*\{[\s\S]*transform:\s*rotate\(0deg\);[\s\S]*transform:\s*rotate\(360deg\);/);
+	assert.doesNotMatch(dashboardCss, /@keyframes ops-refresh-ring-cycle|stroke-dashoffset:\s*1/);
+	assert.doesNotMatch(dashboardCss, /ops-refresh-cadence-flow/);
+});
+
+test('refresh scheduling restarts the visible cycle only when the next deadline is scheduled', () => {
+	assert.match(pageSource, /let refreshCycleKey = \$state\(0\)/);
+	assert.match(pageSource, /let refreshCycleDurationMs = \$state\(POLL_REFRESH_MS\)/);
+	const scheduleBody = functionBody(pageSource, 'scheduleNextRefresh');
+	assert.match(scheduleBody, /refreshCycleDurationMs\s*=\s*Math\.max\(/);
+	assert.match(scheduleBody, /refreshCycleKey\s*\+=\s*1/);
+	const autoBody = functionBody(pageSource, 'runAutoRefresh');
+	assert.match(autoBody, /if \(refreshInFlight\)[\s\S]*scheduleRefreshRetry\(\)[\s\S]*return/);
+	assert.match(autoBody, /await reloadDashboard\(\)[\s\S]*scheduleNextRefresh\(\)/);
 });

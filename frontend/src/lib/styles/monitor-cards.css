@@ -346,10 +346,22 @@
   background: color-mix(in srgb, var(--ops-fg) 28%, var(--ops-primary));
 }
 
-.monitor-gpu-row[data-active='true'] .monitor-gpu-row__index {
+.monitor-gpu-row[data-state='available'] .monitor-gpu-row__index {
+  background: color-mix(in srgb, var(--ops-card) 92%, #040609);
+  border-color: var(--chart-2);
+  color: var(--chart-2);
+}
+
+.monitor-gpu-row[data-state='occupied'] .monitor-gpu-row__index {
   background: var(--chart-2);
   border-color: var(--chart-2);
   color: #040609;
+}
+
+.monitor-gpu-row[data-state='unknown'] .monitor-gpu-row__index {
+  background: color-mix(in srgb, var(--ops-muted) 74%, var(--ops-card));
+  border-color: color-mix(in srgb, var(--ops-border) 92%, transparent);
+  color: color-mix(in srgb, var(--ops-fg) 46%, transparent);
 }
 
 .monitor-gpu-metric__value {
