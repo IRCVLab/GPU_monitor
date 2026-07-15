@@ -96,7 +96,7 @@
   function noteRemainingText(note: Note): string {
     const remainingMs = noteRemainingMs(note);
     if (remainingMs === null) return '';
-    if (remainingMs <= 0) return '곧 만료';
+    if (remainingMs <= 0) return '만료됨';
 
     const seconds = Math.ceil(remainingMs / 1000);
     if (seconds < 60) return `${seconds}초 남음`;
@@ -118,33 +118,6 @@
     return 'text-sky-200/70';
   }
 
-  function notePreviewCountdownText(note: Note): string {
-    const remainingMs = noteRemainingMs(note);
-    if (remainingMs === null) return '';
-    if (remainingMs <= 0) return 'NOW';
-
-    const totalMinutes = Math.ceil(remainingMs / ONE_MINUTE_MS);
-    const totalHours = Math.ceil(remainingMs / ONE_HOUR_MS);
-    const totalDays = Math.floor(remainingMs / ONE_DAY_MS);
-
-    if (remainingMs >= ONE_DAY_MS) {
-      const hours = Math.floor((remainingMs - totalDays * ONE_DAY_MS) / ONE_HOUR_MS);
-      return hours > 0 ? `${totalDays}D ${hours}H` : `${Math.max(1, totalDays)}D`;
-    }
-
-    if (remainingMs >= ONE_HOUR_MS) {
-      return `${totalHours}H`;
-    }
-
-    if (remainingMs >= ONE_MINUTE_MS) {
-      return `${totalMinutes}M`;
-    }
-
-    const totalSeconds = Math.ceil(remainingMs / 1000);
-    return `${totalSeconds}S`;
-  }
-
-
   function holdGpuIndices(note: Note): number[] {
     return [...new Set(note.gpu_indices.filter((value) => Number.isInteger(value) && value >= 0))].sort((a, b) => a - b);
   }
@@ -163,8 +136,8 @@
 
   const statusMeta = $derived(statusConfig[server.status] ?? statusConfig.unknown);
   const lastSeenAbsoluteText = $derived(absoluteTime(server.last_seen));
-  const refreshText = $derived(`갱신 ${lastSeenAbsoluteText}`);
-  const hostText = $derived(server.port ? `${server.host}:${server.port}` : server.host);
+  const refreshText = $derived(lastSeenAbsoluteText);
+  const hostText = $derived(server.host);
   const statusReasonText = $derived(server.status_reason?.message ?? '');
   const statusTooltip = $derived(statusReasonText ? `${statusMeta.label} · ${statusReasonText}` : statusMeta.label);
   const availableGpuCount = $derived.by(() =>
@@ -198,10 +171,19 @@
   );
   const cpuPreviewText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : '–');
   const ramPreviewText = $derived(server.system ? `${ramUsed}/${ramTotal}GB` : '–');
+  const ramPercentText = $derived(server.system ? `${ramPct.toFixed(0)}%` : '–');
+  const ioSome = $derived(server.system?.io_pressure_some ?? null);
+  const ioFull = $derived(server.system?.io_pressure_full ?? null);
+  const ioBlocked = $derived(server.system?.io_blocked_tasks ?? null);
+  const ioSupported = $derived(server.system?.io_pressure_supported === true);
+  const ioPreviewText = $derived(ioSupported && ioSome !== null ? `${ioSome.toFixed(ioSome >= 10 ? 0 : 1)}%` : '–');
+  const ioSomeText = $derived(ioSupported && ioSome !== null ? `${ioSome.toFixed(1)}%` : '지원 안 함');
+  const ioFullText = $derived(ioSupported && ioFull !== null ? `${ioFull.toFixed(1)}%` : '–');
+  const ioBlockedText = $derived(ioSupported && ioBlocked !== null ? `${ioBlocked}` : '–');
+  const ioPressureHelpText = 'Linux PSI I/O pressure · 최근 10초 동안 작업이 I/O 때문에 멈춘 시간의 비율';
   const diskPreviewText = $derived(storageSummary ? `${storagePct.toFixed(0)}%` : '–');
   const cpuLevel = $derived(server.system ? metricLevel(cpuPct) : 'normal');
   const ramLevel = $derived(server.system ? metricLevel(ramPct) : 'normal');
-  const gpuLevel = $derived('normal');
   const diskLevel = $derived(storageSummary ? metricLevel(storagePct) : 'normal');
   const hasSystemSection = $derived(Boolean(server.system || server.storage || server.gpus.length > 0));
 
@@ -310,36 +292,22 @@
   });
 </script>
 
-<article class="monitor-card bg-surface-card border border-surface-border" data-status={server.status} data-has-available={hasAvailableGpu ? 'true' : 'false'}>
+<article class="monitor-card bg-surface-card border border-surface-border" data-status={server.status} data-network={showNetwork ? server.network : undefined} data-has-available={hasAvailableGpu ? 'true' : 'false'}>
   <header class="monitor-card__header">
     <div class="monitor-card__title-row">
-      <div class="monitor-card__title-stack">
-        <div class="monitor-card__title-line">
-          <h2 class="monitor-card__title">{server.server_name}</h2>
-          <span class="monitor-card__status" data-status={server.status} title={statusTooltip}>
-            <span class="monitor-card__status-dot" aria-hidden="true"></span>
-            {#if statusMeta.label === '정상'}
-              <span class="monitor-card__status-text monitor-card__sr-only">{statusMeta.label}</span>
-            {:else}
-              <span class="monitor-card__status-text">{statusMeta.label}</span>
-            {/if}
-          </span>
-          {#if showNetwork}
-            <span class="monitor-card__network">{server.network === 'internal' ? '내부망' : '외부망'}</span>
+      <div class="monitor-card__title-line">
+        <h2 class="monitor-card__title">{server.server_name}</h2>
+        <span class="monitor-card__status" data-status={server.status} title={statusTooltip}>
+          <span class="monitor-card__status-dot" aria-hidden="true"></span>
+          {#if statusMeta.label === '정상'}
+            <span class="monitor-card__status-text monitor-card__sr-only">{statusMeta.label}</span>
+          {:else}
+            <span class="monitor-card__status-text">{statusMeta.label}</span>
           {/if}
-        </div>
-
-        <div class="monitor-card__meta">
-          <span class="monitor-card__host">{hostText}</span>
-          <span class="monitor-card__meta-separator" aria-hidden="true">·</span>
-          <span class="monitor-card__refresh">{refreshText}</span>
-        </div>
-
-        {#if statusReasonText && server.status !== 'online'}
-          <p class="monitor-card__reason" data-status={server.status} title={statusReasonText}>
-            {statusReasonText}
-          </p>
-        {/if}
+        </span>
+        <span class="monitor-card__host" title={server.port ? `${server.host}:${server.port}` : server.host}>{hostText}</span>
+        <span class="monitor-card__separator" aria-hidden="true">·</span>
+        <span class="monitor-card__refresh" title={`마지막 갱신 ${lastSeenAbsoluteText}`}>{refreshText}</span>
       </div>
 
       {#if onEdit}
@@ -356,6 +324,12 @@
         </button>
       {/if}
     </div>
+
+    {#if statusReasonText && server.status !== 'online'}
+      <p class="monitor-card__reason" data-status={server.status} title={statusReasonText}>
+        {statusReasonText}
+      </p>
+    {/if}
   </header>
 
   {#if server.gpus.length > 0}
@@ -380,27 +354,26 @@
           aria-controls={`system-panel-${server.server_id}`}
         >
           <span class="monitor-card__footer-toggle-main">
-            <span class="monitor-card__footer-marker monitor-card__footer-marker--system" aria-hidden="true"></span>
             <span class="monitor-card__footer-label">시스템</span>
           </span>
           <span class="monitor-card__footer-side">
             {#if !sysExpanded}
               <span class="monitor-card__footer-preview monitor-card__system-preview">
-                <span class="monitor-card__system-preview-item" data-level={cpuLevel} title={`CPU ${cpuPreviewText}`}>
-                  <small>CPU</small>
-                  <strong>{server.system ? `${cpuPct.toFixed(0)}%` : '–'}</strong>
+                <span class="monitor-card__system-preview-segment" data-level={cpuLevel} title={`CPU ${cpuPreviewText}`}>
+                  <span class="monitor-card__system-preview-label">CPU</span>
+                  <span class="monitor-card__system-preview-value">{cpuPreviewText}</span>
                 </span>
-                <span class="monitor-card__system-preview-item" data-level={ramLevel} title={`RAM ${server.system ? `${ramPct.toFixed(0)}%` : '–'}`}>
-                  <small>RAM</small>
-                  <strong>{server.system ? `${ramPct.toFixed(0)}%` : '–'}</strong>
+                <span class="monitor-card__system-preview-segment" data-level={ramLevel} title={`RAM ${ramPreviewText}`}>
+                  <span class="monitor-card__system-preview-label">RAM</span>
+                  <span class="monitor-card__system-preview-value">{ramPercentText}</span>
                 </span>
-                <span class="monitor-card__system-preview-item" data-level={gpuLevel} title={`GPU ${totalGpuPowerText}`}>
-                  <small>GPU</small>
-                  <strong>{totalGpuPowerText}</strong>
+                <span class="monitor-card__system-preview-segment" title={ioPressureHelpText}>
+                  <span class="monitor-card__system-preview-label">I/O</span>
+                  <span class="monitor-card__system-preview-value">{ioPreviewText}</span>
                 </span>
-                <span class="monitor-card__system-preview-item" data-level={diskLevel} title={`Disk ${diskPreviewText}`}>
-                  <small>Disk</small>
-                  <strong>{storageSummary ? `${storagePct.toFixed(0)}%` : '–'}</strong>
+                <span class="monitor-card__system-preview-segment" data-level={diskLevel} title={`Disk ${diskPreviewText}`}>
+                  <span class="monitor-card__system-preview-label">Disk</span>
+                  <span class="monitor-card__system-preview-value">{diskPreviewText}</span>
                 </span>
               </span>
             {/if}
@@ -410,43 +383,20 @@
 
         {#if sysExpanded}
           <div id={`system-panel-${server.server_id}`} class="monitor-card__footer-panel">
-            <div class="monitor-card__metric-stack monitor-card__system-summary">
-              <div class="monitor-card__summary-item" data-level={cpuLevel}>
-                <div class="monitor-card__summary-head">
-                  <span class="monitor-card__summary-label">CPU</span>
-                  <span class="monitor-card__summary-value">{cpuPreviewText}</span>
-                </div>
-                <div class="monitor-meter" aria-hidden="true">
-                  <div class="monitor-meter__fill monitor-meter__fill--util" style={`width: ${Math.min(100, cpuPct)}%`}></div>
-                </div>
-              </div>
-              <div class="monitor-card__summary-item" data-level={ramLevel}>
-                <div class="monitor-card__summary-head">
-                  <span class="monitor-card__summary-label">RAM</span>
-                  <span class="monitor-card__summary-value">{ramPreviewText}</span>
-                </div>
-                <div class="monitor-meter" aria-hidden="true">
-                  <div class="monitor-meter__fill monitor-meter__fill--memory" style={`width: ${Math.min(100, ramPct)}%`}></div>
-                </div>
-              </div>
-              <div class="monitor-card__summary-item" data-level={gpuLevel}>
-                <div class="monitor-card__summary-head">
-                  <span class="monitor-card__summary-label">GPU</span>
-                  <span class="monitor-card__summary-value">{totalGpuPowerText}</span>
-                </div>
-                <div class="monitor-card__summary-meta">
-                  {server.gpus.length > 0 ? `${server.gpus.length} devices` : 'GPU 없음'}
-                </div>
-              </div>
-              <div class="monitor-card__summary-item" data-level={diskLevel}>
-                <div class="monitor-card__summary-head">
-                  <span class="monitor-card__summary-label">Disk</span>
-                  <span class="monitor-card__summary-value">{diskPreviewText}</span>
-                </div>
-                <div class="monitor-meter" aria-hidden="true">
-                  <div class="monitor-meter__fill monitor-meter__fill--storage" style={`width: ${Math.min(100, storagePct)}%`}></div>
-                </div>
-              </div>
+            <div class="monitor-card__system-facts">
+              <span><small>CPU</small><strong>{cpuPreviewText}</strong></span>
+              <span><small>RAM</small><strong>{ramPreviewText}</strong></span>
+              <span><small>GPU</small><strong>{totalGpuPowerText}</strong></span>
+              <span><small>Disk</small><strong>{diskPreviewText}</strong></span>
+            </div>
+
+            <div class="monitor-card__io-detail" title={ioPressureHelpText}>
+              <span class="monitor-card__io-detail-copy">I/O pressure</span>
+              <span class="monitor-card__io-detail-metrics">
+                <span>some {ioSomeText}</span>
+                <span>full {ioFullText}</span>
+                <span>blocked {ioBlockedText}</span>
+              </span>
             </div>
 
             {#if server.gpus.length > 0}
@@ -513,7 +463,6 @@
         aria-controls={`notes-panel-${server.server_id}`}
       >
         <span class="monitor-card__footer-toggle-main">
-          <span class="monitor-card__footer-marker monitor-card__footer-marker--memo" aria-hidden="true"></span>
           <span class="monitor-card__footer-label">메모</span>
         </span>
         <span class="monitor-card__footer-side">
@@ -522,8 +471,8 @@
               {#if previewNotes.length > 0}
                 <span class="monitor-card__note-preview-main">
                   {#if previewNotes[0].kind === 'hold'}
-                    <span class="monitor-card__note-preview-scope">
-                      {#each holdGpuIndices(previewNotes[0]) as gpuIndex, index (gpuIndex)}{index > 0 ? '·' : ''}G{gpuIndex}{/each}
+                    <span class="monitor-card__note-preview-hold">
+                      HOLD {#each holdGpuIndices(previewNotes[0]) as gpuIndex, index (gpuIndex)}{index > 0 ? '·' : ''}G{gpuIndex}{/each}
                     </span>
                   {/if}
                   <span class="monitor-card__note-preview-user">{previewNotes[0].username}</span>
@@ -531,7 +480,7 @@
                 </span>
                 {#if previewNotes[0].expires_at}
                   <span class={`monitor-card__note-preview-expiry ${notePreviewBadgeClass(previewNotes[0])}`}>
-                    {notePreviewCountdownText(previewNotes[0])}
+                    {noteRemainingText(previewNotes[0])}
                   </span>
                 {/if}
               {:else if notesLoaded}
@@ -572,7 +521,7 @@
                             <span class="monitor-note-item__user">{note.username}</span>
                             <span class="monitor-note-item__time">{noteDate(note.created_at)}</span>
                             {#if note.expires_at}
-                              <span class="monitor-card__meta-separator" aria-hidden="true">·</span>
+                              <span class="monitor-card__separator" aria-hidden="true">·</span>
                               <span class={`monitor-note-item__expiry ${noteExpiryTextClass(note)}`}>
                                 {noteRemainingText(note)}
                               </span>

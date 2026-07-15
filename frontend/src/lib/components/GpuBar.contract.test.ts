@@ -47,16 +47,29 @@ test('GpuBar accepts the shared availability state without letting holds alter i
 	assert.doesNotMatch(source, /state\s*=.*(?:advisoryHolds|hold)/, 'advisory holds must not alter availability semantics');
 });
 
-test('GpuBar renders compact visible noninteractive HOLD text beside identity line', () => {
+test('GpuBar keeps visible HOLD owner text and a dedicated held index marker', () => {
 	assert.match(source, /monitor-gpu-row__hold-cue/, 'missing dense hold cue element');
-	assert.match(source, />\s*HOLD\s*\{/, 'hold cue should include visible HOLD text, not color alone');
-	assert.match(source, /advisoryHolds\.length\s*>\s*1[\s\S]*\+\{advisoryHolds\.length\s*-\s*1\}/, 'multiple holds should collapse to a concise count');
+	assert.match(source, />\s*HOLD\s*\{primaryHold\.owner\}/, 'hold cue should include visible HOLD owner text');
+	assert.match(
+		source,
+		/class="monitor-gpu-row__index" data-has-hold=\{primaryHold \? 'true' : 'false'\}/,
+		'the exact G# chip should advertise when it carries a HOLD collar'
+	);
+	assert.match(
+		source,
+		/advisoryHolds\.length\s*>\s*1[\s\S]*\+\{advisoryHolds\.length\s*-\s*1\}/,
+		'multiple holds should collapse to a concise count'
+	);
 	assert.doesNotMatch(source, /monitor-gpu-row__hold-cue[^>]*(?:<button|<a|tabindex=)/, 'hold cue should be noninteractive');
 });
 
 test('GpuBar preserves telemetry truth in aria-label while adding advisory hold detail', () => {
 	const oneLine = normalized();
-	assert.match(oneLine, /GPU \$\{gpu\.index\}.*users \$\{usage\}.*utilization \$\{utilValue\} percent.*memory \$\{memUsedGB\} of \$\{memTotalGB\} gigabytes/, 'aria label must retain telemetry users/utilization/memory');
+	assert.match(
+		oneLine,
+		/GPU \$\{gpu\.index\}.*users \$\{usage\}.*utilization \$\{utilValue\} percent.*memory \$\{memUsedGB\} of \$\{memTotalGB\} gigabytes/,
+		'aria label must retain telemetry users/utilization/memory'
+	);
 	assert.match(source, /holdAriaDetail/, 'aria label should include advisory hold details when present');
 	assert.match(source, /title=\{holdDetailText\}|aria-label=\{holdDetailText\}/, 'hold cue should expose owner/time/memo detail accessibly');
 });
