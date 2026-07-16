@@ -165,13 +165,42 @@ test('gpu_missing scenario degrades the first server with one deterministic miss
 	assert.deepEqual(input, original);
 });
 
+test('gpu_missing scenario supplies a deterministic missing index when no GPUs are visible', async () => {
+	const { applyDevScenario } = await loadDevScenarioModule();
+	const nowMs = Date.parse('2026-07-16T00:10:00.000Z');
+	const input = [
+		createState({
+			gpus: [],
+			gpu_inventory: {
+				state: 'healthy',
+				visible_count: 0,
+				expected_count: 2,
+				pci_count: 2,
+				missing_indices: []
+			}
+		})
+	];
+	const original = structuredClone(input);
+	const result = applyDevScenario(input, 'gpu_missing', nowMs);
+
+	assert.equal(result[0].status, 'degraded');
+	assert.deepEqual(result[0].gpus, []);
+	assert.deepEqual(result[0].gpu_inventory, {
+		state: 'missing',
+		visible_count: 0,
+		expected_count: 2,
+		pci_count: 2,
+		missing_indices: [0]
+	});
+	assert.deepEqual(input, original);
+});
+
 test('mixed scenario deterministically applies stale, io, offline, and gpu missing to four distinct servers', async () => {
 	const { applyDevScenario } = await loadDevScenarioModule();
 	const nowMs = Date.parse('2026-07-16T00:10:00.000Z');
 	const input = createOrderedStates();
-	const result = applyDevScenario(input, 'mixed', nowMs);
-
 	const original = structuredClone(input);
+	const result = applyDevScenario(input, 'mixed', nowMs);
 	assert.deepEqual(result.map((state) => state.server_id), [42, 7, 19, 31]);
 	assert.equal(result[0].status, 'online');
 	assert.equal(result[0].status_reason?.code, 'stale_snapshot');
