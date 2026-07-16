@@ -1,10 +1,5 @@
 import type { EventLog, Note, NoteKind, NotePriority, ServerRecord, ServerState } from '$lib/types';
-import {
-	buildNotePayload,
-	normalizeNoteDisplayName,
-	normalizeNotePriority,
-	type CreateNoteInput
-} from '$lib/utils/notePayload';
+import { buildNotePayload, type CreateNoteInput } from '$lib/utils/notePayload';
 
 const BASE = '/api';
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -108,17 +103,40 @@ export async function getServerStatus(): Promise<Record<number, ServerState>> {
 }
 
 interface NoteResponse extends Omit<Note, 'display_name' | 'priority' | 'kind' | 'gpu_indices'> {
-	display_name?: string | null;
-	priority?: NotePriority | null;
+	display_name?: unknown;
+	priority?: unknown;
 	kind?: NoteKind;
 	gpu_indices?: number[];
+}
+
+const NOTE_PRIORITIES = ['normal', 'high', 'urgent'] as const satisfies readonly NotePriority[];
+
+function normalizeReadNoteDisplayName(value: unknown): string | null {
+	if (typeof value !== 'string') {
+		return null;
+	}
+
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	return trimmed.slice(0, 40);
+}
+
+function normalizeReadNotePriority(value: unknown): NotePriority {
+	if (typeof value !== 'string') {
+		return 'normal';
+	}
+
+	return (NOTE_PRIORITIES as readonly string[]).includes(value) ? (value as NotePriority) : 'normal';
 }
 
 function normalizeNoteResponse(note: NoteResponse): Note {
 	return {
 		...note,
-		display_name: normalizeNoteDisplayName(note.display_name),
-		priority: normalizeNotePriority(note.priority),
+		display_name: normalizeReadNoteDisplayName(note.display_name),
+		priority: normalizeReadNotePriority(note.priority),
 		kind: note.kind ?? 'memo',
 		gpu_indices: note.gpu_indices ?? []
 	};

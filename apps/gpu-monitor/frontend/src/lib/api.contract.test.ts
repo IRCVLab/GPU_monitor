@@ -36,9 +36,10 @@ test('API exposes the exact note payload shape and createNote signature', () => 
 	assert.match(apiSource, /buildNotePayload\(input\)/);
 });
 
-test('getNotes normalizes omitted priority and raw nullable display names from legacy responses', async (t) => {
+test('getNotes tolerates malformed legacy priority and display_name values without breaking note loading', async (t) => {
 	const { getNotes } = await loadApiModule();
 	const originalFetch = globalThis.fetch;
+	const legacyLongDisplayName = `  ${'Legacy operator name from old API payload'.repeat(2)}  `;
 	globalThis.fetch = async () =>
 		new Response(
 			JSON.stringify([
@@ -79,6 +80,26 @@ test('getNotes normalizes omitted priority and raw nullable display names from l
 					created_at: '2026-07-15T00:30:00Z',
 					expires_at: null,
 					priority: 'normal'
+				},
+				{
+					id: 5,
+					server_id: 9,
+					username: 'owner-e',
+					display_name: 12345,
+					content: 'non-string display',
+					created_at: '2026-07-15T00:40:00Z',
+					expires_at: null,
+					priority: 'legacy'
+				},
+				{
+					id: 6,
+					server_id: 9,
+					username: 'owner-f',
+					display_name: legacyLongDisplayName,
+					content: 'overlong display',
+					created_at: '2026-07-15T00:50:00Z',
+					expires_at: null,
+					priority: 'unknown'
 				}
 			]),
 			{ status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -101,7 +122,15 @@ test('getNotes normalizes omitted priority and raw nullable display names from l
 			{ id: 1, display_name: null, priority: 'normal', kind: 'memo', gpu_indices: [] },
 			{ id: 2, display_name: null, priority: 'high', kind: 'memo', gpu_indices: [] },
 			{ id: 3, display_name: null, priority: 'urgent', kind: 'memo', gpu_indices: [] },
-			{ id: 4, display_name: null, priority: 'normal', kind: 'memo', gpu_indices: [] }
+			{ id: 4, display_name: null, priority: 'normal', kind: 'memo', gpu_indices: [] },
+			{ id: 5, display_name: null, priority: 'normal', kind: 'memo', gpu_indices: [] },
+			{
+				id: 6,
+				display_name: legacyLongDisplayName.trim().slice(0, 40),
+				priority: 'normal',
+				kind: 'memo',
+				gpu_indices: []
+			}
 		]
 	);
 });
