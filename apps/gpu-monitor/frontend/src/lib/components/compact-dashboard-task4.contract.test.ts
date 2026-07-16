@@ -206,3 +206,13 @@ test("compact hold polling serializes slow refresh batches for the same server s
 	assert.match(dashboardSource, /if \(holdRefreshInFlight\) return;[\s\S]*holdRefreshInFlight = true;/);
 	assert.match(dashboardSource, /finally \{[\s\S]*holdRefreshInFlight = false;[\s\S]*\}/);
 });
+
+
+test('compact hold cues use concise active relative units without 남음', () => {
+	assert.match(dashboardSource, /if \(remainingMs <= 0\) return '만료됨';/);
+	assert.ok(dashboardSource.includes('return `${seconds}초`;'));
+	assert.ok(dashboardSource.includes('return `${minutes}분`;'));
+	assert.ok(dashboardSource.includes('return `${hours}시간`;'));
+	assert.ok(dashboardSource.includes('return `${Math.ceil(hours / 24)}일`;'));
+	assert.doesNotMatch(dashboardSource, /`\$\{[^}]+\}(?:초|분|시간|일) 남음`/);
+});

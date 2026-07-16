@@ -455,7 +455,7 @@ test('Task 6 indicator panel remains mounted and uses accessible hidden-state se
 	assert.match(panelRule, /visibility\s*:\s*hidden/);
 	assert.match(panelRule, /pointer-events\s*:\s*none/);
 	assert.match(panelRule, /transform\s*:\s*translate3d\([^)]*\)\s*scale\(/);
-	assert.match(panelRule, /transition:[^}]*opacity\s+2(?:0|1|2)0ms[^}]*transform\s+2(?:0|1|2)0ms[^}]*visibility\s+0s\s+linear\s+2(?:0|1|2)0ms/s);
+	assert.match(panelRule, /transition:[^}]*opacity\s+2(?:4|5|6|7|8)0ms[^}]*transform\s+2(?:4|5|6|7|8)0ms[^}]*visibility\s+0s\s+linear\s+2(?:4|5|6|7|8)0ms/s);
 	const openRule = cssRule(dashboardCss, '.ops-indicator-panel.ops-indicator-panel-open');
 	assert.match(openRule, /opacity\s*:\s*1/);
 	assert.match(openRule, /visibility\s*:\s*visible/);
@@ -646,19 +646,26 @@ test('Task 6 FLIP handoff suppresses live source and target ring visuals until c
 });
 
 
-test('Task 5 failure veil CSS blurs only the card body and keeps the compact state label visible on reveal', () => {
+test('Task 4 failure veil reveals card body and fully hides veil on hover or focus', () => {
 	const bodyRule = cssRule(cardCss, ".monitor-card[data-operational-state='impaired'] .monitor-card__body");
-	assert.match(bodyRule, /filter:\s*blur\(/, 'impaired body should blur last-known data');
-	assert.match(bodyRule, /backdrop-filter:\s*blur\(/, 'body uses material-aware backdrop blur');
-	assert.match(bodyRule, /opacity:\s*0\.[0-9]+\s*;/, 'body should become translucent');
+	assert.match(bodyRule, /filter:\s*blur\((?:1(?:\.\d+)?|1\.5)px\)/, 'default body blur should stay light, around 1-1.5px');
+	assert.match(bodyRule, /opacity:\s*0\.(?:6|7|8)\d*\s*;/, 'default body should remain readable around 0.7 opacity');
+
 	const hoverRule = cssRule(cardCss, ".monitor-card[data-operational-state='impaired']:is(:hover, :focus-within) .monitor-card__body");
-	assert.match(hoverRule, /filter:\s*none\s*;/, 'hover/focus reveals last-known body data');
-	assert.match(hoverRule, /opacity:\s*1\s*;/, 'revealed body should be readable');
+	assert.match(hoverRule, /filter:\s*none\s*;/);
+	assert.match(hoverRule, /opacity:\s*1\s*;/);
+
 	const veilRule = cssRule(cardCss, '.monitor-card__state-veil');
-	assert.match(veilRule, /pointer-events:\s*none\s*;/, 'veil must never intercept clicks');
-	assert.match(veilRule, /backdrop-filter:\s*blur\(/, 'veil should provide material backdrop');
+	assert.match(veilRule, /pointer-events:\s*none\s*;/);
+	assert.match(veilRule, /backdrop-filter:\s*blur\(/);
+	assert.match(cardCss, /monitor-card__state-veil-label/);
+	assert.match(cardCss, /monitor-card__state-veil-secondary/);
+
 	const revealVeilRule = cssRule(cardCss, ".monitor-card[data-operational-state='impaired']:is(:hover, :focus-within) .monitor-card__state-veil");
-	assert.match(revealVeilRule, /opacity:\s*0\.[0-9]+\s*;/, 'hover/focus retains compact state label so the card never looks healthy');
+	assert.match(revealVeilRule, /opacity:\s*0\s*;/);
+	assert.match(revealVeilRule, /visibility:\s*hidden\s*;/);
+	assert.match(revealVeilRule, /pointer-events:\s*none\s*;/);
+	assert.match(revealVeilRule, /backdrop-filter:\s*none\s*;/);
 	assert.doesNotMatch(cardCss, /\.monitor-card__header[^{]*filter:\s*blur/, 'header must stay unblurred');
 });
 
@@ -703,4 +710,38 @@ test('Task 6 central material variables are consumed by dashboard, menu, veil, a
 	assert.doesNotMatch(dashboardCss, /\.monitor-dashboard-state[\s\S]*box-shadow:\s*var\(--ops-shadow\)/);
 	assert.match(cardCss, /\.monitor-card__state-veil[\s\S]*var\(--material-veil-mix\)/);
 	assert.match(cardCss, /\.monitor-card__state-veil[\s\S]*var\(--material-blur\)/);
+});
+
+
+test('Task 4 full cards receive the page shared visibility-aware nowMs clock', () => {
+	assert.match(pageSource, /let nowMs = \$state\(Date\.now\(\)\)/);
+	assert.match(pageSource, /function currentTickIntervalMs\(\): number[\s\S]*document\.visibilityState === 'hidden' \? HIDDEN_TICK_MS : VISIBLE_TICK_MS/);
+	assert.match(pageSource, /ticker = setInterval\(\(\) => \{[\s\S]*nowMs = Date\.now\(\)[\s\S]*\}, currentTickIntervalMs\(\)\)/);
+	assert.match(pageSource, /<ServerCard\s+\{server\}\s+\{nowMs\}[\s\S]*onEdit=\{handleEditServer\}[\s\S]*showNetwork=\{\$activeTab === 'all'\}/);
+});
+
+test('Task 4 shared card motion uses restrained 240-280ms settling transitions without height or top animation', () => {
+	const cardRule = cssRule(cardCss, '.monitor-card');
+	assert.match(cardRule, /transition:[^;]*(?:transform|box-shadow|border-color)[^;]*2(?:4|5|6|7|8)0ms[^;]*(?:cubic-bezier|ease)/);
+
+	const bodyRule = cssRule(cardCss, '.monitor-card__body');
+	assert.match(bodyRule, /transition:[^;]*(?:filter|opacity|backdrop-filter)[^;]*2(?:4|5|6|7|8)0ms[^;]*(?:cubic-bezier|ease)/);
+
+	const veilRule = cssRule(cardCss, '.monitor-card__state-veil');
+	assert.match(veilRule, /transition:[^;]*opacity\s+2(?:4|5|6|7|8)0ms[^;]*visibility\s+0s\s+linear\s+2(?:4|5|6|7|8)0ms[^;]*backdrop-filter\s+2(?:4|5|6|7|8)0ms/s);
+
+	const meterRule = cssRule(cardCss, '.monitor-gpu-metric__fill,\n.monitor-meter__fill');
+	assert.match(meterRule, /transition:\s*width\s+2(?:4|5|6|7|8)0ms\s+(?:cubic-bezier|ease)/);
+
+	const disclosureRule = cssRule(cardCss, '.monitor-card__disclosure-shell');
+	assert.match(disclosureRule, /transition:[^;]*grid-template-rows\s+0s[^;]*opacity\s+2(?:4|5|6|7|8)0ms[^;]*transform\s+2(?:4|5|6|7|8)0ms/s);
+	assert.doesNotMatch(cardCss, /transition[^;]*(?:height|top)/, 'do not animate height/top directly');
+});
+
+test('Task 4 compact indicator open close uses the same 240-280ms settling motion and reduced-motion disables it', () => {
+	const panelRule = dashboardCss.match(new RegExp('\\.ops-indicator-panel\\s*\\{[\\s\\S]*?transform:\\s*translate3d[\\s\\S]*?transition:[\\s\\S]*?\\n\\}'))?.[0] ?? '';
+	assert.ok(panelRule, 'missing closed compact indicator panel motion rule');
+	assert.match(panelRule, /transition:[^;]*opacity\s+2(?:4|5|6|7|8)0ms[^;]*transform\s+2(?:4|5|6|7|8)0ms[^;]*visibility\s+0s\s+linear\s+2(?:4|5|6|7|8)0ms/s);
+	const reduced = dashboardCss.slice(dashboardCss.indexOf('@media (prefers-reduced-motion: reduce)'));
+	assert.match(reduced, /\.ops-indicator-panel[\s\S]*transition:\s*none/);
 });

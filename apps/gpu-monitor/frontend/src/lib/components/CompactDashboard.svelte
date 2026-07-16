@@ -138,12 +138,12 @@
 		const remainingMs = expiresAtMs - nowMs;
 		if (remainingMs <= 0) return '만료됨';
 		const seconds = Math.ceil(remainingMs / 1000);
-		if (seconds < 60) return `${seconds}초 남음`;
+		if (seconds < 60) return `${seconds}초`;
 		const minutes = Math.ceil(seconds / 60);
-		if (minutes < 60) return `${minutes}분 남음`;
+		if (minutes < 60) return `${minutes}분`;
 		const hours = Math.ceil(minutes / 60);
-		if (hours < 48) return `${hours}시간 남음`;
-		return `${Math.ceil(hours / 24)}일 남음`;
+		if (hours < 48) return `${hours}시간`;
+		return `${Math.ceil(hours / 24)}일`;
 	}
 
 	function holdGpuIndices(note: Note): number[] {

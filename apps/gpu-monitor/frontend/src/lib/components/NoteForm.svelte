@@ -82,16 +82,16 @@
 
 	function formatRemaining(ms: number): string {
 		const seconds = Math.max(0, Math.ceil(ms / 1000));
-		if (seconds < 60) return `${seconds}초 남음`;
+		if (seconds < 60) return `${seconds}초`;
 
 		const minutes = Math.ceil(seconds / 60);
-		if (minutes < 60) return `${minutes}분 남음`;
+		if (minutes < 60) return `${minutes}분`;
 
 		const hours = Math.ceil(minutes / 60);
-		if (hours < 48) return `${hours}시간 남음`;
+		if (hours < 48) return `${hours}시간`;
 
 		const days = Math.ceil(hours / 24);
-		return `${days}일 남음`;
+		return `${days}일`;
 	}
 
 	const expiresAtDate = $derived(parseLocalDateTimeValue(expiresAtLocal));
