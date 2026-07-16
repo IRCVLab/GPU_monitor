@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from backend.routers.notes import NoteCreate, NoteOut, parse_gpu_indices, serialize_gpu_indices
 
 
-FUTURE = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+FUTURE = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
 
 
 class NoteValidationTests(unittest.TestCase):
@@ -46,6 +46,66 @@ class NoteValidationTests(unittest.TestCase):
         )
         self.assertEqual(note.kind, 'memo')
         self.assertEqual(note.gpu_indices, [])
+        self.assertEqual(note.priority, 'normal')
+        self.assertIsNone(note.display_name)
+
+    def test_priority_accepts_supported_values(self) -> None:
+        for priority in ('normal', 'high', 'urgent'):
+            with self.subTest(priority=priority):
+                note = NoteCreate(
+                    username='u',
+                    ssh_password='pw',
+                    content='memo',
+                    expires_at=FUTURE,
+                    priority=priority,
+                )
+                self.assertEqual(note.priority, priority)
+
+    def test_priority_rejects_invalid_values(self) -> None:
+        with self.assertRaises(ValidationError):
+            NoteCreate(
+                username='u',
+                ssh_password='pw',
+                content='memo',
+                expires_at=FUTURE,
+                priority='low',
+            )
+
+    def test_display_name_is_trimmed_and_blank_values_normalize_to_none(self) -> None:
+        trimmed = NoteCreate(
+            username='u',
+            ssh_password='pw',
+            content='memo',
+            expires_at=FUTURE,
+            display_name='  Grace Hopper  ',
+        )
+        blank = NoteCreate(
+            username='u',
+            ssh_password='pw',
+            content='memo',
+            expires_at=FUTURE,
+            display_name='   ',
+        )
+        omitted = NoteCreate(
+            username='u',
+            ssh_password='pw',
+            content='memo',
+            expires_at=FUTURE,
+        )
+
+        self.assertEqual(trimmed.display_name, 'Grace Hopper')
+        self.assertIsNone(blank.display_name)
+        self.assertIsNone(omitted.display_name)
+
+    def test_display_name_rejects_values_longer_than_40_characters(self) -> None:
+        with self.assertRaises(ValidationError):
+            NoteCreate(
+                username='u',
+                ssh_password='pw',
+                content='memo',
+                expires_at=FUTURE,
+                display_name='x' * 41,
+            )
 
     def test_hold_rejects_empty_gpu_list_and_non_integer_values(self) -> None:
         with self.assertRaises(ValidationError):
@@ -92,14 +152,34 @@ class NoteValidationTests(unittest.TestCase):
             id=1,
             server_id=7,
             username='u',
+            display_name='Display Name',
             content='hold',
-            created_at='2026-07-15T00:00:00Z',
+            created_at='2026-07-18T00:00:00Z',
             expires_at=None,
+            priority='high',
             kind='hold',
             gpu_indices=parse_gpu_indices('[2, 0, 2]'),
         )
+        self.assertEqual(out.priority, 'high')
+        self.assertEqual(out.display_name, 'Display Name')
         self.assertEqual(out.gpu_indices, [0, 2])
         self.assertEqual(serialize_gpu_indices(out.gpu_indices), '[0, 2]')
+
+    def test_note_out_normalizes_missing_priority_and_blank_display_name(self) -> None:
+        out = NoteOut(
+            id=1,
+            server_id=7,
+            username='u',
+            display_name='   ',
+            content='memo',
+            created_at='2026-07-18T00:00:00Z',
+            expires_at=None,
+            priority=None,
+            kind='memo',
+            gpu_indices=[],
+        )
+        self.assertEqual(out.priority, 'normal')
+        self.assertIsNone(out.display_name)
 
     def test_note_out_rejects_malformed_db_json(self) -> None:
         with self.assertRaises(ValidationError):
@@ -107,9 +187,15 @@ class NoteValidationTests(unittest.TestCase):
                 id=1,
                 server_id=7,
                 username='u',
+                display_name=None,
                 content='hold',
-                created_at='2026-07-15T00:00:00Z',
+                created_at='2026-07-18T00:00:00Z',
                 expires_at=None,
+                priority='urgent',
                 kind='hold',
                 gpu_indices='not-json',
             )
+
+
+if __name__ == '__main__':
+    unittest.main()
