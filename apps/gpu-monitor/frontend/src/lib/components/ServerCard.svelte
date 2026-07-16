@@ -279,9 +279,9 @@
     const loadText = formatFixed(loadAvg1);
     const cpuText = formatRoundedCount(cpuCount, false);
     if (loadText === systemPreviewUnavailableText && cpuText === systemPreviewUnavailableText) {
-      return `${loadPreviewPrefixText}부하 – / –`;
+      return `${loadPreviewPrefixText}부하 – · CPU –`;
     }
-    return `${loadPreviewPrefixText}부하 ${loadText} / ${cpuText}`;
+    return `${loadPreviewPrefixText}부하 ${loadText} · CPU ${cpuText}`;
   });
   const cpuPressureLabelText = $derived(pressureLabel(cpuPressureLevel));
   const ioPressureLabelText = $derived(pressureLabel(ioPressureLevel));
@@ -323,7 +323,8 @@
   const ioSomeText = $derived(ioSome !== null ? `${ioSome.toFixed(1)}%` : systemPreviewUnavailableText);
   const ioFullText = $derived(ioFull !== null ? `${ioFull.toFixed(1)}%` : systemPreviewUnavailableText);
   const ioBlockedText = $derived(formatRoundedCount(ioBlocked));
-  const ioPressureHelpText = 'Linux PSI stall pressure · 최근 10초 동안 작업이 CPU 또는 I/O 때문에 대기한 시간의 비율';
+  const loadAverageHelpText = 'Load avg는 실행 가능하거나 I/O 대기 중인 작업 수의 1·5·15분 평균입니다. 논리 CPU 수는 포화 판단 기준이며 최댓값이 아닙니다.';
+  const ioPressureHelpText = `${loadAverageHelpText} · PSI는 최근 10초 동안 작업이 CPU 또는 I/O 때문에 대기한 시간의 비율입니다.`;
   const hasSystemSection = $derived(Boolean(server.system || server.storage || server.gpus.length > 0));
 
   const visibleNotes = $derived.by(() => notes.filter((note) => noteVisible(note)));
@@ -478,6 +479,7 @@
           class="monitor-card__footer-toggle"
           aria-expanded={sysExpanded}
           aria-controls={`system-panel-${server.server_id}`}
+          aria-describedby={`system-load-help-${server.server_id}`}
         >
           <span class="monitor-card__footer-toggle-main">
             <span class="monitor-card__footer-label">시스템</span>
@@ -488,7 +490,7 @@
                 <span class="monitor-card__system-inline-metric">CPU {cpuPreviewText}</span>
                 <span class="monitor-card__system-inline-metric">RAM {ramPreviewText}</span>
                 <span class="monitor-card__system-inline-metric">Storage {storagePreviewText}</span>
-                <span class="monitor-card__load-preview" data-level={loadLevel}>
+                <span class="monitor-card__load-preview" title={loadAverageHelpText} data-level={loadLevel}>
                   <span class="monitor-card__load-text">{loadPreviewText}</span>
                 </span>
                 {#each loadPreviewCauses as cause}
@@ -496,6 +498,7 @@
                 {/each}
               </span>
             {/if}
+            <span id={`system-load-help-${server.server_id}`} class="monitor-card__sr-only">{loadAverageHelpText}</span>
             <span class="monitor-card__footer-disclosure" class:is-expanded={sysExpanded} aria-hidden="true"></span>
           </span>
         </button>
