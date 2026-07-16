@@ -325,3 +325,36 @@ test('full gpu metric fills share one accent while memory stays quieter than uti
 	assert.match(memoryRule, /background:\s*color-mix\(in srgb, var\(--ops-primary\)/);
 	assert.doesNotMatch(memoryRule, /var\(--chart-1\)|var\(--chart-2\)/);
 });
+
+test('mobile footer grid sections and one-line system preview remain shrinkable at 390px', () => {
+	const footerRule = cssRule('.monitor-card__footer');
+	assert.match(footerRule, /display:\s*grid/);
+
+	for (const selector of [
+		'.monitor-card__footer-section',
+		'.monitor-card__footer-toggle',
+		'.monitor-card__footer-side',
+		'.monitor-card__footer-preview',
+		'.monitor-card__system-preview',
+		'.monitor-card__load-preview',
+		'.monitor-card__load-text'
+	]) {
+		const rule = cssRule(selector);
+		assertDeclaration(rule, 'min-width', '0');
+	}
+
+	const previewRule = cssRule('.monitor-card__footer-preview');
+	assertDeclaration(previewRule, 'overflow', 'hidden');
+	assertDeclaration(previewRule, 'text-overflow', 'ellipsis');
+	assertDeclaration(previewRule, 'white-space', 'nowrap');
+
+	const systemPreviewRule = cssRule('.monitor-card__system-preview');
+	assertDeclaration(systemPreviewRule, 'overflow', 'hidden');
+	assertDeclaration(systemPreviewRule, 'white-space', 'nowrap');
+	assert.match(systemPreviewRule, /flex-wrap:\s*nowrap/);
+
+	assert.doesNotMatch(
+		css,
+		/\.monitor-card__(?:footer-section|footer-toggle|footer-side|footer-preview|system-preview|load-preview)\s*\{[^}]*width:\s*(?:max-content|min-content|fit-content)/
+	);
+});
