@@ -118,9 +118,10 @@
 
 	function orderedHoldEntries(gpu: GpuInfo): CompactHoldCue[] {
 		const cues = holdCues(gpu);
+		const cueByNote = new Map(cues.map((entry) => [entry.note, entry] as const));
 		const holdAdvisory = buildHoldAdvisory(holdNotes(gpu));
 		return holdAdvisory.ordered
-			.map((note) => cues.find((entry) => entry.note.id === note.id))
+			.map((note) => cueByNote.get(note))
 			.filter((entry): entry is CompactHoldCue => Boolean(entry));
 	}
 
