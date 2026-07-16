@@ -55,7 +55,7 @@ test('compact rows support absent placeholders, keep held overlays orthogonal to
 	assert.match(cssSource, /\.compact-slot\[data-held='true'\]::after/);
 });
 
-test('compact occupied cells show full usernames inline and allow wrapping growth inside one server row', () => {
+test('compact occupied cells keep per-user grid rows with dense ellipsized usernames', () => {
 	assert.doesNotMatch(rowSource, /getLinuxUsernameInitials/);
 	assert.doesNotMatch(rowSource, /compact-slot__badge/);
 	assert.match(rowSource, /\{#each users as user, index/);
@@ -72,9 +72,11 @@ test('compact occupied cells show full usernames inline and allow wrapping growt
 	assertDeclaration(userListRule, 'display', 'grid');
 	assertDeclaration(userListRule, 'white-space', 'normal');
 	assertDeclaration(userListRule, 'word-break', 'normal');
+	assertDeclaration(userListRule, 'min-width', '0');
 	const usernameRule = cssRule(cssSource, '.compact-slot__username');
-	assertDeclaration(usernameRule, 'font-size', '0\.58rem');
-	assertDeclaration(usernameRule, 'line-height', '1\.1');
+	assertDeclaration(usernameRule, 'font-size', '0\.65rem');
+	assertDeclaration(usernameRule, 'line-height', '1\.15');
+	assertDeclaration(usernameRule, 'min-width', '0');
 	assertDeclaration(usernameRule, 'white-space', 'nowrap');
 	assertDeclaration(usernameRule, 'overflow', 'hidden');
 	assertDeclaration(usernameRule, 'text-overflow', 'ellipsis');

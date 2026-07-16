@@ -108,3 +108,14 @@ test('Task 6 material presets keep liquid cookie but show Clean label and struct
 	assert.match(appCss, /html\[data-material='claude'\][\s\S]*--material-surface-mix: 88%;[\s\S]*--material-blur: 14px;[\s\S]*--material-radius: 1\.15rem/);
 	assert.match(appCss, /html\[data-material='astro'\][\s\S]*--material-surface-mix: 91%;[\s\S]*--material-blur: 8px;[\s\S]*--material-radius: 0\.55rem/);
 });
+
+
+test('theme mode and material preferences read and write cookies only', () => {
+	assert.match(storeSource, /const MODE_COOKIE = 'themeMode'/);
+	assert.match(storeSource, /const MATERIAL_COOKIE = 'materialTheme'/);
+	assert.match(storeSource, /readCookie\(MODE_COOKIE\)/);
+	assert.match(storeSource, /readCookie\(MATERIAL_COOKIE\)/);
+	assert.match(storeSource, /writeCookie\(MODE_COOKIE, mode\)/);
+	assert.match(storeSource, /writeCookie\(MATERIAL_COOKIE, material\)/);
+	assert.doesNotMatch(storeSource, /localStorage|sessionStorage|fetch\(|navigator\.sendBeacon|WebSocket|EventSource/);
+});

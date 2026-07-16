@@ -497,45 +497,41 @@ test('Task 6 header and fixed indicator rings are bound and FLIP handoff runs bo
 	assert.match(cleanupBody, /remove\(\)/);
 });
 
-test('Task 6 theme reveal is button-centered, locked, destination-token based, and cleans async work', () => {
+test('theme mode toggle uses the native View Transition API with destination reveal variables and cleanup', () => {
 	assert.match(pageSource, /import \{[\s\S]*setThemeMode[\s\S]*type ThemeMode[\s\S]*\} from '\$lib\/stores\/theme';/);
 	assert.doesNotMatch(pageSource, /toggleThemeMode/);
 	assert.match(pageSource, /let themeModeButtonElement = \$state<HTMLButtonElement \| null>\(null\)/);
 	assert.match(pageSource, /let themeRevealLocked = \$state\(false\)/);
-	assert.match(pageSource, /let themeRevealOverlay: HTMLDivElement \| null = null/);
-	assert.doesNotMatch(pageSource, /themeRevealTimers/);
 	assert.match(pageSource, /type ThemeRevealOrigin = \{ x: number; y: number \}/);
 	assert.match(pageSource, /function readVisibleThemeButtonCenter/);
 	assert.match(pageSource, /function fallbackThemeRevealCenter/);
 	assert.match(pageSource, /function farthestCornerRadius/);
 	assert.match(pageSource, /function runThemeModeReveal/);
+
 	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
+	assert.match(revealBody, /const supportsViewTransition\s*=\s*typeof document\.startViewTransition === 'function'/);
+	assert.match(revealBody, /const reducedMotion\s*=\s*window\.matchMedia\('\(prefers-reduced-motion: reduce\)'\)\.matches/);
+	assert.match(revealBody, /if \(reducedMotion \|\| !supportsViewTransition\) \{[\s\S]*setThemeMode\(nextMode\)[\s\S]*return;[\s\S]*\}/);
 	assert.match(revealBody, /readVisibleThemeButtonCenter\(originElement\)/);
 	assert.match(revealBody, /const originX = origin\.x/);
 	assert.match(revealBody, /const originY = origin\.y/);
-	assert.match(revealBody, /farthestCornerRadius\(originX, originY\)/);
-	assert.match(revealBody, /themeRevealLocked = true/);
-	assert.match(revealBody, /data-theme-mode/);
-	assert.match(revealBody, /data-material/);
-	assert.match(revealBody, /theme-mode-reveal__edge/);
-	assert.match(revealBody, /clipPath:\s*`circle\(0px at \$\{originX\}px \$\{originY\}px\)`/);
-	assert.match(revealBody, /duration:\s*480/);
-	assert.match(revealBody, /await animation\.finished/);
-	assert.match(revealBody, /setThemeMode\(nextMode\)/);
-	assert.match(revealBody, /if \(shouldRestoreFocus && visibleOrigin && originElement\) originElement\.focus\(\{ preventScroll: true \}\)/);
-	assert.match(revealBody, /cleanupThemeReveal\(\)/);
-	assert.match(pageSource, /function cleanupThemeReveal/);
-	const cleanupBody = functionBody(pageSource, 'cleanupThemeReveal');
-	assert.doesNotMatch(cleanupBody, /clearTimeout/);
-	assert.doesNotMatch(cleanupBody, /cancelAnimationFrame/);
-	assert.match(cleanupBody, /themeRevealAnimation\?\.cancel\(\)/);
-	assert.match(cleanupBody, /themeRevealOverlay\?\.remove\(\)/);
+	assert.match(revealBody, /const radius = farthestCornerRadius\(originX, originY\)/);
+	assert.match(revealBody, /document\.documentElement\.style\.setProperty\('--theme-reveal-x', `\$\{originX\}px`\)/);
+	assert.match(revealBody, /document\.documentElement\.style\.setProperty\('--theme-reveal-y', `\$\{originY\}px`\)/);
+	assert.match(revealBody, /document\.documentElement\.style\.setProperty\('--theme-reveal-radius', `\$\{radius\}px`\)/);
+	assert.match(revealBody, /const transition\s*=\s*document\.startViewTransition\(\(\) => \{\s*setThemeMode\(nextMode\);?\s*\}\)/);
+	assert.match(revealBody, /await transition\.finished/);
+	assert.match(revealBody, /finally \{[\s\S]*originElement\.focus\(\{ preventScroll: true \}\)[\s\S]*themeRevealLocked = false[\s\S]*removeProperty\('--theme-reveal-x'\)[\s\S]*removeProperty\('--theme-reveal-y'\)[\s\S]*removeProperty\('--theme-reveal-radius'\)[\s\S]*\}/);
 });
 
-test('Task 6 theme reveal reduced-motion path applies mode immediately and preserves focus', () => {
+test('theme mode reveal has no legacy overlay, proxy, edge animation, or delayed post-overlay mode switch', () => {
 	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
-	assert.match(revealBody, /prefers-reduced-motion: reduce/);
-	assert.match(revealBody, /if \(reducedMotion\) \{[\s\S]*setThemeMode\(nextMode\)[\s\S]*if \(shouldRestoreFocus && visibleOrigin && originElement\) originElement\.focus\(\{ preventScroll: true \}\)[\s\S]*return;[\s\S]*\}/);
+	assert.doesNotMatch(pageSource, /themeRevealOverlay|themeRevealToggleProxy|themeRevealAnimation|themeRevealEdgeAnimation/);
+	assert.doesNotMatch(pageSource, /createThemeToggleProxy|cleanupThemeReveal|theme-mode-toggle-proxy|theme-mode-reveal__edge/);
+	assert.doesNotMatch(pageSource, /document\.createElement\('div'\)[\s\S]*theme-mode-reveal/);
+	assert.doesNotMatch(revealBody, /\.className\s*=\s*'theme-mode-reveal'|\.classList\.add\('theme-mode-reveal'\)/);
+	assert.doesNotMatch(revealBody, /overlay\.animate|edge\.animate|covered|await animation\.finished[\s\S]*setThemeMode\(nextMode\)/);
+	assert.doesNotMatch(appCss, /\.theme-mode-reveal|theme-mode-toggle-proxy|theme-mode-reveal__edge/);
 });
 
 test('Task 6 mode button uses inline SVG sun and moon icons instead of glyph characters', () => {
@@ -549,36 +545,12 @@ test('Task 6 mode button uses inline SVG sun and moon icons instead of glyph cha
 	assert.doesNotMatch(buttonMarkup, /☀|☾|☽|🌙|🌞/);
 });
 
-test('Task 6 reveal overlay resolves destination theme tokens through app css, not page literals', () => {
-	assert.match(appCss, /\.theme-mode-reveal\[data-theme-mode='dark'\]/);
-	assert.match(appCss, /\.theme-mode-reveal\[data-theme-mode='light'\]/);
-	assert.match(appCss, /\.theme-mode-reveal\[data-material='claude'\]/);
-	assert.match(appCss, /\.theme-mode-reveal\[data-material='astro'\]/);
-	const revealRule = cssRule(appCss, '.theme-mode-reveal');
-	assert.match(revealRule, /z-index:\s*8[0-9]\s*;/);
-	assert.match(revealRule, /background:\s*var\(--ops-bg\)/);
-	assert.match(appCss, /\.theme-mode-reveal__edge\s*\{[\s\S]*border:[\s\S]*color-mix/);
-	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
-	assert.doesNotMatch(revealBody, /#[0-9a-fA-F]{3,8}/);
-});
-
-
 test('Task 6 mobile indicator panel keeps a closed translate-scale transition', () => {
 	const mobile = dashboardCss.match(/@media \(max-width: 640px\) \{[\s\S]*?\n\}/)?.[0] ?? '';
 	assert.match(mobile, /\.ops-indicator-panel\s*\{[\s\S]*transform:\s*translate3d\([^)]*\)\s*scale\(/);
 	assert.doesNotMatch(mobile, /\.ops-indicator-panel\s*\{[\s\S]*transform:\s*none/);
 });
 
-test('Task 6 reveal cleanup releases lock after animation rejection without applying mode', () => {
-	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
-	assert.match(revealBody, /let covered = false/);
-	assert.match(revealBody, /catch \{[\s\S]*cleanupThemeReveal\(\)[\s\S]*return;[\s\S]*\}/);
-	const catchStart = revealBody.indexOf('catch {');
-	const catchEnd = revealBody.indexOf('}', catchStart);
-	const catchBody = revealBody.slice(catchStart, catchEnd);
-	assert.doesNotMatch(catchBody, /setThemeMode/);
-	assert.match(revealBody, /covered = true;[\s\S]*setThemeMode\(nextMode\)/);
-});
 
 test('Task 6 shortcut theme reveal uses cached or logical origin instead of focusing a hidden header button', () => {
 	const shortcutStart = pageSource.indexOf("case 'toggle-theme'");
@@ -589,24 +561,6 @@ test('Task 6 shortcut theme reveal uses cached or logical origin instead of focu
 });
 
 
-test('Task 6 reveal overlay covers header while a body-level toggle proxy stays above it', () => {
-	const revealRule = cssRule(appCss, '.theme-mode-reveal');
-	assert.match(revealRule, /z-index:\s*8[0-9]\s*;/);
-	assert.doesNotMatch(appCss, /(?:^|\n)\.theme-mode-toggle-proxy\s*\{[\s\S]*position:\s*fixed/);
-	const proxyRule = cssRule(appCss, 'body > .theme-mode-toggle-proxy.ops-mode-action');
-	assert.match(proxyRule, /position:\s*fixed\s*;/);
-	assert.match(proxyRule, /z-index:\s*9[0-9]\s*;/);
-	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
-	assert.match(revealBody, /const toggleProxy = createThemeToggleProxy\(originElement\)/);
-	assert.match(pageSource, /themeRevealToggleProxy\?\.remove\(\)/);
-	const proxyBody = functionBody(pageSource, 'createThemeToggleProxy');
-	assert.match(proxyBody, /originElement\.cloneNode\(true\)/);
-	assert.match(proxyBody, /proxy\.style\.left = `\$\{rect\.left\}px`/);
-	assert.match(proxyBody, /proxy\.style\.top = `\$\{rect\.top\}px`/);
-	assert.match(proxyBody, /proxy\.style\.width = `\$\{rect\.width\}px`/);
-	assert.match(proxyBody, /proxy\.style\.height = `\$\{rect\.height\}px`/);
-	assert.match(proxyBody, /document\.body\.appendChild\(proxy\)/);
-});
 
 test('Task 6 C shortcut uses exact visible button center and cached measured center only when hidden', () => {
 	const shortcutStart = pageSource.indexOf("case 'toggle-theme'");
@@ -626,7 +580,7 @@ test('Task 6 C shortcut uses exact visible button center and cached measured cen
 });
 
 
-test('Task 6 hidden compact header mode control is not a visible reveal source or proxy source', () => {
+test('Task 6 hidden compact header mode control is not a visible reveal source', () => {
 	assert.match(pageSource, /function isVisibleThemeRevealSource/);
 	const visibilityBody = functionBody(pageSource, 'isVisibleThemeRevealSource');
 	assert.match(visibilityBody, /originElement\.closest\('\.ops-header-compact'\)/);
@@ -634,20 +588,9 @@ test('Task 6 hidden compact header mode control is not a visible reveal source o
 	const visibleCenterBody = functionBody(pageSource, 'readVisibleThemeButtonCenter');
 	assert.match(visibleCenterBody, /isVisibleThemeRevealSource\(originElement\)/);
 	assert.match(visibleCenterBody, /return null/);
-	const proxyBody = functionBody(pageSource, 'createThemeToggleProxy');
-	assert.match(proxyBody, /isVisibleThemeRevealSource\(originElement\)/);
 	assert.match(pageSource, /const visibleOrigin = readVisibleThemeButtonCenter\(originElement\);\s*const origin = originOverride \?\? visibleOrigin \?\? fallbackThemeRevealCenter\(\)/);
 });
 
-
-test('Task 6 stacking keeps refresh handoff below theme reveal while toggle proxy stays above', () => {
-	const handoffRule = cssRule(dashboardCss, '.ops-refresh-handoff');
-	const revealRule = cssRule(appCss, '.theme-mode-reveal');
-	const proxyRule = cssRule(appCss, 'body > .theme-mode-toggle-proxy.ops-mode-action');
-	assert.match(handoffRule, /z-index:\s*83\s*;/);
-	assert.match(revealRule, /z-index:\s*84\s*;/);
-	assert.match(proxyRule, /z-index:\s*94\s*;/);
-});
 
 test('Task 6 FLIP handoff suppresses live source and target ring visuals until cleanup', () => {
 	assert.match(pageSource, /let headerIndicatorHandoffActive = \$state\(false\)/);
@@ -779,4 +722,11 @@ test('Task 4 compact indicator open close uses the same 240-280ms settling motio
 	assert.match(panelRule, /transition:[^;]*opacity\s+2(?:4|5|6|7|8)0ms[^;]*transform\s+2(?:4|5|6|7|8)0ms[^;]*visibility\s+0s\s+linear\s+2(?:4|5|6|7|8)0ms/s);
 	const reduced = dashboardCss.slice(dashboardCss.indexOf('@media (prefers-reduced-motion: reduce)'));
 	assert.match(reduced, /\.ops-indicator-panel[\s\S]*transition:\s*none/);
+});
+
+test('active network tab reads and writes only the activeTab cookie', () => {
+	assert.match(pageSource, /const TAB_COOKIE = 'activeTab';/);
+	assert.match(pageSource, /function readTab\(\): Tab \{[\s\S]*readCookie\(TAB_COOKIE\)[\s\S]*tabOrder\.includes\(value as Tab\)/);
+	assert.match(pageSource, /activeTab\.subscribe\(\(v\) => \{[\s\S]*writeCookie\(TAB_COOKIE, v\)[\s\S]*\}\)/);
+	assert.doesNotMatch(pageSource, /localStorage\.(?:getItem|setItem)[\s\S]*(?:activeTab|TAB_COOKIE)|(?:activeTab|TAB_COOKIE)[\s\S]*localStorage\.(?:getItem|setItem)/);
 });

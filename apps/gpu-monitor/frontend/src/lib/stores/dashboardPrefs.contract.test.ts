@@ -14,3 +14,18 @@ test('dashboard layout preference persists Grid or Masonry independently of Full
 	assert.match(source, /dashboardLayout\.subscribe\([\s\S]*writeCookie\(DASHBOARD_LAYOUT_COOKIE, value\)/);
 	assert.match(source, /export function setDashboardLayout\(value: DashboardLayout\): void/);
 });
+
+
+test('dashboard view preference persists Full or Compact in the dashboardView cookie', () => {
+	assert.match(source, /const DASHBOARD_VIEW_COOKIE = 'dashboardView';/);
+	assert.match(source, /export function readDashboardView\(\): DashboardView/);
+	assert.match(source, /readCookie\(DASHBOARD_VIEW_COOKIE\)/);
+	assert.match(source, /value === 'compact' \? 'compact' : 'default'/);
+	assert.match(source, /export const dashboardView: Writable<DashboardView> = writable\(readDashboardView\(\)\);/);
+	assert.match(source, /dashboardView\.subscribe\([\s\S]*writeCookie\(DASHBOARD_VIEW_COOKIE, value\)/);
+	assert.match(source, /export function setDashboardView\(value: DashboardView\): void/);
+});
+
+test('dashboard preferences do not persist via localStorage, backend, or cross-device sync', () => {
+	assert.doesNotMatch(source, /localStorage|sessionStorage|fetch\(|navigator\.sendBeacon|WebSocket|EventSource|sync/i);
+});
