@@ -274,3 +274,20 @@ test('task 4 compact tooltip stays passive, keyboard reachable, and availability
 	assert.match(rowSource, /const availableCount = \$derived\.by\([\s\S]*gpuState\(gpu\) === 'available'[\s\S]*\);/);
 	assert.doesNotMatch(rowSource, /getCompactGpuState\([^\n]*hold/);
 });
+
+test('compact dashboard closes hold tooltips on hold refresh or expiry tick so stale advisory snapshots cannot persist', () => {
+	assert.match(dashboardSource, /const TOOLTIP_HEIGHT_ESTIMATE = 176;/);
+	assert.match(dashboardSource, /let holdTooltipVersion = \$state\(0\);/);
+	assert.match(dashboardSource, /let activeTooltipVersion = \$state<number \| null>\(null\);/);
+	assert.match(dashboardSource, /function tooltipHasHoldAdvisory\(tooltip: CompactPopover\): boolean \{/);
+	assert.match(dashboardSource, /activeTooltipVersion = holdTooltipVersion;/);
+	assert.match(dashboardSource, /nowMs = Date\.now\(\);[\s\S]*holdTooltipVersion \+= 1;/);
+	assert.match(dashboardSource, /compactHoldNotesByServer = result\.notesByServer;[\s\S]*compactHoldLoadErrors = result\.failedServerIds;[\s\S]*holdTooltipVersion \+= 1;/);
+	assert.match(dashboardSource, /\$effect\(\(\) => \{[\s\S]*if \(!activeTooltip \|\| activeTooltipVersion === null \|\| !tooltipHasHoldAdvisory\(activeTooltip\)\) return;[\s\S]*if \(activeTooltipVersion === holdTooltipVersion\) return;[\s\S]*closeTooltip\(\);[\s\S]*\}\);/);
+});
+
+test('compact ordered hold entries preserve note object identity instead of joining by note ids', () => {
+	assert.match(rowSource, /const cueByNote = new Map\(cues\.map\(\(entry\) => \[entry\.note, entry\] as const\)\);/);
+	assert.match(rowSource, /return holdAdvisory\.ordered[\s\S]*cueByNote\.get\(note\)/);
+	assert.doesNotMatch(rowSource, /entry\.note\.id === note\.id/);
+});

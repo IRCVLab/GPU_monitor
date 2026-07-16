@@ -57,15 +57,17 @@
 	} = $props();
 
 	const TOOLTIP_WIDTH_ESTIMATE = 240;
-	const TOOLTIP_HEIGHT_ESTIMATE = 132;
+	const TOOLTIP_HEIGHT_ESTIMATE = 176;
 	const TOOLTIP_VIEWPORT_MARGIN = 12;
 	const HOLD_REFRESH_MS = 30_000;
 
 	let activeBankIndex = $state(0);
 	let activeTooltip = $state<CompactPopover | null>(null);
+	let activeTooltipVersion = $state<number | null>(null);
 	let nowMs = $state(Date.now());
 	let compactHoldNotesByServer = $state(new Map<number, Note[]>());
 	let compactHoldLoadErrors = $state(new Set<number>());
+	let holdTooltipVersion = $state(0);
 	let holdNotesCache = new Map<number, Note[]>();
 
 	const serverIdSignature = $derived(servers.map((server) => server.server_id).join(','));
@@ -205,17 +207,24 @@
 		return { ...next, left, top };
 	}
 
+	function tooltipHasHoldAdvisory(tooltip: CompactPopover): boolean {
+		return Boolean(tooltip.item.holdLabel) || tooltip.item.holdEntries.length > 0;
+	}
+
 	function updateTooltip(next: CompactPopover | null): void {
 		if (!next) {
 			activeTooltip = null;
+			activeTooltipVersion = null;
 			return;
 		}
 		activeTooltip = clampTooltip(next);
+		activeTooltipVersion = holdTooltipVersion;
 	}
 
 	function closeTooltip({ restoreFocus = false }: { restoreFocus?: boolean } = {}): void {
 		const currentTooltip = activeTooltip;
 		activeTooltip = null;
+		activeTooltipVersion = null;
 		if (restoreFocus && currentTooltip?.trigger?.isConnected) {
 			currentTooltip.trigger.focus();
 		}
@@ -246,6 +255,7 @@
 		if (!browser) return;
 		const timer = window.setInterval(() => {
 			nowMs = Date.now();
+			holdTooltipVersion += 1;
 		}, HOLD_REFRESH_MS);
 		return () => window.clearInterval(timer);
 	});
@@ -264,6 +274,7 @@
 				holdNotesCache = result.notesByServer;
 				compactHoldNotesByServer = result.notesByServer;
 				compactHoldLoadErrors = result.failedServerIds;
+				holdTooltipVersion += 1;
 			} finally {
 				holdRefreshInFlight = false;
 			}
@@ -276,6 +287,12 @@
 			cancelled = true;
 			window.clearInterval(timer);
 		};
+	});
+
+	$effect(() => {
+		if (!activeTooltip || activeTooltipVersion === null || !tooltipHasHoldAdvisory(activeTooltip)) return;
+		if (activeTooltipVersion === holdTooltipVersion) return;
+		closeTooltip();
 	});
 
 	$effect(() => {
