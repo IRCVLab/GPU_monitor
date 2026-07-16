@@ -39,6 +39,8 @@ class Note(Base):
     server_id = Column(Integer, ForeignKey("servers.id"), nullable=False)
     username = Column(Text, nullable=False)           # 메모 작성자
     content = Column(Text, nullable=False)
+    display_name = Column(String(40), nullable=True)
+    priority = Column(Text, nullable=False, default="normal", server_default=text("'normal'"))
     kind = Column(Text, nullable=False, default="memo", server_default=text("'memo'"))
     gpu_indices = Column(Text, nullable=False, default="[]", server_default=text("'[]'"))
     created_at = Column(DateTime, default=func.now())

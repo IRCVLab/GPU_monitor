@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["notes"])
 
 NoteKind = Literal["memo", "hold"]
+NotePriority = Literal["normal", "high", "urgent"]
 
 
 def parse_gpu_indices(raw: str | None) -> list[int]:
@@ -54,6 +55,25 @@ def _canonical_gpu_indices(indices) -> list[int]:
     return sorted(dict.fromkeys(normalized))
 
 
+def normalize_priority(value: str | None) -> str:
+    if value in (None, ""):
+        return "normal"
+    return value
+
+
+def normalize_display_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("display_name must be a string")
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if len(trimmed) > 40:
+        raise ValueError("display_name must be at most 40 characters")
+    return trimmed
+
+
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
@@ -62,11 +82,23 @@ class NoteOut(BaseModel):
     id: int
     server_id: int
     username: str
+    display_name: Optional[str] = None
     content: str
     created_at: str
     expires_at: Optional[str] = None
+    priority: NotePriority = "normal"
     kind: NoteKind
     gpu_indices: list[int] = Field(default_factory=list)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _normalize_display_name(cls, value):
+        return normalize_display_name(value)
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _normalize_priority(cls, value):
+        return normalize_priority(value)
 
     @field_validator("gpu_indices", mode="before")
     @classmethod
@@ -92,11 +124,23 @@ class NoteOut(BaseModel):
 
 class NoteCreate(BaseModel):
     username: str
+    display_name: Optional[str] = None
+    priority: NotePriority = "normal"
     ssh_password: str
     content: str
     expires_at: datetime
     kind: NoteKind = "memo"
     gpu_indices: list[StrictInt] = Field(default_factory=list)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _normalize_display_name(cls, value):
+        return normalize_display_name(value)
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _normalize_priority(cls, value):
+        return normalize_priority(value)
 
     @field_validator("gpu_indices", mode="before")
     @classmethod
@@ -174,9 +218,11 @@ def _note_to_out(n: Note) -> NoteOut:
         id=n.id,
         server_id=n.server_id,
         username=n.username,
+        display_name=n.display_name,
         content=n.content,
         created_at=serialize_datetime(n.created_at) if isinstance(n.created_at, datetime) else str(n.created_at),
         expires_at=serialize_datetime(n.expires_at) if isinstance(n.expires_at, datetime) else None,
+        priority=n.priority,
         kind=n.kind or "memo",
         gpu_indices=n.gpu_indices,
     )
@@ -224,8 +270,10 @@ async def create_note(server_id: int, body: NoteCreate):
         note = Note(
             server_id=server_id,
             username=body.username,
+            display_name=body.display_name,
             content=body.content,
             expires_at=expires_at,
+            priority=body.priority,
             kind=body.kind,
             gpu_indices=serialize_gpu_indices(body.gpu_indices),
         )
