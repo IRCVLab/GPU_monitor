@@ -102,6 +102,12 @@ test('ServerCard renders collapsed System as one resource-leading CPU RAM Storag
 	assert.ok(cpuIndex >= 0 && cpuIndex < ramIndex && ramIndex < storageIndex && storageIndex < loadIndex, 'CPU, RAM and Storage must remain visible before secondary load context');
 	assert.doesNotMatch(preview, /monitor-card__load-gauge/, 'normal collapsed summary should not spend width on a load gauge');
 	assert.match(preview, /monitor-card__load-text">\{loadPreviewText\}<\/span>/, 'collapsed system preview should retain compact load text');
+	assert.match(preview, /monitor-card__load-preview" title=\{loadAverageHelpText\}/, 'collapsed load context should explain how load relates to logical CPU count');
+	assert.match(source, /aria-describedby=\{`system-load-help-\$\{server\.server_id\}`\}/, 'system disclosure should expose load help to keyboard and assistive technology users');
+	assert.match(preview, /\{\/if\}\s*<span id=\{`system-load-help-\$\{server\.server_id\}`\} class=\"monitor-card__sr-only\">\{loadAverageHelpText\}<\/span>/, 'load help target must remain mounted after the collapsed-only preview closes');
+	assert.ok(source.includes('return `${loadPreviewPrefixText}부하 ${loadText} · CPU ${cpuText}`;'), 'load and logical CPU must read as separate facts, not a hard maximum fraction');
+	assert.match(source, /const loadAverageHelpText = /);
+	for (const phrase of ['1·5·15분 평균', '실행 가능', 'I/O 대기', '최댓값이 아닙니다']) assert.ok(source.includes(phrase));
 	assert.match(preview, /#each loadPreviewCauses as cause/, 'collapsed system preview should append only active cause labels');
 	assert.match(preview, /· \{cause\.label\}/, 'pressure cause labels should be separated from the dense summary');
 	assert.match(source, /const ramPreviewText = \$derived\([\s\S]*?`\$\{ramPct\.toFixed\(0\)\}%`/, 'collapsed RAM preview should use percentage only');
@@ -275,7 +281,7 @@ test('historical and offline System preview keeps a neutral last-sample load cue
 	assert.match(source, /const loadPreviewText = \$derived\.by/, 'collapsed preview should derive compact load context');
 	assert.match(source, /\{#if isHistoricalSystemTelemetry && server\.system\}[\s\S]*monitor-card__last-sample-label[\s\S]*마지막 수집값[\s\S]*\{\/if\}/);
 	assert.match(source, /마지막 ·/, 'historical preview should prefix the last-sample cue');
-	assert.match(source, /부하 – \/ –/, 'neutral fallback copy should remain available when load is unusable');
+	assert.match(source, /부하 – · CPU –/, 'neutral fallback should keep load and CPU capacity as separate facts');
 });
 
 test('expanded historical System keeps raw last-sample resource and pressure values', () => {

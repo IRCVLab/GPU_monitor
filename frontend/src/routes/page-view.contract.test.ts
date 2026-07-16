@@ -658,8 +658,8 @@ test('Task 6 FLIP handoff suppresses live source and target ring visuals until c
 
 test('Task 4 failure veil reveals card body and fully hides veil on hover or focus', () => {
 	const bodyRule = cssRule(cardCss, ".monitor-card[data-operational-state='impaired'] .monitor-card__body");
-	assert.match(bodyRule, /filter:\s*blur\((?:1(?:\.\d+)?|1\.5)px\)/, 'default body blur should stay light, around 1-1.5px');
-	assert.match(bodyRule, /opacity:\s*0\.(?:6|7|8)\d*\s*;/, 'default body should remain readable around 0.7 opacity');
+	assert.match(bodyRule, /filter:\s*blur\(2\.[0-9]+px\)\s+saturate\(0\.[0-9]+\)/, 'failed telemetry should use a visible Gaussian blur instead of disappearing behind the veil');
+	assert.match(bodyRule, /opacity:\s*0\.(?:7|8)\d*\s*;/, 'blurred body should remain legible beneath the status layer');
 
 	const hoverRule = cssRule(cardCss, ".monitor-card[data-operational-state='impaired']:is(:hover, :focus-within) .monitor-card__body");
 	assert.match(hoverRule, /filter:\s*none\s*;/);
@@ -667,6 +667,7 @@ test('Task 4 failure veil reveals card body and fully hides veil on hover or foc
 
 	const veilRule = cssRule(cardCss, '.monitor-card__state-veil');
 	assert.match(veilRule, /pointer-events:\s*none\s*;/);
+	assert.match(veilRule, /background:\s*color-mix\(in srgb, color-mix\(in srgb, var\(--ops-card\) var\(--material-veil-mix\), transparent\) 28%, transparent\)/, 'veil surface must remain translucent enough to preserve blurred telemetry');
 	assert.match(veilRule, /backdrop-filter:\s*blur\(/);
 	assert.match(cardCss, /monitor-card__state-veil-label/);
 	assert.match(cardCss, /monitor-card__state-veil-secondary/);
