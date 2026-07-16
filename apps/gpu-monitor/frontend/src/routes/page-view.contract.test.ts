@@ -508,8 +508,15 @@ test('theme mode toggle uses the native View Transition API with destination rev
 	assert.match(pageSource, /function farthestCornerRadius/);
 	assert.match(pageSource, /function runThemeModeReveal/);
 
+	const radiusBody = functionBody(pageSource, 'farthestCornerRadius');
+	assert.match(radiusBody, /Math\.hypot\(\s*Math\.max\(originX, window\.innerWidth - originX\),\s*Math\.max\(originY, window\.innerHeight - originY\)\s*\)\s*\+\s*24/);
+	assert.doesNotMatch(radiusBody, /sourceRect|sourceRadius/);
+	assert.doesNotMatch(pageSource, /lastThemeRevealSourceRect/);
+
 	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
 	assert.match(revealBody, /const supportsViewTransition\s*=\s*typeof document\.startViewTransition === 'function'/);
+	assert.doesNotMatch(revealBody, /confirmViewTransitionSupport/);
+	assert.doesNotMatch(revealBody, /viewTransitionDocument\[['"]startViewTransition['"]\]/);
 	assert.match(revealBody, /const reducedMotion\s*=\s*window\.matchMedia\('\(prefers-reduced-motion: reduce\)'\)\.matches/);
 	assert.match(revealBody, /if \(reducedMotion \|\| !supportsViewTransition\) \{[\s\S]*setThemeMode\(nextMode\)[\s\S]*return;[\s\S]*\}/);
 	assert.match(revealBody, /readVisibleThemeButtonCenter\(originElement\)/);
@@ -521,7 +528,7 @@ test('theme mode toggle uses the native View Transition API with destination rev
 	const setXIndex = revealBody.indexOf("setProperty('--theme-reveal-x'");
 	const setYIndex = revealBody.indexOf("setProperty('--theme-reveal-y'");
 	const setRadiusIndex = revealBody.indexOf("setProperty('--theme-reveal-radius'");
-	const startTransitionIndex = revealBody.indexOf('document.startViewTransition');
+	const startTransitionIndex = revealBody.indexOf('const transition = document.startViewTransition');
 	const awaitFinishedIndex = revealBody.indexOf('await transition.finished');
 	const finallyIndex = revealBody.indexOf('finally', awaitFinishedIndex);
 	for (const [label, index] of Object.entries({ lockIndex, setXIndex, setYIndex, setRadiusIndex, startTransitionIndex, awaitFinishedIndex, finallyIndex })) {
@@ -535,7 +542,7 @@ test('theme mode toggle uses the native View Transition API with destination rev
 	assert.ok(awaitFinishedIndex < finallyIndex, 'cleanup finally must be paired after awaiting transition.finished');
 
 	const startTransitionCall = revealBody.slice(startTransitionIndex, awaitFinishedIndex);
-	assert.match(startTransitionCall, /document\.startViewTransition\(\s*\(\)\s*=>\s*\{[\s\S]*setThemeMode\(nextMode\)[\s\S]*\}\s*\)/);
+	assert.match(startTransitionCall, /const transition = document\.startViewTransition\(\s*\(\)\s*=>\s*\{[\s\S]*setThemeMode\(nextMode\)[\s\S]*\}\s*\)/);
 	assert.equal((startTransitionCall.match(/setThemeMode\(nextMode\)/g) ?? []).length, 1, 'mode switch belongs inside the native transition callback exactly once');
 
 	const postFinishedBeforeFinally = revealBody.slice(awaitFinishedIndex + 'await transition.finished'.length, finallyIndex);
@@ -549,10 +556,10 @@ test('theme mode toggle uses the native View Transition API with destination rev
 	assert.doesNotMatch(finallyBody, /setThemeMode\(nextMode\)/, 'cleanup finally must not perform a delayed mode switch');
 });
 
-test('theme mode reveal has no legacy overlay, proxy, edge animation, or delayed post-overlay mode switch', () => {
+test('theme mode reveal has no legacy overlay, proxy, edge animation, delayed post-overlay mode switch, or test-shaped dead code', () => {
 	const revealBody = functionBody(pageSource, 'runThemeModeReveal');
 	assert.doesNotMatch(pageSource, /themeRevealOverlay|themeRevealToggleProxy|themeRevealAnimation|themeRevealEdgeAnimation/);
-	assert.doesNotMatch(pageSource, /createThemeToggleProxy|cleanupThemeReveal|theme-mode-toggle-proxy|theme-mode-reveal__edge/);
+	assert.doesNotMatch(pageSource, /createThemeToggleProxy|cleanupThemeReveal|theme-mode-toggle-proxy|theme-mode-reveal__edge|confirmViewTransitionSupport/);
 	assert.doesNotMatch(pageSource, /document\.createElement\('div'\)[\s\S]*theme-mode-reveal/);
 	assert.doesNotMatch(revealBody, /\.className\s*=\s*'theme-mode-reveal'|\.classList\.add\('theme-mode-reveal'\)/);
 	assert.doesNotMatch(revealBody, /overlay\.animate|edge\.animate|covered|await animation\.finished[\s\S]*setThemeMode\(nextMode\)/);
