@@ -84,6 +84,12 @@ test('GpuBar preserves telemetry truth in aria-label while adding advisory hold 
 	assert.match(source, /resolveDisplayName\(entry\.note\)|resolveDisplayName\(note\)/, 'aria detail should use the shared display fallback');
 });
 
+
+test('GpuBar exposes a stable tooltip id that includes server scope', () => {
+	assert.match(source, /primaryHold\.server_id/);
+	assert.match(source, /gpu-hold-tooltip-\$\{primaryHold\.server_id\}-\$\{gpu\.index\}/);
+	assert.doesNotMatch(source, /`gpu-hold-tooltip-\$\{gpu\.index\}`/);
+});
 test('GpuBar exposes a custom accessible tooltip on hover and focus instead of title-only hints', () => {
 	assert.match(source, /let\s+tooltipOpen\s*=\s*\$state\(false\)/);
 	assert.match(source, /function\s+openTooltip\(\)\s*\{/);
