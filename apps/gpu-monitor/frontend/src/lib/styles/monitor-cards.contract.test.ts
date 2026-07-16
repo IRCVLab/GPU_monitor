@@ -181,43 +181,46 @@ test('collapsed utility controls keep the chevron affordance and remove decorati
 	assertDeclaration(previewRule, 'white-space', 'nowrap');
 });
 
-test('collapsed system preview is a single inline baseline with explicit I/O segment', () => {
+test('collapsed system preview keeps a single load sentence with a micro-gauge', () => {
 	const previewRule = cssRule('.monitor-card__system-preview');
 	assert.match(previewRule, /display:\s*flex/);
 	assert.match(previewRule, /align-items:\s*center/);
+	assert.match(previewRule, /justify-content:\s*flex-end/);
 	assert.match(previewRule, /flex-wrap:\s*nowrap/);
 	assert.match(previewRule, /overflow:\s*hidden/);
-	assert.doesNotMatch(previewRule, /grid-template-columns:\s*repeat\(4/);
+	assert.ok(remValues(declarationValue(previewRule, 'gap'))[0] <= 0.35);
 
-	const segmentRule = cssRule('.monitor-card__system-preview-segment');
-	assert.match(segmentRule, /display:\s*inline-flex/);
-	assert.match(segmentRule, /align-items:\s*baseline/);
-	assert.match(segmentRule, /min-width:\s*0/);
+	const loadPreviewRule = cssRule('.monitor-card__load-preview');
+	assert.match(loadPreviewRule, /display:\s*inline-flex/);
+	assert.match(loadPreviewRule, /align-items:\s*center/);
+	assert.match(loadPreviewRule, /min-width:\s*0/);
 
-	const labelRule = cssRule('.monitor-card__system-preview-label');
-	assert.ok(remValues(declarationValue(labelRule, 'font-size'))[0] <= 0.6);
+	const gaugeRule = cssRule('.monitor-card__load-gauge');
+	assert.match(gaugeRule, /width:\s*2\.15rem/);
+	assert.match(gaugeRule, /height:\s*0\.26rem/);
+	assert.match(gaugeRule, /border-radius:\s*999px/);
 
-	const valueRule = cssRule('.monitor-card__system-preview-value');
-	assert.ok(remValues(declarationValue(valueRule, 'font-size'))[0] <= 0.68);
-	assert.match(valueRule, /font-variant-numeric:\s*tabular-nums/);
+	const textRule = cssRule('.monitor-card__load-text');
+	assert.ok(remValues(declarationValue(textRule, 'font-size'))[0] <= 0.68);
+	assert.match(textRule, /font-variant-numeric:\s*tabular-nums/);
 
-	assert.doesNotMatch(css, /\.monitor-card__system-preview-item\b/, 'old 4-item system tiles should not remain');
+	assert.doesNotMatch(css, /\.monitor-card__system-preview-segment/, 'old segmented preview styles should be removed');
+	assert.doesNotMatch(css, /\.monitor-card__system-preview-item/, 'old 4-item system tiles should not remain');
 });
 
-test('expanded system removes summary tiles and adds dense I/O pressure detail', () => {
-	assert.doesNotMatch(css, /\.monitor-card__system-summary\b/, 'old summary tile grid styles should be removed');
-	assert.doesNotMatch(css, /\.monitor-card__summary-item\b/, 'old summary tile styles should be removed');
+test('expanded system removes summary tiles and keeps dense pressure detail', () => {
+	assert.doesNotMatch(css, /\.monitor-card__system-summary/, 'old summary tile grid styles should be removed');
+	assert.doesNotMatch(css, /\.monitor-card__summary-item/, 'old summary tile styles should be removed');
 
 	const ioDetail = cssRule('.monitor-card__io-detail');
 	assert.match(ioDetail, /display:\s*grid|display:\s*flex/);
 	assert.match(ioDetail, /gap:\s*0\./);
 
-	const ioCopy = cssRule('.monitor-card__io-detail-copy');
-	assert.ok(remValues(declarationValue(ioCopy, 'font-size'))[0] <= 0.68);
-
 	const ioMetrics = cssRule('.monitor-card__io-detail-metrics');
 	assert.match(ioMetrics, /display:\s*flex|display:\s*grid/);
 	assert.match(ioMetrics, /font-variant-numeric:\s*tabular-nums/);
+
+	assert.doesNotMatch(css, /MB\/s/, 'system CSS should not encode MB\/s throughput copy');
 });
 
 test('hardware mounts and notes align to the dense card scale', () => {

@@ -5,6 +5,7 @@
   import GpuBar from '$lib/components/GpuBar.svelte';
   import NoteForm from '$lib/components/NoteForm.svelte';
   import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
+  import { classifyLoadRatio, classifyPressure, normalizeLoadRatio, pressureLabel } from '$lib/utils/resourcePressure';
 
   let {
     server,
@@ -35,7 +36,6 @@
   const FRESHNESS_WARNING_AFTER_MS = 30_000;
 
   type GpuHoldCue = { owner: string; remaining: string; memo: string };
-  type MetricLevel = 'normal' | 'medium' | 'high';
   type OperationalState = 'healthy' | 'impaired';
 
 
@@ -62,12 +62,14 @@
     return `${value.toFixed(digits)}${units[unitIndex]}`;
   }
 
-  function formatDiskThroughput(bytesPerSecond: number | null | undefined): string {
-    if (!Number.isFinite(bytesPerSecond)) return '–';
+  function formatFixed(value: number | null | undefined, digits = 1): string {
+    return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '–';
+  }
 
-    const megabytesPerSecond = Math.max(0, bytesPerSecond ?? 0) / 1024 / 1024;
-    const digits = megabytesPerSecond >= 100 ? 0 : megabytesPerSecond >= 10 ? 1 : 2;
-    return `${megabytesPerSecond.toFixed(digits)} MB/s`;
+  function formatRoundedCount(value: number | null | undefined, allowZero = true): string {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '–';
+    if (!allowZero && value <= 0) return '–';
+    return `${Math.round(value)}`;
   }
 
   function absoluteTime(iso: string | null): string {
@@ -152,12 +154,6 @@
     return status === 'offline' || status === 'unknown' || Boolean(refreshText);
   }
 
-  function metricLevel(percent: number | null | undefined): MetricLevel {
-    if (!Number.isFinite(percent)) return 'normal';
-    if ((percent ?? 0) >= 90) return 'high';
-    if ((percent ?? 0) >= 75) return 'medium';
-    return 'normal';
-  }
 
   function parseNoteTime(iso: string | null): number | null {
     if (!iso) return null;
@@ -238,18 +234,6 @@
   const hasAvailableGpu = $derived(availableGpuCount > 0);
 
   const cpuPct = $derived(server.system?.cpu_percent ?? 0);
-  const ramUsed = $derived(server.system ? (server.system.ram_used / 1024).toFixed(1) : '–');
-  const ramTotal = $derived(server.system ? (server.system.ram_total / 1024).toFixed(1) : '–');
-  const ramPct = $derived(
-    server.system && server.system.ram_total > 0
-      ? (server.system.ram_used / server.system.ram_total) * 100
-      : 0
-  );
-
-  const totalGpuPower = $derived(
-    server.gpus.reduce((sum, gpu) => sum + Math.max(0, gpu.power_draw || 0), 0)
-  );
-  const totalGpuPowerText = $derived(server.gpus.length > 0 ? `${Math.round(totalGpuPower)}W` : '–');
   const storageSummary = $derived(server.storage?.summary ?? null);
   const storageUsedText = $derived(storageSummary ? formatStorage(storageSummary.used) : '–');
   const storageTotalText = $derived(storageSummary ? formatStorage(storageSummary.total) : '–');
@@ -260,59 +244,73 @@
     )
   );
   const systemPreviewUnavailableText = '–';
-  const cpuSystemDetailText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : systemPreviewUnavailableText);
-  const ramSystemDetailText = $derived(server.system ? `${ramPct.toFixed(0)}%` : systemPreviewUnavailableText);
-  const diskSystemDetailText = $derived(storageSummary ? `${storagePct.toFixed(0)}%` : systemPreviewUnavailableText);
-  const cpuPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : cpuSystemDetailText);
-  const ramPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : server.system ? `${ramUsed}/${ramTotal}GB` : systemPreviewUnavailableText);
-  const ramPercentText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : ramSystemDetailText);
+  const loadAvg1 = $derived(server.system?.load_avg_1 ?? null);
+  const loadAvg5 = $derived(server.system?.load_avg_5 ?? null);
+  const loadAvg15 = $derived(server.system?.load_avg_15 ?? null);
+  const cpuCount = $derived(server.system?.cpu_count ?? null);
+  const cpuPressureSome = $derived(server.system?.cpu_pressure_some ?? null);
+  const cpuRunningTasks = $derived(server.system?.cpu_running_tasks ?? null);
   const ioSome = $derived(server.system?.io_pressure_some ?? null);
   const ioFull = $derived(server.system?.io_pressure_full ?? null);
   const ioBlocked = $derived(server.system?.io_blocked_tasks ?? null);
-  const ioSupported = $derived(server.system?.io_pressure_supported === true);
-  const diskReadBytesPerSecond = $derived(server.system?.disk_read_bytes_per_second);
-  const diskWriteBytesPerSecond = $derived(server.system?.disk_write_bytes_per_second);
-  const diskThroughputBytesPerSecond = $derived(
-    (diskReadBytesPerSecond ?? 0) + (diskWriteBytesPerSecond ?? 0)
-  );
-  const hasDiskThroughput = $derived(
-    Number.isFinite(diskReadBytesPerSecond) || Number.isFinite(diskWriteBytesPerSecond)
-  );
-  const hasPsiTelemetry = $derived(ioSome !== null || ioFull !== null || ioBlocked !== null);
-  const hasIoPressure = $derived((ioSome ?? 0) > 0 || (ioFull ?? 0) > 0 || (ioBlocked ?? 0) > 0);
-  const isIoIdle = $derived(
-    hasPsiTelemetry &&
-      (ioSome ?? 0) === 0 &&
-      (ioFull ?? 0) === 0 &&
-      (ioBlocked ?? 0) === 0 &&
-      (!hasDiskThroughput || diskThroughputBytesPerSecond < 512 * 1024)
-  );
-  const ioThroughputText = $derived(formatDiskThroughput(diskThroughputBytesPerSecond));
-  const ioPreviewText = $derived.by(() => {
-    if (isHistoricalSystemTelemetry) return systemPreviewUnavailableText;
-    if (!server.system) return systemPreviewUnavailableText;
-    if (hasIoPressure) return '병목';
-    if (isIoIdle) return '여유';
-    if (hasDiskThroughput) return ioThroughputText;
-    return systemPreviewUnavailableText;
+  const loadRatio = $derived(normalizeLoadRatio(loadAvg1, cpuCount));
+  const loadLevel = $derived(isHistoricalSystemTelemetry ? 'unknown' : classifyLoadRatio(loadRatio));
+  const cpuPressureLevel = $derived(classifyPressure(cpuPressureSome));
+  const ioPressureLevel = $derived.by(() => {
+    const someLevel = classifyPressure(ioSome);
+    const fullLevel = classifyPressure(ioFull);
+
+    if (someLevel === 'bottleneck' || fullLevel === 'bottleneck') return 'bottleneck';
+    if (someLevel === 'pressure' || fullLevel === 'pressure') return 'pressure';
+    if ((ioBlocked ?? 0) > 0) return 'pressure';
+    if (someLevel === 'idle' || fullLevel === 'idle') return 'idle';
+    return 'unknown';
   });
-  const ioSystemDetailText = $derived.by(() => {
-    if (!server.system) return systemPreviewUnavailableText;
-    if (hasIoPressure) return '병목';
-    if (isIoIdle) return '여유';
-    if (hasDiskThroughput) return ioThroughputText;
-    return systemPreviewUnavailableText;
+  const loadPreviewPrefixText = $derived(isHistoricalSystemTelemetry && server.system ? '마지막 · ' : '');
+  const loadPreviewText = $derived.by(() => {
+    const loadText = formatFixed(loadAvg1);
+    const cpuText = formatRoundedCount(cpuCount, false);
+    if (loadText === systemPreviewUnavailableText && cpuText === systemPreviewUnavailableText) {
+      return `${loadPreviewPrefixText}부하 – / –`;
+    }
+    return `${loadPreviewPrefixText}부하 ${loadText} / ${cpuText}`;
   });
-  const ioSomeText = $derived(ioSome !== null ? `${ioSome.toFixed(1)}%` : ioSupported ? '–' : '지원 안 함');
-  const ioFullText = $derived(ioFull !== null ? `${ioFull.toFixed(1)}%` : '–');
-  const ioBlockedText = $derived(ioBlocked !== null ? `${ioBlocked}` : '–');
-  const diskReadText = $derived(hasDiskThroughput ? formatDiskThroughput(diskReadBytesPerSecond ?? 0) : '–');
-  const diskWriteText = $derived(hasDiskThroughput ? formatDiskThroughput(diskWriteBytesPerSecond ?? 0) : '–');
-  const ioPressureHelpText = 'Linux PSI I/O pressure · 최근 10초 동안 작업이 I/O 때문에 멈춘 시간의 비율';
-  const diskPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : diskSystemDetailText);
-  const cpuLevel = $derived(server.system && !isHistoricalSystemTelemetry ? metricLevel(cpuPct) : 'normal');
-  const ramLevel = $derived(server.system && !isHistoricalSystemTelemetry ? metricLevel(ramPct) : 'normal');
-  const diskLevel = $derived(storageSummary && !isHistoricalSystemTelemetry ? metricLevel(storagePct) : 'normal');
+  const cpuPressureLabelText = $derived(pressureLabel(cpuPressureLevel));
+  const ioPressureLabelText = $derived(pressureLabel(ioPressureLevel));
+  const cpuPressureCauseLabel = $derived(
+    cpuPressureLevel === 'pressure' ? 'CPU 압박' : cpuPressureLevel === 'bottleneck' ? 'CPU 병목' : null
+  );
+  const ioPressureCauseLabel = $derived(
+    ioPressureLevel === 'pressure' ? 'I/O 압박' : ioPressureLevel === 'bottleneck' ? 'I/O 병목' : null
+  );
+  const loadPreviewCauses = $derived.by(() => {
+    if (isHistoricalSystemTelemetry) return [];
+
+    const causes = [];
+    if (cpuPressureCauseLabel) {
+      causes.push({ key: 'cpu', label: cpuPressureCauseLabel, level: cpuPressureLevel, detail: cpuPressureLabelText });
+    }
+    if (ioPressureCauseLabel) {
+      causes.push({ key: 'io', label: ioPressureCauseLabel, level: ioPressureLevel, detail: ioPressureLabelText });
+    }
+    return causes;
+  });
+  const loadGaugeFillWidth = $derived.by(() => {
+    if (typeof loadRatio !== 'number' || !Number.isFinite(loadRatio)) return '12%';
+    return `${Math.min(Math.max(loadRatio, 0), 1) * 100}%`;
+  });
+  const loadGaugeOverflow = $derived(
+    !isHistoricalSystemTelemetry && typeof loadRatio === 'number' && Number.isFinite(loadRatio) && loadRatio > 1
+  );
+  const loadDetailText = $derived(`${formatFixed(loadAvg1)} · ${formatFixed(loadAvg5)} · ${formatFixed(loadAvg15)}`);
+  const cpuCountText = $derived(formatRoundedCount(cpuCount, false));
+  const cpuSystemDetailText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : systemPreviewUnavailableText);
+  const cpuRunningText = $derived(formatRoundedCount(cpuRunningTasks));
+  const cpuPressureSomeText = $derived(cpuPressureSome !== null ? `${cpuPressureSome.toFixed(1)}%` : systemPreviewUnavailableText);
+  const ioSomeText = $derived(ioSome !== null ? `${ioSome.toFixed(1)}%` : systemPreviewUnavailableText);
+  const ioFullText = $derived(ioFull !== null ? `${ioFull.toFixed(1)}%` : systemPreviewUnavailableText);
+  const ioBlockedText = $derived(formatRoundedCount(ioBlocked));
+  const ioPressureHelpText = 'Linux PSI stall pressure · 최근 10초 동안 작업이 CPU 또는 I/O 때문에 대기한 시간의 비율';
   const hasSystemSection = $derived(Boolean(server.system || server.storage || server.gpus.length > 0));
 
   const visibleNotes = $derived.by(() => notes.filter((note) => noteVisible(note)));
@@ -481,22 +479,21 @@
           <span class="monitor-card__footer-side">
             {#if !sysExpanded}
               <span class="monitor-card__footer-preview monitor-card__system-preview">
-                <span class="monitor-card__system-preview-segment" data-level={cpuLevel} title={`CPU ${cpuPreviewText}`}>
-                  <span class="monitor-card__system-preview-label">CPU</span>
-                  <span class="monitor-card__system-preview-value">{cpuPreviewText}</span>
+                <span class="monitor-card__load-preview">
+                  <span
+                    class="monitor-card__load-gauge"
+                    data-level={loadLevel}
+                    data-overflow={loadGaugeOverflow ? 'true' : 'false'}
+                    style={`--load-fill-width: ${loadGaugeFillWidth};`}
+                    aria-hidden="true"
+                  >
+                    <span class="monitor-card__load-gauge-fill"></span>
+                  </span>
+                  <span class="monitor-card__load-text">{loadPreviewText}</span>
                 </span>
-                <span class="monitor-card__system-preview-segment" data-level={ramLevel} title={`RAM ${ramPreviewText}`}>
-                  <span class="monitor-card__system-preview-label">RAM</span>
-                  <span class="monitor-card__system-preview-value">{ramPercentText}</span>
-                </span>
-                <span class="monitor-card__system-preview-segment" title={ioPressureHelpText}>
-                  <span class="monitor-card__system-preview-label">I/O</span>
-                  <span class="monitor-card__system-preview-value">{ioPreviewText}</span>
-                </span>
-                <span class="monitor-card__system-preview-segment" data-level={diskLevel} title={`Disk ${diskPreviewText}`}>
-                  <span class="monitor-card__system-preview-label">Disk</span>
-                  <span class="monitor-card__system-preview-value">{diskPreviewText}</span>
-                </span>
+                {#each loadPreviewCauses as cause}
+                  <span class="monitor-card__pressure-cause" data-level={cause.level}>{cause.label}</span>
+                {/each}
               </span>
             {/if}
             <span class="monitor-card__footer-disclosure" class:is-expanded={sysExpanded} aria-hidden="true"></span>
@@ -516,19 +513,18 @@
             {/if}
 
             <div class="monitor-card__system-facts">
+              <span><small>부하</small><strong>{loadDetailText}</strong></span>
+              <span><small>논리 CPU</small><strong>{cpuCountText}</strong></span>
               <span><small>CPU</small><strong>{cpuSystemDetailText}</strong></span>
-              <span><small>RAM</small><strong>{ramSystemDetailText}</strong></span>
-              <span><small>GPU</small><strong>{totalGpuPowerText}</strong></span>
-              <span><small>Disk</small><strong>{diskSystemDetailText}</strong></span>
+              <span><small>실행대기</small><strong>{cpuRunningText}</strong></span>
             </div>
 
             <div class="monitor-card__io-detail" title={ioPressureHelpText}>
-              <span class="monitor-card__io-detail-copy">I/O {ioSystemDetailText}</span>
+              <span class="monitor-card__io-detail-copy">PSI 원인</span>
               <span class="monitor-card__io-detail-metrics monitor-card__io-detail-table">
-                <span>R</span><strong>{diskReadText}</strong>
-                <span>W</span><strong>{diskWriteText}</strong>
-                <span>some</span><strong>{ioSomeText}</strong>
-                <span>full</span><strong>{ioFullText}</strong>
+                <span>CPU PSI</span><strong>{cpuPressureSomeText}</strong>
+                <span>I/O some</span><strong>{ioSomeText}</strong>
+                <span>I/O full</span><strong>{ioFullText}</strong>
                 <span>blocked</span><strong>{ioBlockedText}</strong>
               </span>
             </div>

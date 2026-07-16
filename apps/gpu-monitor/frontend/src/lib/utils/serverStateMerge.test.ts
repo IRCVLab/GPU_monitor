@@ -284,3 +284,97 @@ test('isServerStateEqual treats gpu inventory changes as meaningful telemetry up
 
 	assert.equal(isServerStateEqual(baseline, changed), false);
 });
+
+test('normalizeServerState preserves load-average, CPU PSI, and runnable-task fields', () => {
+	const normalized = normalizeServerState({
+		server_id: 31,
+		server_name: 'QueueBox',
+		host: 'queuebox.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-16T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 67,
+			ram_used: 64000,
+			ram_total: 128000,
+			cpu_pressure_some: 8.5,
+			cpu_running_tasks: 6,
+			io_pressure_some: 0.8,
+			io_pressure_full: 0.1,
+			io_blocked_tasks: 2,
+			io_pressure_supported: true,
+			load_avg_1: 3.2,
+			load_avg_5: 2.8,
+			load_avg_15: 2.1,
+			cpu_count: 32
+		},
+		storage: null
+	});
+
+	assert.equal(normalized?.system?.cpu_pressure_some, 8.5);
+	assert.equal(normalized?.system?.cpu_running_tasks, 6);
+	assert.equal(normalized?.system?.load_avg_1, 3.2);
+	assert.equal(normalized?.system?.load_avg_5, 2.8);
+	assert.equal(normalized?.system?.load_avg_15, 2.1);
+	assert.equal(normalized?.system?.cpu_count, 32);
+});
+
+test('isServerStateEqual treats normalized load and CPU pressure changes as meaningful telemetry updates', () => {
+	const baseline = normalizeServerState({
+		server_id: 32,
+		server_name: 'QueueBox',
+		host: 'queuebox.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-16T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 67,
+			ram_used: 64000,
+			ram_total: 128000,
+			cpu_pressure_some: 8.5,
+			cpu_running_tasks: 6,
+			io_pressure_some: 0.8,
+			io_pressure_full: 0.1,
+			io_blocked_tasks: 2,
+			io_pressure_supported: true,
+			load_avg_1: 3.2,
+			load_avg_5: 2.8,
+			load_avg_15: 2.1,
+			cpu_count: 32
+		},
+		storage: null
+	});
+	const changed = normalizeServerState({
+		server_id: 32,
+		server_name: 'QueueBox',
+		host: 'queuebox.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-16T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 67,
+			ram_used: 64000,
+			ram_total: 128000,
+			cpu_pressure_some: 12.5,
+			cpu_running_tasks: 6,
+			io_pressure_some: 0.8,
+			io_pressure_full: 0.1,
+			io_blocked_tasks: 2,
+			io_pressure_supported: true,
+			load_avg_1: 24.8,
+			load_avg_5: 14.2,
+			load_avg_15: 9.6,
+			cpu_count: 32
+		},
+		storage: null
+	});
+
+	assert.equal(isServerStateEqual(baseline, changed), false);
+});
+

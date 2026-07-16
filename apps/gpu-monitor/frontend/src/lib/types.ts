@@ -15,6 +15,12 @@ export interface SystemInfo {
 	cpu_percent: number;
 	ram_used: number;       // MB
 	ram_total: number;      // MB
+	cpu_pressure_some?: number | null;
+	cpu_running_tasks?: number | null;
+	load_avg_1?: number | null;
+	load_avg_5?: number | null;
+	load_avg_15?: number | null;
+	cpu_count?: number | null;
 	io_pressure_some?: number | null;
 	io_pressure_full?: number | null;
 	io_blocked_tasks?: number | null;
