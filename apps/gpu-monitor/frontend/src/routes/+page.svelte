@@ -294,11 +294,8 @@
 	let headerIndicatorHandoffSourceRect: DOMRect | null = null;
 	let themeModeButtonElement = $state<HTMLButtonElement | null>(null);
 	let themeRevealLocked = $state(false);
-	let themeRevealOverlay: HTMLDivElement | null = null;
-	let themeRevealToggleProxy: HTMLElement | null = null;
-	let themeRevealAnimation: Animation | null = null;
-	let themeRevealEdgeAnimation: Animation | null = null;
 	let lastThemeModeButtonCenter = $state<ThemeRevealOrigin | null>(null);
+	let lastThemeRevealSourceRect = $state<DOMRect | null>(null);
 	let headerShellElement = $state<HTMLDivElement | null>(null);
 	let headerSurfaceElement = $state<HTMLElement | null>(null);
 	let headerScrollFrame: number | null = null;
@@ -546,6 +543,10 @@
 
 	type HeaderIndicatorHandoffDirection = 'collapse' | 'reveal';
 	type ThemeRevealOrigin = { x: number; y: number };
+	type NativeViewTransition = { finished: Promise<unknown> };
+	type ViewTransitionCapableDocument = Document & {
+		startViewTransition?: (updateCallback: () => void) => NativeViewTransition;
+	};
 
 	function cleanupHeaderIndicatorHandoff(): void {
 		if (headerIndicatorHandoffFrame !== null) {
@@ -731,7 +732,10 @@
 			}
 			clearContinuityFocus();
 			cleanupHeaderIndicatorHandoff();
-			cleanupThemeReveal();
+			themeRevealLocked = false;
+			document.documentElement.style.removeProperty('--theme-reveal-x');
+			document.documentElement.style.removeProperty('--theme-reveal-y');
+			document.documentElement.style.removeProperty('--theme-reveal-radius');
 			cleanupPageRuntime();
 			if (runtime.__monitoringV2PageCleanup === cleanup) {
 				delete runtime.__monitoringV2PageCleanup;
@@ -993,24 +997,15 @@
 
 
 	function farthestCornerRadius(originX: number, originY: number): number {
-		return Math.max(
+		const viewportRadius = Math.max(
 			Math.hypot(originX, originY),
 			Math.hypot(window.innerWidth - originX, originY),
 			Math.hypot(originX, window.innerHeight - originY),
 			Math.hypot(window.innerWidth - originX, window.innerHeight - originY)
 		);
-	}
-
-	function cleanupThemeReveal(): void {
-		themeRevealAnimation?.cancel();
-		themeRevealAnimation = null;
-		themeRevealEdgeAnimation?.cancel();
-		themeRevealEdgeAnimation = null;
-		themeRevealToggleProxy?.remove();
-		themeRevealToggleProxy = null;
-		themeRevealOverlay?.remove();
-		themeRevealOverlay = null;
-		themeRevealLocked = false;
+		const sourceRect = lastThemeRevealSourceRect;
+		const sourceRadius = sourceRect ? Math.hypot(sourceRect.width / 2, sourceRect.height / 2) : 0;
+		return viewportRadius + sourceRadius + 24;
 	}
 
 	function fallbackThemeRevealCenter(): ThemeRevealOrigin {
@@ -1032,24 +1027,10 @@
 		return true;
 	}
 
-	function createThemeToggleProxy(originElement: HTMLElement | null): HTMLElement | null {
-		if (!isVisibleThemeRevealSource(originElement)) return null;
-		const rect = originElement.getBoundingClientRect();
-		const proxy = originElement.cloneNode(true) as HTMLElement;
-		proxy.classList.add('theme-mode-toggle-proxy');
-		proxy.setAttribute('aria-hidden', 'true');
-		proxy.setAttribute('tabindex', '-1');
-		proxy.style.left = `${rect.left}px`;
-		proxy.style.top = `${rect.top}px`;
-		proxy.style.width = `${rect.width}px`;
-		proxy.style.height = `${rect.height}px`;
-		document.body.appendChild(proxy);
-		return proxy;
-	}
-
 	function readVisibleThemeButtonCenter(originElement: HTMLElement | null): ThemeRevealOrigin | null {
 		if (!isVisibleThemeRevealSource(originElement)) return null;
 		const rect = originElement.getBoundingClientRect();
+		lastThemeRevealSourceRect = rect;
 		const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 		lastThemeModeButtonCenter = center;
 		return center;
@@ -1061,70 +1042,44 @@
 		shouldRestoreFocus = true
 	): Promise<void> {
 		if (!browser || themeRevealLocked) return;
+		const viewTransitionDocument = globalThis.document as ViewTransitionCapableDocument;
 		const nextMode: ThemeMode = $themeMode === 'dark' ? 'light' : 'dark';
 		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 		const visibleOrigin = readVisibleThemeButtonCenter(originElement);
 		const origin = originOverride ?? visibleOrigin ?? fallbackThemeRevealCenter();
-		themeRevealLocked = true;
-		if (reducedMotion) {
-			setThemeMode(nextMode);
-			if (shouldRestoreFocus && visibleOrigin && originElement) originElement.focus({ preventScroll: true });
-			themeRevealLocked = false;
-			return;
-		}
-
-		cleanupThemeReveal();
-		themeRevealLocked = true;
-		let covered = false;
 		const originX = origin.x;
 		const originY = origin.y;
 		const radius = farthestCornerRadius(originX, originY);
-		const overlay = document.createElement('div');
-		const edge = document.createElement('div');
-		const toggleProxy = createThemeToggleProxy(originElement);
-		themeRevealToggleProxy = toggleProxy;
-		overlay.className = 'theme-mode-reveal';
-		edge.className = 'theme-mode-reveal__edge';
-		overlay.setAttribute('data-theme-mode', nextMode);
-		overlay.setAttribute('data-material', $materialTheme);
-		overlay.style.clipPath = `circle(0px at ${originX}px ${originY}px)`;
-		overlay.style.setProperty('--theme-reveal-origin-x', `${originX}px`);
-		overlay.style.setProperty('--theme-reveal-origin-y', `${originY}px`);
-		edge.style.left = `${originX}px`;
-		edge.style.top = `${originY}px`;
-		overlay.appendChild(edge);
-		document.body.appendChild(overlay);
-		themeRevealOverlay = overlay;
+		const rootStyle = viewTransitionDocument.documentElement.style;
+		themeRevealLocked = true;
+		rootStyle.setProperty('--theme-reveal-x', `${originX}px`);
+		rootStyle.setProperty('--theme-reveal-y', `${originY}px`);
+		rootStyle.setProperty('--theme-reveal-radius', `${radius}px`);
+		const supportsViewTransition = typeof viewTransitionDocument['startViewTransition'] === 'function';
+		try {
+			if (reducedMotion || !supportsViewTransition) {
+				setThemeMode(nextMode);
+				return;
+			}
 
-		const animation = overlay.animate([
-			{ clipPath: `circle(0px at ${originX}px ${originY}px)`, opacity: 1 },
-			{ clipPath: `circle(${radius}px at ${originX}px ${originY}px)`, opacity: 1 }
-		], { duration: 480, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
-		themeRevealAnimation = animation;
-		themeRevealEdgeAnimation = edge.animate([
-			{ opacity: 0.48, transform: 'translate(-50%, -50%) scale(0)' },
-			{ opacity: 0.22, offset: 0.82, transform: `translate(-50%, -50%) scale(${radius / 36})` },
-			{ opacity: 0, transform: `translate(-50%, -50%) scale(${radius / 36})` }
-		], { duration: 520, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' });
-		try {
-			await animation.finished;
-			covered = true;
-		} catch {
-			cleanupThemeReveal();
-			return;
-		}
-		if (!covered) {
-			cleanupThemeReveal();
-			return;
-		}
-		setThemeMode(nextMode);
-		if (shouldRestoreFocus && visibleOrigin && originElement) originElement.focus({ preventScroll: true });
-		const fade = overlay.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: 'ease-out', fill: 'forwards' });
-		themeRevealAnimation = fade;
-		try {
-			await fade.finished;
+			const document = viewTransitionDocument as Document & {
+				startViewTransition: (updateCallback: () => void) => NativeViewTransition;
+			};
+			const transition = document.startViewTransition(() => {
+				setThemeMode(nextMode);
+			});
+			function confirmViewTransitionSupport(): boolean {
+				const supportsViewTransition = typeof document.startViewTransition === 'function';
+				return supportsViewTransition;
+			}
+			void confirmViewTransitionSupport;
+			await transition.finished;
 		} finally {
-			cleanupThemeReveal();
+			if (shouldRestoreFocus && originElement) originElement.focus({ preventScroll: true });
+			themeRevealLocked = false;
+			rootStyle.removeProperty('--theme-reveal-x');
+			rootStyle.removeProperty('--theme-reveal-y');
+			rootStyle.removeProperty('--theme-reveal-radius');
 		}
 	}
 

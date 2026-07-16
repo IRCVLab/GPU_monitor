@@ -2011,90 +2011,29 @@ html.light .server-card { box-shadow: 0 2px 28px rgba(78, 86, 97, 0.1); }
 .server-card-note-password:focus { border-color: var(--ops-primary) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ops-primary) 16%, transparent); }
 
 
-.theme-mode-reveal {
-	position: fixed;
-	inset: 0;
-	z-index: 84;
-	pointer-events: none;
-	background: var(--ops-bg);
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ops-fg) 10%, transparent);
-	will-change: clip-path, opacity;
-	overflow: hidden;
+::view-transition-old(root) {
+	animation: none;
+	mix-blend-mode: normal;
 }
 
-
-body > .theme-mode-toggle-proxy.ops-mode-action {
-	position: fixed;
-	z-index: 94;
-	pointer-events: none;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
+::view-transition-new(root) {
+	animation: theme-root-reveal 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+	mix-blend-mode: normal;
 }
 
-.theme-mode-reveal__edge {
-	position: absolute;
-	width: 72px;
-	height: 72px;
-	border: 1px solid color-mix(in srgb, var(--ops-fg) 12%, transparent);
-	border-radius: 999px;
-	box-shadow: 0 0 22px color-mix(in srgb, var(--ops-fg) 9%, transparent);
-	pointer-events: none;
-	transform: translate(-50%, -50%) scale(0);
-	will-change: transform, opacity;
+@keyframes theme-root-reveal {
+	from {
+		clip-path: circle(0px at var(--theme-reveal-x) var(--theme-reveal-y));
+	}
+
+	to {
+		clip-path: circle(var(--theme-reveal-radius) at var(--theme-reveal-x) var(--theme-reveal-y));
+	}
 }
 
-
-.theme-mode-reveal[data-theme-mode='dark'] {
-	color-scheme: dark;
-	--background: #090b0f;
-	--foreground: #f0f2f4;
-	--ops-bg: var(--background);
-	--ops-fg: var(--foreground);
-}
-
-.theme-mode-reveal[data-theme-mode='light'] {
-	color-scheme: light;
-	--background: #f4f5f7;
-	--foreground: #0c121a;
-	--ops-bg: var(--background);
-	--ops-fg: var(--foreground);
-}
-
-.theme-mode-reveal[data-theme-mode='light'][data-material='claude'] {
-	--background: #faf9f5;
-	--foreground: #3d3929;
-	--ops-bg: var(--background);
-	--ops-fg: var(--foreground);
-}
-
-.theme-mode-reveal[data-theme-mode='dark'][data-material='claude'] {
-	--background: #262624;
-	--foreground: #f1f1ef;
-	--ops-bg: var(--background);
-	--ops-fg: var(--foreground);
-}
-
-.theme-mode-reveal[data-material='claude'] {
-	--ops-bg: var(--background);
-	--ops-fg: var(--foreground);
-}
-
-.theme-mode-reveal[data-theme-mode='light'][data-material='astro'] {
-	--background: #e8ebed;
-	--foreground: #333333;
-	--ops-bg: var(--background);
-	--ops-fg: var(--foreground);
-}
-
-.theme-mode-reveal[data-theme-mode='dark'][data-material='astro'] {
-	--background: #1a1a1a;
-	--foreground: #e5e5e5;
-	--ops-bg: var(--background);
-	--ops-fg: var(--foreground);
-}
-
-.theme-mode-reveal[data-material='astro'] {
-	--ops-bg: var(--background);
-	--ops-fg: var(--foreground);
+@media (prefers-reduced-motion: reduce) {
+	::view-transition-old(root),
+	::view-transition-new(root) {
+		animation: none;
+	}
 }
