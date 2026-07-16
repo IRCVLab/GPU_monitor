@@ -834,73 +834,135 @@
   letter-spacing: 0.02em;
 }
 
-.monitor-card__system-facts {
+.monitor-card__resource-overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.28rem;
-  padding-top: 0.38rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding: 0.42rem 0;
   border-top: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--ops-border) 72%, transparent);
 }
 
-.monitor-card__system-facts > span {
+.monitor-card__resource-item {
   min-width: 0;
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    'label value'
+    'meta meta';
   align-items: baseline;
-  gap: 0.18rem;
-  overflow: hidden;
+  gap: 0.08rem 0.28rem;
+  padding: 0 0.5rem;
+  border-left: 1px solid color-mix(in srgb, var(--ops-border) 68%, transparent);
 }
 
-.monitor-card__system-facts small {
-  flex: 0 0 auto;
-  font-size: 0.56rem;
-  color: color-mix(in srgb, var(--ops-fg) 30%, transparent);
+.monitor-card__resource-item:first-child {
+  padding-left: 0;
+  border-left: 0;
 }
 
-.monitor-card__system-facts strong {
+.monitor-card__resource-item:last-child {
+  padding-right: 0;
+}
+
+.monitor-card__resource-item small {
+  grid-area: label;
+  font-size: 0.58rem;
+  color: color-mix(in srgb, var(--ops-fg) 50%, transparent);
+}
+
+.monitor-card__resource-value {
+  grid-area: value;
+  min-width: 0;
+  font-size: 0.72rem;
+  font-weight: 680;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--ops-fg) 82%, transparent);
+}
+
+.monitor-card__resource-meta {
+  grid-area: meta;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.67rem;
-  font-weight: 620;
+  font-size: 0.61rem;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--ops-fg) 62%, transparent);
+  color: color-mix(in srgb, var(--ops-fg) 52%, transparent);
 }
 
-.monitor-card__io-detail {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.28rem;
-  padding-top: 0.34rem;
+.monitor-card__resource-item[data-level='medium'] .monitor-card__resource-value {
+  color: color-mix(in srgb, #f59e0b 76%, var(--ops-fg));
 }
 
-.monitor-card__io-detail-copy {
-  flex: 0 0 auto;
-  font-size: 0.64rem;
-  color: color-mix(in srgb, var(--ops-fg) 38%, transparent);
+.monitor-card__resource-item[data-level='high'] .monitor-card__resource-value {
+  color: color-mix(in srgb, #ef4444 76%, var(--ops-fg));
 }
 
-.monitor-card__io-detail-metrics {
+.monitor-card__pressure-table {
+  display: grid;
+  gap: 0;
+  padding-bottom: 0.04rem;
+}
+
+.monitor-card__pressure-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(8, auto);
-  justify-content: end;
-  gap: 0.18rem 0.42rem;
+  grid-template-columns: 4.35rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.48rem;
+  min-height: 1.7rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--ops-border) 62%, transparent);
+}
+
+.monitor-card__pressure-label {
+  font-size: 0.61rem;
+  font-weight: 620;
+  color: color-mix(in srgb, var(--ops-fg) 48%, transparent);
+}
+
+.monitor-card__pressure-values {
+  min-width: 0;
+  display: grid;
+  align-items: baseline;
+  gap: 0.28rem 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.monitor-card__pressure-values--load {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.monitor-card__pressure-values--clues {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.monitor-card__pressure-datum {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.18rem;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 0.64rem;
-  font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--ops-fg) 54%, transparent);
+  font-size: 0.61rem;
 }
 
-.monitor-card__io-detail-table > span {
-  color: color-mix(in srgb, var(--ops-fg) 38%, transparent);
+.monitor-card__pressure-datum--load {
+  justify-content: flex-start;
 }
 
-.monitor-card__io-detail-table > strong {
-  font-weight: 620;
-  color: color-mix(in srgb, var(--ops-fg) 62%, transparent);
+.monitor-card__pressure-datum small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--ops-fg) 46%, transparent);
+}
+
+.monitor-card__pressure-datum strong {
+  flex: 0 0 auto;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--ops-fg) 68%, transparent);
 }
 
 .monitor-card__metric-name,
@@ -1352,6 +1414,24 @@
 }
 
 @media (max-width: 520px) {
+  .monitor-card__pressure-row {
+    grid-template-columns: 3.8rem minmax(0, 1fr);
+    gap: 0.32rem;
+  }
+
+  .monitor-card__pressure-values--clues .monitor-card__pressure-datum {
+    display: grid;
+    justify-content: end;
+    justify-items: end;
+    gap: 0.02rem;
+    line-height: 1.08;
+  }
+
+  .monitor-card__pressure-values--clues .monitor-card__pressure-datum small {
+    max-width: 100%;
+    font-size: 0.54rem;
+  }
+
   .monitor-card .note-form-entry-row {
     grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.44fr);
     gap: 0.34rem;

@@ -212,18 +212,37 @@ test('collapsed system preview keeps one resource-leading summary line with seco
 	assert.doesNotMatch(css, /\.monitor-card__system-preview-item/, 'old 4-item system tiles should not remain');
 });
 
-test('expanded system removes summary tiles and keeps dense pressure detail', () => {
-	assert.doesNotMatch(css, /\.monitor-card__system-summary/, 'old summary tile grid styles should be removed');
-	assert.doesNotMatch(css, /\.monitor-card__summary-item/, 'old summary tile styles should be removed');
+test('expanded system uses an aligned resource strip and diagnostic pressure rows', () => {
+	assert.doesNotMatch(css, /\.monitor-card__system-facts\b/, 'flat six-fact grid should be removed');
+	assert.doesNotMatch(css, /\.monitor-card__system-summary\b/, 'old summary tile grid styles should stay removed');
+	assert.doesNotMatch(css, /\.monitor-card__summary-item\b/, 'old summary tile styles should stay removed');
 
-	const ioDetail = cssRule('.monitor-card__io-detail');
-	assert.match(ioDetail, /display:\s*grid|display:\s*flex/);
-	assert.match(ioDetail, /gap:\s*0\./);
+	const overview = cssRule('.monitor-card__resource-overview');
+	assert.match(overview, /display:\s*grid/);
+	assert.match(overview, /grid-template-columns:\s*repeat\(3,/i, 'CPU RAM and Storage should align in one three-column strip');
 
-	const ioMetrics = cssRule('.monitor-card__io-detail-metrics');
-	assert.match(ioMetrics, /display:\s*flex|display:\s*grid/);
-	assert.match(ioMetrics, /font-variant-numeric:\s*tabular-nums/);
+	const item = cssRule('.monitor-card__resource-item');
+	assert.match(item, /min-width:\s*0/);
+	assert.match(item, /display:\s*grid|display:\s*flex/);
 
+	const value = cssRule('.monitor-card__resource-value');
+	assert.match(value, /font-variant-numeric:\s*tabular-nums/);
+	const meta = cssRule('.monitor-card__resource-meta');
+	assert.match(meta, /text-overflow:\s*ellipsis/);
+
+	const pressureTable = cssRule('.monitor-card__pressure-table');
+	assert.match(pressureTable, /display:\s*grid/);
+	const pressureRow = cssRule('.monitor-card__pressure-row');
+	assert.match(pressureRow, /display:\s*grid/);
+	assert.match(pressureRow, /grid-template-columns:/, 'diagnostic labels and values need stable columns');
+
+	const narrowMobile = mediaBlock('(max-width: 520px)');
+	const mobileClue = narrowMobile.match(/\.monitor-card__pressure-values--clues \.monitor-card__pressure-datum\s*\{(?<body>[^}]*)\}/m);
+	assert.ok(mobileClue?.groups?.body, 'narrow clue stacking must remain scoped to the mobile media query');
+	assert.match(mobileClue.groups.body, /display:\s*grid/, 'narrow clue cells should stack labels above values instead of truncating both');
+	assert.match(mobileClue.groups.body, /justify-items:\s*end/);
+
+	assert.doesNotMatch(css, /repeat\(8,\s*auto\)/, 'pressure metrics must not be packed into eight microscopic columns');
 	assert.doesNotMatch(css, /MB\/s/, 'system CSS should not encode MB\/s throughput copy');
 });
 
@@ -250,8 +269,9 @@ test('expanded system secondary details stay under the dense type scale', () => 
 		'.monitor-card__hardware-value',
 		'.monitor-card__mount-usage',
 		'.monitor-card__mount-percent',
-		'.monitor-card__io-detail-copy',
-		'.monitor-card__io-detail-metrics'
+		'.monitor-card__resource-meta',
+		'.monitor-card__pressure-label',
+		'.monitor-card__pressure-datum'
 	]) {
 		assertFontSizeAtMost(selector, 0.7);
 	}
