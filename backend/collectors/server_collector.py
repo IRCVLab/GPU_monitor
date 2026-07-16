@@ -6,7 +6,7 @@ import socket
 from datetime import datetime, timedelta, timezone
 
 import paramiko
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 try:
     from ..config import get_settings
@@ -14,18 +14,20 @@ try:
     from ..event_logger import get_event_log_health, log_event
     from ..models import GpuMetric, Server
     from .gpu import parse_gpustat, parse_nvidia_smi, NVIDIA_SMI_CMD
+    from .gpu_health import GpuInventoryTracker
     from .ssh_client import SSHClient
     from .storage import StorageCollector
-    from .system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, parse_system
+    from .system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, calculate_disk_io_rate, parse_system
 except ImportError:  # pragma: no cover - direct execution fallback
     from config import get_settings
     from database import AsyncSessionLocal
     from event_logger import get_event_log_health, log_event
     from models import GpuMetric, Server
     from collectors.gpu import parse_gpustat, parse_nvidia_smi, NVIDIA_SMI_CMD
+    from collectors.gpu_health import GpuInventoryTracker
     from collectors.ssh_client import SSHClient
     from collectors.storage import StorageCollector
-    from collectors.system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, parse_system
+    from collectors.system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, calculate_disk_io_rate, parse_system
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,9 @@ class ServerCollector:
         self._alert_sent: bool = False
         # GPU user tracking for process_start / process_end events
         self._prev_users: dict[int, set[str]] = {}
+        self._last_system_info = None
+        self._historical_gpu_indices_loaded: bool = False
+        self._gpu_inventory_tracker = GpuInventoryTracker()
 
     @property
     def offline_since(self) -> datetime | None:
@@ -242,6 +247,22 @@ class ServerCollector:
             "updated_at": _utcnow().isoformat(),
         }
 
+    def _build_gpu_inventory_degraded_reason(self, inventory: dict) -> dict:
+        missing = inventory.get("missing_indices") or []
+        if missing:
+            detail = f"missing GPU indices: {missing}"
+        else:
+            detail = (
+                f"visible GPU count {inventory.get('visible_count')} is less than "
+                f"expected {inventory.get('expected_count')}"
+            )
+        return self._status_reason_payload(
+            "gpu_device_missing",
+            "gpu",
+            f"GPU inventory mismatch detected ({detail})",
+            True,
+        )
+
     def _build_degraded_reason(self, gpu_failed: bool, system_failed: bool) -> dict | None:
         if gpu_failed and system_failed:
             return self._status_reason_payload(
@@ -315,6 +336,26 @@ class ServerCollector:
             logger.debug("System metrics unavailable for %s: %s", self.server.name, exc)
             return None
 
+    async def _load_historical_gpu_indices_once(self) -> set[int]:
+        if self._historical_gpu_indices_loaded:
+            return self._gpu_inventory_tracker.expected_indices
+
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(GpuMetric.gpu_index)
+                    .where(GpuMetric.server_id == self.server.id)
+                    .distinct()
+                )
+                indices = {int(index) for index in result.scalars().all() if index is not None}
+                self._gpu_inventory_tracker.add_historical_indices(indices)
+        except Exception as exc:
+            logger.debug("Historical GPU inventory unavailable for %s: %s", self.server.name, exc)
+        finally:
+            self._historical_gpu_indices_loaded = True
+
+        return self._gpu_inventory_tracker.expected_indices
+
     def _sync_collect_storage(self) -> dict | None:
         """Collect storage metrics with a 10-minute TTL cache."""
         try:
@@ -349,6 +390,32 @@ class ServerCollector:
 
         degraded = gpu_failed or system_raw is None
         degraded_reason = self._build_degraded_reason(gpu_failed, system_raw is None)
+        gpu_inventory = None
+
+        if gpu_data is not None:
+            await self._load_historical_gpu_indices_once()
+            inventory_health = self._gpu_inventory_tracker.assess(
+                visible_indices=[gpu.index for gpu in gpu_data.gpus],
+                pci_count=system_info.pci_gpu_count if system_info is not None else None,
+            )
+            gpu_inventory = inventory_health.to_dict()
+            if inventory_health.state == "missing":
+                degraded = True
+                degraded_reason = self._build_gpu_inventory_degraded_reason(gpu_inventory)
+
+        disk_rate = calculate_disk_io_rate(self._last_system_info, system_info)
+        disk_sample_seconds = None
+        if (
+            self._last_system_info is not None
+            and system_info is not None
+            and self._last_system_info.disk_sample_time is not None
+            and system_info.disk_sample_time is not None
+        ):
+            elapsed = system_info.disk_sample_time - self._last_system_info.disk_sample_time
+            if elapsed > 0:
+                disk_sample_seconds = elapsed
+        if system_info is not None:
+            self._last_system_info = system_info
 
         gpus_list = (
             [
@@ -431,11 +498,19 @@ class ServerCollector:
                     "io_pressure_full": system_info.io_pressure_full,
                     "io_blocked_tasks": system_info.io_blocked_tasks,
                     "io_pressure_supported": system_info.io_pressure_supported,
+                    "disk_read_bytes_per_second": (
+                        disk_rate.read_bytes_per_second if disk_rate is not None else None
+                    ),
+                    "disk_write_bytes_per_second": (
+                        disk_rate.write_bytes_per_second if disk_rate is not None else None
+                    ),
+                    "disk_sample_seconds": disk_sample_seconds if disk_rate is not None else None,
                 }
                 if system_info
                 else None
             ),
             "storage": storage_info,
+            "gpu_inventory": gpu_inventory,
         }
         return data, degraded, degraded_reason
 
@@ -522,6 +597,7 @@ class ServerCollector:
                     "gpus": data.get("gpus", []),
                     "system": data.get("system"),
                     "storage": data.get("storage"),
+                    "gpu_inventory": data.get("gpu_inventory"),
                     "event_log_health": get_event_log_health(),
                 },
             }

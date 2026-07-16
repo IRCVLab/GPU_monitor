@@ -121,6 +121,7 @@ async def get_all_server_status(db: AsyncSession = Depends(get_db)):
                 "gpus": [],
                 "system": None,
                 "storage": None,
+                "gpu_inventory": None,
                 "event_log_health": log_health,
             }
         return state

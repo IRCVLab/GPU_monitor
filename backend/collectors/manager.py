@@ -106,6 +106,7 @@ def get_current_state() -> dict:
             "gpus": data.get("gpus", []),
             "system": data.get("system"),
             "storage": data.get("storage"),
+            "gpu_inventory": data.get("gpu_inventory"),
             "event_log_health": log_health,
         }
     return state

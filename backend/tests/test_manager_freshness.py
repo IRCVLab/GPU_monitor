@@ -66,6 +66,47 @@ class ManagerFreshnessTests(unittest.TestCase):
         self.assertEqual(offline_since, collector.last_seen)
         self.assertEqual(reason["code"], "stale_offline")
 
+    def test_current_state_exports_gpu_inventory(self) -> None:
+        from backend.collectors import manager
+
+        original_collectors = manager._collectors
+        now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+        inventory = {
+            "visible_count": 2,
+            "expected_count": 3,
+            "pci_count": 3,
+            "missing_indices": [2],
+            "state": "missing",
+        }
+        collector = SimpleNamespace(
+            status="degraded",
+            last_seen=now,
+            offline_since=None,
+            status_reason={"code": "gpu_device_missing"},
+            current_data={
+                "server_name": "test-server",
+                "gpus": [],
+                "system": None,
+                "storage": None,
+                "gpu_inventory": inventory,
+            },
+            server=SimpleNamespace(
+                name="test-server",
+                host="127.0.0.1",
+                port=22,
+                network="internal",
+                display_order=0,
+            ),
+        )
+        try:
+            manager._collectors = {7: collector}
+
+            state = manager.get_current_state()
+        finally:
+            manager._collectors = original_collectors
+
+        self.assertEqual(state[7]["gpu_inventory"], inventory)
+
 
 if __name__ == "__main__":
     unittest.main()
