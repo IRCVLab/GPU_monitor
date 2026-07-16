@@ -102,6 +102,13 @@
 			return Number.isFinite(value) && value >= 0 ? value : 16;
 		}
 
+		function masonryItemBorderBoxBlockSize(child: HTMLElement, entry?: ResizeObserverEntry): number {
+			const borderBoxSize = entry?.borderBoxSize as ResizeObserverSize | readonly ResizeObserverSize[] | undefined;
+			const firstBorderBoxSize = Array.isArray(borderBoxSize) ? borderBoxSize[0] : borderBoxSize;
+			const blockSize = firstBorderBoxSize?.blockSize;
+			return Number.isFinite(blockSize) && blockSize > 0 ? blockSize : child.getBoundingClientRect().height;
+		}
+
 		function clearPlacement(child: HTMLElement): void {
 			child.style.removeProperty('grid-column-start');
 			child.style.removeProperty('grid-row-start');
@@ -135,17 +142,19 @@
 				const styles = getComputedStyle(node);
 				const template = styles.gridTemplateColumns.trim();
 				const currentColumnCount = template === '' || template === 'none' ? 1 : template.split(/\s+/).length;
+				const columnCountChanged = currentColumnCount !== assignedColumnCount;
 				const structureChanged =
-					currentColumnCount !== assignedColumnCount ||
+					columnCountChanged ||
 					items.length !== assignedItems.length ||
 					items.some((child, index) => child !== assignedItems[index]);
 
 				if (structureChanged) clearAssignments();
+				if (columnCountChanged) measuredHeights.clear();
 
 				const currentRowSize = rowSize(styles);
 				const currentGap = rowGap(styles);
 				const spans = items.map((child) => {
-					const height = measuredHeights.get(child) ?? child.getBoundingClientRect().height;
+					const height = measuredHeights.get(child) ?? masonryItemBorderBoxBlockSize(child);
 					measuredHeights.set(child, height);
 					return Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
 				});
@@ -210,7 +219,9 @@
 			}
 			itemObserver = new ResizeObserver((entries) => {
 				for (const entry of entries) {
-					if (entry.target instanceof HTMLElement) measuredHeights.set(entry.target, entry.contentRect.height);
+					if (entry.target instanceof HTMLElement) {
+						measuredHeights.set(entry.target, masonryItemBorderBoxBlockSize(entry.target, entry));
+					}
 				}
 				schedule();
 			});

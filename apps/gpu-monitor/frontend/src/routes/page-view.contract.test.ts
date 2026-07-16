@@ -210,7 +210,7 @@ test('task 3 height-only masonry relayout reuses assigned columns and cached hei
 
 	assert.match(layoutBody, /preferredColumns:\s*items\.map\(\(child\) => assignedColumns\.get\(child\) \?\? null\)/);
 	assert.doesNotMatch(layoutBody, /style\.removeProperty\('grid-column-start'\)[\s\S]*getBoundingClientRect\(\)\.height/);
-	assert.match(layoutBody, /measuredHeights\.get\(child\) \?\? child\.getBoundingClientRect\(\)\.height/);
+	assert.match(layoutBody, /measuredHeights\.get\(child\) \?\? masonryItemBorderBoxBlockSize\(child\)/);
 });
 
 test('task 3 ResizeObserver updates cached heights without structural invalidation', () => {
@@ -233,6 +233,34 @@ test('task 3 structural masonry changes clear assignments so layout can rebalanc
 	assert.match(masonryBody, /currentColumnCount !== assignedColumnCount|assignedColumnCount !== currentColumnCount/);
 	assert.match(masonryBody, /items\.length !== assignedItems\.length|assignedItems\.length !== items\.length/);
 	assert.match(masonryBody, /items\.some\(\(child, index\) => child !== assignedItems\[index\]\)/);
+});
+
+
+test('task 3 column-count structural change clears height cache before masonry placement', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const layoutBody = functionBody(pageSource, 'layout', masonryStart);
+
+	const columnChangedIndex = layoutBody.indexOf('const columnCountChanged = currentColumnCount !== assignedColumnCount');
+	assert.notEqual(columnChangedIndex, -1, 'column-count changes must be tracked separately from ordinary structure changes');
+	const heightClearIndex = layoutBody.indexOf('measuredHeights.clear()', columnChangedIndex);
+	const spansIndex = layoutBody.indexOf('const spans = items.map', columnChangedIndex);
+	assert.ok(heightClearIndex > columnChangedIndex, 'column-count changes must invalidate cached heights');
+	assert.ok(spansIndex > heightClearIndex, 'height cache must be invalidated before computing spans/assignments');
+});
+
+test('task 3 cold and ResizeObserver height cache share one border-box measurement helper', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const masonryBody = pageSource.slice(masonryStart, pageSource.indexOf('\n\tfunction readTab', masonryStart));
+	const layoutBody = functionBody(pageSource, 'layout', masonryStart);
+
+	assert.match(masonryBody, /function masonryItemBorderBoxBlockSize\(child: HTMLElement, entry\?: ResizeObserverEntry\): number/);
+	assert.match(masonryBody, /borderBoxSize/);
+	assert.match(masonryBody, /blockSize/);
+	assert.match(layoutBody, /measuredHeights\.get\(child\) \?\? masonryItemBorderBoxBlockSize\(child\)/);
+	assert.match(masonryBody, /measuredHeights\.set\(entry\.target, masonryItemBorderBoxBlockSize\(entry\.target, entry\)\)/);
+	assert.doesNotMatch(masonryBody, /entry\.contentRect\.height/);
 });
 
 test('task 3 masonry keeps DOM order and server order stable', () => {
