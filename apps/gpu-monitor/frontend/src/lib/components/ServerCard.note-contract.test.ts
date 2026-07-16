@@ -17,9 +17,11 @@ test('ServerCard renders advisory hold chips and wires the dense NoteForm props'
 
 test('ServerCard derives active unexpired hold notes per GPU and passes cues into GpuBar', () => {
 	assert.match(source, /activeHoldNotesByGpu\s*=\s*\$derived\.by/, 'missing derived per-GPU hold cue map');
+	assert.match(source, /const holds:\s*Record<number,\s*GpuHoldCue\[]> = \{\};/, 'per-GPU advisory map should stay scoped to each card');
 	assert.match(source, /note\.kind\s*===\s*'hold'/, 'hold cue map should only use hold notes');
 	assert.match(source, /noteVisible\(note\)/, 'hold cue map should ignore expired notes');
 	assert.match(source, /holdGpuIndices\(note\)/, 'hold cue map should validate GPU indices');
+	assert.match(source, /note,\s*remaining:\s*noteRemainingText\(note\)/, 'GpuBar tooltip entries should keep relative expiry text');
 	const gpuBar = source.match(/<GpuBar[\s\S]*?\/>/)?.[0] ?? '';
 	assert.match(gpuBar, /\{gpu\}/, 'GPU row should receive its telemetry record');
 	assert.match(
@@ -190,6 +192,7 @@ test('ServerCard note preview and history keep concise HOLD markers and GPU chip
 	assert.match(source, /monitor-note-item__kind">HOLD<\/span>/);
 	assert.match(source, /monitor-note-item__gpu-chip">G\{gpuIndex\}<\/span>/);
 	assert.match(source, /monitor-note-item__user">@\{note\.username\}<\/span>/, 'history must distinguish author from memo copy');
+	assert.doesNotMatch(source, /monitor-note-item__user">@\{resolveDisplayName\(note\)\}<\/span>/, 'display_name must not replace username ownership or delete identity');
 });
 
 test('ServerCard separates memo history from the composer and provides a deliberate empty state', () => {
@@ -197,6 +200,7 @@ test('ServerCard separates memo history from the composer and provides a deliber
 	assert.match(source, /monitor-card__memo-group monitor-card__memo-group--composer/);
 	assert.match(source, /monitor-card__memo-group-title">기록<\/span>/);
 	assert.match(source, /monitor-card__memo-group-title">작성<\/span>/);
+	assert.match(source, /GPU 선택 시 작업 공유 · 예약 보장 아님/);
 	assert.match(source, /monitor-card__memo-empty/);
 });
 

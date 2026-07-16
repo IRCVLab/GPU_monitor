@@ -2,18 +2,18 @@
   import { cubicOut } from 'svelte/easing';
   import { prefersReducedMotion } from 'svelte/motion';
   import { fly } from 'svelte/transition';
-  import type { GpuInfo } from '$lib/types';
+  import type { GpuInfo, Note } from '$lib/types';
   import type { CompactGpuState } from '$lib/utils/compactGpuAvailability';
+  import { buildHoldAdvisory, getNotePriorityMeta, resolveDisplayName } from '$lib/utils/noteAdvisory';
 
   type AdvisoryHoldCue = {
-    owner: string;
+    note: Note;
     remaining: string;
-    memo: string;
   };
 
   let {
     gpu,
-    state,
+    state: availabilityState,
     advisoryHolds = []
   }: {
     gpu: GpuInfo;
@@ -44,13 +44,25 @@
     duration: prefersReducedMotion.current ? 0 : 160,
     easing: cubicOut
   });
-  const primaryHold = $derived(advisoryHolds[0] ?? null);
+  let tooltipOpen = $state(false);
+
+  const holdAdvisory = $derived(buildHoldAdvisory(advisoryHolds.map(({ note }) => note)));
+  const primaryHold = $derived(holdAdvisory.primary);
+  const primaryPriorityMeta = $derived(primaryHold ? getNotePriorityMeta(primaryHold.priority) : null);
+  const primaryHoldDisplayName = $derived(primaryHold ? resolveDisplayName(primaryHold) : '');
+  const orderedHoldEntries = $derived.by(() =>
+    holdAdvisory.ordered
+      .map((note) => advisoryHolds.find((entry) => entry.note.id === note.id))
+      .filter((entry): entry is AdvisoryHoldCue => Boolean(entry))
+  );
+  const tooltipId = $derived(`gpu-hold-tooltip-${gpu.index}`);
   const holdDetailText = $derived.by(() =>
-    advisoryHolds
-      .map((hold, index) => {
-        const detail = [`HOLD ${index + 1}`, hold.owner];
-        if (hold.remaining) detail.push(hold.remaining);
-        if (hold.memo) detail.push(hold.memo);
+    orderedHoldEntries
+      .map((entry, index) => {
+        const priorityMeta = getNotePriorityMeta(entry.note.priority);
+        const detail = [`HOLD ${index + 1}`, resolveDisplayName(entry.note), priorityMeta.label];
+        if (entry.remaining) detail.push(entry.remaining);
+        if (entry.note.content) detail.push(entry.note.content);
         return detail.join(' · ');
       })
       .join('; ')
@@ -60,9 +72,23 @@
     const usage = displayUsers.length > 0 ? displayUsers.join(', ') : 'idle';
     return `GPU ${gpu.index}, users ${usage}, utilization ${utilValue} percent, memory ${memUsedGB} of ${memTotalGB} gigabytes${holdAriaDetail}`;
   });
+
+  function openTooltip() {
+    tooltipOpen = true;
+  }
+
+  function closeTooltip() {
+    tooltipOpen = false;
+  }
+
+  function handleTooltipKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      closeTooltip();
+    }
+  }
 </script>
 
-<div class="monitor-gpu-row" data-state={state} aria-label={gpuAriaLabel}>
+<div class="monitor-gpu-row" data-state={availabilityState} aria-label={gpuAriaLabel}>
   <span class="monitor-gpu-row__index" data-has-hold={primaryHold ? 'true' : 'false'}>G{gpu.index}</span>
 
   <div class="monitor-gpu-row__body">
@@ -82,9 +108,43 @@
       </div>
 
       {#if primaryHold}
-        <span class="monitor-gpu-row__hold-cue" title={holdDetailText} aria-label={holdDetailText}>
-          HOLD {primaryHold.owner}{#if advisoryHolds.length > 1} +{advisoryHolds.length - 1}{/if}
-        </span>
+        <button
+          type="button"
+          class={`monitor-gpu-row__hold-cue ${primaryPriorityMeta?.className ?? ''}`}
+          aria-describedby={tooltipOpen ? tooltipId : undefined}
+          aria-label={holdDetailText}
+          onmouseenter={openTooltip}
+          onmouseleave={closeTooltip}
+          onfocus={openTooltip}
+          onblur={closeTooltip}
+          onkeydown={handleTooltipKeydown}
+        >
+          {#if primaryHold.priority !== 'normal'}
+            <span class="monitor-gpu-row__hold-priority">{primaryPriorityMeta?.label}</span>
+          {/if}
+          <span class="monitor-gpu-row__hold-owner">{primaryHoldDisplayName}</span>
+          {#if holdAdvisory.secondarySummary}
+            <span class="monitor-gpu-row__hold-more">{holdAdvisory.secondarySummary}</span>
+          {/if}
+        </button>
+        {#if tooltipOpen}
+          <div id={tooltipId} role="tooltip" class="monitor-gpu-row__tooltip">
+            <div class="monitor-gpu-row__tooltip-title">GPU G{gpu.index} · {gpu.name}</div>
+            {#each orderedHoldEntries as entry (entry.note.id)}
+              {@const priorityMeta = getNotePriorityMeta(entry.note.priority)}
+              <div class="monitor-gpu-row__tooltip-note">
+                <div class="monitor-gpu-row__tooltip-note-head">
+                  <span class="monitor-gpu-row__tooltip-note-owner">{resolveDisplayName(entry.note)}</span>
+                  <span class={`monitor-gpu-row__tooltip-note-priority ${priorityMeta.className}`}>{priorityMeta.label}</span>
+                </div>
+                <div class="monitor-gpu-row__tooltip-note-meta">
+                  <span class="monitor-gpu-row__tooltip-note-expiry">{entry.remaining}</span>
+                </div>
+                <p class="monitor-gpu-row__tooltip-note-memo">{entry.note.content}</p>
+              </div>
+            {/each}
+          </div>
+        {/if}
       {/if}
     </div>
 

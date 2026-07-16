@@ -36,7 +36,7 @@
   const DEFAULT_SSH_PORT = 22;
   const FRESHNESS_WARNING_AFTER_MS = 30_000;
 
-  type GpuHoldCue = { owner: string; remaining: string; memo: string };
+  type GpuHoldCue = { note: Note; remaining: string };
   type OperationalState = 'healthy' | 'impaired';
 
 
@@ -338,9 +338,8 @@
       if (gpuIndices.length === 0) continue;
 
       const cue: GpuHoldCue = {
-        owner: note.username,
-        remaining: noteRemainingText(note),
-        memo: note.content
+        note,
+        remaining: noteRemainingText(note)
       };
 
       for (const gpuIndex of gpuIndices) {
@@ -736,7 +735,7 @@
               <div class="monitor-card__memo-group monitor-card__memo-group--composer">
                 <div class="monitor-card__memo-group-head">
                   <span class="monitor-card__memo-group-title">작성</span>
-                  <span class="monitor-card__memo-group-meta">GPU 선택 시 HOLD</span>
+                  <span class="monitor-card__memo-group-meta">GPU 선택 시 작업 공유 · 예약 보장 아님</span>
                 </div>
                 <NoteForm
                   serverId={server.server_id}
