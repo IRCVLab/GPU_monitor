@@ -113,7 +113,7 @@ test('expanded System keeps a dense expert I/O detail row with stall-pressure he
 	assert.match(source, /ioFullText/, 'expanded system should surface PSI full avg10');
 	assert.match(source, /ioBlockedText/, 'expanded system should surface blocked task count');
 	const facts = source.match(/<div class="monitor-card__system-facts">[\s\S]*?<\/div>/)?.[0] ?? '';
-	assert.match(facts, /<small>RAM<\/small><strong>\{ramPercentText\}<\/strong>/, 'summary facts should use compact RAM percent instead of truncating capacity text');
+	assert.match(facts, /<small>RAM<\/small><strong>\{ramSystemDetailText\}<\/strong>/, 'summary facts should use compact RAM percent instead of truncating capacity text');
 	assert.doesNotMatch(source, /monitor-card__system-summary/, 'old summary tile grid should be removed from the dense system panel');
 	assert.doesNotMatch(source, /monitor-card__summary-item/, 'old summary tiles should not remain');
 });
@@ -221,4 +221,30 @@ test('Task 5 ServerCard maps status reasons to bounded Korean veil labels and pr
 	assert.match(source, /status === 'degraded'[\s\S]*return '메트릭 수집 실패'/, 'degraded fallback should be metrics collection failure');
 	assert.match(source, /offline|connect_failed|connection_failed|ssh_connect_failed/, 'offline/connect failures should collapse to SSH failure');
 	assert.match(source, /const staleAvailabilityState = \$derived\('unknown'\)/, 'offline/stale availability remains unknown instead of healthy/unavailable');
+});
+
+test('ServerCard classifies historical system telemetry separately from gpu-only degradation', () => {
+	assert.match(source, /function isHistoricalSystemTelemetryStatus\(status: ServerStatus, reasonCode: string \| null, refreshText: string\): boolean/);
+	assert.match(source, /case 'stale_snapshot':[\s\S]*case 'dev-sim-stale':[\s\S]*case 'stale_offline':[\s\S]*case 'system_collect_failed':[\s\S]*case 'offline':[\s\S]*case 'connect_failed':[\s\S]*case 'connection_failed':[\s\S]*case 'ssh_connect_failed':[\s\S]*case 'dev-sim-offline':[\s\S]*return true/);
+	assert.match(source, /if \(reasonCode === 'gpu_device_missing'\) return false;/, 'GPU-device-missing degradation must keep current system metrics');
+	assert.match(source, /const isHistoricalSystemTelemetry = \$derived\(isHistoricalSystemTelemetryStatus\(server\.status, statusReasonCode, refreshText\)\)/);
+});
+
+test('collapsed historical/offline System preview uses neutral placeholders and expanded System labels last collected values', () => {
+	assert.match(source, /const systemPreviewUnavailableText = '–';/);
+	assert.match(source, /const cpuPreviewText = \$derived\(isHistoricalSystemTelemetry \? systemPreviewUnavailableText : cpuSystemDetailText\)/);
+	assert.match(source, /const ramPercentText = \$derived\(isHistoricalSystemTelemetry \? systemPreviewUnavailableText : ramSystemDetailText\)/);
+	assert.match(source, /if \(isHistoricalSystemTelemetry\) return systemPreviewUnavailableText;[\s\S]*if \(!server\.system\) return systemPreviewUnavailableText;[\s\S]*if \(hasIoPressure\) return '병목';/);
+	assert.match(source, /const diskPreviewText = \$derived\(isHistoricalSystemTelemetry \? systemPreviewUnavailableText : diskSystemDetailText\)/);
+	assert.match(source, /\{#if isHistoricalSystemTelemetry && server\.system\}[\s\S]*monitor-card__last-sample-label[\s\S]*마지막 수집값[\s\S]*\{\/if\}/);
+});
+
+test('expanded historical System keeps raw last-sample fact values instead of collapsed placeholders', () => {
+	const facts = source.match(/<div class="monitor-card__system-facts">[\s\S]*?<\/div>/)?.[0] ?? '';
+	assert.match(source, /const cpuSystemDetailText = \$derived\(server\.system \? `\$\{cpuPct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
+	assert.match(source, /const ramSystemDetailText = \$derived\(server\.system \? `\$\{ramPct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
+	assert.match(source, /const diskSystemDetailText = \$derived\(storageSummary \? `\$\{storagePct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
+	assert.match(facts, /<small>CPU<\/small><strong>\{cpuSystemDetailText\}<\/strong>/);
+	assert.match(facts, /<small>RAM<\/small><strong>\{ramSystemDetailText\}<\/strong>/);
+	assert.match(facts, /<small>Disk<\/small><strong>\{diskSystemDetailText\}<\/strong>/);
 });

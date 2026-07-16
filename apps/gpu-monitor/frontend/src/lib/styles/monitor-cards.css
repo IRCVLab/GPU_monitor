@@ -770,6 +770,18 @@
   gap: 0.32rem;
 }
 
+.monitor-card__last-sample-label {
+  display: inline-flex;
+  width: max-content;
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ops-muted) 72%, transparent);
+  color: color-mix(in srgb, var(--ops-fg) 68%, transparent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .monitor-card__system-facts {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
