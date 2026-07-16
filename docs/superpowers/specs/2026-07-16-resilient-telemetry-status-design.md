@@ -59,7 +59,7 @@ Card headers keep one stable baseline: server name, status mark, host, edit affo
 For stale, degraded, unknown, or offline states:
 
 - A semantic veil covers the card body with a material-aware translucent or opaque treatment.
-- Primary copy identifies the condition: SSH 연결 실패, GPU 인식 누락, 수집 지연, or 메트릭 수집 실패.
+- Primary copy identifies the condition with a bounded operational vocabulary: SSH 연결 실패, GPU 인식 누락, 수집 지연, 수집 중단, GPU 메트릭 수집 실패, 시스템 메트릭 수집 실패, 메트릭 수집 실패, or 상태 확인 중. Granular collector labels are intentional because the user needs to distinguish transport, GPU, system, and freshness failures.
 - Secondary copy provides the actionable reason and a compact last-known age only inside the veil.
 - Pointer hover or keyboard focus softens or removes the blur so the last snapshot can be inspected.
 - The status message remains readable while detail is revealed.

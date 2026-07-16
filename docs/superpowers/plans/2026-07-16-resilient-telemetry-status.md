@@ -201,7 +201,7 @@ Run targeted frontend tests.
 
 - [ ] **Step 3: Implement condition mapping**
 
-Map status reason codes to SSH 연결 실패, GPU 인식 누락, 수집 지연, 메트릭 수집 실패, or 상태 확인 중. Put age only in secondary veil copy.
+Map status reason codes to the bounded operational vocabulary: SSH 연결 실패, GPU 인식 누락, 수집 지연, 수집 중단, GPU 메트릭 수집 실패, 시스템 메트릭 수집 실패, 메트릭 수집 실패, or 상태 확인 중. Put age only in secondary veil copy.
 
 - [ ] **Step 4: Implement material-aware veil**
 
