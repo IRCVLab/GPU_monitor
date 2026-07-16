@@ -133,6 +133,7 @@
   - Scroll handlers use `requestAnimationFrame` and thresholding.
   - Light/dark mode uses a button-centered circular reveal with reduced-motion fallback; material preset changes remain immediate and restrained.
   - Slower status breathing only where it does not distract.
+  - GPU occupancy identity changes in Full and Compact use a height-stable 220ms opacity/2px handoff; G# state surfaces settle over 240ms while telemetry values update immediately. User ordering is deterministic, and reduced motion swaps immediately.
 - Imagery/iconography:
   - Deterministic initials are functional identity marks.
   - Icons support state and navigation; they do not replace text for critical state.
