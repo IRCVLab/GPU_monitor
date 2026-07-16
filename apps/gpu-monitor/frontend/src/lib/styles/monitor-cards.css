@@ -75,8 +75,8 @@
   padding: 0.85rem;
   border: 1px solid color-mix(in srgb, var(--ops-border) 70%, transparent);
   border-radius: 1.05rem;
-  background: color-mix(in srgb, var(--ops-card) 62%, transparent);
-  backdrop-filter: blur(13px) saturate(1.08);
+  background: color-mix(in srgb, var(--ops-card) var(--material-veil-mix), transparent);
+  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation));
   color: color-mix(in srgb, var(--ops-fg) 86%, transparent);
   text-align: center;
   pointer-events: none;
@@ -85,8 +85,8 @@
 
 .monitor-card[data-operational-state='impaired']:is(:hover, :focus-within) .monitor-card__state-veil {
   opacity: 0.36;
-  background: color-mix(in srgb, var(--ops-card) 38%, transparent);
-  backdrop-filter: blur(5px) saturate(0.95);
+  background: color-mix(in srgb, var(--ops-card) var(--material-control-mix), transparent);
+  backdrop-filter: blur(calc(var(--material-blur) * 0.5)) saturate(0.95);
 }
 
 .monitor-card__state-veil-label {
@@ -213,18 +213,15 @@
 }
 
 .monitor-card__host {
-  font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
-  font-size: 0.61rem;
-  line-height: 1;
-  color: color-mix(in srgb, var(--ops-fg) 38%, transparent);
-}
-
-.monitor-card__host {
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+  font-size: 0.61rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--ops-fg) 38%, transparent);
 }
 
 

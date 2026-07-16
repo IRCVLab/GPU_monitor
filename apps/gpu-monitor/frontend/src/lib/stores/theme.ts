@@ -8,9 +8,9 @@ export type ThemeMode = (typeof themeModes)[number];
 export type MaterialTheme = (typeof materialThemes)[number];
 
 export const materialThemeOptions = [
-	{ value: 'liquid', label: 'Liquid Glass', description: 'Cool translucent glass' },
-	{ value: 'claude', label: 'Claude+', description: 'Warm paper-soft material' },
-	{ value: 'astro', label: 'AstroVista', description: 'Cool crisp depth' }
+	{ value: 'liquid', label: 'Clean', description: 'Crisp mostly opaque material' },
+	{ value: 'claude', label: 'Claude+', description: 'Warm soft rounded material' },
+	{ value: 'astro', label: 'AstroVista', description: 'Cool technical crisp material' }
 ] as const satisfies ReadonlyArray<{ value: MaterialTheme; label: string; description: string }>;
 
 const MODE_COOKIE = 'themeMode';

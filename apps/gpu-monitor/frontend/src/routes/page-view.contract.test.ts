@@ -348,7 +348,7 @@ test('Task 5 View menu exposes material presets instead of accent color swatches
 	assert.match(pageSource, /materialThemeOptions/);
 	assert.match(pageSource, /setMaterialTheme/);
 	assert.doesNotMatch(pageSource, /colorTheme|setColorTheme|colorThemeOptions/);
-	assert.match(pageSource, />재질<\/span>|ops-menu-label">재질/);
+	assert.match(pageSource, /Theme \/ Material/);
 	assert.match(pageSource, /ops-material-options/);
 	assert.match(pageSource, /ops-material-tile/);
 	assert.match(pageSource, /data-material-preview=\{option\.value\}/);
@@ -366,8 +366,9 @@ test('Task 5 functional layers use material variables while cards remain mostly 
 		/\.ops-view-menu,\s*\.ops-overflow-menu,\s*\.ops-indicator-panel\s*\{[\s\S]*var\(--material-blur\)[\s\S]*var\(--material-shadow\)/,
 		'header menus and indicator panel share functional material variables'
 	);
-	assert.doesNotMatch(cardCss, /--material-blur/, 'server cards should not consume global functional material variables');
+	assert.doesNotMatch(cssRule(cardCss, '.monitor-card'), /--material-/, 'server card shell stays dense and mostly opaque');
 	assert.match(cardCss, /monitor-card__body[\s\S]*backdrop-filter/, 'Task 5 allows body-scoped material blur for failure veil only');
+	assert.match(cardCss, /\.monitor-card__state-veil[\s\S]*--material-blur/, 'Task 6 scopes material blur consumption to the card veil');
 });
 
 
@@ -598,4 +599,38 @@ test('Task 5 failure veil CSS has immediate reduced-motion transitions', () => {
 	assert.match(reduceCss, /\.monitor-card__body/);
 	assert.match(reduceCss, /\.monitor-card__state-veil/);
 	assert.match(reduceCss, /transition:\s*none\s*;/);
+});
+
+
+test('Task 6 exposes shortcut discovery with menu legend and pointer-safe tooltips', () => {
+	assert.match(pageSource, /Theme \/ Material/);
+	assert.doesNotMatch(pageSource, /<span class="ops-menu-label">재질<\/span>/);
+	assert.match(pageSource, /V 보기 · 1\/2\/3 망 · C 명암/);
+
+	assert.match(pageSource, /shortcut: '1'[\s\S]*tooltip: '1 내부망'/);
+	assert.match(pageSource, /shortcut: '2'[\s\S]*tooltip: '2 외부망'/);
+	assert.match(pageSource, /shortcut: '3'[\s\S]*tooltip: '3 전체망'/);
+	assert.match(pageSource, /aria-keyshortcuts=\{tab\.shortcut\}/);
+	assert.match(pageSource, /data-shortcut-tooltip=\{tab\.tooltip\}/);
+	assert.match(pageSource, /class="ops-indicator-network"[\s\S]*aria-keyshortcuts=\{tab\.shortcut\}/);
+	assert.match(pageSource, /class="ops-network ops-network-desktop"[\s\S]*aria-keyshortcuts=\{tab\.shortcut\}/);
+	assert.match(pageSource, /class="ops-mode-action"[\s\S]*aria-keyshortcuts="C"[\s\S]*data-shortcut-tooltip="C 명암"/);
+	assert.match(pageSource, /class="ops-utility-action"[\s\S]*aria-keyshortcuts="V"[\s\S]*data-shortcut-tooltip="V 보기"/);
+
+	assert.match(dashboardCss, /\[data-shortcut-tooltip\]::after/);
+	assert.match(dashboardCss, /pointer-events:\s*none;/);
+	assert.match(dashboardCss, /\[data-shortcut-tooltip\]:is\(:hover, :focus-visible\)::after/);
+	assert.match(dashboardCss, /content:\s*attr\(data-shortcut-tooltip\);/);
+	assert.match(dashboardCss, /\.ops-menu-shortcut-legend/);
+});
+
+test('Task 6 central material variables are consumed by dashboard, menu, veil, and controls', () => {
+	assert.match(dashboardCss, /\.ops-header-shell[\s\S]*var\(--material-veil-mix\)/);
+	assert.match(dashboardCss, /\.ops-header[\s\S]*var\(--material-veil-mix\)/);
+	assert.match(dashboardCss, /\.ops-view-menu,[\s\S]*\.ops-indicator-panel[\s\S]*var\(--material-veil-mix\)/);
+	assert.match(dashboardCss, /\.ops-network button,[\s\S]*\.monitor-dashboard-button[\s\S]*var\(--material-control-mix\)/);
+	assert.match(dashboardCss, /\.monitor-dashboard-state[\s\S]*var\(--material-card-mix\)/);
+	assert.doesNotMatch(dashboardCss, /\.monitor-dashboard-state[\s\S]*box-shadow:\s*var\(--ops-shadow\)/);
+	assert.match(cardCss, /\.monitor-card__state-veil[\s\S]*var\(--material-veil-mix\)/);
+	assert.match(cardCss, /\.monitor-card__state-veil[\s\S]*var\(--material-blur\)/);
 });
