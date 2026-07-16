@@ -11,7 +11,14 @@
 	} from '$lib/utils/compactGpuMatrix';
 
 	type CompactHoldCue = {
-		owner: string;
+		note: Note;
+		remaining: string;
+	};
+
+	type CompactTooltipHoldEntry = {
+		displayName: string;
+		priorityLabel: string;
+		priorityClassName: string;
 		remaining: string;
 		memo: string;
 	};
@@ -26,6 +33,8 @@
 		stateLabel: string;
 		ownersLabel: string;
 		holdLabel: string;
+		holdEntries: CompactTooltipHoldEntry[];
+		tooltipId: string;
 	};
 
 	type CompactPopover = {
@@ -80,9 +89,8 @@
 				if (gpuIndices.length === 0) continue;
 
 				const cue: CompactHoldCue = {
-					owner: note.username,
-					remaining: noteRemainingText(note, nowMs),
-					memo: note.content
+					note,
+					remaining: noteRemainingText(note, nowMs)
 				};
 
 				for (const gpuIndex of gpuIndices) {
@@ -334,6 +342,7 @@
 				bankIndex={activeBankIndex}
 				heldGpuIndices={resolvedHeldGpuIndicesByServer.get(server.server_id)}
 				holdCuesByGpu={fetchedHoldCuesByServer.get(server.server_id)}
+				activeTooltipId={activeTooltip?.item.tooltipId ?? null}
 				onOpenFull={openFull}
 				onTooltipChange={updateTooltip}
 			/>
@@ -343,6 +352,7 @@
 	{#if activeTooltip}
 		<div
 			class="compact-dashboard__tooltip"
+			id={activeTooltip.item.tooltipId}
 			data-compact-popover="true"
 			role="tooltip"
 			aria-label={`${activeTooltip.serverName} GPU 상태 힌트`}
@@ -360,6 +370,26 @@
 							{/if}
 						</div>
 						<span class="compact-dashboard__tooltip-users">{activeTooltip.item.ownersLabel}</span>
+						{#if activeTooltip.item.holdEntries.length > 0}
+							<div class="compact-dashboard__tooltip-note-list">
+								{#each activeTooltip.item.holdEntries as entry, index (`${activeTooltip.item.tooltipId}-${index}`)}
+									<div class="compact-dashboard__tooltip-note">
+										<div class="compact-dashboard__tooltip-note-head">
+											<span class="compact-dashboard__tooltip-note-owner">{entry.displayName}</span>
+											<span class={`compact-dashboard__tooltip-note-priority ${entry.priorityClassName}`}>{entry.priorityLabel}</span>
+										</div>
+										{#if entry.remaining}
+											<div class="compact-dashboard__tooltip-note-meta">
+												<span class="compact-dashboard__tooltip-note-expiry">{entry.remaining}</span>
+											</div>
+										{/if}
+										{#if entry.memo}
+											<p class="compact-dashboard__tooltip-note-memo">{entry.memo}</p>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</div>
 				</li>
 			</ul>
