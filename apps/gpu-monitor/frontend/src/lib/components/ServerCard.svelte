@@ -60,6 +60,14 @@
     return `${value.toFixed(digits)}${units[unitIndex]}`;
   }
 
+  function formatDiskThroughput(bytesPerSecond: number | null | undefined): string {
+    if (!Number.isFinite(bytesPerSecond)) return '–';
+
+    const megabytesPerSecond = Math.max(0, bytesPerSecond ?? 0) / 1024 / 1024;
+    const digits = megabytesPerSecond >= 100 ? 0 : megabytesPerSecond >= 10 ? 1 : 2;
+    return `${megabytesPerSecond.toFixed(digits)} MB/s`;
+  }
+
   function absoluteTime(iso: string | null): string {
     if (!iso) return '업데이트 없음';
 
@@ -199,10 +207,36 @@
   const ioFull = $derived(server.system?.io_pressure_full ?? null);
   const ioBlocked = $derived(server.system?.io_blocked_tasks ?? null);
   const ioSupported = $derived(server.system?.io_pressure_supported === true);
-  const ioPreviewText = $derived(ioSupported && ioSome !== null ? `${ioSome.toFixed(ioSome >= 10 ? 0 : 1)}%` : '–');
-  const ioSomeText = $derived(ioSupported && ioSome !== null ? `${ioSome.toFixed(1)}%` : '지원 안 함');
-  const ioFullText = $derived(ioSupported && ioFull !== null ? `${ioFull.toFixed(1)}%` : '–');
-  const ioBlockedText = $derived(ioSupported && ioBlocked !== null ? `${ioBlocked}` : '–');
+  const diskReadBytesPerSecond = $derived(server.system?.disk_read_bytes_per_second);
+  const diskWriteBytesPerSecond = $derived(server.system?.disk_write_bytes_per_second);
+  const diskThroughputBytesPerSecond = $derived(
+    (diskReadBytesPerSecond ?? 0) + (diskWriteBytesPerSecond ?? 0)
+  );
+  const hasDiskThroughput = $derived(
+    Number.isFinite(diskReadBytesPerSecond) || Number.isFinite(diskWriteBytesPerSecond)
+  );
+  const hasPsiTelemetry = $derived(ioSome !== null || ioFull !== null || ioBlocked !== null);
+  const hasIoPressure = $derived((ioSome ?? 0) > 0 || (ioFull ?? 0) > 0 || (ioBlocked ?? 0) > 0);
+  const isIoIdle = $derived(
+    hasPsiTelemetry &&
+      (ioSome ?? 0) === 0 &&
+      (ioFull ?? 0) === 0 &&
+      (ioBlocked ?? 0) === 0 &&
+      (!hasDiskThroughput || diskThroughputBytesPerSecond < 512 * 1024)
+  );
+  const ioThroughputText = $derived(formatDiskThroughput(diskThroughputBytesPerSecond));
+  const ioPreviewText = $derived.by(() => {
+    if (!server.system) return '–';
+    if (hasIoPressure) return '병목';
+    if (isIoIdle) return '여유';
+    if (hasDiskThroughput) return ioThroughputText;
+    return '–';
+  });
+  const ioSomeText = $derived(ioSome !== null ? `${ioSome.toFixed(1)}%` : ioSupported ? '–' : '지원 안 함');
+  const ioFullText = $derived(ioFull !== null ? `${ioFull.toFixed(1)}%` : '–');
+  const ioBlockedText = $derived(ioBlocked !== null ? `${ioBlocked}` : '–');
+  const diskReadText = $derived(hasDiskThroughput ? formatDiskThroughput(diskReadBytesPerSecond ?? 0) : '–');
+  const diskWriteText = $derived(hasDiskThroughput ? formatDiskThroughput(diskWriteBytesPerSecond ?? 0) : '–');
   const ioPressureHelpText = 'Linux PSI I/O pressure · 최근 10초 동안 작업이 I/O 때문에 멈춘 시간의 비율';
   const diskPreviewText = $derived(storageSummary ? `${storagePct.toFixed(0)}%` : '–');
   const cpuLevel = $derived(server.system ? metricLevel(cpuPct) : 'normal');
@@ -422,11 +456,13 @@
             </div>
 
             <div class="monitor-card__io-detail" title={ioPressureHelpText}>
-              <span class="monitor-card__io-detail-copy">I/O pressure</span>
-              <span class="monitor-card__io-detail-metrics">
-                <span>some {ioSomeText}</span>
-                <span>full {ioFullText}</span>
-                <span>blocked {ioBlockedText}</span>
+              <span class="monitor-card__io-detail-copy">I/O {ioPreviewText}</span>
+              <span class="monitor-card__io-detail-metrics monitor-card__io-detail-table">
+                <span>R</span><strong>{diskReadText}</strong>
+                <span>W</span><strong>{diskWriteText}</strong>
+                <span>some</span><strong>{ioSomeText}</strong>
+                <span>full</span><strong>{ioFullText}</strong>
+                <span>blocked</span><strong>{ioBlockedText}</strong>
               </span>
             </div>
 

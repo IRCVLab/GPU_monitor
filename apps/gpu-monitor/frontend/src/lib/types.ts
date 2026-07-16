@@ -19,6 +19,17 @@ export interface SystemInfo {
 	io_pressure_full?: number | null;
 	io_blocked_tasks?: number | null;
 	io_pressure_supported?: boolean;
+	disk_read_bytes_per_second?: number;
+	disk_write_bytes_per_second?: number;
+	disk_sample_seconds?: number;
+}
+
+export interface GpuInventory {
+	state: string;
+	visible_count: number;
+	expected_count: number;
+	pci_count: number;
+	missing_indices: number[];
 }
 
 export interface StorageSummary {
@@ -66,6 +77,7 @@ export interface ServerState {
 	gpus: GpuInfo[];
 	system: SystemInfo | null;
 	storage: StorageInfo | null;
+	gpu_inventory?: GpuInventory;
 	display_order?: number;
 }
 

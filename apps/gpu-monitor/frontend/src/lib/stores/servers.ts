@@ -31,6 +31,20 @@ function sameStringArray(a: string[], b: string[]): boolean {
 	return true;
 }
 
+function toNonNegativeIntegerArray(value: unknown): number[] {
+	return Array.isArray(value)
+		? value.filter((item): item is number => Number.isInteger(item) && item >= 0)
+		: [];
+}
+
+function sameNumberArray(a: number[], b: number[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let index = 0; index < a.length; index += 1) {
+		if (a[index] !== b[index]) return false;
+	}
+	return true;
+}
+
 function sameGpuInfo(a: ServerState['gpus'][number], b: ServerState['gpus'][number]): boolean {
 	return (
 		a.index === b.index &&
@@ -54,7 +68,10 @@ function sameSystemInfo(a: ServerState['system'], b: ServerState['system']): boo
 		a.io_pressure_some === b.io_pressure_some &&
 		a.io_pressure_full === b.io_pressure_full &&
 		a.io_blocked_tasks === b.io_blocked_tasks &&
-		a.io_pressure_supported === b.io_pressure_supported
+		a.io_pressure_supported === b.io_pressure_supported &&
+		a.disk_read_bytes_per_second === b.disk_read_bytes_per_second &&
+		a.disk_write_bytes_per_second === b.disk_write_bytes_per_second &&
+		a.disk_sample_seconds === b.disk_sample_seconds
 	);
 }
 
@@ -103,6 +120,18 @@ function sameStatusReason(a: ServerState['status_reason'], b: ServerState['statu
 	);
 }
 
+function sameGpuInventory(a: ServerState['gpu_inventory'], b: ServerState['gpu_inventory']): boolean {
+	if (a === b) return true;
+	if (!a || !b) return a === b;
+	return (
+		a.state === b.state &&
+		a.visible_count === b.visible_count &&
+		a.expected_count === b.expected_count &&
+		a.pci_count === b.pci_count &&
+		sameNumberArray(a.missing_indices, b.missing_indices)
+	);
+}
+
 export function isServerStateEqual(a: ServerState, b: ServerState): boolean {
 	if (
 		a.server_id !== b.server_id ||
@@ -116,6 +145,7 @@ export function isServerStateEqual(a: ServerState, b: ServerState): boolean {
 		a.display_order !== b.display_order ||
 		!sameSystemInfo(a.system, b.system) ||
 		!sameStorageInfo(a.storage, b.storage) ||
+		!sameGpuInventory(a.gpu_inventory, b.gpu_inventory) ||
 		a.gpus.length !== b.gpus.length
 	) {
 		return false;
@@ -167,7 +197,10 @@ export function normalizeServerState(value: unknown, fallbackId?: number): Serve
 			io_pressure_some: toNullableFiniteNumber(rawSystem.io_pressure_some),
 			io_pressure_full: toNullableFiniteNumber(rawSystem.io_pressure_full),
 			io_blocked_tasks: toNullableFiniteNumber(rawSystem.io_blocked_tasks),
-			io_pressure_supported: rawSystem.io_pressure_supported === true
+			io_pressure_supported: rawSystem.io_pressure_supported === true,
+			disk_read_bytes_per_second: toOptionalFiniteNumber(rawSystem.disk_read_bytes_per_second),
+			disk_write_bytes_per_second: toOptionalFiniteNumber(rawSystem.disk_write_bytes_per_second),
+			disk_sample_seconds: toOptionalFiniteNumber(rawSystem.disk_sample_seconds)
 		};
 	}
 
@@ -205,6 +238,18 @@ export function normalizeServerState(value: unknown, fallbackId?: number): Serve
 		};
 	}
 
+	let gpuInventory: ServerState['gpu_inventory'];
+	if (raw.gpu_inventory && typeof raw.gpu_inventory === 'object') {
+		const rawInventory = raw.gpu_inventory as Record<string, unknown>;
+		gpuInventory = {
+			state: typeof rawInventory.state === 'string' ? rawInventory.state : 'unknown',
+			visible_count: toFiniteNumber(rawInventory.visible_count),
+			expected_count: toFiniteNumber(rawInventory.expected_count),
+			pci_count: toFiniteNumber(rawInventory.pci_count),
+			missing_indices: toNonNegativeIntegerArray(rawInventory.missing_indices)
+		};
+	}
+
 	let statusReason: ServerState['status_reason'] = null;
 	if (raw.status_reason && typeof raw.status_reason === 'object') {
 		const rawReason = raw.status_reason as Record<string, unknown>;
@@ -233,6 +278,7 @@ export function normalizeServerState(value: unknown, fallbackId?: number): Serve
 		gpus,
 		system,
 		storage,
+		gpu_inventory: gpuInventory,
 		display_order: toOptionalFiniteNumber(raw.display_order)
 	};
 }
