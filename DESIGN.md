@@ -252,7 +252,8 @@ letter-spacing 0em
 
 - Collapsed System and Memo have no decorative leading circle.
 - Healthy server identity, host/IP, freshness, and edit action share one compact line.
-- Collapsed System is one baseline: CPU, RAM, PSI I/O pressure, and disk capacity. Expanded detail explains PSI and may show full pressure and blocked tasks.
+- Collapsed System is one baseline of CPU, RAM, and storage percentages. It never exposes raw load, logical CPU count, or PSI terminology; it appends only interpreted exception cues such as `CPU 혼잡`, `CPU 병목`, `I/O 혼잡`, or `I/O 병목` when PSI proves real contention.
+- Expanded System shows interpreted recent-10-second CPU/I/O delay percentages before quieter expert diagnostics. Raw 1/5/15-minute load, runnable tasks, logical CPU count, I/O full, and blocked tasks remain visible only in that diagnostic layer. Essential interpretation never depends on hover tooltips.
 - Memo reads owner, authored content, then explicit Korean expiry. Hold reads exact GPUs, owner, reason, then expiry.
 - System and Memo expansion/collapse must be symmetric: disclosure controls own `aria-expanded` and `aria-controls`, panels remain mounted while closed, and the narrow approved exception to the generic no-layout-animation rule may animate mounted grid-track disclosure via `grid-template-rows`, opacity, and a slight translate. Closing retains content until the transition finishes; reduced motion is immediate. Do not animate `top`, arbitrary height, or hard-coded `max-height`.
 - A hold overlays a warm collar/notch on the exact GPU in both Full and Compact without changing telemetry state.
