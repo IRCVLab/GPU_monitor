@@ -24,8 +24,8 @@ test('ServerCard derives active unexpired hold notes per GPU and passes cues int
 	assert.match(gpuBar, /\{gpu\}/, 'GPU row should receive its telemetry record');
 	assert.match(
 		gpuBar,
-		/state=\{getCompactGpuState\(server\.status, server\.last_seen, gpu\)\}/,
-		'GPU row should receive the shared availability state'
+		/state=\{operationalState === 'impaired' \? staleAvailabilityState : getCompactGpuState\(server\.status, server\.last_seen, gpu\)\}/,
+		'GPU row should receive shared availability state and unknown impaired override'
 	);
 	assert.match(
 		gpuBar,
@@ -34,12 +34,12 @@ test('ServerCard derives active unexpired hold notes per GPU and passes cues int
 	);
 });
 
-test('ServerCard header collapses identity into one dense baseline with inline host and freshness', () => {
-	const titleRow = source.match(/<div class="monitor-card__title-row">[\s\S]*?\{#if statusReasonText/)?.[0] ?? '';
+test('ServerCard header keeps one stable baseline with inline host and edit controls', () => {
+	const titleRow = source.match(/<header class="monitor-card__header">[\s\S]*?<\/header>/)?.[0] ?? '';
 	assert.match(titleRow, /monitor-card__title-line/, 'title row should keep one inline identity line');
 	assert.match(titleRow, /monitor-card__status/, 'title row should keep the accessible health status');
 	assert.match(titleRow, /monitor-card__host/, 'host should live in the inline identity line');
-	assert.match(titleRow, /monitor-card__refresh/, 'freshness should live in the inline identity line');
+	assert.doesNotMatch(titleRow, /monitor-card__refresh|refreshText|statusReasonText|monitor-card__reason/, 'freshness and reason copy should not live in the stable header');
 	assert.match(titleRow, /monitor-card__edit-button/, 'edit control should stay in the compact header row');
 	assert.doesNotMatch(source, /monitor-card__meta/, 'separate meta row should be removed');
 	assert.doesNotMatch(source, /monitor-card__network/, 'decorative network chip should not remain in the header');
@@ -48,7 +48,7 @@ test('ServerCard header collapses identity into one dense baseline with inline h
 	assert.match(source, /\{endpointText\}/, 'the compact header should render the operational endpoint');
 	assert.match(source, /freshnessIssueText\(server\.last_seen, noteNowMs\)/, 'freshness should be derived as exception-only copy');
 	assert.match(source, /FRESHNESS_WARNING_AFTER_MS/, 'healthy sub-threshold updates must not emit second-by-second copy');
-	assert.match(titleRow, /\{#if refreshText\}[\s\S]*monitor-card__refresh[\s\S]*\{\/if\}/, 'freshness markup should exist only for stale telemetry');
+	assert.match(source, /stateVeilSecondary/, 'freshness details should move to the state veil secondary copy');
 	assert.doesNotMatch(source, /const refreshText = \$derived\(lastSeenAbsoluteText\)/);
 });
 
@@ -157,7 +157,8 @@ test('ServerCard separates memo history from the composer and provides a deliber
 
 test('ServerCard exposes a non-text availability nudge without reordering cards', () => {
 	assert.ok(source.includes('const availableGpuCount = $derived.by'));
-	assert.ok(source.includes("getCompactGpuState(server.status, server.last_seen, gpu) === 'available'"));
+	assert.match(source, /getCompactGpuState\(server\.status, server\.last_seen, gpu\)[\s\S]*=== 'available'/);
+	assert.match(source, /operationalState === 'impaired' \? staleAvailabilityState/, 'impaired availability should not advertise free GPUs');
 	assert.ok(source.includes('const hasAvailableGpu = $derived(availableGpuCount > 0)'));
 	assert.ok(source.includes("data-has-available={hasAvailableGpu ? 'true' : 'false'}"));
 });
@@ -186,4 +187,38 @@ test('expanded System shows stable tabular R/W throughput with exact PSI and blo
 	assert.match(source, /<span>some<\/span><strong>\{ioSomeText\}<\/strong>/, 'expanded details should show PSI some');
 	assert.match(source, /<span>full<\/span><strong>\{ioFullText\}<\/strong>/, 'expanded details should show PSI full');
 	assert.match(source, /<span>blocked<\/span><strong>\{ioBlockedText\}<\/strong>/, 'expanded details should show blocked tasks');
+});
+
+
+test('Task 5 ServerCard keeps header stable and moves freshness/reason copy into a non-interactive veil', () => {
+	const header = source.match(/<header class="monitor-card__header">[\s\S]*?<\/header>/)?.[0] ?? '';
+	assert.ok(header, 'missing card header');
+	assert.doesNotMatch(header, /monitor-card__refresh|refreshText|statusReasonText|monitor-card__reason/, 'header must not render relative freshness or reason rows');
+	assert.match(header, /monitor-card__title/, 'header keeps server name');
+	assert.match(header, /monitor-card__status/, 'header keeps status');
+	assert.match(header, /monitor-card__host/, 'header keeps host');
+	assert.match(header, /monitor-card__edit-button/, 'header keeps edit affordance');
+
+	assert.match(source, /data-operational-state=\{operationalState\}/, 'card exposes stable operational state for CSS/testing');
+	assert.match(source, /class="monitor-card__body"/, 'GPU and footer content must be wrapped as the veiled body');
+	assert.match(source, /class="monitor-card__state-veil"/, 'non-healthy state must render a dedicated state veil');
+	assert.match(source, /\{stateVeilLabel\}/, 'state veil should own the compact label');
+	assert.match(source, /\{stateVeilSecondary\}/, 'secondary reason and age belong inside the veil');
+	assert.doesNotMatch(source, /<p class="monitor-card__reason"/, 'legacy reason row must be removed');
+});
+
+test('Task 5 ServerCard maps status reasons to bounded Korean veil labels and preserves unknown availability', () => {
+	assert.match(source, /function stateVeilLabelFor/, 'veil labels should use a dedicated reason mapper');
+	for (const label of ['GPU 인식 누락', '수집 지연', '수집 중단', 'SSH 연결 실패', 'GPU 메트릭 수집 실패', '시스템 메트릭 수집 실패', '상태 확인 중', '메트릭 수집 실패']) {
+		assert.ok(source.includes(label), `missing veil label ${label}`);
+	}
+	assert.match(source, /case 'gpu_device_missing':[\s\S]*return 'GPU 인식 누락'/);
+	assert.match(source, /case 'stale_snapshot':[\s\S]*return '수집 지연'/);
+	assert.match(source, /case 'stale_offline':[\s\S]*return '수집 중단'/);
+	assert.match(source, /case 'gpu_collect_failed':[\s\S]*return 'GPU 메트릭 수집 실패'/);
+	assert.match(source, /case 'system_collect_failed':[\s\S]*return '시스템 메트릭 수집 실패'/);
+	assert.match(source, /case 'unknown':[\s\S]*return '상태 확인 중'/);
+	assert.match(source, /status === 'degraded'[\s\S]*return '메트릭 수집 실패'/, 'degraded fallback should be metrics collection failure');
+	assert.match(source, /offline|connect_failed|connection_failed|ssh_connect_failed/, 'offline/connect failures should collapse to SSH failure');
+	assert.match(source, /const staleAvailabilityState = \$derived\('unknown'\)/, 'offline/stale availability remains unknown instead of healthy/unavailable');
 });

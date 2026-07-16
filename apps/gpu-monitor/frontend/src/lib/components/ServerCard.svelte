@@ -36,6 +36,8 @@
 
   type GpuHoldCue = { owner: string; remaining: string; memo: string };
   type MetricLevel = 'normal' | 'medium' | 'high';
+  type OperationalState = 'healthy' | 'impaired';
+
 
   const statusConfig: Record<ServerStatus, { label: string }> = {
     online: { label: '정상' },
@@ -96,6 +98,40 @@
     const elapsedHours = Math.floor(elapsedMinutes / 60);
     if (elapsedHours < 24) return `마지막 갱신 ${elapsedHours}시간 전`;
     return `마지막 갱신 ${Math.floor(elapsedHours / 24)}일 전`;
+  }
+
+
+  function stateVeilLabelFor(status: ServerStatus, reasonCode: string | null): string {
+    switch (reasonCode) {
+      case 'gpu_device_missing':
+        return 'GPU 인식 누락';
+      case 'stale_snapshot':
+      case 'dev-sim-stale':
+        return '수집 지연';
+      case 'stale_offline':
+        return '수집 중단';
+      case 'gpu_collect_failed':
+        return 'GPU 메트릭 수집 실패';
+      case 'system_collect_failed':
+        return '시스템 메트릭 수집 실패';
+      case 'unknown':
+        return '상태 확인 중';
+      case 'offline':
+      case 'connect_failed':
+      case 'connection_failed':
+      case 'ssh_connect_failed':
+      case 'dev-sim-offline':
+        return 'SSH 연결 실패';
+    }
+
+    if (status === 'offline') return 'SSH 연결 실패';
+    if (status === 'unknown') return '상태 확인 중';
+    if (status === 'degraded') return '메트릭 수집 실패';
+    return '수집 지연';
+  }
+
+  function secondaryVeilText(reason: string, age: string): string {
+    return [reason, age].filter(Boolean).join(' · ');
   }
 
   function metricLevel(percent: number | null | undefined): MetricLevel {
@@ -164,16 +200,20 @@
   }
 
   const statusMeta = $derived(statusConfig[server.status] ?? statusConfig.unknown);
-  const lastSeenAbsoluteText = $derived(absoluteTime(server.last_seen));
   const refreshText = $derived(freshnessIssueText(server.last_seen, noteNowMs));
   const endpointText = $derived(
     server.port && server.port !== DEFAULT_SSH_PORT ? `${server.host}:${server.port}` : server.host
   );
   const statusReasonText = $derived(server.status_reason?.message ?? '');
+  const statusReasonCode = $derived(server.status_reason?.code ?? null);
   const statusTooltip = $derived(statusReasonText ? `${statusMeta.label} · ${statusReasonText}` : statusMeta.label);
+  const operationalState: OperationalState = $derived(server.status === 'online' && !refreshText ? 'healthy' : 'impaired');
+  const stateVeilLabel = $derived(stateVeilLabelFor(server.status, refreshText ? statusReasonCode ?? 'stale_snapshot' : statusReasonCode));
+  const stateVeilSecondary = $derived(secondaryVeilText(statusReasonText, refreshText));
+  const staleAvailabilityState = $derived('unknown');
   const availableGpuCount = $derived.by(() =>
     server.gpus.filter(
-      (gpu) => getCompactGpuState(server.status, server.last_seen, gpu) === 'available'
+      (gpu) => (operationalState === 'impaired' ? staleAvailabilityState : getCompactGpuState(server.status, server.last_seen, gpu)) === 'available'
     ).length
   );
   const hasAvailableGpu = $derived(availableGpuCount > 0);
@@ -349,7 +389,7 @@
   });
 </script>
 
-<article class="monitor-card bg-surface-card border border-surface-border" data-status={server.status} data-network={showNetwork ? server.network : undefined} data-has-available={hasAvailableGpu ? 'true' : 'false'}>
+<article class="monitor-card bg-surface-card border border-surface-border" data-status={server.status} data-operational-state={operationalState} data-network={showNetwork ? server.network : undefined} data-has-available={hasAvailableGpu ? 'true' : 'false'}>
   <header class="monitor-card__header">
     <div class="monitor-card__title-row">
       <div class="monitor-card__title-line">
@@ -363,10 +403,6 @@
           {/if}
         </span>
         <span class="monitor-card__host" title={server.port ? `${server.host}:${server.port}` : server.host}>{endpointText}</span>
-        {#if refreshText}
-          <span class="monitor-card__separator" aria-hidden="true">·</span>
-          <span class="monitor-card__refresh" title={`마지막 갱신 ${lastSeenAbsoluteText}`}>{refreshText}</span>
-        {/if}
       </div>
 
       {#if onEdit}
@@ -384,26 +420,22 @@
       {/if}
     </div>
 
-    {#if statusReasonText && server.status !== 'online'}
-      <p class="monitor-card__reason" data-status={server.status} title={statusReasonText}>
-        {statusReasonText}
-      </p>
-    {/if}
   </header>
 
-  {#if server.gpus.length > 0}
-    <div class="monitor-card__gpu-list">
-      {#each server.gpus as gpu (gpu.index)}
-        <GpuBar
-          {gpu}
-          state={getCompactGpuState(server.status, server.last_seen, gpu)}
-          advisoryHolds={activeHoldNotesByGpu[gpu.index] ?? []}
-        />
-      {/each}
-    </div>
-  {/if}
+  <div class="monitor-card__body">
+    {#if server.gpus.length > 0}
+      <div class="monitor-card__gpu-list">
+        {#each server.gpus as gpu (gpu.index)}
+          <GpuBar
+            {gpu}
+            state={operationalState === 'impaired' ? staleAvailabilityState : getCompactGpuState(server.status, server.last_seen, gpu)}
+            advisoryHolds={activeHoldNotesByGpu[gpu.index] ?? []}
+          />
+        {/each}
+      </div>
+    {/if}
 
-  <div class="monitor-card__footer">
+    <div class="monitor-card__footer">
     {#if hasSystemSection}
       <section class="monitor-card__footer-section">
         <button
@@ -662,5 +694,15 @@
         </div>
       </div>
     </section>
+    </div>
   </div>
+
+  {#if operationalState === 'impaired'}
+    <div class="monitor-card__state-veil" aria-hidden="true">
+      <span class="monitor-card__state-veil-label">{stateVeilLabel}</span>
+      {#if stateVeilSecondary}
+        <span class="monitor-card__state-veil-secondary">{stateVeilSecondary}</span>
+      {/if}
+    </div>
+  {/if}
 </article>

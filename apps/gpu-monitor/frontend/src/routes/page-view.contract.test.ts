@@ -366,7 +366,8 @@ test('Task 5 functional layers use material variables while cards remain mostly 
 		/\.ops-view-menu,\s*\.ops-overflow-menu,\s*\.ops-indicator-panel\s*\{[\s\S]*var\(--material-blur\)[\s\S]*var\(--material-shadow\)/,
 		'header menus and indicator panel share functional material variables'
 	);
-	assert.doesNotMatch(cardCss, /--material-blur|backdrop-filter/, 'server cards should not get functional glass treatment');
+	assert.doesNotMatch(cardCss, /--material-blur/, 'server cards should not consume global functional material variables');
+	assert.match(cardCss, /monitor-card__body[\s\S]*backdrop-filter/, 'Task 5 allows body-scoped material blur for failure veil only');
 });
 
 
@@ -571,4 +572,30 @@ test('Task 6 FLIP handoff suppresses live source and target ring visuals until c
 	assert.match(cleanupBody, /headerIndicatorHandoffActive = false/);
 	assert.match(pageSource, /class:ops-refresh-ring-wrap--handoff-active=\{headerIndicatorHandoffActive\}/);
 	assert.match(dashboardCss, /\.ops-refresh-ring-wrap--handoff-active\s*\{[\s\S]*opacity:\s*0/);
+});
+
+
+test('Task 5 failure veil CSS blurs only the card body and keeps the compact state label visible on reveal', () => {
+	const bodyRule = cssRule(cardCss, ".monitor-card[data-operational-state='impaired'] .monitor-card__body");
+	assert.match(bodyRule, /filter:\s*blur\(/, 'impaired body should blur last-known data');
+	assert.match(bodyRule, /backdrop-filter:\s*blur\(/, 'body uses material-aware backdrop blur');
+	assert.match(bodyRule, /opacity:\s*0\.[0-9]+\s*;/, 'body should become translucent');
+	const hoverRule = cssRule(cardCss, ".monitor-card[data-operational-state='impaired']:is(:hover, :focus-within) .monitor-card__body");
+	assert.match(hoverRule, /filter:\s*none\s*;/, 'hover/focus reveals last-known body data');
+	assert.match(hoverRule, /opacity:\s*1\s*;/, 'revealed body should be readable');
+	const veilRule = cssRule(cardCss, '.monitor-card__state-veil');
+	assert.match(veilRule, /pointer-events:\s*none\s*;/, 'veil must never intercept clicks');
+	assert.match(veilRule, /backdrop-filter:\s*blur\(/, 'veil should provide material backdrop');
+	const revealVeilRule = cssRule(cardCss, ".monitor-card[data-operational-state='impaired']:is(:hover, :focus-within) .monitor-card__state-veil");
+	assert.match(revealVeilRule, /opacity:\s*0\.[0-9]+\s*;/, 'hover/focus retains compact state label so the card never looks healthy');
+	assert.doesNotMatch(cardCss, /\.monitor-card__header[^{]*filter:\s*blur/, 'header must stay unblurred');
+});
+
+test('Task 5 failure veil CSS has immediate reduced-motion transitions', () => {
+	const reduceStart = cardCss.indexOf('@media (prefers-reduced-motion: reduce)');
+	assert.notEqual(reduceStart, -1, 'missing reduced-motion media query');
+	const reduceCss = cardCss.slice(reduceStart);
+	assert.match(reduceCss, /\.monitor-card__body/);
+	assert.match(reduceCss, /\.monitor-card__state-veil/);
+	assert.match(reduceCss, /transition:\s*none\s*;/);
 });

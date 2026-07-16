@@ -43,7 +43,8 @@ test('GpuBar accepts the shared availability state without letting holds alter i
 	assert.match(source, /data-state=\{state\}/);
 	assert.doesNotMatch(source, /data-active=/);
 	assert.match(serverCardSource, /getCompactGpuState\(server\.status, server\.last_seen, gpu\)/);
-	assert.match(serverCardSource, /<GpuBar[\s\S]*state=\{getCompactGpuState\(server\.status, server\.last_seen, gpu\)\}/);
+	assert.match(serverCardSource, /<GpuBar[\s\S]*state=\{operationalState === 'impaired' \? staleAvailabilityState : getCompactGpuState\(server\.status, server\.last_seen, gpu\)\}/);
+	assert.match(serverCardSource, /const staleAvailabilityState = \$derived\('unknown'\)/, 'impaired server cards should preserve unknown availability');
 	assert.doesNotMatch(source, /state\s*=.*(?:advisoryHolds|hold)/, 'advisory holds must not alter availability semantics');
 });
 
