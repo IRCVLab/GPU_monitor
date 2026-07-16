@@ -720,22 +720,42 @@ test('Task 4 full cards receive the page shared visibility-aware nowMs clock', (
 	assert.match(pageSource, /<ServerCard\s+\{server\}\s+\{nowMs\}[\s\S]*onEdit=\{handleEditServer\}[\s\S]*showNetwork=\{\$activeTab === 'all'\}/);
 });
 
-test('Task 4 shared card motion uses restrained 240-280ms settling transitions without height or top animation', () => {
+test('Task 4 shared card motion uses the local settle token without height or top animation', () => {
 	const cardRule = cssRule(cardCss, '.monitor-card');
-	assert.match(cardRule, /transition:[^;]*(?:transform|box-shadow|border-color)[^;]*2(?:4|5|6|7|8)0ms[^;]*(?:cubic-bezier|ease)/);
+	assertDeclaration(cardRule, '--monitor-card-settle-duration', '260ms');
+	assertDeclaration(cardRule, '--monitor-card-settle-easing', 'cubic-bezier(0.22, 1, 0.36, 1)');
+	assertDeclaration(cardRule, '--monitor-card-settle', 'var(--monitor-card-settle-duration) var(--monitor-card-settle-easing)');
+	assert.match(cardRule, /transition:[^;]*transform\s+var\(--monitor-card-settle\)[^;]*box-shadow\s+var\(--monitor-card-settle\)[^;]*border-color\s+var\(--monitor-card-settle\)/s);
+
+	const availabilityRailRule = cssRule(cardCss, '.monitor-card::before');
+	assert.match(availabilityRailRule, /transition:[^;]*opacity\s+var\(--monitor-card-settle\)[^;]*transform\s+var\(--monitor-card-settle\)/s);
 
 	const bodyRule = cssRule(cardCss, '.monitor-card__body');
-	assert.match(bodyRule, /transition:[^;]*(?:filter|opacity|backdrop-filter)[^;]*2(?:4|5|6|7|8)0ms[^;]*(?:cubic-bezier|ease)/);
+	assert.match(bodyRule, /transition:[^;]*filter\s+var\(--monitor-card-settle\)[^;]*opacity\s+var\(--monitor-card-settle\)[^;]*backdrop-filter\s+var\(--monitor-card-settle\)/s);
 
 	const veilRule = cssRule(cardCss, '.monitor-card__state-veil');
-	assert.match(veilRule, /transition:[^;]*opacity\s+2(?:4|5|6|7|8)0ms[^;]*visibility\s+0s\s+linear\s+2(?:4|5|6|7|8)0ms[^;]*backdrop-filter\s+2(?:4|5|6|7|8)0ms/s);
+	assert.match(veilRule, /transition:[^;]*opacity\s+var\(--monitor-card-settle\)[^;]*visibility\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)[^;]*backdrop-filter\s+var\(--monitor-card-settle\)/s);
 
 	const meterRule = cssRule(cardCss, '.monitor-gpu-metric__fill,\n.monitor-meter__fill');
-	assert.match(meterRule, /transition:\s*width\s+2(?:4|5|6|7|8)0ms\s+(?:cubic-bezier|ease)/);
+	assert.match(meterRule, /transition:\s*width\s+var\(--monitor-card-settle\)/);
 
 	const disclosureRule = cssRule(cardCss, '.monitor-card__disclosure-shell');
-	assert.match(disclosureRule, /transition:[^;]*grid-template-rows\s+0s[^;]*opacity\s+2(?:4|5|6|7|8)0ms[^;]*transform\s+2(?:4|5|6|7|8)0ms/s);
+	assert.match(disclosureRule, /transition:[^;]*grid-template-rows\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)[^;]*opacity\s+var\(--monitor-card-settle\)[^;]*transform\s+var\(--monitor-card-settle\)[^;]*visibility\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)[^;]*pointer-events\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)/s);
 	assert.doesNotMatch(cardCss, /transition[^;]*(?:height|top)/, 'do not animate height/top directly');
+});
+
+test('Task 4 disclosure chevron uses the same settle timing as the disclosure shell', () => {
+	const chevronRule = cssRule(cardCss, '.monitor-card__footer-disclosure');
+	assert.match(chevronRule, /transition:[^;]*transform\s+var\(--monitor-card-settle\)[^;]*border-color\s+var\(--monitor-card-settle\)/s);
+	assert.doesNotMatch(chevronRule, /160ms|ease(?:[,;]|$)/, 'chevron must not keep its pre-Task4 160ms ease motion');
+});
+
+test('Task 4 reduced-motion disables card, rail, chevron, shell, and meter transitions', () => {
+	const reduced = cardCss.slice(cardCss.indexOf('@media (prefers-reduced-motion: reduce)'));
+	assert.match(reduced, /\.monitor-card::before[\s\S]*transition:\s*none/);
+	assert.match(reduced, /\.monitor-card__footer-disclosure[\s\S]*transition:\s*none/);
+	assert.match(reduced, /\.monitor-card__disclosure-shell[\s\S]*transition:\s*none/);
+	assert.match(reduced, /\.monitor-gpu-metric__fill[\s\S]*transition:\s*none/);
 });
 
 test('Task 4 compact indicator open close uses the same 240-280ms settling motion and reduced-motion disables it', () => {
