@@ -319,8 +319,8 @@
 
 .compact-slot__username {
 	min-width: 0;
-	font-size: 0.58rem;
-	line-height: 1.1;
+	font-size: 0.65rem;
+	line-height: 1.15;
 	font-weight: 700;
 	color: inherit;
 	white-space: nowrap;
