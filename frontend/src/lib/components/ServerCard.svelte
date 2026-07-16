@@ -135,8 +135,6 @@
   }
 
   function isHistoricalSystemTelemetryStatus(status: ServerStatus, reasonCode: string | null, refreshText: string): boolean {
-    if (reasonCode === 'gpu_device_missing') return false;
-
     switch (reasonCode) {
       case 'stale_snapshot':
       case 'dev-sim-stale':
@@ -292,6 +290,13 @@
   const ioThroughputText = $derived(formatDiskThroughput(diskThroughputBytesPerSecond));
   const ioPreviewText = $derived.by(() => {
     if (isHistoricalSystemTelemetry) return systemPreviewUnavailableText;
+    if (!server.system) return systemPreviewUnavailableText;
+    if (hasIoPressure) return '병목';
+    if (isIoIdle) return '여유';
+    if (hasDiskThroughput) return ioThroughputText;
+    return systemPreviewUnavailableText;
+  });
+  const ioSystemDetailText = $derived.by(() => {
     if (!server.system) return systemPreviewUnavailableText;
     if (hasIoPressure) return '병목';
     if (isIoIdle) return '여유';
@@ -518,7 +523,7 @@
             </div>
 
             <div class="monitor-card__io-detail" title={ioPressureHelpText}>
-              <span class="monitor-card__io-detail-copy">I/O {ioPreviewText}</span>
+              <span class="monitor-card__io-detail-copy">I/O {ioSystemDetailText}</span>
               <span class="monitor-card__io-detail-metrics monitor-card__io-detail-table">
                 <span>R</span><strong>{diskReadText}</strong>
                 <span>W</span><strong>{diskWriteText}</strong>

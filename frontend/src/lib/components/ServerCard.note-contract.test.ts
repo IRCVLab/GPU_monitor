@@ -223,10 +223,11 @@ test('Task 5 ServerCard maps status reasons to bounded Korean veil labels and pr
 	assert.match(source, /const staleAvailabilityState = \$derived\('unknown'\)/, 'offline/stale availability remains unknown instead of healthy/unavailable');
 });
 
-test('ServerCard classifies historical system telemetry separately from gpu-only degradation', () => {
+test('ServerCard treats gpu_device_missing with stale refresh copy as historical system telemetry', () => {
 	assert.match(source, /function isHistoricalSystemTelemetryStatus\(status: ServerStatus, reasonCode: string \| null, refreshText: string\): boolean/);
 	assert.match(source, /case 'stale_snapshot':[\s\S]*case 'dev-sim-stale':[\s\S]*case 'stale_offline':[\s\S]*case 'system_collect_failed':[\s\S]*case 'offline':[\s\S]*case 'connect_failed':[\s\S]*case 'connection_failed':[\s\S]*case 'ssh_connect_failed':[\s\S]*case 'dev-sim-offline':[\s\S]*return true/);
-	assert.match(source, /if \(reasonCode === 'gpu_device_missing'\) return false;/, 'GPU-device-missing degradation must keep current system metrics');
+	assert.doesNotMatch(source, /if \(reasonCode === 'gpu_device_missing'\) return false;/, 'gpu_device_missing must not bypass historical placeholders when refreshText is non-empty');
+	assert.match(source, /return status === 'offline' \|\| status === 'unknown' \|\| Boolean\(refreshText\);/, 'non-empty refreshText should make gpu_device_missing historical while current degradation remains non-historical');
 	assert.match(source, /const isHistoricalSystemTelemetry = \$derived\(isHistoricalSystemTelemetryStatus\(server\.status, statusReasonCode, refreshText\)\)/);
 });
 
@@ -241,10 +242,14 @@ test('collapsed historical/offline System preview uses neutral placeholders and 
 
 test('expanded historical System keeps raw last-sample fact values instead of collapsed placeholders', () => {
 	const facts = source.match(/<div class="monitor-card__system-facts">[\s\S]*?<\/div>/)?.[0] ?? '';
+	const ioDetail = source.match(/<div class="monitor-card__io-detail"[\s\S]*?<\/div>/)?.[0] ?? '';
 	assert.match(source, /const cpuSystemDetailText = \$derived\(server\.system \? `\$\{cpuPct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
 	assert.match(source, /const ramSystemDetailText = \$derived\(server\.system \? `\$\{ramPct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
 	assert.match(source, /const diskSystemDetailText = \$derived\(storageSummary \? `\$\{storagePct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
+	assert.match(source, /const ioSystemDetailText = \$derived\.by/, 'expanded I/O detail needs raw semantic text separate from collapsed placeholder');
 	assert.match(facts, /<small>CPU<\/small><strong>\{cpuSystemDetailText\}<\/strong>/);
 	assert.match(facts, /<small>RAM<\/small><strong>\{ramSystemDetailText\}<\/strong>/);
 	assert.match(facts, /<small>Disk<\/small><strong>\{diskSystemDetailText\}<\/strong>/);
+	assert.match(ioDetail, /I\/O \{ioSystemDetailText\}/, 'expanded last-sample I/O copy should render raw semantic text');
+	assert.doesNotMatch(ioDetail, /I\/O \{ioPreviewText\}/, 'expanded I/O copy must not reuse collapsed historical placeholder');
 });
