@@ -393,3 +393,21 @@ test('compact open indicator panel resolves to an opaque semantic popover surfac
 	assert.doesNotMatch(finalPanelBackground ?? '', /color-mix|transparent|rgba|hsla/);
 	assert.match(ruleBody(dashboardCss, '.ops-indicator-panel {'), /box-shadow:\s*var\(--material-shadow\)/);
 });
+
+
+test('native root view transition CSS suppresses default crossfade and blending', () => {
+	const oldRoot = ruleBody(css, '::view-transition-old(root)');
+	const newRoot = ruleBody(css, '::view-transition-new(root)');
+	assert.match(oldRoot, /animation:\s*none\s*;/);
+	assert.match(oldRoot, /mix-blend-mode:\s*normal\s*;/);
+	assert.match(newRoot, /mix-blend-mode:\s*normal\s*;/);
+	assert.doesNotMatch(`${oldRoot}\n${newRoot}`, /cross-fade|opacity\s+520ms/);
+});
+
+test('native destination root snapshot uses CSS variable circular reveal for 520ms', () => {
+	const newRoot = ruleBody(css, '::view-transition-new(root)');
+	assert.match(newRoot, /animation:\s*theme-root-reveal\s+520ms\s+cubic-bezier\(0\.22,\s*1,\s*0\.36,\s*1\)\s*both\s*;/);
+	const keyframes = ruleBody(css, '@keyframes theme-root-reveal');
+	assert.match(keyframes, /clip-path:\s*circle\(0px at var\(--theme-reveal-x\) var\(--theme-reveal-y\)\)/);
+	assert.match(keyframes, /clip-path:\s*circle\(var\(--theme-reveal-radius\) at var\(--theme-reveal-x\) var\(--theme-reveal-y\)\)/);
+});
