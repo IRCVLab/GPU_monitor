@@ -490,6 +490,10 @@
   background: color-mix(in srgb, var(--ops-card) 92%, var(--ops-muted));
 }
 
+.monitor-card__footer-section {
+  min-width: 0;
+}
+
 .monitor-card__footer-section + .monitor-card__footer-section {
   border-top: 1px solid color-mix(in srgb, var(--ops-border) 82%, transparent);
   padding-top: 0.14rem;
@@ -497,6 +501,7 @@
 
 .monitor-card__footer-toggle {
   width: 100%;
+  min-width: 0;
   min-height: 1.4rem;
   display: flex;
   align-items: center;
