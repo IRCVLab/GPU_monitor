@@ -131,7 +131,8 @@ test('System and Memo disclosure motion uses mounted grid-track animation withou
 	assertDeclaration(shellRule, 'opacity', '0');
 	assert.match(shellRule, /transform:\s*translateY\(-0\.12rem\)/);
 	assert.match(shellRule, /transition:[^;]*grid-template-rows[^;]*opacity[^;]*transform[^;]*visibility/s);
-	assert.match(shellRule, /grid-template-rows\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)/, 'closing grid track should switch discretely after fade finishes');
+	assert.match(shellRule, /grid-template-rows\s+var\(--monitor-card-settle\)/, 'closing grid track should shrink continuously with the content');
+	assert.doesNotMatch(shellRule, /grid-template-rows\s+0s/, 'closing grid track must not wait and snap after the fade');
 	assert.match(shellRule, /visibility\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)/, 'closing visibility should wait until fade finishes');
 	assertDeclaration(shellRule, 'pointer-events', 'none');
 

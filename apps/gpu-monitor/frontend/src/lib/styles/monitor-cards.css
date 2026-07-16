@@ -729,7 +729,7 @@
   transform: translateY(-0.12rem);
   visibility: hidden;
   pointer-events: none;
-  transition: grid-template-rows 0s linear var(--monitor-card-settle-duration), opacity var(--monitor-card-settle), transform var(--monitor-card-settle), visibility 0s linear var(--monitor-card-settle-duration), pointer-events 0s linear var(--monitor-card-settle-duration);
+  transition: grid-template-rows var(--monitor-card-settle), opacity var(--monitor-card-settle), transform var(--monitor-card-settle), visibility 0s linear var(--monitor-card-settle-duration), pointer-events 0s linear var(--monitor-card-settle-duration);
 }
 
 .monitor-card__disclosure-shell[data-expanded='true'] {
