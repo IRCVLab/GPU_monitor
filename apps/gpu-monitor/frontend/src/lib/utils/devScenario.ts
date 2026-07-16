@@ -99,7 +99,13 @@ function cloneGpu(gpu: GpuInfo): GpuInfo {
 function buildMissingInventory(state: ServerState, visibleGpus: GpuInfo[], missingIndex: number | null): GpuInventory {
 	const current = state.gpu_inventory;
 	const expectedCount = Math.max(current?.expected_count ?? state.gpus.length, visibleGpus.length + 1);
-	const missingIndices = missingIndex === null ? current?.missing_indices ?? [] : [missingIndex];
+	const previousMissingIndices = current?.missing_indices ?? [];
+	const missingIndices =
+		missingIndex !== null
+			? [missingIndex]
+			: previousMissingIndices.length > 0
+				? previousMissingIndices
+				: [visibleGpus.length];
 
 	return {
 		state: 'missing',
