@@ -146,6 +146,7 @@
 	border-radius: 0.46rem;
 	background: color-mix(in srgb, var(--ops-card) 92%, transparent);
 	overflow: hidden;
+	transition: border-color 240ms cubic-bezier(0.22, 1, 0.36, 1), background-color 240ms cubic-bezier(0.22, 1, 0.36, 1), color 240ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .compact-row__identity {
@@ -244,7 +245,7 @@
 }
 
 .compact-slot__users {
-	display: flex;
+	display: grid;
 	width: 100%;
 	appearance: none;
 	align-items: flex-start;
@@ -258,6 +259,29 @@
 	text-align: left;
 	cursor: pointer;
 	pointer-events: auto;
+}
+
+.compact-slot__identity-slot {
+	display: grid;
+	width: 100%;
+	min-width: 0;
+	min-height: 1.72rem;
+}
+
+.compact-slot__identity-set {
+	grid-area: 1 / 1;
+	display: grid;
+	width: 100%;
+	min-width: 0;
+}
+
+.compact-slot__identity-set[data-state='available'],
+.compact-slot__identity-set[data-state='unknown'] {
+	align-items: center;
+}
+
+.compact-slot__identity-set[data-state='occupied'] {
+	align-items: flex-start;
 }
 
 .compact-slot__free,
@@ -401,5 +425,11 @@
 
 	.compact-slot__users {
 		pointer-events: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.compact-slot {
+		transition: none;
 	}
 }

@@ -40,7 +40,7 @@ def parse_gpustat(json_str: str) -> ServerGpuData:
 
     for gpu in data.get("gpus", []):
         processes = gpu.get("processes") or []
-        users = list({p["username"] for p in processes if p.get("username")})
+        users = sorted({p["username"] for p in processes if p.get("username")})
 
         gpus.append(GpuInfo(
             index=int(gpu["index"]),
@@ -107,7 +107,7 @@ def parse_nvidia_smi(output: str) -> ServerGpuData:
             power_int = round(float(power_draw)) if power_draw not in ("", "[N/A]", "N/A") else 0
         except ValueError:
             power_int = 0
-        users = list(uuid_to_users.get(gpu_uuid, set()))
+        users = sorted(uuid_to_users.get(gpu_uuid, set()))
         gpus.append(GpuInfo(
             index=int(index),
             name=name,

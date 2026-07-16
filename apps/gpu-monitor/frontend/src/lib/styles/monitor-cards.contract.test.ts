@@ -355,3 +355,33 @@ test('mobile footer grid sections and one-line system preview remain shrinkable 
 		/\.monitor-card__(?:footer-section|footer-toggle|footer-side|footer-preview|system-preview|load-preview)\s*\{[^}]*width:\s*(?:max-content|min-content|fit-content)/
 	);
 });
+
+test('full gpu identity slot keeps layout stable while user identity flies independently of metrics', () => {
+	const usersRule = cssRule('.monitor-gpu-row__users');
+	assertDeclaration(usersRule, 'display', 'flex');
+	assertDeclaration(usersRule, 'flex-wrap', 'wrap');
+
+	const slotRule = cssRule('.monitor-gpu-row__identity-slot');
+	assertDeclaration(slotRule, 'display', 'grid');
+	assertDeclaration(slotRule, 'flex', '1 1 auto');
+	assertDeclaration(slotRule, 'min-width', '0');
+	assertDeclaration(slotRule, 'min-height', '1\.07rem');
+
+	const setRule = cssRule('.monitor-gpu-row__identity-set');
+	assertDeclaration(setRule, 'grid-area', '1 / 1');
+	assertDeclaration(setRule, 'display', 'flex');
+	assertDeclaration(setRule, 'flex-wrap', 'wrap');
+	assertDeclaration(setRule, 'align-items', 'center');
+	assertDeclaration(setRule, 'gap', '0.25rem 0.45rem');
+	assertDeclaration(setRule, 'min-width', '0');
+	assertDeclaration(setRule, 'align-content', 'flex-start');
+});
+
+test('full gpu index surface settles in 240ms and reduced motion disables the state transition', () => {
+	const indexRule = cssRule('.monitor-gpu-row__index');
+	assert.match(indexRule, /transition:\s*border-color 240ms cubic-bezier\(0\.22, 1, 0\.36, 1\), background-color 240ms cubic-bezier\(0\.22, 1, 0\.36, 1\), color 240ms cubic-bezier\(0\.22, 1, 0\.36, 1\), box-shadow 240ms cubic-bezier\(0\.22, 1, 0\.36, 1\);/);
+
+	const reduced = mediaBlock('(prefers-reduced-motion: reduce)');
+	assert.match(reduced, /\.monitor-gpu-row__index\s*\{[^}]*transition:\s*none;/s);
+	assert.doesNotMatch(reduced, /transition-duration:\s*1ms;/);
+});

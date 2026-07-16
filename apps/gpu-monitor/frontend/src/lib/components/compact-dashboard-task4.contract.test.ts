@@ -58,7 +58,7 @@ test('compact rows support absent placeholders, keep held overlays orthogonal to
 test('compact occupied cells show full usernames inline and allow wrapping growth inside one server row', () => {
 	assert.doesNotMatch(rowSource, /getLinuxUsernameInitials/);
 	assert.doesNotMatch(rowSource, /compact-slot__badge/);
-	assert.match(rowSource, /\{#each gpu\.users as user, index/);
+	assert.match(rowSource, /\{#each users as user, index/);
 	assert.match(rowSource, /class="compact-slot__user-list"/);
 	assert.match(rowSource, /class="compact-slot__username"/);
 
@@ -130,8 +130,8 @@ test('compact row activation always opens full while gpu hover and focus only re
 	assert.doesNotMatch(rowSource, /if \(occupiedSlots\.length > 0\) \{/);
 	assert.doesNotMatch(rowSource, /openTooltip\(event\.currentTarget, popoverItems\(occupiedSlots\)\)/);
 	assert.match(rowSource, /class="compact-row__select"[\s\S]*onclick=\{openFull\}/);
-	assert.match(rowSource, /onmouseenter=\{\(event\) => openTooltip\(event\.currentTarget, popoverItem\(gpu\)\)\}/);
-	assert.match(rowSource, /onfocus=\{\(event\) => openTooltip\(event\.currentTarget, popoverItem\(gpu\)\)\}/);
+	assert.match(rowSource, /onmouseenter=\{\(event\) => openTooltip\(event\.currentTarget, popoverItem\(gpu, users\)\)\}/);
+	assert.match(rowSource, /onfocus=\{\(event\) => openTooltip\(event\.currentTarget, popoverItem\(gpu, users\)\)\}/);
 	assert.match(rowSource, /onclick=\{openFull\}/);
 	assert.doesNotMatch(dashboardSource, />Full에서 보기</);
 	assert.doesNotMatch(dashboardSource, /compact-dashboard__tooltip-action|compact-dashboard__tooltip-footer|tooltipActionButton|focusAction/);
@@ -215,4 +215,30 @@ test('compact hold cues use concise active relative units without 남음', () =>
 	assert.ok(dashboardSource.includes('return `${hours}시간`;'));
 	assert.ok(dashboardSource.includes('return `${Math.ceil(hours / 24)}일`;'));
 	assert.doesNotMatch(dashboardSource, /`\$\{[^}]+\}(?:초|분|시간|일) 남음`/);
+});
+
+test('compact row sorts owners for display and tooltip text, keys a height-stable slot identity, and flies motion with reduced-motion fallback', () => {
+	assert.match(rowSource, /function displayUsers\(gpu: GpuInfo\): string\[\] \{[\s\S]*\[\.\.\.gpu\.users\]\.sort\(\)/);
+	assert.ok(rowSource.includes("return users.join('\\u0000') || 'idle';"));
+	assert.match(rowSource, /\{@const users = displayUsers\(gpu\)\}/);
+	assert.match(rowSource, /import \{ prefersReducedMotion \} from 'svelte\/motion';/);
+	assert.match(rowSource, /import \{ cubicOut \} from 'svelte\/easing';/);
+	assert.match(rowSource, /import \{ fly \} from 'svelte\/transition';/);
+	assert.match(rowSource, /const slotIdentityInFly = \$derived\(\{[\s\S]*y: prefersReducedMotion\.current \? 0 : 2,[\s\S]*opacity: prefersReducedMotion\.current \? 1 : 0,[\s\S]*duration: prefersReducedMotion\.current \? 0 : 220,[\s\S]*easing: cubicOut[\s\S]*\}\);/);
+	assert.match(rowSource, /const slotIdentityOutFly = \$derived\(\{[\s\S]*y: prefersReducedMotion\.current \? 0 : -2,[\s\S]*opacity: prefersReducedMotion\.current \? 1 : 0,[\s\S]*duration: prefersReducedMotion\.current \? 0 : 160,[\s\S]*easing: cubicOut[\s\S]*\}\);/);
+	assert.match(rowSource, /ownersLabel:\s*users\.length > 0 \? users\.join\(', '\) : 'idle'/);
+	assert.match(rowSource, /class="compact-slot__identity-slot"/);
+	assert.match(rowSource, /\{#key `\$\{gpu\.index\}:\$\{state\}:\$\{displayUsersSignature\(users\)\}`\}[\s\S]*class="compact-slot__identity-set"[\s\S]*in:fly=\{slotIdentityInFly\}[\s\S]*out:fly=\{slotIdentityOutFly\}/);
+	assert.doesNotMatch(rowSource, /\{#each gpu\.users as user, index/);
+	assert.match(rowSource, /\{#each users as user, index \(`/);
+});
+
+test('compact slot surface transitions settle in 240ms and reduced motion disables them', () => {
+	const slotRule = cssRule(cssSource, '.compact-slot');
+	assert.match(slotRule, /transition:\s*border-color 240ms cubic-bezier\(0\.22, 1, 0\.36, 1\), background-color 240ms cubic-bezier\(0\.22, 1, 0\.36, 1\), color 240ms cubic-bezier\(0\.22, 1, 0\.36, 1\), box-shadow 240ms cubic-bezier\(0\.22, 1, 0\.36, 1\);/);
+	const reducedStart = cssSource.indexOf('@media (prefers-reduced-motion: reduce)');
+	assert.notEqual(reducedStart, -1, 'missing compact reduced-motion media query');
+	const reduced = cssSource.slice(reducedStart);
+	assert.match(reduced, /\.compact-slot\s*\{[^}]*transition:\s*none;/s);
+	assert.doesNotMatch(reduced, /transition-duration:\s*1ms;/);
 });

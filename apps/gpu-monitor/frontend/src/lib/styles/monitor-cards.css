@@ -315,6 +315,7 @@
   font-size: 0.7rem;
   line-height: 1;
   color: color-mix(in srgb, var(--ops-fg) 48%, transparent);
+  transition: border-color 240ms cubic-bezier(0.22, 1, 0.36, 1), background-color 240ms cubic-bezier(0.22, 1, 0.36, 1), color 240ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .monitor-gpu-row__index[data-has-hold='true'] {
@@ -344,6 +345,23 @@
   align-items: center;
   gap: 0.25rem 0.45rem;
   min-width: 0;
+}
+
+.monitor-gpu-row__identity-slot {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 1.07rem;
+}
+
+.monitor-gpu-row__identity-set {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.45rem;
+  min-width: 0;
+  align-content: flex-start;
 }
 
 .monitor-gpu-row__user,
@@ -1353,12 +1371,17 @@
   .monitor-card__footer-toggle,
   .monitor-card__footer-disclosure,
   .monitor-card__disclosure-shell,
+  .monitor-gpu-row__index,
   .monitor-gpu-metric__fill,
   .monitor-meter__fill,
   .monitor-note-item__delete,
   .monitor-card .note-form-expiry-adjust,
   .monitor-card .note-form-expiry-toggle,
   .monitor-card .note-form-submit-primary {
+    transition: none;
+  }
+
+  .monitor-gpu-row__index {
     transition: none;
   }
 
