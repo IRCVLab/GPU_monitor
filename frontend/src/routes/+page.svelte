@@ -31,7 +31,7 @@
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
 	import { applyDevScenario, type DevScenario } from '$lib/utils/devScenario';
 	import { resolveDashboardShortcut } from '$lib/utils/dashboardShortcuts';
-	import { placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
+	import { countResolvedGridTracks, placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
 	import { mergeServerRecordState } from '$lib/utils/serverStateMerge';
 	import {
 		animateFlip,
@@ -140,8 +140,7 @@
 
 			if (enabled) {
 				const styles = getComputedStyle(node);
-				const template = styles.gridTemplateColumns.trim();
-				const currentColumnCount = template === '' || template === 'none' ? 1 : template.split(/\s+/).length;
+				const currentColumnCount = countResolvedGridTracks(styles.gridTemplateColumns);
 				const columnCountChanged = currentColumnCount !== assignedColumnCount;
 				const structureChanged =
 					columnCountChanged ||
