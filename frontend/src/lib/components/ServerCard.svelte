@@ -134,6 +134,26 @@
     return [reason, age].filter(Boolean).join(' · ');
   }
 
+  function isHistoricalSystemTelemetryStatus(status: ServerStatus, reasonCode: string | null, refreshText: string): boolean {
+    if (reasonCode === 'gpu_device_missing') return false;
+
+    switch (reasonCode) {
+      case 'stale_snapshot':
+      case 'dev-sim-stale':
+      case 'stale_offline':
+      case 'system_collect_failed':
+      case 'unknown':
+      case 'offline':
+      case 'connect_failed':
+      case 'connection_failed':
+      case 'ssh_connect_failed':
+      case 'dev-sim-offline':
+        return true;
+    }
+
+    return status === 'offline' || status === 'unknown' || Boolean(refreshText);
+  }
+
   function metricLevel(percent: number | null | undefined): MetricLevel {
     if (!Number.isFinite(percent)) return 'normal';
     if ((percent ?? 0) >= 90) return 'high';
@@ -210,6 +230,7 @@
   const operationalState: OperationalState = $derived(server.status === 'online' && !refreshText ? 'healthy' : 'impaired');
   const stateVeilLabel = $derived(stateVeilLabelFor(server.status, refreshText ? statusReasonCode ?? 'stale_snapshot' : statusReasonCode));
   const stateVeilSecondary = $derived(secondaryVeilText(statusReasonText, refreshText));
+  const isHistoricalSystemTelemetry = $derived(isHistoricalSystemTelemetryStatus(server.status, statusReasonCode, refreshText));
   const staleAvailabilityState = $derived('unknown');
   const availableGpuCount = $derived.by(() =>
     server.gpus.filter(
@@ -240,9 +261,13 @@
       (a, b) => b.percent - a.percent || a.mount.localeCompare(b.mount)
     )
   );
-  const cpuPreviewText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : '–');
-  const ramPreviewText = $derived(server.system ? `${ramUsed}/${ramTotal}GB` : '–');
-  const ramPercentText = $derived(server.system ? `${ramPct.toFixed(0)}%` : '–');
+  const systemPreviewUnavailableText = '–';
+  const cpuSystemDetailText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : systemPreviewUnavailableText);
+  const ramSystemDetailText = $derived(server.system ? `${ramPct.toFixed(0)}%` : systemPreviewUnavailableText);
+  const diskSystemDetailText = $derived(storageSummary ? `${storagePct.toFixed(0)}%` : systemPreviewUnavailableText);
+  const cpuPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : cpuSystemDetailText);
+  const ramPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : server.system ? `${ramUsed}/${ramTotal}GB` : systemPreviewUnavailableText);
+  const ramPercentText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : ramSystemDetailText);
   const ioSome = $derived(server.system?.io_pressure_some ?? null);
   const ioFull = $derived(server.system?.io_pressure_full ?? null);
   const ioBlocked = $derived(server.system?.io_blocked_tasks ?? null);
@@ -266,11 +291,12 @@
   );
   const ioThroughputText = $derived(formatDiskThroughput(diskThroughputBytesPerSecond));
   const ioPreviewText = $derived.by(() => {
-    if (!server.system) return '–';
+    if (isHistoricalSystemTelemetry) return systemPreviewUnavailableText;
+    if (!server.system) return systemPreviewUnavailableText;
     if (hasIoPressure) return '병목';
     if (isIoIdle) return '여유';
     if (hasDiskThroughput) return ioThroughputText;
-    return '–';
+    return systemPreviewUnavailableText;
   });
   const ioSomeText = $derived(ioSome !== null ? `${ioSome.toFixed(1)}%` : ioSupported ? '–' : '지원 안 함');
   const ioFullText = $derived(ioFull !== null ? `${ioFull.toFixed(1)}%` : '–');
@@ -278,10 +304,10 @@
   const diskReadText = $derived(hasDiskThroughput ? formatDiskThroughput(diskReadBytesPerSecond ?? 0) : '–');
   const diskWriteText = $derived(hasDiskThroughput ? formatDiskThroughput(diskWriteBytesPerSecond ?? 0) : '–');
   const ioPressureHelpText = 'Linux PSI I/O pressure · 최근 10초 동안 작업이 I/O 때문에 멈춘 시간의 비율';
-  const diskPreviewText = $derived(storageSummary ? `${storagePct.toFixed(0)}%` : '–');
-  const cpuLevel = $derived(server.system ? metricLevel(cpuPct) : 'normal');
-  const ramLevel = $derived(server.system ? metricLevel(ramPct) : 'normal');
-  const diskLevel = $derived(storageSummary ? metricLevel(storagePct) : 'normal');
+  const diskPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : diskSystemDetailText);
+  const cpuLevel = $derived(server.system && !isHistoricalSystemTelemetry ? metricLevel(cpuPct) : 'normal');
+  const ramLevel = $derived(server.system && !isHistoricalSystemTelemetry ? metricLevel(ramPct) : 'normal');
+  const diskLevel = $derived(storageSummary && !isHistoricalSystemTelemetry ? metricLevel(storagePct) : 'normal');
   const hasSystemSection = $derived(Boolean(server.system || server.storage || server.gpus.length > 0));
 
   const visibleNotes = $derived.by(() => notes.filter((note) => noteVisible(note)));
@@ -480,11 +506,15 @@
           inert={!sysExpanded}
         >
           <div class="monitor-card__disclosure-inner monitor-card__footer-panel">
+            {#if isHistoricalSystemTelemetry && server.system}
+              <span class="monitor-card__last-sample-label">마지막 수집값</span>
+            {/if}
+
             <div class="monitor-card__system-facts">
-              <span><small>CPU</small><strong>{cpuPreviewText}</strong></span>
-              <span><small>RAM</small><strong>{ramPercentText}</strong></span>
+              <span><small>CPU</small><strong>{cpuSystemDetailText}</strong></span>
+              <span><small>RAM</small><strong>{ramSystemDetailText}</strong></span>
               <span><small>GPU</small><strong>{totalGpuPowerText}</strong></span>
-              <span><small>Disk</small><strong>{diskPreviewText}</strong></span>
+              <span><small>Disk</small><strong>{diskSystemDetailText}</strong></span>
             </div>
 
             <div class="monitor-card__io-detail" title={ioPressureHelpText}>

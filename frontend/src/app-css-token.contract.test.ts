@@ -380,3 +380,16 @@ test('Task 5 removes obsolete accent color selectors from global CSS', () => {
 	assert.doesNotMatch(css, /data-color-theme/);
 	assert.doesNotMatch(css, /html\.rose/);
 });
+
+test('compact open indicator panel resolves to an opaque semantic popover surface', () => {
+	const panelRules = Array.from(dashboardCss.matchAll(/\.ops-indicator-panel\s*\{(?<body>[^}]*)\}/g));
+	assert.ok(panelRules.length > 0, 'missing indicator panel rules');
+	const finalPanelBackground = panelRules
+		.map((match) => match.groups?.body ?? '')
+		.flatMap((body) => Array.from(body.matchAll(/background\s*:\s*([^;]+);/g)).map((match) => match[1].trim()))
+		.at(-1);
+
+	assert.equal(finalPanelBackground, 'var(--ops-popover)');
+	assert.doesNotMatch(finalPanelBackground ?? '', /color-mix|transparent|rgba|hsla/);
+	assert.match(ruleBody(dashboardCss, '.ops-indicator-panel {'), /box-shadow:\s*var\(--material-shadow\)/);
+});
