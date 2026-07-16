@@ -303,14 +303,6 @@
     }
     return causes;
   });
-  const loadGaugeFillWidth = $derived.by(() => {
-    if (isHistoricalSystemTelemetry) return '12%';
-    if (typeof loadRatio !== 'number' || !Number.isFinite(loadRatio)) return '12%';
-    return `${Math.min(Math.max(loadRatio, 0), 1) * 100}%`;
-  });
-  const loadGaugeOverflow = $derived(
-    !isHistoricalSystemTelemetry && typeof loadRatio === 'number' && Number.isFinite(loadRatio) && loadRatio > 1
-  );
   const loadDetailText = $derived(`${formatFixed(loadAvg1)} · ${formatFixed(loadAvg5)} · ${formatFixed(loadAvg15)}`);
   const cpuCountText = $derived(formatRoundedCount(cpuCount, false));
   const cpuSystemDetailText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : systemPreviewUnavailableText);
@@ -318,13 +310,11 @@
   const storageSystemDetailText = $derived(storageSummary ? `${storagePct.toFixed(0)}% · ${storageUsedText}/${storageTotalText}` : systemPreviewUnavailableText);
   const cpuRunningText = $derived(formatRoundedCount(cpuRunningTasks));
   const cpuPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : cpuSystemDetailText);
-  const ramPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : ramSystemDetailText);
+  const ramPreviewText = $derived(
+    isHistoricalSystemTelemetry || !server.system ? systemPreviewUnavailableText : `${ramPct.toFixed(0)}%`
+  );
   const storagePreviewText = $derived(
-    isHistoricalSystemTelemetry
-      ? systemPreviewUnavailableText
-      : storageSummary
-        ? `${storagePct.toFixed(0)}% ${storageUsedText}/${storageTotalText}`
-        : systemPreviewUnavailableText
+    isHistoricalSystemTelemetry || !storageSummary ? systemPreviewUnavailableText : `${storagePct.toFixed(0)}%`
   );
   const cpuPressureSomeText = $derived(cpuPressureSome !== null ? `${cpuPressureSome.toFixed(1)}%` : systemPreviewUnavailableText);
   const ioSomeText = $derived(ioSome !== null ? `${ioSome.toFixed(1)}%` : systemPreviewUnavailableText);
@@ -492,21 +482,12 @@
           <span class="monitor-card__footer-side">
             {#if !sysExpanded}
               <span class="monitor-card__footer-preview monitor-card__system-preview">
-                <span class="monitor-card__load-preview">
-                  <span
-                    class="monitor-card__load-gauge"
-                    data-level={loadLevel}
-                    data-overflow={loadGaugeOverflow ? 'true' : 'false'}
-                    style={`--load-fill-width: ${loadGaugeFillWidth};`}
-                    aria-hidden="true"
-                  >
-                    <span class="monitor-card__load-gauge-fill"></span>
-                  </span>
-                  <span class="monitor-card__load-text">{loadPreviewText}</span>
-                </span>
                 <span class="monitor-card__system-inline-metric">CPU {cpuPreviewText}</span>
                 <span class="monitor-card__system-inline-metric">RAM {ramPreviewText}</span>
                 <span class="monitor-card__system-inline-metric">Storage {storagePreviewText}</span>
+                <span class="monitor-card__load-preview" data-level={loadLevel}>
+                  <span class="monitor-card__load-text">{loadPreviewText}</span>
+                </span>
                 {#each loadPreviewCauses as cause}
                   <span class="monitor-card__pressure-cause" data-level={cause.level}>· {cause.label}</span>
                 {/each}
