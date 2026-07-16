@@ -321,6 +321,7 @@ letter-spacing 0em
 - Tone: terse, operational, calm, research-lab practical.
 - Terminology:
   - User-facing mode names are `Full` and `Compact`.
+  - Material preset names are `Clean`, `Claude+`, and `AstroVista`; do not call Clean liquid glass.
   - Use exact `G#` labels.
   - Use `Linux username`, `memo`, `hold`, `expires`, and `stale telemetry` precisely.
   - GPU memory uses integer `21/24 GB`; utilization uses integer `78%`.
@@ -348,7 +349,7 @@ letter-spacing 0em
   - Expired holds are cleaned/omitted by current expiry behavior; near-expiry shows a countdown.
   - Stale means telemetry freshness, not a stale hold record.
   - Holds are advisory overlays; current telemetry remains truth for actual occupancy.
-  - Notes API/storage may change; collector and WebSocket payload contracts may not change.
+  - Notes API/storage may change. Collector and WebSocket payloads may add backward-compatible optional system-health fields for disk throughput and GPU visibility; existing fields remain compatible.
   - Plain memo behavior and rendering remain.
 - Header no-overlap contract:
   - Expanded header participates in flow.
@@ -412,3 +413,15 @@ These decisions turn the Apple/Ive/nudge direction into concrete hierarchy rules
   - `docs/superpowers/plans/2026-07-14-compact-gpu-dashboard-implementation.md`
   - `docs/superpowers/plans/2026-07-14-apple-gpu-monitor-dashboard.md`
 - Keep useful evidence from those files only when it does not conflict with this document or the Quiet Rack spec.
+
+
+## Resilient telemetry and failure states — 2026-07-16
+
+- I/O preview distinguishes throughput from PSI stall pressure. Healthy zero PSI reads as `I/O 여유`, never a bare utilization-looking zero.
+- Ten-second collection remains fixed. Cheap `/proc/diskstats` and `/sys/bus/pci` reads are folded into the existing remote system command; no extra SSH roundtrip, daemon, package, or high-frequency process is allowed.
+- GPU visibility mismatch is a first-class degraded state after two consecutive samples and compares NVIDIA-visible GPUs with PCI inventory plus historical or learned capacity.
+- Manual server order is a visual invariant: ordered Masonry may leave a small gap, but a later server must never start above an earlier server.
+- Failure details leave the card header baseline. A material-aware veil identifies SSH failure, stale telemetry, collector failure, or GPU loss; hover or focus reveals last-known card data without claiming availability.
+- Theme presets are structural materials: Clean is crisp and quiet, Claude+ is warm and paper-soft, AstroVista is cool and technical.
+- Shortcuts are disclosed through hover or focus tooltips and a compact View-menu legend: V, 1/2/3, C.
+- Detailed contract: `docs/superpowers/specs/2026-07-16-resilient-telemetry-status-design.md`.
