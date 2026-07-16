@@ -65,6 +65,12 @@ function sameSystemInfo(a: ServerState['system'], b: ServerState['system']): boo
 		a.cpu_percent === b.cpu_percent &&
 		a.ram_used === b.ram_used &&
 		a.ram_total === b.ram_total &&
+		a.cpu_pressure_some === b.cpu_pressure_some &&
+		a.cpu_running_tasks === b.cpu_running_tasks &&
+		a.load_avg_1 === b.load_avg_1 &&
+		a.load_avg_5 === b.load_avg_5 &&
+		a.load_avg_15 === b.load_avg_15 &&
+		a.cpu_count === b.cpu_count &&
 		a.io_pressure_some === b.io_pressure_some &&
 		a.io_pressure_full === b.io_pressure_full &&
 		a.io_blocked_tasks === b.io_blocked_tasks &&
@@ -194,6 +200,12 @@ export function normalizeServerState(value: unknown, fallbackId?: number): Serve
 			cpu_percent: toFiniteNumber(rawSystem.cpu_percent),
 			ram_used: toFiniteNumber(rawSystem.ram_used),
 			ram_total: toFiniteNumber(rawSystem.ram_total),
+			cpu_pressure_some: toNullableFiniteNumber(rawSystem.cpu_pressure_some),
+			cpu_running_tasks: toNullableFiniteNumber(rawSystem.cpu_running_tasks),
+			load_avg_1: toNullableFiniteNumber(rawSystem.load_avg_1),
+			load_avg_5: toNullableFiniteNumber(rawSystem.load_avg_5),
+			load_avg_15: toNullableFiniteNumber(rawSystem.load_avg_15),
+			cpu_count: toNullableFiniteNumber(rawSystem.cpu_count),
 			io_pressure_some: toNullableFiniteNumber(rawSystem.io_pressure_some),
 			io_pressure_full: toNullableFiniteNumber(rawSystem.io_pressure_full),
 			io_blocked_tasks: toNullableFiniteNumber(rawSystem.io_blocked_tasks),

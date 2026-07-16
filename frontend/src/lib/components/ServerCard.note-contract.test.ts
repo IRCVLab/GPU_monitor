@@ -92,28 +92,38 @@ test('ServerCard hides the normal status label while keeping exception labels vi
 	assert.match(source, /\{:else\}\s*<span class="monitor-card__status-text">\{statusMeta\.label\}<\/span>/);
 });
 
-test('ServerCard renders collapsed system preview as one inline baseline with explicit I/O PSI', () => {
+test('ServerCard renders collapsed system preview as one load cue with attribution-only pressure causes', () => {
 	const preview = source.match(/<span class="monitor-card__footer-preview monitor-card__system-preview">[\s\S]*?<\/span>\s*\{\/if\}/)?.[0] ?? '';
-	assert.match(preview, /monitor-card__system-preview-segment/, 'collapsed system preview should use inline segments');
-	assert.match(preview, /monitor-card__system-preview-label">CPU<\/span>/);
-	assert.match(preview, /monitor-card__system-preview-label">RAM<\/span>/);
-	assert.match(preview, /monitor-card__system-preview-label">I\/O<\/span>/);
-	assert.match(preview, /monitor-card__system-preview-label">Disk<\/span>/);
-	assert.match(source, /ioPreviewText/, 'collapsed preview should derive an explicit I/O PSI value');
+	assert.match(preview, /monitor-card__load-preview/, 'collapsed system preview should use the single load preview group');
+	assert.match(preview, /monitor-card__load-gauge/, 'collapsed system preview should render the inline load gauge');
+	assert.match(preview, /monitor-card__load-gauge-fill/, 'collapsed system preview should render the inline load fill');
+	assert.match(preview, /monitor-card__load-text">\{loadPreviewText\}<\/span>/, 'collapsed system preview should lead with the load text');
+	assert.match(preview, /#each loadPreviewCauses as cause/, 'collapsed system preview should append only active cause labels');
+	assert.match(source, /CPU 압박/);
+	assert.match(source, /CPU 병목/);
+	assert.match(source, /I\/O 압박/);
+	assert.match(source, /I\/O 병목/);
+	assert.match(source, /마지막 ·/, 'historical collapsed preview should prefix the last-sample cue');
+	assert.doesNotMatch(preview, /monitor-card__system-preview-segment|CPU<\/span>|RAM<\/span>|Disk<\/span>/, 'old segmented CPU\/RAM\/Disk preview should be removed');
 	assert.doesNotMatch(source, /monitor-card__system-preview-item/, 'old 4-tile micro-grid should be removed');
-	assert.doesNotMatch(preview, /<small>CPU<\/small>/, 'old two-row label/value tiles should be removed');
 });
 
-test('expanded System keeps a dense expert I/O detail row with stall-pressure help', () => {
-	assert.match(source, /monitor-card__io-detail/, 'expanded system should expose a dedicated dense I\/O detail row');
-	assert.match(source, /monitor-card__io-detail-copy/, 'expanded system should include concise explanatory microcopy');
-	assert.match(source, /monitor-card__io-detail-metrics/, 'expanded system should keep the PSI metrics inline');
+test('expanded System keeps dense load and pressure facts without throughput rows', () => {
+	assert.match(source, /monitor-card__io-detail/, 'expanded system should expose a dedicated dense pressure detail row');
+	assert.match(source, /monitor-card__io-detail-metrics/, 'expanded system should keep the pressure metrics inline');
 	assert.match(source, /ioPressureHelpText/, 'expanded system should provide a tooltip or title explaining stall pressure');
-	assert.match(source, /ioSomeText/, 'expanded system should surface PSI some avg10');
-	assert.match(source, /ioFullText/, 'expanded system should surface PSI full avg10');
+	assert.match(source, /loadDetailText/, 'expanded system should surface 1\/5\/15 load detail text');
+	assert.match(source, /cpuCountText/, 'expanded system should surface logical CPU count');
+	assert.match(source, /cpuRunningText/, 'expanded system should surface runnable task count');
+	assert.match(source, /cpuPressureSomeText/, 'expanded system should surface CPU PSI some avg10');
+	assert.match(source, /ioSomeText/, 'expanded system should surface I\/O PSI some avg10');
+	assert.match(source, /ioFullText/, 'expanded system should surface I\/O PSI full avg10');
 	assert.match(source, /ioBlockedText/, 'expanded system should surface blocked task count');
 	const facts = source.match(/<div class="monitor-card__system-facts">[\s\S]*?<\/div>/)?.[0] ?? '';
-	assert.match(facts, /<small>RAM<\/small><strong>\{ramSystemDetailText\}<\/strong>/, 'summary facts should use compact RAM percent instead of truncating capacity text');
+	assert.match(facts, /<small>부하<\/small><strong>\{loadDetailText\}<\/strong>/);
+	assert.match(facts, /<small>논리 CPU<\/small><strong>\{cpuCountText\}<\/strong>/);
+	assert.match(facts, /<small>CPU<\/small><strong>\{cpuSystemDetailText\}<\/strong>/);
+	assert.match(facts, /<small>실행대기<\/small><strong>\{cpuRunningText\}<\/strong>/);
 	assert.doesNotMatch(source, /monitor-card__system-summary/, 'old summary tile grid should be removed from the dense system panel');
 	assert.doesNotMatch(source, /monitor-card__summary-item/, 'old summary tiles should not remain');
 });
@@ -164,29 +174,28 @@ test('ServerCard exposes a non-text availability nudge without reordering cards'
 });
 
 
-test('ServerCard collapsed I/O copy uses semantic labels instead of bare zero percent', () => {
-	assert.match(source, /ioPreviewText\s*=\s*\$derived\.by/, 'I/O preview needs semantic branch logic');
-	assert.match(source, /return '여유';/, 'idle I/O should show 여유');
-	assert.match(source, /return '병목';/, 'pressure or blocked I/O should show 병목');
-	assert.match(source, /hasPsiTelemetry/, 'idle I/O should require present PSI or blocked telemetry, preserving legacy payloads');
-	assert.doesNotMatch(source, /ioPreviewText\s*=\s*\$derived\([^\n]*ioSome\.toFixed/, 'preview must not be a bare PSI percent derivation');
+test('ServerCard derives CPU and I/O cause labels only when pressure is non-idle', () => {
+	assert.match(source, /const cpuPressureLevel = \$derived\(classifyPressure\(cpuPressureSome\)\)/);
+	assert.match(source, /const ioPressureLevel = \$derived\.by/, 'I\/O pressure should be derived from PSI and blocked-task telemetry');
+	assert.match(source, /const loadPreviewCauses = \$derived\.by/, 'collapsed preview should gather only active cause labels');
+	assert.match(source, /pressureLabel\(cpuPressureLevel\)/, 'CPU copy should reuse the semantic pressure label helper');
+	assert.match(source, /pressureLabel\(ioPressureLevel\)/, 'I\/O copy should reuse the semantic pressure label helper');
+	assert.doesNotMatch(source, /CPU 여유|I\/O 여유/, 'collapsed preview must not render healthy cause labels');
 });
 
-test('ServerCard collapsed I/O preview can show compact aggregate throughput without percent copy', () => {
-	assert.match(source, /diskReadBytesPerSecond/, 'read throughput should be derived from optional telemetry');
-	assert.match(source, /diskWriteBytesPerSecond/, 'write throughput should be derived from optional telemetry');
-	assert.match(source, /formatDiskThroughput/, 'throughput should use a dedicated MB/s formatter');
-	assert.match(source, /ioThroughputText/, 'collapsed copy should be able to show total throughput');
-	assert.doesNotMatch(source, /I\/O\s*\{ioPreviewText\}%/, 'collapsed I/O must not append a misleading percent suffix');
+test('ServerCard removes throughput fallback and any MB/s copy from the System UI', () => {
+	assert.doesNotMatch(source, /formatDiskThroughput/, 'System UI must not keep an MB\/s formatter');
+	assert.doesNotMatch(source, /diskReadBytesPerSecond|diskWriteBytesPerSecond|diskThroughputBytesPerSecond/, 'System UI must not derive disk throughput preview values');
+	assert.doesNotMatch(source, /MB\/s/, 'System UI copy must not render MB\/s anywhere');
 });
 
-test('expanded System shows stable tabular R/W throughput with exact PSI and blocked fields', () => {
-	assert.match(source, /monitor-card__io-detail-table/, 'expanded I/O details should use stable tabular formatting');
-	assert.match(source, /<span>R<\/span><strong>\{diskReadText\}<\/strong>/, 'expanded details should show read MB/s');
-	assert.match(source, /<span>W<\/span><strong>\{diskWriteText\}<\/strong>/, 'expanded details should show write MB/s');
-	assert.match(source, /<span>some<\/span><strong>\{ioSomeText\}<\/strong>/, 'expanded details should show PSI some');
-	assert.match(source, /<span>full<\/span><strong>\{ioFullText\}<\/strong>/, 'expanded details should show PSI full');
+test('expanded System pressure detail shows CPU and I/O PSI facts without R/W throughput cells', () => {
+	assert.match(source, /monitor-card__io-detail-table/, 'expanded pressure details should keep stable tabular formatting');
+	assert.match(source, /<span>CPU PSI<\/span><strong>\{cpuPressureSomeText\}<\/strong>/, 'expanded details should show CPU PSI some');
+	assert.match(source, /<span>I\/O some<\/span><strong>\{ioSomeText\}<\/strong>/, 'expanded details should show I\/O PSI some');
+	assert.match(source, /<span>I\/O full<\/span><strong>\{ioFullText\}<\/strong>/, 'expanded details should show I\/O PSI full');
 	assert.match(source, /<span>blocked<\/span><strong>\{ioBlockedText\}<\/strong>/, 'expanded details should show blocked tasks');
+	assert.doesNotMatch(source, /<span>R<\/span>|<span>W<\/span>/, 'expanded details must not show read\/write throughput cells');
 });
 
 
@@ -231,25 +240,24 @@ test('ServerCard treats gpu_device_missing with stale refresh copy as historical
 	assert.match(source, /const isHistoricalSystemTelemetry = \$derived\(isHistoricalSystemTelemetryStatus\(server\.status, statusReasonCode, refreshText\)\)/);
 });
 
-test('collapsed historical/offline System preview uses neutral placeholders and expanded System labels last collected values', () => {
+test('historical and offline System preview keeps a neutral last-sample load cue', () => {
 	assert.match(source, /const systemPreviewUnavailableText = '–';/);
-	assert.match(source, /const cpuPreviewText = \$derived\(isHistoricalSystemTelemetry \? systemPreviewUnavailableText : cpuSystemDetailText\)/);
-	assert.match(source, /const ramPercentText = \$derived\(isHistoricalSystemTelemetry \? systemPreviewUnavailableText : ramSystemDetailText\)/);
-	assert.match(source, /if \(isHistoricalSystemTelemetry\) return systemPreviewUnavailableText;[\s\S]*if \(!server\.system\) return systemPreviewUnavailableText;[\s\S]*if \(hasIoPressure\) return '병목';/);
-	assert.match(source, /const diskPreviewText = \$derived\(isHistoricalSystemTelemetry \? systemPreviewUnavailableText : diskSystemDetailText\)/);
+	assert.match(source, /const loadPreviewPrefixText = \$derived/);
+	assert.match(source, /const loadPreviewText = \$derived\.by/, 'collapsed preview should derive a load-first sentence');
 	assert.match(source, /\{#if isHistoricalSystemTelemetry && server\.system\}[\s\S]*monitor-card__last-sample-label[\s\S]*마지막 수집값[\s\S]*\{\/if\}/);
+	assert.match(source, /마지막 ·/, 'historical preview should prefix the last-sample cue');
+	assert.match(source, /부하 – \/ –/, 'neutral fallback copy should remain available when load is unusable');
 });
 
-test('expanded historical System keeps raw last-sample fact values instead of collapsed placeholders', () => {
+test('expanded historical System keeps raw last-sample load and pressure fact values', () => {
 	const facts = source.match(/<div class="monitor-card__system-facts">[\s\S]*?<\/div>/)?.[0] ?? '';
 	const ioDetail = source.match(/<div class="monitor-card__io-detail"[\s\S]*?<\/div>/)?.[0] ?? '';
+	assert.match(source, /const loadDetailText = \$derived/);
 	assert.match(source, /const cpuSystemDetailText = \$derived\(server\.system \? `\$\{cpuPct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
-	assert.match(source, /const ramSystemDetailText = \$derived\(server\.system \? `\$\{ramPct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
-	assert.match(source, /const diskSystemDetailText = \$derived\(storageSummary \? `\$\{storagePct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
-	assert.match(source, /const ioSystemDetailText = \$derived\.by/, 'expanded I/O detail needs raw semantic text separate from collapsed placeholder');
+	assert.match(source, /const cpuRunningText = \$derived/);
+	assert.match(source, /const cpuPressureSomeText = \$derived/);
+	assert.match(facts, /<small>부하<\/small><strong>\{loadDetailText\}<\/strong>/);
 	assert.match(facts, /<small>CPU<\/small><strong>\{cpuSystemDetailText\}<\/strong>/);
-	assert.match(facts, /<small>RAM<\/small><strong>\{ramSystemDetailText\}<\/strong>/);
-	assert.match(facts, /<small>Disk<\/small><strong>\{diskSystemDetailText\}<\/strong>/);
-	assert.match(ioDetail, /I\/O \{ioSystemDetailText\}/, 'expanded last-sample I/O copy should render raw semantic text');
-	assert.doesNotMatch(ioDetail, /I\/O \{ioPreviewText\}/, 'expanded I/O copy must not reuse collapsed historical placeholder');
+	assert.match(ioDetail, /<span>CPU PSI<\/span><strong>\{cpuPressureSomeText\}<\/strong>/);
+	assert.doesNotMatch(ioDetail, /\{loadPreviewText\}/, 'expanded facts must not reuse the collapsed preview sentence');
 });
