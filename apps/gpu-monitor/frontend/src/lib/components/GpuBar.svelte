@@ -55,7 +55,7 @@
       .map((note) => advisoryHolds.find((entry) => entry.note.id === note.id))
       .filter((entry): entry is AdvisoryHoldCue => Boolean(entry))
   );
-  const tooltipId = $derived(`gpu-hold-tooltip-${gpu.index}`);
+  const tooltipId = $derived(primaryHold ? `gpu-hold-tooltip-${primaryHold.server_id}-${gpu.index}` : `gpu-hold-tooltip-legacy-${gpu.index}`);
   const holdDetailText = $derived.by(() =>
     orderedHoldEntries
       .map((entry, index) => {
