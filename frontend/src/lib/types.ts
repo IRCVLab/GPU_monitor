@@ -102,14 +102,17 @@ export interface ServerRecord {
 }
 
 export type NoteKind = 'memo' | 'hold';
+export type NotePriority = 'normal' | 'high' | 'urgent';
 
 export interface Note {
 	id: number;
 	server_id: number;
 	username: string;
+	display_name: string | null;
 	content: string;
 	created_at: string;
 	expires_at: string | null;
+	priority: NotePriority;
 	kind: NoteKind;
 	gpu_indices: number[];
 }
