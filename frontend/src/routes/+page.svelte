@@ -64,6 +64,7 @@
 		stale: '갱신 지연',
 		io: 'I/O 병목',
 		offline: 'SSH 연결 실패',
+		gpu_missing: 'GPU visibility mismatch · GPU 누락',
 		mixed: '복합 장애'
 	};
 	const dashboardViewTransition = {
