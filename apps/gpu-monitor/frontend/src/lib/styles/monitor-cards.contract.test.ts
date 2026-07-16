@@ -152,10 +152,9 @@ test('System and Memo disclosure motion uses mounted grid-track animation withou
 	assert.doesNotMatch(css, /transition[^;]*(?:height|top)/, 'Task 4a forbids height/top transition shortcuts');
 });
 
-test('reduced motion makes card rail, disclosure, and load gauge state changes immediate', () => {
+test('reduced motion makes card rail and disclosure state changes immediate', () => {
 	const reduced = mediaBlock('(prefers-reduced-motion: reduce)');
 	assert.match(reduced, /\.monitor-card::before[\s\S]*\.monitor-card__footer-disclosure,[\s\S]*\.monitor-card__disclosure-shell[\s\S]*transition:\s*none;/s);
-	assert.match(reduced, /\.monitor-card__load-gauge::after,\s*\.monitor-card__load-gauge-fill\s*\{[^}]*transition:\s*none;/s);
 	assert.doesNotMatch(reduced, /transition-duration:\s*1ms;/, 'reduced motion should remove Task 4 transitions instead of leaving 1ms motion');
 });
 
@@ -183,11 +182,11 @@ test('collapsed utility controls keep the chevron affordance and remove decorati
 	assertDeclaration(previewRule, 'white-space', 'nowrap');
 });
 
-test('collapsed system preview keeps one load-leading resource summary line with a micro-gauge', () => {
+test('collapsed system preview keeps one resource-leading summary line with secondary load text', () => {
 	const previewRule = cssRule('.monitor-card__system-preview');
 	assert.match(previewRule, /display:\s*flex/);
 	assert.match(previewRule, /align-items:\s*center/);
-	assert.match(previewRule, /justify-content:\s*flex-end/);
+	assert.match(previewRule, /justify-content:\s*flex-start/, 'narrow rows must preserve CPU/RAM/Storage and clip secondary load context last');
 	assert.match(previewRule, /flex-wrap:\s*nowrap/);
 	assert.match(previewRule, /overflow:\s*hidden/);
 	assert.ok(remValues(declarationValue(previewRule, 'gap'))[0] <= 0.35);
@@ -195,21 +194,19 @@ test('collapsed system preview keeps one load-leading resource summary line with
 	const loadPreviewRule = cssRule('.monitor-card__load-preview');
 	assert.match(loadPreviewRule, /display:\s*inline-flex/);
 	assert.match(loadPreviewRule, /align-items:\s*center/);
-	assert.match(loadPreviewRule, /min-width:\s*0/);
+	assert.match(loadPreviewRule, /flex:\s*0 0 auto/);
 
 	const inlineMetricRule = cssRule('.monitor-card__system-inline-metric');
 	assert.match(inlineMetricRule, /display:\s*inline/);
+	assert.match(inlineMetricRule, /flex:\s*0 0 auto/);
 	assert.ok(remValues(declarationValue(inlineMetricRule, 'font-size'))[0] <= 0.66);
-
-	const gaugeRule = cssRule('.monitor-card__load-gauge');
-	assert.match(gaugeRule, /width:\s*2\.15rem/);
-	assert.match(gaugeRule, /height:\s*0\.26rem/);
-	assert.match(gaugeRule, /border-radius:\s*999px/);
+	assert.match(inlineMetricRule, /var\(--ops-fg\)\s+5[0-9]%/, 'CPU/RAM/Storage should carry stronger contrast than secondary load text');
 
 	const textRule = cssRule('.monitor-card__load-text');
 	assert.ok(remValues(declarationValue(textRule, 'font-size'))[0] <= 0.68);
 	assert.match(textRule, /font-variant-numeric:\s*tabular-nums/);
 
+	assert.doesNotMatch(css, /\.monitor-card__load-gauge\s*\{/, 'collapsed summary should not reserve width for the old gauge');
 	assert.doesNotMatch(css, /\.monitor-card__system-preview-segment/, 'old segmented preview styles should be removed');
 	assert.doesNotMatch(css, /\.monitor-card__system-preview-item/, 'old 4-item system tiles should not remain');
 });

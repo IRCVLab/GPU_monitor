@@ -91,14 +91,18 @@ The collector continues to execute one system command per normal collection cycl
 
 ### Collapsed row
 
-Keep one compact baseline.
+Keep one compact baseline while preserving the machine resources users expect to scan first.
 
-- Compact summary text: `부하 3.2 / 32`
-  - numerator is raw `load_avg_1`
-  - denominator is logical `cpu_count`
-  - normalized ratio (`load_avg_1 / cpu_count`) drives visual/state logic only
-- Historical/offline telemetry keeps the current neutral `–` placeholders.
-- GPU-only degradation with current telemetry keeps the current load summary.
+- Visual order: `CPU 28% · RAM 42% · Storage 63% · 부하 3.2 / 32`.
+- CPU, RAM, and Storage use percentage-only summaries. Absolute RAM and Storage capacities stay in the expanded panel.
+- Load remains a trailing diagnostic:
+  - numerator is raw `load_avg_1`;
+  - denominator is logical `cpu_count`;
+  - normalized ratio (`load_avg_1 / cpu_count`) drives visual/state logic only;
+  - normal load stays lower contrast, while pressure or bottleneck states gain semantic emphasis.
+- Do not reserve collapsed-row width for a load gauge. On narrow cards, preserve CPU/RAM/Storage and allow trailing load/cause context to clip first.
+- Historical/offline telemetry keeps neutral `–` placeholders.
+- GPU-only degradation with current telemetry keeps the current resource summary and load context.
 
 ### Expanded row
 

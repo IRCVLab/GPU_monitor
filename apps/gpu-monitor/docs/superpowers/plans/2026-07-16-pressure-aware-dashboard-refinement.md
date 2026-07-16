@@ -181,10 +181,10 @@ Normalize the optional CPU fields without inventing zero values.
 Collapsed compact summary:
 
 ```text
-부하 3.2 / 32
+CPU 28% · RAM 42% · Storage 63% · 부하 3.2 / 32
 ```
 
-Use normalized load ratio (`load_avg_1 / cpu_count`) for visual/state logic, not for the displayed numerator/denominator text. CPU PSI and I/O PSI explain the cause in expanded detail. Do not show MB/s anywhere in the UI.
+Keep CPU/RAM/Storage first and percentage-only so they remain readable without increasing card height. Load is trailing diagnostic context, with normalized load ratio (`load_avg_1 / cpu_count`) used for visual/state logic rather than replacing the displayed numerator/denominator. Remove the normal-state load gauge; pressure/bottleneck text can still receive semantic emphasis. CPU PSI and I/O PSI explain the cause in expanded detail. Do not show MB/s anywhere in the UI.
 
 Expanded details show 1/5/15 load plus CPU stall/runnable facts and I/O pressure facts. Keep the layout dense and tabular.
 

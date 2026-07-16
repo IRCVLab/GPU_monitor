@@ -92,17 +92,20 @@ test('ServerCard hides the normal status label while keeping exception labels vi
 	assert.match(source, /\{:else\}\s*<span class="monitor-card__status-text">\{statusMeta\.label\}<\/span>/);
 });
 
-test('ServerCard renders collapsed System as one load-leading CPU RAM Storage summary line', () => {
+test('ServerCard renders collapsed System as one resource-leading CPU RAM Storage load line', () => {
 	const preview = source.match(/<span class="monitor-card__footer-preview monitor-card__system-preview">[\s\S]*?monitor-card__footer-disclosure/)?.[0] ?? '';
-	assert.match(preview, /monitor-card__load-preview/, 'collapsed system preview should lead with the load preview group');
-	assert.match(preview, /monitor-card__load-gauge/, 'collapsed system preview should render the inline load gauge');
-	assert.match(preview, /monitor-card__load-gauge-fill/, 'collapsed system preview should render the inline load fill');
-	assert.match(preview, /monitor-card__load-text">\{loadPreviewText\}<\/span>/, 'collapsed system preview should lead with the load text');
-	assert.match(preview, /CPU \{cpuPreviewText\}/, 'collapsed system preview should keep CPU utilization after load');
-	assert.match(preview, /RAM \{ramPreviewText\}/, 'collapsed system preview should keep RAM utilization after load');
-	assert.match(preview, /Storage \{storagePreviewText\}/, 'collapsed system preview should keep Storage utilization and capacity after load');
+	const cpuIndex = preview.indexOf('CPU {cpuPreviewText}');
+	const ramIndex = preview.indexOf('RAM {ramPreviewText}');
+	const storageIndex = preview.indexOf('Storage {storagePreviewText}');
+	const loadIndex = preview.indexOf('monitor-card__load-preview');
+
+	assert.ok(cpuIndex >= 0 && cpuIndex < ramIndex && ramIndex < storageIndex && storageIndex < loadIndex, 'CPU, RAM and Storage must remain visible before secondary load context');
+	assert.doesNotMatch(preview, /monitor-card__load-gauge/, 'normal collapsed summary should not spend width on a load gauge');
+	assert.match(preview, /monitor-card__load-text">\{loadPreviewText\}<\/span>/, 'collapsed system preview should retain compact load text');
 	assert.match(preview, /#each loadPreviewCauses as cause/, 'collapsed system preview should append only active cause labels');
 	assert.match(preview, /· \{cause\.label\}/, 'pressure cause labels should be separated from the dense summary');
+	assert.match(source, /const ramPreviewText = \$derived\([\s\S]*?`\$\{ramPct\.toFixed\(0\)\}%`/, 'collapsed RAM preview should use percentage only');
+	assert.match(source, /const storagePreviewText = \$derived\([\s\S]*?`\$\{storagePct\.toFixed\(0\)\}%`/, 'collapsed Storage preview should use percentage only');
 	assert.match(source, /CPU 압박/);
 	assert.match(source, /CPU 병목/);
 	assert.match(source, /I\/O 압박/);
@@ -261,14 +264,13 @@ test('ServerCard treats gpu_device_missing with stale refresh copy as historical
 	assert.match(source, /const isHistoricalSystemTelemetry = \$derived\(isHistoricalSystemTelemetryStatus\(server\.status, statusReasonCode, refreshText\)\)/);
 });
 
-test('historical and offline System preview keeps a neutral last-sample load cue and fixed gauge width', () => {
+test('historical and offline System preview keeps a neutral last-sample load cue', () => {
 	assert.match(source, /const systemPreviewUnavailableText = '–';/);
 	assert.match(source, /const loadPreviewPrefixText = \$derived/);
-	assert.match(source, /const loadPreviewText = \$derived\.by/, 'collapsed preview should derive a load-first sentence');
+	assert.match(source, /const loadPreviewText = \$derived\.by/, 'collapsed preview should derive compact load context');
 	assert.match(source, /\{#if isHistoricalSystemTelemetry && server\.system\}[\s\S]*monitor-card__last-sample-label[\s\S]*마지막 수집값[\s\S]*\{\/if\}/);
 	assert.match(source, /마지막 ·/, 'historical preview should prefix the last-sample cue');
 	assert.match(source, /부하 – \/ –/, 'neutral fallback copy should remain available when load is unusable');
-	assert.match(source, /if \(isHistoricalSystemTelemetry\) return '12%';/, 'historical gauge width should not encode stale load magnitude');
 });
 
 test('expanded historical System keeps raw last-sample load and pressure fact values', () => {
