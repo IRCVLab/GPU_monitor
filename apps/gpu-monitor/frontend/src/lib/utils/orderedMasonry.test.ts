@@ -3,7 +3,20 @@ import test from 'node:test';
 // @ts-expect-error node built-in types are not installed for these stripped Node tests.
 import assert from 'node:assert/strict';
 // @ts-expect-error Node strip-types executes the .ts helper directly.
-import { placeOrderedMasonryItems } from './orderedMasonry.ts';
+import { countResolvedGridTracks, placeOrderedMasonryItems } from './orderedMasonry.ts';
+
+
+test('counts only positive resolved masonry grid tracks', () => {
+	assert.equal(countResolvedGridTracks('352px 0px 0px'), 1);
+	assert.equal(countResolvedGridTracks('352px 352px 0px'), 2);
+	assert.equal(countResolvedGridTracks('352px 352px 352px'), 3);
+});
+
+test('falls back to one masonry grid track for none or invalid templates', () => {
+	assert.equal(countResolvedGridTracks('none'), 1);
+	assert.equal(countResolvedGridTracks(''), 1);
+	assert.equal(countResolvedGridTracks('repeat(auto-fit, minmax(0, 1fr))'), 1);
+});
 
 function assertRowStartsAreMonotonic(placements: ReturnType<typeof placeOrderedMasonryItems>): void {
 	for (let index = 1; index < placements.length; index += 1) {

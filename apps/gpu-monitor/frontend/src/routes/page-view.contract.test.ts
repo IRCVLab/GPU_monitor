@@ -145,7 +145,7 @@ test('View menu chooses aligned Grid or gapless Masonry without changing server 
 });
 
 test('task 1 masonry action writes and cleans stable grid placement properties', () => {
-	assert.match(pageSource, /import \{\s*placeOrderedMasonryItems\s*\} from '\$lib\/utils\/orderedMasonry';/);
+	assert.match(pageSource, /import \{[\s\S]*countResolvedGridTracks[\s\S]*placeOrderedMasonryItems[\s\S]*\} from '\$lib\/utils\/orderedMasonry';/);
 	assert.match(pageSource, /style\.gridColumnStart\s*=\s*String\(placement\.gridColumnStart\)/);
 	assert.match(pageSource, /style\.gridRowStart\s*=\s*String\(placement\.gridRowStart\)/);
 	assert.match(pageSource, /style\.gridRowEnd\s*=\s*placement\.gridRowEnd/);
@@ -220,6 +220,16 @@ test('task 3 ResizeObserver updates cached heights without structural invalidati
 
 	assert.match(masonryBody, /new ResizeObserver\(\(entries\) => \{[\s\S]*measuredHeights\.set\([\s\S]*schedule\(\)/);
 	assert.doesNotMatch(masonryBody, /new ResizeObserver\(\(entries\)[\s\S]*assignedColumns\.clear\(\)/);
+});
+
+test('masonry action counts only non-collapsed resolved grid tracks', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const layoutBody = functionBody(pageSource, 'layout', masonryStart);
+
+	assert.match(pageSource, /import \{[\s\S]*countResolvedGridTracks[\s\S]*placeOrderedMasonryItems[\s\S]*\} from '\$lib\/utils\/orderedMasonry';/);
+	assert.match(layoutBody, /const currentColumnCount = countResolvedGridTracks\(styles\.gridTemplateColumns\)/);
+	assert.doesNotMatch(layoutBody, /gridTemplateColumns\.trim\(\)[\s\S]*split\(\/\\s\+\//);
 });
 
 test('task 3 structural masonry changes clear assignments so layout can rebalance', () => {

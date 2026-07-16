@@ -1,3 +1,13 @@
+export function countResolvedGridTracks(gridTemplateColumns: string): number {
+	const tokens = gridTemplateColumns.trim().split(/\s+/).filter(Boolean);
+	const positiveTrackCount = tokens.filter((token) => {
+		if (!token.endsWith('px')) return false;
+		const value = Number.parseFloat(token);
+		return Number.isFinite(value) && value > 0;
+	}).length;
+	return Math.max(1, positiveTrackCount);
+}
+
 export type OrderedMasonryPlacement = {
 	gridColumnStart: number;
 	gridRowStart: number;
