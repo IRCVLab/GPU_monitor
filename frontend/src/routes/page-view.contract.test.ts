@@ -750,7 +750,8 @@ test('Task 4 shared card motion uses the local settle token without height or to
 	assert.match(meterRule, /transition:\s*width\s+var\(--monitor-card-settle\)/);
 
 	const disclosureRule = cssRule(cardCss, '.monitor-card__disclosure-shell');
-	assert.match(disclosureRule, /transition:[^;]*grid-template-rows\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)[^;]*opacity\s+var\(--monitor-card-settle\)[^;]*transform\s+var\(--monitor-card-settle\)[^;]*visibility\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)[^;]*pointer-events\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)/s);
+	assert.match(disclosureRule, /transition:[^;]*grid-template-rows\s+var\(--monitor-card-settle\)[^;]*opacity\s+var\(--monitor-card-settle\)[^;]*transform\s+var\(--monitor-card-settle\)[^;]*visibility\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)[^;]*pointer-events\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)/s);
+	assert.doesNotMatch(disclosureRule, /grid-template-rows\s+0s/, 'disclosure height must animate instead of snapping after opacity settles');
 	assert.doesNotMatch(cardCss, /transition[^;]*(?:height|top)/, 'do not animate height/top directly');
 });
 
