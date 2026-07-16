@@ -137,3 +137,150 @@ test('isServerStateEqual treats PSI changes as meaningful telemetry updates', ()
 
 	assert.equal(isServerStateEqual(baseline, changedPsi), false);
 });
+
+
+test('normalizeServerState preserves optional disk throughput and sample interval fields', () => {
+	const normalized = normalizeServerState({
+		server_id: 21,
+		server_name: 'IoBox',
+		host: 'iobox.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 12,
+			ram_used: 1024,
+			ram_total: 2048,
+			io_pressure_some: 0,
+			io_pressure_full: 0,
+			io_blocked_tasks: 0,
+			io_pressure_supported: true,
+			disk_read_bytes_per_second: 1048576,
+			disk_write_bytes_per_second: 2097152,
+			disk_sample_seconds: 10
+		},
+		storage: null
+	});
+
+	assert.equal(normalized?.system?.disk_read_bytes_per_second, 1048576);
+	assert.equal(normalized?.system?.disk_write_bytes_per_second, 2097152);
+	assert.equal(normalized?.system?.disk_sample_seconds, 10);
+});
+
+test('isServerStateEqual treats optional disk throughput changes as meaningful telemetry updates', () => {
+	const baseline = normalizeServerState({
+		server_id: 22,
+		server_name: 'IoBox',
+		host: 'iobox.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 12,
+			ram_used: 1024,
+			ram_total: 2048,
+			io_pressure_some: 0,
+			io_pressure_full: 0,
+			io_blocked_tasks: 0,
+			io_pressure_supported: true,
+			disk_read_bytes_per_second: 1048576,
+			disk_write_bytes_per_second: 2097152,
+			disk_sample_seconds: 10
+		},
+		storage: null
+	});
+	const changed = normalizeServerState({
+		server_id: 22,
+		server_name: 'IoBox',
+		host: 'iobox.internal',
+		network: 'internal',
+		status: 'online',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: {
+			cpu_percent: 12,
+			ram_used: 1024,
+			ram_total: 2048,
+			io_pressure_some: 0,
+			io_pressure_full: 0,
+			io_blocked_tasks: 0,
+			io_pressure_supported: true,
+			disk_read_bytes_per_second: 1048576,
+			disk_write_bytes_per_second: 3145728,
+			disk_sample_seconds: 10
+		},
+		storage: null
+	});
+
+	assert.equal(isServerStateEqual(baseline, changed), false);
+});
+
+test('normalizeServerState preserves optional gpu inventory fields', () => {
+	const normalized = normalizeServerState({
+		server_id: 23,
+		server_name: 'GpuBox',
+		host: 'gpubox.internal',
+		network: 'internal',
+		status: 'degraded',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: null,
+		storage: null,
+		gpu_inventory: {
+			state: 'partial',
+			visible_count: 3,
+			expected_count: 4,
+			pci_count: 4,
+			missing_indices: [2]
+		}
+	});
+
+	assert.deepEqual(normalized?.gpu_inventory, {
+		state: 'partial',
+		visible_count: 3,
+		expected_count: 4,
+		pci_count: 4,
+		missing_indices: [2]
+	});
+});
+
+test('isServerStateEqual treats gpu inventory changes as meaningful telemetry updates', () => {
+	const baseline = normalizeServerState({
+		server_id: 24,
+		server_name: 'GpuBox',
+		host: 'gpubox.internal',
+		network: 'internal',
+		status: 'degraded',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: null,
+		storage: null,
+		gpu_inventory: {
+			state: 'partial', visible_count: 3, expected_count: 4, pci_count: 4, missing_indices: [2]
+		}
+	});
+	const changed = normalizeServerState({
+		server_id: 24,
+		server_name: 'GpuBox',
+		host: 'gpubox.internal',
+		network: 'internal',
+		status: 'degraded',
+		status_reason: null,
+		last_seen: '2026-07-15T00:00:10Z',
+		gpus: [],
+		system: null,
+		storage: null,
+		gpu_inventory: {
+			state: 'partial', visible_count: 2, expected_count: 4, pci_count: 4, missing_indices: [1, 2]
+		}
+	});
+
+	assert.equal(isServerStateEqual(baseline, changed), false);
+});

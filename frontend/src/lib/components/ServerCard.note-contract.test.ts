@@ -161,3 +161,29 @@ test('ServerCard exposes a non-text availability nudge without reordering cards'
 	assert.ok(source.includes('const hasAvailableGpu = $derived(availableGpuCount > 0)'));
 	assert.ok(source.includes("data-has-available={hasAvailableGpu ? 'true' : 'false'}"));
 });
+
+
+test('ServerCard collapsed I/O copy uses semantic labels instead of bare zero percent', () => {
+	assert.match(source, /ioPreviewText\s*=\s*\$derived\.by/, 'I/O preview needs semantic branch logic');
+	assert.match(source, /return '여유';/, 'idle I/O should show 여유');
+	assert.match(source, /return '병목';/, 'pressure or blocked I/O should show 병목');
+	assert.match(source, /hasPsiTelemetry/, 'idle I/O should require present PSI or blocked telemetry, preserving legacy payloads');
+	assert.doesNotMatch(source, /ioPreviewText\s*=\s*\$derived\([^\n]*ioSome\.toFixed/, 'preview must not be a bare PSI percent derivation');
+});
+
+test('ServerCard collapsed I/O preview can show compact aggregate throughput without percent copy', () => {
+	assert.match(source, /diskReadBytesPerSecond/, 'read throughput should be derived from optional telemetry');
+	assert.match(source, /diskWriteBytesPerSecond/, 'write throughput should be derived from optional telemetry');
+	assert.match(source, /formatDiskThroughput/, 'throughput should use a dedicated MB/s formatter');
+	assert.match(source, /ioThroughputText/, 'collapsed copy should be able to show total throughput');
+	assert.doesNotMatch(source, /I\/O\s*\{ioPreviewText\}%/, 'collapsed I/O must not append a misleading percent suffix');
+});
+
+test('expanded System shows stable tabular R/W throughput with exact PSI and blocked fields', () => {
+	assert.match(source, /monitor-card__io-detail-table/, 'expanded I/O details should use stable tabular formatting');
+	assert.match(source, /<span>R<\/span><strong>\{diskReadText\}<\/strong>/, 'expanded details should show read MB/s');
+	assert.match(source, /<span>W<\/span><strong>\{diskWriteText\}<\/strong>/, 'expanded details should show write MB/s');
+	assert.match(source, /<span>some<\/span><strong>\{ioSomeText\}<\/strong>/, 'expanded details should show PSI some');
+	assert.match(source, /<span>full<\/span><strong>\{ioFullText\}<\/strong>/, 'expanded details should show PSI full');
+	assert.match(source, /<span>blocked<\/span><strong>\{ioBlockedText\}<\/strong>/, 'expanded details should show blocked tasks');
+});
