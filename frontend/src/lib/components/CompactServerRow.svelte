@@ -2,13 +2,21 @@
 	import { cubicOut } from 'svelte/easing';
 	import { prefersReducedMotion } from 'svelte/motion';
 	import { fly } from 'svelte/transition';
-	import type { GpuInfo, ServerState, ServerStatus } from '$lib/types';
+	import type { GpuInfo, Note, ServerState, ServerStatus } from '$lib/types';
 	import type { CompactGpuState } from '$lib/utils/compactGpuAvailability';
 	import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
 	import { compactGpuBankSlots } from '$lib/utils/compactGpuMatrix';
+	import { buildHoldAdvisory, getNotePriorityMeta, resolveDisplayName } from '$lib/utils/noteAdvisory';
 
 	type CompactHoldCue = {
-		owner: string;
+		note: Note;
+		remaining: string;
+	};
+
+	type CompactTooltipHoldEntry = {
+		displayName: string;
+		priorityLabel: string;
+		priorityClassName: string;
 		remaining: string;
 		memo: string;
 	};
@@ -18,6 +26,8 @@
 		stateLabel: string;
 		ownersLabel: string;
 		holdLabel: string;
+		holdEntries: CompactTooltipHoldEntry[];
+		tooltipId: string;
 	};
 
 	type CompactTooltip = {
@@ -34,6 +44,7 @@
 		bankIndex,
 		heldGpuIndices = undefined,
 		holdCuesByGpu = undefined,
+		activeTooltipId = null,
 		onOpenFull = () => {},
 		onTooltipChange = () => {}
 	}: {
@@ -41,6 +52,7 @@
 		bankIndex: number;
 		heldGpuIndices?: ReadonlySet<number>;
 		holdCuesByGpu?: ReadonlyMap<number, CompactHoldCue[]>;
+		activeTooltipId?: string | null;
 		onOpenFull?: (serverId: number) => void;
 		onTooltipChange?: (tooltip: CompactTooltip | null) => void;
 	} = $props();
@@ -88,17 +100,60 @@
 		return users.join('\u0000') || 'idle';
 	}
 
-	function holdLabel(gpu: GpuInfo): string {
-		const cues = holdCuesByGpu?.get(gpu.index) ?? [];
-		const fallbackHoldLabel = heldGpuIndices?.has(gpu.index) ? 'HOLD' : '';
-		if (cues.length === 0) return fallbackHoldLabel;
+	function tooltipId(gpu: GpuInfo): string {
+		return `compact-tooltip-${server.server_id}-${gpu.index}`;
+	}
 
-		const primaryHold = cues[0];
-		const parts = [`HOLD ${primaryHold.owner}`];
-		if (primaryHold.remaining) parts.push(primaryHold.remaining);
-		if (primaryHold.memo) parts.push(primaryHold.memo);
-		if (cues.length > 1) parts.push(`+${cues.length - 1}`);
+	function tooltipVisible(gpu: GpuInfo): boolean {
+		return activeTooltipId === tooltipId(gpu);
+	}
+
+	function holdCues(gpu: GpuInfo): CompactHoldCue[] {
+		return holdCuesByGpu?.get(gpu.index) ?? [];
+	}
+
+	function holdNotes(gpu: GpuInfo): Note[] {
+		return holdCues(gpu).map(({ note }) => note);
+	}
+
+	function orderedHoldEntries(gpu: GpuInfo): CompactHoldCue[] {
+		const cues = holdCues(gpu);
+		const holdAdvisory = buildHoldAdvisory(holdNotes(gpu));
+		return holdAdvisory.ordered
+			.map((note) => cues.find((entry) => entry.note.id === note.id))
+			.filter((entry): entry is CompactHoldCue => Boolean(entry));
+	}
+
+	function holdLabel(gpu: GpuInfo): string {
+		const fallbackHoldLabel = heldGpuIndices?.has(gpu.index) ? 'HOLD' : '';
+		const holdAdvisory = buildHoldAdvisory(holdNotes(gpu));
+		const primaryHold = holdAdvisory.primary;
+		if (!primaryHold) return fallbackHoldLabel;
+
+		const primaryPriorityMeta = getNotePriorityMeta(primaryHold.priority);
+		const primaryEntry = orderedHoldEntries(gpu)[0] ?? null;
+		const parts = ['HOLD'];
+		if (primaryHold.priority !== 'normal') {
+			parts.push(primaryPriorityMeta.label);
+		}
+		parts.push(resolveDisplayName(primaryHold));
+		if (primaryEntry?.remaining) parts.push(primaryEntry.remaining);
+		if (primaryHold.content) parts.push(primaryHold.content);
+		if (holdAdvisory.secondarySummary) parts.push(holdAdvisory.secondarySummary);
 		return parts.join(' · ');
+	}
+
+	function holdEntries(gpu: GpuInfo): CompactTooltipHoldEntry[] {
+		return orderedHoldEntries(gpu).map(({ note, remaining }) => {
+			const priorityMeta = getNotePriorityMeta(note.priority);
+			return {
+				displayName: resolveDisplayName(note),
+				priorityLabel: priorityMeta.label,
+				priorityClassName: priorityMeta.className,
+				remaining,
+				memo: note.content
+			};
+		});
 	}
 
 	function popoverItem(gpu: GpuInfo, users: readonly string[]): CompactPopoverItem {
@@ -107,7 +162,9 @@
 			gpuIndex: gpu.index,
 			stateLabel: gpuStateLabels[state],
 			ownersLabel: users.length > 0 ? users.join(', ') : 'idle',
-			holdLabel: holdLabel(gpu)
+			holdLabel: holdLabel(gpu),
+			holdEntries: holdEntries(gpu),
+			tooltipId: tooltipId(gpu)
 		};
 	}
 
@@ -177,6 +234,7 @@
 					type="button"
 					class="compact-slot__users"
 					aria-label={slotAriaLabel(gpu, users)}
+					aria-describedby={tooltipVisible(gpu) ? tooltipId(gpu) : undefined}
 					data-compact-trigger="true"
 					onmouseenter={(event) => openTooltip(event.currentTarget, popoverItem(gpu, users))}
 					onmouseleave={hideTooltip}

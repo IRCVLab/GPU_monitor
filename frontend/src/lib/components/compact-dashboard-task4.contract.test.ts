@@ -242,3 +242,35 @@ test('compact slot surface transitions settle in 240ms and reduced motion disabl
 	assert.match(reduced, /\.compact-slot\s*\{[^}]*transition:\s*none;/s);
 	assert.doesNotMatch(reduced, /transition-duration:\s*1ms;/);
 });
+
+test('task 4 compact hold cues reuse shared noteAdvisory ranking and display fallback helpers', () => {
+	assert.match(rowSource, /import \{ buildHoldAdvisory, getNotePriorityMeta, resolveDisplayName \} from '\$lib\/utils\/noteAdvisory';/);
+	assert.match(rowSource, /function holdNotes\(gpu: GpuInfo\): Note\[] \{/);
+	assert.match(rowSource, /buildHoldAdvisory\(holdNotes\(gpu\)\)/);
+	assert.match(rowSource, /const primaryPriorityMeta = getNotePriorityMeta\(primaryHold\.priority\)/);
+	assert.match(rowSource, /parts\.push\(resolveDisplayName\(primaryHold\)\)/);
+	assert.match(rowSource, /holdAdvisory\.secondarySummary/);
+	assert.match(rowSource, /displayName: resolveDisplayName\(note\)/);
+	assert.doesNotMatch(rowSource, /owner:\s*note\.username/);
+	assert.doesNotMatch(rowSource, /const parts = \[`HOLD \$\{primaryHold\.owner\}`\]/);
+});
+
+test('task 4 compact tooltip stays passive, keyboard reachable, and availability-neutral while mirroring full hold detail fields', () => {
+	assert.match(rowSource, /type CompactTooltipHoldEntry = \{[\s\S]*displayName: string;[\s\S]*priorityLabel: string;[\s\S]*priorityClassName: string;[\s\S]*remaining: string;[\s\S]*memo: string;[\s\S]*\}/);
+	assert.match(rowSource, /holdEntries:\s*CompactTooltipHoldEntry\[];/);
+	assert.match(rowSource, /function orderedHoldEntries\(gpu: GpuInfo\): CompactHoldCue\[] \{/);
+	assert.match(rowSource, /getNotePriorityMeta\(note\.priority\)/);
+	assert.match(rowSource, /onmouseenter=\{\(event\) => openTooltip\(event\.currentTarget, popoverItem\(gpu, users\)\)\}/);
+	assert.match(rowSource, /onfocus=\{\(event\) => openTooltip\(event\.currentTarget, popoverItem\(gpu, users\)\)\}/);
+	assert.match(rowSource, /aria-describedby=\{tooltipVisible\(gpu\) \? tooltipId\(gpu\) : undefined\}/);
+	assert.match(dashboardSource, /id=\{activeTooltip\.item\.tooltipId\}/);
+	assert.match(dashboardSource, /role="tooltip"/);
+	assert.match(dashboardSource, /compact-dashboard__tooltip-note-owner/);
+	assert.match(dashboardSource, /compact-dashboard__tooltip-note-priority/);
+	assert.match(dashboardSource, /compact-dashboard__tooltip-note-expiry/);
+	assert.match(dashboardSource, /compact-dashboard__tooltip-note-memo/);
+	assert.doesNotMatch(dashboardSource, /compact-dashboard__tooltip[\s\S]*<button/);
+	assert.match(rowSource, /function gpuState\(gpu: GpuInfo\): CompactGpuState \{[\s\S]*return getCompactGpuState\(server\.status, server\.last_seen, gpu\);[\s\S]*\}/);
+	assert.match(rowSource, /const availableCount = \$derived\.by\([\s\S]*gpuState\(gpu\) === 'available'[\s\S]*\);/);
+	assert.doesNotMatch(rowSource, /getCompactGpuState\([^\n]*hold/);
+});
