@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { GpuInfo, Note, ServerStatus } from '$lib/types';
+	import type { GpuInfo, Note, NotePriority, ServerStatus } from '$lib/types';
 	import { createNote } from '$lib/api';
 	import { buildNotePayload } from '$lib/utils/notePayload';
 	import { isTelemetryStale } from '$lib/utils/telemetryFreshness';
@@ -19,10 +19,18 @@
 	const ONE_HOUR_MS = 60 * 60 * 1000;
 	const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 	const MIN_FUTURE_MS = 60 * 1000;
+	const HOLD_PRIORITY_OPTIONS: { value: NotePriority; label: string; description: string }[] = [
+		{ value: 'normal', label: '보통', description: '가벼운 작업 공유용입니다. 예약 보장 아님.' },
+		{ value: 'high', label: '높음', description: '곧 사용할 작업을 강조합니다. 예약 보장 아님.' },
+		{ value: 'urgent', label: '긴급', description: '즉시 확인이 필요한 작업입니다. 예약 보장 아님.' }
+	];
 
 	let username = $state('');
 	let sshPassword = $state('');
 	let content = $state('');
+	let displayName = $state('');
+	let priority = $state<NotePriority>('normal');
+	let priorityHelpValue = $state<NotePriority | null>(null);
 	let loading = $state(false);
 	let error = $state('');
 	let nowMs = $state(Date.now());
@@ -32,6 +40,17 @@
 	const telemetryStale = $derived(isTelemetryStale(lastSeen, nowMs, 60000));
 	const statusWarning = $derived(serverStatus !== 'online');
 	const sortedGpus = $derived([...gpus].sort((a, b) => a.index - b.index));
+	const trimmedDisplayName = $derived(displayName.trim());
+	const holdPayload = $derived.by(() => {
+		if (selectedGpuIndices.length === 0) return {};
+		return {
+			display_name: trimmedDisplayName ? trimmedDisplayName.slice(0, 40) : null,
+			priority
+		};
+	});
+	const activePriorityOption = $derived(
+		HOLD_PRIORITY_OPTIONS.find((option) => option.value === (priorityHelpValue ?? priority)) ?? HOLD_PRIORITY_OPTIONS[0]
+	);
 
 	function pad(value: number): string {
 		return String(value).padStart(2, '0');
@@ -136,13 +155,16 @@
 					content: content.trim(),
 					expires_at: expiresAtDate.toISOString(),
 					kind: selectedGpuIndices.length > 0 ? 'hold' : 'memo',
-					gpu_indices: selectedGpuIndices
+					gpu_indices: selectedGpuIndices,
+					...holdPayload
 				})
 			);
 			onCreated(note);
 			content = '';
 			expiresAtLocal = defaultExpiryLocal();
 			selectedGpuIndices = [];
+			displayName = '';
+			priority = 'normal';
 		} catch (e) {
 			error = e instanceof Error ? e.message : '작성 실패';
 		} finally {
@@ -165,8 +187,8 @@
 <div class="note-form">
 	<div class="note-form-row note-form-scope-row">
 		<div class="note-form-gpu-selector-head">
-			<span class="note-form-gpu-label">GPU 참고 홀드</span>
-			<span class="note-form-gpu-hint">선택 없으면 일반 메모 · 비독점 HOLD</span>
+			<span class="note-form-gpu-label">GPU 작업 공유</span>
+			<span class="note-form-gpu-hint">선택 시 작업 공유 · 예약 보장 아님</span>
 		</div>
 		<div class="note-form-gpu-chip-row" role="group" aria-label="GPU 선택(선택 시 참고 홀드)">
 			{#each sortedGpus as gpu (gpu.index)}
@@ -182,6 +204,41 @@
 		</div>
 		{#if selectedGpuIndices.length > 0 && (telemetryStale || statusWarning)}
 			<p class="note-form-hold-warning" aria-live="polite">{holdWarningText}</p>
+		{/if}
+
+		{#if selectedGpuIndices.length > 0}
+			<div class="note-form-hold-fields">
+				<input
+					type="text"
+					placeholder="표시 이름(선택)"
+					aria-label="GPU 표시 이름"
+					bind:value={displayName}
+					maxlength="40"
+					class="note-form-input"
+				/>
+
+				<div class="note-form-priority-stack">
+					<span class="note-form-priority-label">우선순위</span>
+					<div class="note-form-priority-row" role="group" aria-label="GPU 우선순위">
+						{#each HOLD_PRIORITY_OPTIONS as option (option.value)}
+							<button
+								type="button"
+								class="note-form-priority-chip"
+								data-selected={priority === option.value ? 'true' : 'false'}
+								aria-pressed={priority === option.value}
+								onmouseenter={() => (priorityHelpValue = option.value)}
+								onfocus={() => (priorityHelpValue = option.value)}
+								onmouseleave={() => (priorityHelpValue = null)}
+								onblur={() => (priorityHelpValue = null)}
+								onclick={() => (priority = option.value)}
+							>
+								{option.label}
+							</button>
+						{/each}
+					</div>
+					<p class="note-form-priority-help" aria-live="polite">{activePriorityOption.description}</p>
+				</div>
+			</div>
 		{/if}
 	</div>
 

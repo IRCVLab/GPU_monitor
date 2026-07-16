@@ -19,7 +19,7 @@ test('NoteForm keeps server props, stale helper, payload validation, and Korean 
 	assert.match(source, /toggleGpu/);
 	assert.match(source, /buildNotePayload\(/);
 	assert.match(source, /자문|참고|안내/);
-	assert.match(source, /비독점|독점이 아니/);
+	assert.match(source, /예약 보장 아님/);
 	assert.match(source, /텔레메트리/);
 	assert.doesNotMatch(source, /reserved|cancelled_at/i);
 });
@@ -29,7 +29,7 @@ test('NoteForm derives memo versus hold from selected GPUs and resets after succ
 	assert.doesNotMatch(source, /let\s+kind\s*=\s*\$state/);
 	assert.match(source, /kind:\s*selectedGpuIndices\.length\s*>\s*0\s*\?\s*'hold'\s*:\s*'memo'/);
 	assert.match(source, /gpu_indices:\s*selectedGpuIndices/);
-	assert.match(source, /onCreated\(note\);[\s\S]*content\s*=\s*''[\s\S]*expiresAtLocal\s*=\s*defaultExpiryLocal\(\)[\s\S]*selectedGpuIndices\s*=\s*\[\]/);
+	assert.match(source, /onCreated\(note\);[\s\S]*content\s*=\s*''[\s\S]*expiresAtLocal\s*=\s*defaultExpiryLocal\(\)[\s\S]*selectedGpuIndices\s*=\s*\[\][\s\S]*displayName\s*=\s*''[\s\S]*priority\s*=\s*'normal'/);
 });
 
 test('NoteForm warns for offline or stale telemetry without blocking submission', () => {
@@ -63,6 +63,28 @@ test('NoteForm keeps the hold warning conditional to stale or abnormal telemetry
 	assert.doesNotMatch(source, /선택한 GPU는 비독점 참고 홀드입니다/);
 	assert.match(source, /\{#if\s+selectedGpuIndices\.length\s*>\s*0\s*&&\s*\(telemetryStale\s*\|\|\s*statusWarning\)\}/);
 	assert.match(source, /참고 안내로만 사용하세요/);
+});
+
+test('NoteForm keeps memo submission unchanged until selected GPUs reveal compact hold-only display name and priority controls', () => {
+	assert.match(source, /let\s+displayName\s*=\s*\$state\(''\)/);
+	assert.match(source, /let\s+priority\s*=\s*\$state<NotePriority>\('normal'\)/);
+	assert.match(source, /const\s+holdPayload\s*=\s*\$derived\.by\(\(\)\s*=>\s*\{[\s\S]*if\s*\(selectedGpuIndices\.length\s*===\s*0\)\s*return\s*\{\};[\s\S]*display_name:\s*trimmedDisplayName\s*\?\s*trimmedDisplayName\.slice\(0,\s*40\)\s*:\s*null,[\s\S]*priority[\s\S]*\}\s*\)/);
+	assert.match(source, /buildNotePayload\(\{[\s\S]*\.\.\.holdPayload[\s\S]*\}\)/);
+	assert.match(source, /\{#if\s+selectedGpuIndices\.length\s*>\s*0\}[\s\S]*aria-label="GPU 표시 이름"[\s\S]*maxlength="40"[\s\S]*aria-label="GPU 우선순위"/);
+	assert.doesNotMatch(source, /aria-label="GPU 표시 이름"[\s\S]*\{#if\s+selectedGpuIndices\.length\s*===\s*0\}/);
+});
+
+test('NoteForm uses action-centered hold copy and hover or focus priority explanations without implying a reservation guarantee', () => {
+	assert.match(source, /예약 보장 아님/);
+	assert.doesNotMatch(source, /비독점 HOLD/);
+	assert.match(source, /보통/);
+	assert.match(source, /높음/);
+	assert.match(source, /긴급/);
+	assert.match(source, /onmouseenter=\{\(\)\s*=>\s*\(priorityHelpValue\s*=\s*option\.value\)\}/);
+	assert.match(source, /onfocus=\{\(\)\s*=>\s*\(priorityHelpValue\s*=\s*option\.value\)\}/);
+	assert.match(source, /onmouseleave=\{\(\)\s*=>\s*\(priorityHelpValue\s*=\s*null\)\}/);
+	assert.match(source, /onblur=\{\(\)\s*=>\s*\(priorityHelpValue\s*=\s*null\)\}/);
+	assert.match(source, /aria-live="polite"/);
 });
 
 
