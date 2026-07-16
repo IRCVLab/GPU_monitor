@@ -11,11 +11,23 @@ class SystemInfo:
     io_pressure_full: float | None = None
     io_blocked_tasks: int | None = None
     io_pressure_supported: bool = False
+    disk_read_bytes_total: int | None = None
+    disk_write_bytes_total: int | None = None
+    disk_sample_time: float | None = None
+    pci_gpu_count: int | None = None
+
+
+@dataclass
+class DiskIORate:
+    read_bytes_per_second: float
+    write_bytes_per_second: float
 
 
 # /proc 기반 — psutil 불필요, Linux 범용
 SYSTEM_CMD_PROC = (
     'python3 -c "\n'
+    'import glob\n'
+    'import os\n'
     'import time\n'
     '\n'
     'def read_cpu_and_blocked():\n'
@@ -53,6 +65,39 @@ SYSTEM_CMD_PROC = (
     '    except Exception:\n'
     "        return '', ''\n"
     '\n'
+    'def read_disk_counters():\n'
+    '    try:\n'
+    '        physical = set()\n'
+    "        for path in glob.glob('/sys/block/*'):\n"
+    "            if os.path.islink(os.path.join(path, 'device')):\n"
+    '                physical.add(os.path.basename(path))\n'
+    '        read_sectors = 0\n'
+    '        write_sectors = 0\n'
+    "        with open('/proc/diskstats') as f:\n"
+    '            for line in f:\n'
+    '                fields = line.split()\n'
+    '                if len(fields) < 10 or fields[2] not in physical:\n'
+    '                    continue\n'
+    '                read_sectors += int(fields[5])\n'
+    '                write_sectors += int(fields[9])\n'
+    '        return read_sectors * 512, write_sectors * 512, time.monotonic()\n'
+    '    except Exception:\n'
+    "        return '', '', ''\n"
+    '\n'
+    'def count_nvidia_display_pci_devices():\n'
+    '    count = 0\n'
+    "    for path in glob.glob('/sys/bus/pci/devices/*'):\n"
+    '        try:\n'
+    "            with open(os.path.join(path, 'vendor')) as f:\n"
+    '                vendor = f.read().strip().lower()\n'
+    "            with open(os.path.join(path, 'class')) as f:\n"
+    '                pci_class = f.read().strip().lower()\n'
+    "            if vendor == '0x10de' and pci_class.startswith('0x03'):\n"
+    '                count += 1\n'
+    '        except Exception:\n'
+    '            continue\n'
+    '    return count\n'
+    '\n'
     'c1, _ = read_cpu_and_blocked()\n'
     'time.sleep(0.1)\n'
     'c2, blocked = read_cpu_and_blocked()\n'
@@ -70,7 +115,9 @@ SYSTEM_CMD_PROC = (
     "ram_free  = (mem.get('MemAvailable') or mem['MemFree']) * 1024\n"
     'ram_used  = ram_total - ram_free\n'
     'psi_some, psi_full = read_psi_avg10()\n'
-    "print(f'{cpu:.1f},{ram_used},{ram_total},{psi_some},{psi_full},{blocked}')\n"
+    'disk_read, disk_write, disk_sample_time = read_disk_counters()\n'
+    'pci_gpu_count = count_nvidia_display_pci_devices()\n'
+    "print(f'{cpu:.1f},{ram_used},{ram_total},{psi_some},{psi_full},{blocked},{disk_read},{disk_write},{disk_sample_time},{pci_gpu_count}')\n"
     '"'
 )
 
@@ -106,7 +153,7 @@ def _parse_optional_int(value: str) -> int | None:
 
 
 def parse_system(raw: str) -> SystemInfo:
-    """Parse csv 'cpu,ram_used_bytes,ram_total_bytes[,io_some,io_full,procs_blocked]' output."""
+    """Parse csv 'cpu,ram_used_bytes,ram_total_bytes[,io_some,io_full,procs_blocked[,disk_read,disk_write,disk_time,pci_gpus]]' output."""
     parts = raw.strip().split(',')
     if len(parts) < 3:
         raise ValueError(f'Invalid system metrics payload: {raw!r}')
@@ -119,6 +166,10 @@ def parse_system(raw: str) -> SystemInfo:
     io_pressure_full = None
     io_blocked_tasks = None
     io_pressure_supported = False
+    disk_read_bytes_total = None
+    disk_write_bytes_total = None
+    disk_sample_time = None
+    pci_gpu_count = None
 
     if len(parts) >= 6:
         parsed_some = _parse_optional_float(parts[3])
@@ -129,6 +180,12 @@ def parse_system(raw: str) -> SystemInfo:
             io_pressure_supported = True
         io_blocked_tasks = _parse_optional_int(parts[5])
 
+    if len(parts) >= 10:
+        disk_read_bytes_total = _parse_optional_int(parts[6])
+        disk_write_bytes_total = _parse_optional_int(parts[7])
+        disk_sample_time = _parse_optional_float(parts[8])
+        pci_gpu_count = _parse_optional_int(parts[9])
+
     return SystemInfo(
         cpu_percent=cpu,
         ram_used=ram_used_bytes // 1024 // 1024,
@@ -137,4 +194,39 @@ def parse_system(raw: str) -> SystemInfo:
         io_pressure_full=io_pressure_full,
         io_blocked_tasks=io_blocked_tasks,
         io_pressure_supported=io_pressure_supported,
+        disk_read_bytes_total=disk_read_bytes_total,
+        disk_write_bytes_total=disk_write_bytes_total,
+        disk_sample_time=disk_sample_time,
+        pci_gpu_count=pci_gpu_count,
+    )
+
+
+def calculate_disk_io_rate(previous: SystemInfo | None, current: SystemInfo | None) -> DiskIORate | None:
+    """Calculate non-negative disk I/O rates between two cumulative samples."""
+    if previous is None or current is None:
+        return None
+
+    required = (
+        previous.disk_read_bytes_total,
+        previous.disk_write_bytes_total,
+        previous.disk_sample_time,
+        current.disk_read_bytes_total,
+        current.disk_write_bytes_total,
+        current.disk_sample_time,
+    )
+    if any(value is None for value in required):
+        return None
+
+    elapsed = current.disk_sample_time - previous.disk_sample_time
+    if elapsed <= 0:
+        return None
+
+    read_delta = current.disk_read_bytes_total - previous.disk_read_bytes_total
+    write_delta = current.disk_write_bytes_total - previous.disk_write_bytes_total
+    if read_delta < 0 or write_delta < 0:
+        return None
+
+    return DiskIORate(
+        read_bytes_per_second=read_delta / elapsed,
+        write_bytes_per_second=write_delta / elapsed,
     )
