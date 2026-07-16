@@ -151,10 +151,11 @@ test('System and Memo disclosure motion uses mounted grid-track animation withou
 	assert.doesNotMatch(css, /transition[^;]*(?:height|top)/, 'Task 4a forbids height/top transition shortcuts');
 });
 
-test('reduced motion makes disclosure state changes effectively immediate', () => {
+test('reduced motion makes disclosure and load gauge state changes effectively immediate', () => {
 	const reduced = mediaBlock('(prefers-reduced-motion: reduce)');
 	assert.match(reduced, /\.monitor-card__disclosure-shell\s*\{[^}]*transition-duration:\s*1ms;/s);
 	assert.match(reduced, /\.monitor-card__footer-disclosure\s*\{[^}]*transition-duration:\s*1ms;/s);
+	assert.match(reduced, /\.monitor-card__load-gauge::after,\s*\.monitor-card__load-gauge-fill\s*\{[^}]*transition:\s*none;/s);
 });
 
 test('collapsed utility controls keep the chevron affordance and remove decorative markers', () => {
@@ -181,7 +182,7 @@ test('collapsed utility controls keep the chevron affordance and remove decorati
 	assertDeclaration(previewRule, 'white-space', 'nowrap');
 });
 
-test('collapsed system preview keeps a single load sentence with a micro-gauge', () => {
+test('collapsed system preview keeps one load-leading resource summary line with a micro-gauge', () => {
 	const previewRule = cssRule('.monitor-card__system-preview');
 	assert.match(previewRule, /display:\s*flex/);
 	assert.match(previewRule, /align-items:\s*center/);
@@ -194,6 +195,10 @@ test('collapsed system preview keeps a single load sentence with a micro-gauge',
 	assert.match(loadPreviewRule, /display:\s*inline-flex/);
 	assert.match(loadPreviewRule, /align-items:\s*center/);
 	assert.match(loadPreviewRule, /min-width:\s*0/);
+
+	const inlineMetricRule = cssRule('.monitor-card__system-inline-metric');
+	assert.match(inlineMetricRule, /display:\s*inline/);
+	assert.ok(remValues(declarationValue(inlineMetricRule, 'font-size'))[0] <= 0.66);
 
 	const gaugeRule = cssRule('.monitor-card__load-gauge');
 	assert.match(gaugeRule, /width:\s*2\.15rem/);

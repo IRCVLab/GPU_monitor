@@ -234,6 +234,13 @@
   const hasAvailableGpu = $derived(availableGpuCount > 0);
 
   const cpuPct = $derived(server.system?.cpu_percent ?? 0);
+  const ramUsed = $derived(server.system ? (server.system.ram_used / 1024).toFixed(1) : '–');
+  const ramTotal = $derived(server.system ? (server.system.ram_total / 1024).toFixed(1) : '–');
+  const ramPct = $derived(
+    server.system && server.system.ram_total > 0
+      ? (server.system.ram_used / server.system.ram_total) * 100
+      : 0
+  );
   const storageSummary = $derived(server.storage?.summary ?? null);
   const storageUsedText = $derived(storageSummary ? formatStorage(storageSummary.used) : '–');
   const storageTotalText = $derived(storageSummary ? formatStorage(storageSummary.total) : '–');
@@ -296,6 +303,7 @@
     return causes;
   });
   const loadGaugeFillWidth = $derived.by(() => {
+    if (isHistoricalSystemTelemetry) return '12%';
     if (typeof loadRatio !== 'number' || !Number.isFinite(loadRatio)) return '12%';
     return `${Math.min(Math.max(loadRatio, 0), 1) * 100}%`;
   });
@@ -305,7 +313,18 @@
   const loadDetailText = $derived(`${formatFixed(loadAvg1)} · ${formatFixed(loadAvg5)} · ${formatFixed(loadAvg15)}`);
   const cpuCountText = $derived(formatRoundedCount(cpuCount, false));
   const cpuSystemDetailText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : systemPreviewUnavailableText);
+  const ramSystemDetailText = $derived(server.system ? `${ramPct.toFixed(0)}% · ${ramUsed}/${ramTotal}GB` : systemPreviewUnavailableText);
+  const storageSystemDetailText = $derived(storageSummary ? `${storagePct.toFixed(0)}% · ${storageUsedText}/${storageTotalText}` : systemPreviewUnavailableText);
   const cpuRunningText = $derived(formatRoundedCount(cpuRunningTasks));
+  const cpuPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : cpuSystemDetailText);
+  const ramPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : ramSystemDetailText);
+  const storagePreviewText = $derived(
+    isHistoricalSystemTelemetry
+      ? systemPreviewUnavailableText
+      : storageSummary
+        ? `${storagePct.toFixed(0)}% ${storageUsedText}/${storageTotalText}`
+        : systemPreviewUnavailableText
+  );
   const cpuPressureSomeText = $derived(cpuPressureSome !== null ? `${cpuPressureSome.toFixed(1)}%` : systemPreviewUnavailableText);
   const ioSomeText = $derived(ioSome !== null ? `${ioSome.toFixed(1)}%` : systemPreviewUnavailableText);
   const ioFullText = $derived(ioFull !== null ? `${ioFull.toFixed(1)}%` : systemPreviewUnavailableText);
@@ -491,8 +510,11 @@
                   </span>
                   <span class="monitor-card__load-text">{loadPreviewText}</span>
                 </span>
+                <span class="monitor-card__system-inline-metric">CPU {cpuPreviewText}</span>
+                <span class="monitor-card__system-inline-metric">RAM {ramPreviewText}</span>
+                <span class="monitor-card__system-inline-metric">Storage {storagePreviewText}</span>
                 {#each loadPreviewCauses as cause}
-                  <span class="monitor-card__pressure-cause" data-level={cause.level}>{cause.label}</span>
+                  <span class="monitor-card__pressure-cause" data-level={cause.level}>· {cause.label}</span>
                 {/each}
               </span>
             {/if}
@@ -516,6 +538,8 @@
               <span><small>부하</small><strong>{loadDetailText}</strong></span>
               <span><small>논리 CPU</small><strong>{cpuCountText}</strong></span>
               <span><small>CPU</small><strong>{cpuSystemDetailText}</strong></span>
+              <span><small>RAM</small><strong>{ramSystemDetailText}</strong></span>
+              <span><small>Storage</small><strong>{storageSystemDetailText}</strong></span>
               <span><small>실행대기</small><strong>{cpuRunningText}</strong></span>
             </div>
 
