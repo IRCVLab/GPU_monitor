@@ -9,6 +9,7 @@ test('dashboard layout preference persists Grid or Masonry independently of Full
 	assert.match(source, /export type DashboardLayout = 'grid' \| 'masonry';/);
 	assert.match(source, /const DASHBOARD_LAYOUT_COOKIE = 'dashboardLayout';/);
 	assert.match(source, /export function readDashboardLayout\(\): DashboardLayout/);
+	assert.match(source, /export function readDashboardLayout\(\): DashboardLayout \{[\s\S]*readCookie\(DASHBOARD_LAYOUT_COOKIE\)/);
 	assert.match(source, /value === 'grid' \? 'grid' : 'masonry'/);
 	assert.match(source, /export const dashboardLayout: Writable<DashboardLayout> = writable\(readDashboardLayout\(\)\);/);
 	assert.match(source, /dashboardLayout\.subscribe\([\s\S]*writeCookie\(DASHBOARD_LAYOUT_COOKIE, value\)/);

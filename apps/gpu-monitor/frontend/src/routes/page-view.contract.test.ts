@@ -728,5 +728,13 @@ test('active network tab reads and writes only the activeTab cookie', () => {
 	assert.match(pageSource, /const TAB_COOKIE = 'activeTab';/);
 	assert.match(pageSource, /function readTab\(\): Tab \{[\s\S]*readCookie\(TAB_COOKIE\)[\s\S]*tabOrder\.includes\(value as Tab\)/);
 	assert.match(pageSource, /activeTab\.subscribe\(\(v\) => \{[\s\S]*writeCookie\(TAB_COOKIE, v\)[\s\S]*\}\)/);
-	assert.doesNotMatch(pageSource, /localStorage\.(?:getItem|setItem)[\s\S]*(?:activeTab|TAB_COOKIE)|(?:activeTab|TAB_COOKIE)[\s\S]*localStorage\.(?:getItem|setItem)/);
+
+	const readTabStart = pageSource.indexOf('function readTab(): Tab');
+	assert.notEqual(readTabStart, -1, 'missing activeTab read path');
+	const selectNetworkStart = pageSource.indexOf('function selectNetwork', readTabStart);
+	assert.notEqual(selectNetworkStart, -1, 'missing activeTab selection path boundary');
+	const activeTabPersistencePath = pageSource.slice(readTabStart, selectNetworkStart);
+
+	assert.doesNotMatch(activeTabPersistencePath, /localStorage\.(?:getItem|setItem)|sessionStorage\.(?:getItem|setItem)/);
+	assert.doesNotMatch(activeTabPersistencePath, /fetch\(|navigator\.sendBeacon|new\s+WebSocket\(|new\s+EventSource\(|BroadcastChannel|serviceWorker/i);
 });
