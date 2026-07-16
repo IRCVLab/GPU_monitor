@@ -240,15 +240,19 @@
 	}
 
 html[data-material='liquid'] {
-	--material-surface-alpha: 0.72;
-	--material-surface-mix: 72%;
-	--material-blur: 24px;
-	--material-saturation: 145%;
-	--material-border-alpha: 72%;
-	--material-highlight-alpha: 30%;
-	--material-radius: 24px;
-	--material-control-radius: 999px;
-	--material-shadow: 0 1rem 2.8rem color-mix(in srgb, var(--ops-primary) 16%, transparent), 0 0.35rem 1rem color-mix(in srgb, var(--shadow-color) 18%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 22%, transparent);
+	--material-surface-alpha: 0.94;
+	--material-surface-mix: 94%;
+	--material-blur: 6px;
+	--material-saturation: 105%;
+	--material-border-alpha: 88%;
+	--material-highlight-alpha: 12%;
+	--material-radius: 0.8rem;
+	--material-control-radius: 0.7rem;
+	--material-card-mix: 96%;
+	--material-control-mix: 94%;
+	--material-veil-mix: 96%;
+	--material-tooltip-mix: 96%;
+	--material-shadow: 0 0.45rem 1.1rem color-mix(in srgb, var(--shadow-color) 12%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 10%, transparent);
 }
 
 html[data-material='claude'] {
@@ -258,21 +262,29 @@ html[data-material='claude'] {
 	--material-saturation: 112%;
 	--material-border-alpha: 86%;
 	--material-highlight-alpha: 18%;
-	--material-radius: 1rem;
+	--material-radius: 1.15rem;
 	--material-control-radius: 999px;
-	--material-shadow: 0 0.7rem 1.8rem color-mix(in srgb, var(--shadow-color) 12%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 16%, transparent);
+	--material-card-mix: 94%;
+	--material-control-mix: 90%;
+	--material-veil-mix: 92%;
+	--material-tooltip-mix: 94%;
+	--material-shadow: 0 0.75rem 1.9rem color-mix(in srgb, var(--shadow-color) 13%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 16%, transparent);
 }
 
 html[data-material='astro'] {
-	--material-surface-alpha: 0.82;
-	--material-surface-mix: 82%;
-	--material-blur: 18px;
-	--material-saturation: 128%;
-	--material-border-alpha: 78%;
-	--material-highlight-alpha: 24%;
-	--material-radius: .5rem;
-	--material-control-radius: 999px;
-	--material-shadow: 0 0.85rem 2.2rem color-mix(in srgb, var(--ops-primary) 12%, transparent), 0 0.25rem 0.8rem color-mix(in srgb, var(--shadow-color) 16%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 20%, transparent);
+	--material-surface-alpha: 0.91;
+	--material-surface-mix: 91%;
+	--material-blur: 8px;
+	--material-saturation: 120%;
+	--material-border-alpha: 80%;
+	--material-highlight-alpha: 16%;
+	--material-radius: 0.55rem;
+	--material-control-radius: 0.45rem;
+	--material-card-mix: 95%;
+	--material-control-mix: 92%;
+	--material-veil-mix: 94%;
+	--material-tooltip-mix: 96%;
+	--material-shadow: 0 0.55rem 1.35rem color-mix(in srgb, var(--ops-primary) 10%, transparent), 0 0.18rem 0.55rem color-mix(in srgb, var(--shadow-color) 14%, transparent), inset 0 1px 0 color-mix(in srgb, #ffffff 14%, transparent);
 }
 
 html.light[data-material='claude'] {

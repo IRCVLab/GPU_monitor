@@ -6,6 +6,7 @@ import { Script, createContext } from 'node:vm';
 
 const storeSource = readFileSync(new URL('./theme.ts', import.meta.url), 'utf8');
 const appHtml = readFileSync(new URL('../../app.html', import.meta.url), 'utf8');
+const appCss = readFileSync(new URL('../../app.css', import.meta.url), 'utf8');
 const appScriptBody = appHtml.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1];
 
 function runInitialTheme(cookie) {
@@ -31,7 +32,7 @@ function runInitialTheme(cookie) {
 test('Task 5 theme store exposes semantic material presets only', () => {
 	assert.match(storeSource, /materialThemes = \['liquid', 'claude', 'astro'\] as const/);
 	assert.match(storeSource, /materialThemeOptions = \[/);
-	assert.match(storeSource, /Liquid Glass/);
+	assert.match(storeSource, /Clean/);
 	assert.match(storeSource, /Claude\+/);
 	assert.match(storeSource, /AstroVista/);
 	assert.doesNotMatch(storeSource, /colorThemes|colorThemeOptions|setColorTheme/);
@@ -73,4 +74,37 @@ test('Task 5 app.html inline cookie reader finds material cookies after earlier 
 	assert.equal(result.material, 'astro');
 	assert.equal(result.classes.has('light'), true);
 	assert.equal(result.classes.has('dark'), false);
+});
+
+
+test('Task 6 material presets keep liquid cookie but show Clean label and structural tokens', () => {
+	assert.match(storeSource, /\{ value: 'liquid', label: 'Clean', description: 'Crisp mostly opaque material' \}/);
+	assert.doesNotMatch(storeSource, /Liquid Glass/);
+	assert.match(storeSource, /\{ value: 'claude', label: 'Claude\+', description: 'Warm soft rounded material' \}/);
+	assert.match(storeSource, /\{ value: 'astro', label: 'AstroVista', description: 'Cool technical crisp material' \}/);
+
+	for (const material of ['liquid', 'claude', 'astro']) {
+		const rule = appCss.match(new RegExp(`html\\[data-material='${material}'\\] \\{(?<body>[\\s\\S]*?)\\n\\}`));
+		assert.ok(rule?.groups?.body, `missing ${material} material rule`);
+		for (const token of [
+			'--material-surface-mix',
+			'--material-blur',
+			'--material-saturation',
+			'--material-border-alpha',
+			'--material-highlight-alpha',
+			'--material-radius',
+			'--material-control-radius',
+			'--material-shadow',
+			'--material-card-mix',
+			'--material-control-mix',
+			'--material-veil-mix',
+			'--material-tooltip-mix'
+		]) {
+			assert.match(rule.groups.body, new RegExp(`${token}:`), `${material} missing ${token}`);
+		}
+	}
+
+	assert.match(appCss, /html\[data-material='liquid'\][\s\S]*--material-surface-mix: 94%;[\s\S]*--material-blur: 6px;[\s\S]*--material-shadow: 0 0\.45rem 1\.1rem/);
+	assert.match(appCss, /html\[data-material='claude'\][\s\S]*--material-surface-mix: 88%;[\s\S]*--material-blur: 14px;[\s\S]*--material-radius: 1\.15rem/);
+	assert.match(appCss, /html\[data-material='astro'\][\s\S]*--material-surface-mix: 91%;[\s\S]*--material-blur: 8px;[\s\S]*--material-radius: 0\.55rem/);
 });

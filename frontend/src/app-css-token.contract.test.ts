@@ -353,22 +353,27 @@ test('Task 5 material presets expose exact Claude+ and AstroVista light/dark sem
 
 test('Task 5 material presets centralize functional-layer material variables', () => {
 	const liquid = declarationsFor("html[data-material='liquid']");
-	assert.equal(liquid['--material-surface-alpha'], '0.72');
-	assert.equal(liquid['--material-surface-mix'], '72%');
-	assert.equal(liquid['--material-blur'], '24px');
-	assert.equal(liquid['--material-saturation'], '145%');
-	assert.equal(liquid['--material-radius'], '24px');
-	assert.ok(liquid['--material-shadow'].includes('color-mix(in srgb, var(--ops-primary)'), 'liquid shadow is tinted by semantic primary');
+	assert.equal(liquid['--material-surface-alpha'], '0.94');
+	assert.equal(liquid['--material-surface-mix'], '94%');
+	assert.equal(liquid['--material-blur'], '6px');
+	assert.equal(liquid['--material-saturation'], '105%');
+	assert.equal(liquid['--material-radius'], '0.8rem');
+	assert.equal(liquid['--material-card-mix'], '96%');
+	assert.equal(liquid['--material-control-mix'], '94%');
+	assert.equal(liquid['--material-veil-mix'], '96%');
+	assert.ok(liquid['--material-shadow'].includes('0 0.45rem 1.1rem'), 'liquid shadow is shallow and crisp');
 
 	const claude = declarationsFor("html[data-material='claude']");
 	assert.equal(claude['--material-blur'], '14px');
 	assert.equal(claude['--material-saturation'], '112%');
-	assert.equal(claude['--material-radius'], '1rem');
+	assert.equal(claude['--material-radius'], '1.15rem');
+	assert.equal(claude['--material-control-mix'], '90%');
 
 	const astro = declarationsFor("html[data-material='astro']");
-	assert.equal(astro['--material-blur'], '18px');
-	assert.equal(astro['--material-saturation'], '128%');
-	assert.equal(astro['--material-radius'], '.5rem');
+	assert.equal(astro['--material-blur'], '8px');
+	assert.equal(astro['--material-saturation'], '120%');
+	assert.equal(astro['--material-radius'], '0.55rem');
+	assert.equal(astro['--material-control-radius'], '0.45rem');
 });
 
 test('Task 5 removes obsolete accent color selectors from global CSS', () => {

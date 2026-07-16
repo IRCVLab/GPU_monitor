@@ -754,9 +754,9 @@
 	);
 
 	const tabOptions = derived([allServers, internalServers, externalServers], ([$all, $int, $ext]) => [
-		{ value: 'internal' as Tab, label: '내부망', count: $int.length },
-		{ value: 'external' as Tab, label: '외부망', count: $ext.length },
-		{ value: 'all' as Tab, label: '전체', count: $all.length }
+		{ value: 'internal' as Tab, label: '내부망', count: $int.length, shortcut: '1', tooltip: '1 내부망' },
+		{ value: 'external' as Tab, label: '외부망', count: $ext.length, shortcut: '2', tooltip: '2 외부망' },
+		{ value: 'all' as Tab, label: '전체', count: $all.length, shortcut: '3', tooltip: '3 전체망' }
 	]);
 
 	const currentServers = derived(
@@ -1150,7 +1150,7 @@
 					{/if}
 					<div class="ops-indicator-network" role="group" aria-label="네트워크 필터">
 						{#each $tabOptions as tab}
-							<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>
+							<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} aria-keyshortcuts={tab.shortcut} data-shortcut-tooltip={tab.tooltip} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>
 						{/each}
 					</div>
 				</div>
@@ -1175,7 +1175,7 @@
 
 				<nav class="ops-network ops-network-desktop" aria-label="네트워크 필터">
 					{#each $tabOptions as tab}
-						<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}>
+						<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} aria-keyshortcuts={tab.shortcut} data-shortcut-tooltip={tab.tooltip} onclick={() => selectNetwork(tab.value)}>
 							<span>{tab.label}</span><span>{tab.count}</span>
 						</button>
 					{/each}
@@ -1183,7 +1183,7 @@
 
 				<div class="ops-actions">
 					<div class="relative ops-direct-control" bind:this={viewMenuEl}>
-						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen}>{dashboardViewLabel($dashboardView)} <span aria-hidden="true">⌄</span></button>
+						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen} aria-keyshortcuts="V" data-shortcut-tooltip="V 보기">{dashboardViewLabel($dashboardView)} <span aria-hidden="true">⌄</span></button>
 						{#if viewMenuOpen}
 							<div class="ops-popover ops-view-menu">
 								<div class="ops-menu-row" role="group" aria-label="대시보드 보기">
@@ -1200,7 +1200,8 @@
 									</div>
 									<div class="ops-view-divider"></div>
 								{/if}
-								<span class="ops-menu-label">재질</span>
+								<span class="ops-menu-label">Theme / Material</span>
+								<span class="ops-menu-shortcut-legend">V 보기 · 1/2/3 망 · C 명암</span>
 								<div class="ops-material-options" role="group" aria-label="재질 프리셋">
 									{#each materialThemeOptions as option}
 										<button
@@ -1225,7 +1226,7 @@
 						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
 						{#if actionsMenuOpen}<div class="ops-overflow-menu"><button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button><a class="ops-menu-link" href="/logs">이벤트 로그</a><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
 					</div>
-					<button bind:this={themeModeButtonElement} class="ops-mode-action" onclick={() => void runThemeModeReveal(themeModeButtonElement)} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'} aria-busy={themeRevealLocked}>
+					<button bind:this={themeModeButtonElement} class="ops-mode-action" onclick={() => void runThemeModeReveal(themeModeButtonElement)} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'} aria-busy={themeRevealLocked} aria-keyshortcuts="C" data-shortcut-tooltip="C 명암">
 						{#if $themeMode === 'dark'}
 							<svg class="ops-mode-icon ops-mode-icon--sun" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
 						{:else}
@@ -1236,7 +1237,7 @@
 
 				<nav class="ops-network ops-network-mobile" aria-label="네트워크 필터">
 					{#each $tabOptions as tab}
-						<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>
+						<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} aria-keyshortcuts={tab.shortcut} data-shortcut-tooltip={tab.tooltip} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>
 					{/each}
 				</nav>
 			</div>

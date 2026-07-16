@@ -9,7 +9,7 @@
 	display: grid;
 	grid-template-rows: minmax(0, 1fr);
 	backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation));
-	background: color-mix(in srgb, var(--ops-bg) var(--material-surface-mix), transparent);
+	background: color-mix(in srgb, var(--ops-bg) var(--material-veil-mix), transparent);
 	transition: grid-template-rows 180ms ease, background-color 180ms ease;
 }
 
@@ -19,8 +19,8 @@
 	backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation));
 	background: linear-gradient(
 		to bottom,
-		color-mix(in srgb, var(--ops-bg) 98%, transparent) 0,
-		color-mix(in srgb, var(--ops-bg) 94%, transparent) calc(100% - 0.35rem),
+		color-mix(in srgb, var(--ops-bg) var(--material-veil-mix), transparent) 0,
+		color-mix(in srgb, var(--ops-bg) var(--material-surface-mix), transparent) calc(100% - 0.35rem),
 		transparent 100%
 	);
 }
@@ -29,7 +29,7 @@
 .ops-header {
 	min-height: 0;
 	overflow: hidden;
-	background: color-mix(in srgb, var(--ops-bg) var(--material-surface-mix), transparent);
+	background: color-mix(in srgb, var(--ops-bg) var(--material-veil-mix), transparent);
 	backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation));
 	opacity: 1;
 	transform: translateY(0);
@@ -183,7 +183,7 @@
 .monitor-dashboard-button {
 	appearance: none;
 	border: 1px solid color-mix(in srgb, var(--ops-border) 80%, transparent);
-	background: color-mix(in srgb, var(--ops-card) 88%, transparent);
+	background: color-mix(in srgb, var(--ops-card) var(--material-control-mix), transparent);
 	color: var(--ops-fg);
 	border-radius: 999px;
 	font: inherit;
@@ -240,6 +240,38 @@
 	outline-offset: 2px;
 }
 
+
+[data-shortcut-tooltip] {
+	position: relative;
+}
+
+[data-shortcut-tooltip]::after {
+	content: attr(data-shortcut-tooltip);
+	position: absolute;
+	z-index: 95;
+	left: 50%;
+	top: calc(100% + 0.42rem);
+	padding: 0.32rem 0.46rem;
+	border: 1px solid color-mix(in srgb, var(--ops-border) var(--material-border-alpha), transparent);
+	border-radius: 0.5rem;
+	background: color-mix(in srgb, var(--ops-popover) var(--material-tooltip-mix), transparent);
+	box-shadow: var(--material-shadow);
+	color: color-mix(in srgb, var(--ops-fg) 86%, transparent);
+	font-size: 0.68rem;
+	font-weight: 650;
+	line-height: 1;
+	white-space: nowrap;
+	pointer-events: none;
+	opacity: 0;
+	transform: translate3d(-50%, -0.18rem, 0);
+	transition: opacity 120ms ease, transform 120ms ease;
+}
+
+[data-shortcut-tooltip]:is(:hover, :focus-visible)::after {
+	opacity: 1;
+	transform: translate3d(-50%, 0, 0);
+}
+
 .ops-actions {
 	display: flex;
 	align-items: center;
@@ -262,7 +294,7 @@
 	min-width: 2.85rem;
 	justify-content: center;
 	border-radius: var(--material-control-radius);
-	background: color-mix(in srgb, var(--ops-popover) var(--material-surface-mix), transparent);
+	background: color-mix(in srgb, var(--ops-popover) var(--material-control-mix), transparent);
 	box-shadow: var(--material-shadow);
 	backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation));
 }
@@ -305,7 +337,7 @@
 	padding: 0.8rem;
 	border-radius: var(--material-radius);
 	border: 1px solid color-mix(in srgb, var(--ops-border) var(--material-border-alpha), transparent);
-	background: color-mix(in srgb, var(--ops-popover) var(--material-surface-mix), transparent);
+	background: color-mix(in srgb, var(--ops-popover) var(--material-veil-mix), transparent);
 	box-shadow: var(--material-shadow);
 	backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation));
 	pointer-events: auto;
@@ -411,12 +443,21 @@
 }
 
 .ops-menu-row > span,
-.ops-menu-label {
+.ops-menu-label,
+.ops-menu-shortcut-legend {
 	font-size: 0.76rem;
 	font-weight: 650;
 	letter-spacing: 0.02em;
 	text-transform: uppercase;
 	color: color-mix(in srgb, var(--ops-fg) 48%, transparent);
+}
+
+.ops-menu-shortcut-legend {
+	display: block;
+	margin-top: 0.35rem;
+	font-weight: 550;
+	text-transform: none;
+	color: color-mix(in srgb, var(--ops-fg) 42%, transparent);
 }
 
 
@@ -551,8 +592,8 @@
 .monitor-dashboard-state {
 	border: 1px solid color-mix(in srgb, var(--ops-border) 84%, transparent);
 	border-radius: 1.5rem;
-	background: color-mix(in srgb, var(--ops-card) 92%, transparent);
-	box-shadow: var(--ops-shadow);
+	background: color-mix(in srgb, var(--ops-card) var(--material-card-mix), transparent);
+	box-shadow: var(--material-shadow);
 
 	display: flex;
 	flex-direction: column;
@@ -616,7 +657,8 @@
 		display: none;
 	}
 
-	.ops-actions {
+	
+.ops-actions {
 		justify-content: flex-end;
 		flex-wrap: nowrap;
 	}
@@ -629,7 +671,8 @@
 		align-items: stretch;
 	}
 
-	.ops-actions {
+	
+.ops-actions {
 		justify-content: flex-start;
 	}
 
@@ -656,7 +699,8 @@
 		padding-inline: 1rem !important;
 	}
 
-	.ops-actions {
+	
+.ops-actions {
 		gap: 0.55rem;
 	}
 
