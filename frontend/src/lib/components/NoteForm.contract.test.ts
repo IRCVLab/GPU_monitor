@@ -64,3 +64,13 @@ test('NoteForm keeps the hold warning conditional to stale or abnormal telemetry
 	assert.match(source, /\{#if\s+selectedGpuIndices\.length\s*>\s*0\s*&&\s*\(telemetryStale\s*\|\|\s*statusWarning\)\}/);
 	assert.match(source, /참고 안내로만 사용하세요/);
 });
+
+
+test('NoteForm expiry summary uses concise active relative units without 남음', () => {
+	assert.ok(source.includes('return `${seconds}초`;'));
+	assert.ok(source.includes('return `${minutes}분`;'));
+	assert.ok(source.includes('return `${hours}시간`;'));
+	assert.ok(source.includes('return `${days}일`;'));
+	assert.doesNotMatch(source, /`\$\{(?:seconds|minutes|hours|days)\}(?:초|분|시간|일) 남음`/);
+	assert.match(source, /\$\{formatExpiryAbsolute\(expiresAtDate\)\} · \$\{formatRemaining\(diffMs\)\}/);
+});

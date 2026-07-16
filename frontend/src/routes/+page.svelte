@@ -1368,7 +1368,7 @@
 									class:ring-1={dragTarget === server.server_id && dragTarget !== dragging}
 									class:ring-blue-500={dragTarget === server.server_id && dragTarget !== dragging}
 								>
-									<ServerCard {server} onEdit={handleEditServer} showNetwork={$activeTab === 'all'} />
+									<ServerCard {server} {nowMs} onEdit={handleEditServer} showNetwork={$activeTab === 'all'} />
 								</div>
 							{/each}
 						</div>

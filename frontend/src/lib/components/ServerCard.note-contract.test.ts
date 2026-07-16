@@ -46,7 +46,7 @@ test('ServerCard header keeps one stable baseline with inline host and edit cont
 	assert.match(source, /const endpointText = \$derived/, 'visible endpoint should be derived once');
 	assert.match(source, /server\.port !== DEFAULT_SSH_PORT/, 'non-default SSH ports must remain visible');
 	assert.match(source, /\{endpointText\}/, 'the compact header should render the operational endpoint');
-	assert.match(source, /freshnessIssueText\(server\.last_seen, noteNowMs\)/, 'freshness should be derived as exception-only copy');
+	assert.match(source, /freshnessIssueText\(server\.last_seen, nowMs\)/, 'freshness should be derived from the shared page clock as exception-only copy');
 	assert.match(source, /FRESHNESS_WARNING_AFTER_MS/, 'healthy sub-threshold updates must not emit second-by-second copy');
 	assert.match(source, /stateVeilSecondary/, 'freshness details should move to the state veil secondary copy');
 	assert.doesNotMatch(source, /const refreshText = \$derived\(lastSeenAbsoluteText\)/);
@@ -152,11 +152,23 @@ test('collapsed memo preview uses explicit Korean relative expiry instead of cry
 	assert.doesNotMatch(source, /notePreviewCountdownText/, 'cryptic D\/H\/M\/S countdown helper should be removed');
 });
 
-test('note expiry helper speaks in explicit Korean relative phrases and expired state', () => {
+test('note expiry helper speaks in concise Korean relative units and expired state', () => {
 	assert.match(source, /return '만료됨';/, 'expired notes should say 만료됨');
-	assert.ok(source.includes('return `${minutes}분 남음`;'));
-	assert.ok(source.includes('return `${hours}시간 남음`;'));
-	assert.ok(source.includes('return `${days}일 남음`;'));
+	assert.ok(source.includes('return `${seconds}초`;'));
+	assert.ok(source.includes('return `${minutes}분`;'));
+	assert.ok(source.includes('return `${hours}시간`;'));
+	assert.ok(source.includes('return `${days}일`;'));
+	assert.doesNotMatch(source, /`\$\{(?:seconds|minutes|hours|days)\}(?:초|분|시간|일) 남음`/);
+});
+
+test('Task 4 ServerCard consumes the page shared nowMs clock and owns no interval', () => {
+	assert.match(source, /nowMs:\s*number/, 'ServerCard should accept a parent nowMs prop');
+	assert.match(source, /freshnessIssueText\(server\.last_seen, nowMs\)/, 'freshness should use the parent clock');
+	assert.match(source, /expiresAtMs > nowMs/, 'note visibility should use the parent clock');
+	assert.match(source, /return expiresAtMs - nowMs/, 'note remaining time should use the parent clock');
+	assert.doesNotMatch(source, /noteNowMs/, 'per-card noteNowMs state should be removed');
+	assert.doesNotMatch(source, /\bsetInterval\s*\(/, 'ServerCard must not fan out one timer per card');
+	assert.doesNotMatch(source, /\bclearInterval\s*\(/, 'ServerCard should not own an interval cleanup');
 });
 
 test('ServerCard note preview and history keep concise HOLD markers and GPU chips', () => {

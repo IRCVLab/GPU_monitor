@@ -9,10 +9,12 @@
 
   let {
     server,
+    nowMs,
     onEdit,
     showNetwork = true
   }: {
     server: ServerState;
+    nowMs: number;
     onEdit?: (server: ServerState) => void;
     showNetwork?: boolean;
   } = $props();
@@ -24,7 +26,6 @@
   let notesLoading = $state(false);
   let notesError = $state('');
   let notesServerId = $state<number | null>(null);
-  let noteNowMs = $state(Date.now());
 
   let deleteState = $state<Record<number, { loading: boolean; error: string }>>({});
   let deletePassword = $state<Record<number, string>>({});
@@ -163,13 +164,13 @@
 
   function noteVisible(note: Note): boolean {
     const expiresAtMs = parseNoteTime(note.expires_at);
-    return expiresAtMs === null || expiresAtMs > noteNowMs;
+    return expiresAtMs === null || expiresAtMs > nowMs;
   }
 
   function noteRemainingMs(note: Note): number | null {
     const expiresAtMs = parseNoteTime(note.expires_at);
     if (expiresAtMs === null) return null;
-    return expiresAtMs - noteNowMs;
+    return expiresAtMs - nowMs;
   }
 
   function noteRemainingText(note: Note): string {
@@ -178,16 +179,16 @@
     if (remainingMs <= 0) return '만료됨';
 
     const seconds = Math.ceil(remainingMs / 1000);
-    if (seconds < 60) return `${seconds}초 남음`;
+    if (seconds < 60) return `${seconds}초`;
 
     const minutes = Math.ceil(seconds / 60);
-    if (minutes < 60) return `${minutes}분 남음`;
+    if (minutes < 60) return `${minutes}분`;
 
     const hours = Math.ceil(minutes / 60);
-    if (hours < 48) return `${hours}시간 남음`;
+    if (hours < 48) return `${hours}시간`;
 
     const days = Math.ceil(hours / 24);
-    return `${days}일 남음`;
+    return `${days}일`;
   }
 
   function noteExpiryTextClass(note: Note): string {
@@ -214,7 +215,7 @@
   }
 
   const statusMeta = $derived(statusConfig[server.status] ?? statusConfig.unknown);
-  const refreshText = $derived(freshnessIssueText(server.last_seen, noteNowMs));
+  const refreshText = $derived(freshnessIssueText(server.last_seen, nowMs));
   const endpointText = $derived(
     server.port && server.port !== DEFAULT_SSH_PORT ? `${server.host}:${server.port}` : server.host
   );
@@ -428,13 +429,6 @@
     }
   });
 
-  $effect(() => {
-    const timer = setInterval(() => {
-      noteNowMs = Date.now();
-    }, 1000);
-
-    return () => clearInterval(timer);
-  });
 </script>
 
 <article class="monitor-card bg-surface-card border border-surface-border" data-status={server.status} data-operational-state={operationalState} data-network={showNetwork ? server.network : undefined} data-has-available={hasAvailableGpu ? 'true' : 'false'}>
