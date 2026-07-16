@@ -306,8 +306,11 @@
   const loadDetailText = $derived(`${formatFixed(loadAvg1)} · ${formatFixed(loadAvg5)} · ${formatFixed(loadAvg15)}`);
   const cpuCountText = $derived(formatRoundedCount(cpuCount, false));
   const cpuSystemDetailText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : systemPreviewUnavailableText);
-  const ramSystemDetailText = $derived(server.system ? `${ramPct.toFixed(0)}% · ${ramUsed}/${ramTotal}GB` : systemPreviewUnavailableText);
-  const storageSystemDetailText = $derived(storageSummary ? `${storagePct.toFixed(0)}% · ${storageUsedText}/${storageTotalText}` : systemPreviewUnavailableText);
+  const cpuSystemMetaText = $derived(server.system ? `논리 CPU ${cpuCountText}` : systemPreviewUnavailableText);
+  const ramSystemDetailText = $derived(server.system ? `${ramPct.toFixed(0)}%` : systemPreviewUnavailableText);
+  const ramCapacityText = $derived(server.system ? `${ramUsed}/${ramTotal} GB` : systemPreviewUnavailableText);
+  const storageSystemDetailText = $derived(storageSummary ? `${storagePct.toFixed(0)}%` : systemPreviewUnavailableText);
+  const storageCapacityText = $derived(storageSummary ? `${storageUsedText}/${storageTotalText}` : systemPreviewUnavailableText);
   const cpuRunningText = $derived(formatRoundedCount(cpuRunningTasks));
   const cpuPreviewText = $derived(isHistoricalSystemTelemetry ? systemPreviewUnavailableText : cpuSystemDetailText);
   const ramPreviewText = $derived(
@@ -509,39 +512,46 @@
               <span class="monitor-card__last-sample-label">마지막 수집값</span>
             {/if}
 
-            <div class="monitor-card__system-facts">
-              <span><small>부하</small><strong>{loadDetailText}</strong></span>
-              <span><small>논리 CPU</small><strong>{cpuCountText}</strong></span>
-              <span><small>CPU</small><strong>{cpuSystemDetailText}</strong></span>
-              <span><small>RAM</small><strong>{ramSystemDetailText}</strong></span>
-              <span><small>Storage</small><strong>{storageSystemDetailText}</strong></span>
-              <span><small>실행대기</small><strong>{cpuRunningText}</strong></span>
-            </div>
-
-            <div class="monitor-card__io-detail" title={ioPressureHelpText}>
-              <span class="monitor-card__io-detail-copy">PSI 원인</span>
-              <span class="monitor-card__io-detail-metrics monitor-card__io-detail-table">
-                <span>CPU PSI</span><strong>{cpuPressureSomeText}</strong>
-                <span>I/O some</span><strong>{ioSomeText}</strong>
-                <span>I/O full</span><strong>{ioFullText}</strong>
-                <span>blocked</span><strong>{ioBlockedText}</strong>
+            <div class="monitor-card__resource-overview" role="group" aria-label="호스트 리소스">
+              <span class="monitor-card__resource-item" data-resource="cpu" data-level={cpuPct >= 90 ? 'high' : cpuPct >= 75 ? 'medium' : 'normal'}>
+                <small>CPU</small>
+                <strong class="monitor-card__resource-value">{cpuSystemDetailText}</strong>
+                <span class="monitor-card__resource-meta" title={cpuSystemMetaText}>{cpuSystemMetaText}</span>
+              </span>
+              <span class="monitor-card__resource-item" data-resource="ram" data-level={ramPct >= 90 ? 'high' : ramPct >= 75 ? 'medium' : 'normal'}>
+                <small>RAM</small>
+                <strong class="monitor-card__resource-value">{ramSystemDetailText}</strong>
+                <span class="monitor-card__resource-meta" title={ramCapacityText}>{ramCapacityText}</span>
+              </span>
+              <span class="monitor-card__resource-item" data-resource="storage" data-level={storagePct >= 90 ? 'high' : storagePct >= 75 ? 'medium' : 'normal'}>
+                <small>Storage</small>
+                <strong class="monitor-card__resource-value">{storageSystemDetailText}</strong>
+                <span class="monitor-card__resource-meta" title={storageCapacityText}>{storageCapacityText}</span>
               </span>
             </div>
 
-            {#if server.gpus.length > 0}
-              <div class="monitor-card__subsection">
-                <div class="monitor-card__subheading">GPU 하드웨어</div>
-                <div class="monitor-card__hardware-grid">
-                  {#each server.gpus as gpu (gpu.index)}
-                    <div class="monitor-card__hardware-item">
-                      <span class="monitor-card__hardware-index">G{gpu.index}</span>
-                      <span class="monitor-card__hardware-value">{gpu.temperature}°C</span>
-                      <span class="monitor-card__hardware-value">{Math.round(gpu.power_draw)}W</span>
-                    </div>
-                  {/each}
-                </div>
+            <div class="monitor-card__pressure-table" title={ioPressureHelpText}>
+              <div class="monitor-card__pressure-row">
+                <span class="monitor-card__pressure-label">Load avg</span>
+                <span class="monitor-card__pressure-values monitor-card__pressure-values--load">
+                  <span class="monitor-card__pressure-datum monitor-card__pressure-datum--load">
+                    <small>1 · 5 · 15m</small><strong>{loadDetailText}</strong>
+                  </span>
+                  <span class="monitor-card__pressure-datum">
+                    <small>실행 중</small><strong>{cpuRunningText}</strong>
+                  </span>
+                </span>
               </div>
-            {/if}
+              <div class="monitor-card__pressure-row">
+                <span class="monitor-card__pressure-label">병목 단서</span>
+                <span class="monitor-card__pressure-values monitor-card__pressure-values--clues">
+                  <span class="monitor-card__pressure-datum"><small>CPU PSI</small><strong>{cpuPressureSomeText}</strong></span>
+                  <span class="monitor-card__pressure-datum"><small>I/O some</small><strong>{ioSomeText}</strong></span>
+                  <span class="monitor-card__pressure-datum"><small>I/O full</small><strong>{ioFullText}</strong></span>
+                  <span class="monitor-card__pressure-datum"><small>blocked</small><strong>{ioBlockedText}</strong></span>
+                </span>
+              </div>
+            </div>
 
             {#if server.storage}
               <div class="monitor-card__subsection">
@@ -577,6 +587,21 @@
                     {/each}
                   </div>
                 {/if}
+              </div>
+            {/if}
+
+            {#if server.gpus.length > 0}
+              <div class="monitor-card__subsection monitor-card__subsection--hardware">
+                <div class="monitor-card__subheading">GPU 하드웨어</div>
+                <div class="monitor-card__hardware-grid">
+                  {#each server.gpus as gpu (gpu.index)}
+                    <div class="monitor-card__hardware-item">
+                      <span class="monitor-card__hardware-index">G{gpu.index}</span>
+                      <span class="monitor-card__hardware-value">{gpu.temperature}°C</span>
+                      <span class="monitor-card__hardware-value">{Math.round(gpu.power_draw)}W</span>
+                    </div>
+                  {/each}
+                </div>
               </div>
             {/if}
           </div>

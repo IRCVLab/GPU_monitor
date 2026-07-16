@@ -115,10 +115,15 @@ test('ServerCard renders collapsed System as one resource-leading CPU RAM Storag
 	assert.doesNotMatch(source, /monitor-card__system-preview-item/, 'old 4-tile micro-grid should be removed');
 });
 
-test('expanded System keeps load pressure RAM and Storage capacity facts without throughput rows', () => {
-	assert.match(source, /monitor-card__io-detail/, 'expanded system should expose a dedicated dense pressure detail row');
-	assert.match(source, /monitor-card__io-detail-metrics/, 'expanded system should keep the pressure metrics inline');
-	assert.match(source, /ioPressureHelpText/, 'expanded system should provide a tooltip or title explaining stall pressure');
+test('expanded System follows pressure capacity bottleneck detail hierarchy', () => {
+	assert.match(source, /monitor-card__resource-overview/, 'expanded system should begin with a compact resource overview');
+	assert.match(source, /class="monitor-card__resource-overview" role="group" aria-label="호스트 리소스"/, 'resource facts should expose an accessible group name');
+	assert.match(source, /monitor-card__resource-item/, 'CPU RAM and Storage should share one aligned hierarchy');
+	assert.match(source, /monitor-card__resource-value/, 'resource utilization should be the primary value');
+	assert.match(source, /monitor-card__resource-meta/, 'capacity and CPU count should be secondary metadata');
+	assert.match(source, /monitor-card__pressure-table/, 'load and PSI facts should form one diagnostic table');
+	assert.match(source, /monitor-card__pressure-row/, 'diagnostic facts should use aligned rows instead of a flat token dump');
+	assert.match(source, /ioPressureHelpText/, 'expanded system should explain stall pressure');
 	assert.match(source, /loadDetailText/, 'expanded system should surface 1\/5\/15 load detail text');
 	assert.match(source, /cpuCountText/, 'expanded system should surface logical CPU count');
 	assert.match(source, /cpuRunningText/, 'expanded system should surface runnable task count');
@@ -128,14 +133,14 @@ test('expanded System keeps load pressure RAM and Storage capacity facts without
 	assert.match(source, /ioSomeText/, 'expanded system should surface I\/O PSI some avg10');
 	assert.match(source, /ioFullText/, 'expanded system should surface I\/O PSI full avg10');
 	assert.match(source, /ioBlockedText/, 'expanded system should surface blocked task count');
-	const facts = source.match(/<div class="monitor-card__system-facts">[\s\S]*?<\/div>/)?.[0] ?? '';
-	assert.match(facts, /<small>부하<\/small><strong>\{loadDetailText\}<\/strong>/);
-	assert.match(facts, /<small>논리 CPU<\/small><strong>\{cpuCountText\}<\/strong>/);
-	assert.match(facts, /<small>CPU<\/small><strong>\{cpuSystemDetailText\}<\/strong>/);
-	assert.match(facts, /<small>RAM<\/small><strong>\{ramSystemDetailText\}<\/strong>/);
-	assert.match(facts, /<small>Storage<\/small><strong>\{storageSystemDetailText\}<\/strong>/);
-	assert.match(facts, /<small>실행대기<\/small><strong>\{cpuRunningText\}<\/strong>/);
-	assert.doesNotMatch(source, /monitor-card__system-summary/, 'old summary tile grid should be removed from the dense system panel');
+	assert.match(source, />실행 중</, 'procs_running must not be mislabeled as queued work');
+	assert.match(source, />병목 단서</, 'PSI should be presented as an actionable bottleneck clue');
+
+	const storageIndex = source.indexOf('<span class="monitor-card__subheading">Storage</span>');
+	const hardwareIndex = source.indexOf('<div class="monitor-card__subheading">GPU 하드웨어</div>');
+	assert.ok(storageIndex >= 0 && hardwareIndex > storageIndex, 'Storage detail should precede secondary GPU hardware facts');
+	assert.doesNotMatch(source, /monitor-card__system-facts/, 'flat six-fact dump should be removed');
+	assert.doesNotMatch(source, /monitor-card__system-summary/, 'old summary tile grid should stay removed');
 	assert.doesNotMatch(source, /monitor-card__summary-item/, 'old summary tiles should not remain');
 	assert.doesNotMatch(source, /MB\/s|diskReadText|diskWriteText|<span>R<\/span>|<span>W<\/span>/, 'System panel must not render disk throughput');
 });
@@ -213,12 +218,12 @@ test('ServerCard removes throughput fallback and any MB/s copy from the System U
 	assert.doesNotMatch(source, /MB\/s/, 'System UI copy must not render MB\/s anywhere');
 });
 
-test('expanded System pressure detail shows CPU and I/O PSI facts without R/W throughput cells', () => {
-	assert.match(source, /monitor-card__io-detail-table/, 'expanded pressure details should keep stable tabular formatting');
-	assert.match(source, /<span>CPU PSI<\/span><strong>\{cpuPressureSomeText\}<\/strong>/, 'expanded details should show CPU PSI some');
-	assert.match(source, /<span>I\/O some<\/span><strong>\{ioSomeText\}<\/strong>/, 'expanded details should show I\/O PSI some');
-	assert.match(source, /<span>I\/O full<\/span><strong>\{ioFullText\}<\/strong>/, 'expanded details should show I\/O PSI full');
-	assert.match(source, /<span>blocked<\/span><strong>\{ioBlockedText\}<\/strong>/, 'expanded details should show blocked tasks');
+test('expanded System pressure table shows CPU and I/O PSI facts without R/W throughput cells', () => {
+	assert.match(source, /monitor-card__pressure-table/, 'expanded pressure details should keep stable tabular formatting');
+	assert.match(source, /<small>CPU PSI<\/small><strong>\{cpuPressureSomeText\}<\/strong>/, 'expanded details should show CPU PSI some');
+	assert.match(source, /<small>I\/O some<\/small><strong>\{ioSomeText\}<\/strong>/, 'expanded details should show I\/O PSI some');
+	assert.match(source, /<small>I\/O full<\/small><strong>\{ioFullText\}<\/strong>/, 'expanded details should show I\/O PSI full');
+	assert.match(source, /<small>blocked<\/small><strong>\{ioBlockedText\}<\/strong>/, 'expanded details should show blocked tasks');
 	assert.doesNotMatch(source, /<span>R<\/span>|<span>W<\/span>/, 'expanded details must not show read\/write throughput cells');
 });
 
@@ -273,17 +278,16 @@ test('historical and offline System preview keeps a neutral last-sample load cue
 	assert.match(source, /부하 – \/ –/, 'neutral fallback copy should remain available when load is unusable');
 });
 
-test('expanded historical System keeps raw last-sample load and pressure fact values', () => {
-	const facts = source.match(/<div class="monitor-card__system-facts">[\s\S]*?<\/div>/)?.[0] ?? '';
-	const ioDetail = source.match(/<div class="monitor-card__io-detail"[\s\S]*?<\/div>/)?.[0] ?? '';
+test('expanded historical System keeps raw last-sample resource and pressure values', () => {
+	const overview = source.match(/<div class="monitor-card__resource-overview"[\s\S]*?<\/div>/)?.[0] ?? '';
+	const pressure = source.match(/<div class="monitor-card__pressure-table"[\s\S]*?<\/div>/)?.[0] ?? '';
 	assert.match(source, /const loadDetailText = \$derived/);
 	assert.match(source, /const cpuSystemDetailText = \$derived\(server\.system \? `\$\{cpuPct\.toFixed\(0\)\}%` : systemPreviewUnavailableText\)/);
 	assert.match(source, /const cpuRunningText = \$derived/);
 	assert.match(source, /const cpuPressureSomeText = \$derived/);
-	assert.match(facts, /<small>부하<\/small><strong>\{loadDetailText\}<\/strong>/);
-	assert.match(facts, /<small>CPU<\/small><strong>\{cpuSystemDetailText\}<\/strong>/);
-	assert.match(facts, /<small>RAM<\/small><strong>\{ramSystemDetailText\}<\/strong>/);
-	assert.match(facts, /<small>Storage<\/small><strong>\{storageSystemDetailText\}<\/strong>/);
-	assert.match(ioDetail, /<span>CPU PSI<\/span><strong>\{cpuPressureSomeText\}<\/strong>/);
-	assert.doesNotMatch(ioDetail, /\{loadPreviewText\}/, 'expanded facts must not reuse the collapsed preview sentence');
+	assert.match(overview, /<small>CPU<\/small>[\s\S]*<strong class="monitor-card__resource-value">\{cpuSystemDetailText\}<\/strong>/);
+	assert.match(overview, /<small>RAM<\/small>[\s\S]*<strong class="monitor-card__resource-value">\{ramSystemDetailText\}<\/strong>/);
+	assert.match(overview, /<small>Storage<\/small>[\s\S]*<strong class="monitor-card__resource-value">\{storageSystemDetailText\}<\/strong>/);
+	assert.match(source, /<small>CPU PSI<\/small><strong>\{cpuPressureSomeText\}<\/strong>/);
+	assert.doesNotMatch(pressure, /\{loadPreviewText\}/, 'expanded facts must not reuse the collapsed preview sentence');
 });
