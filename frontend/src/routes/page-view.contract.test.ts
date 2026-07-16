@@ -192,24 +192,66 @@ test('task 2 does not change system meter fill semantics to exact chart tokens',
 	assert.doesNotMatch(systemMemoryRule, /var\(--chart-1\)/);
 });
 
-test('task 1 masonry layout clears stale placement before resize column detection and measurement', () => {
+test('task 3 masonry action keeps sticky column and height-cache state', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const masonryBody = pageSource.slice(masonryStart, pageSource.indexOf('\n\tfunction readTab', masonryStart));
+
+	assert.match(masonryBody, /let assignedColumns = new Map<HTMLElement, number>\(\)/);
+	assert.match(masonryBody, /let measuredHeights = new Map<HTMLElement, number>\(\)/);
+	assert.match(masonryBody, /let assignedItems: HTMLElement\[\] = \[\]/);
+	assert.match(masonryBody, /let assignedColumnCount = 0/);
+});
+
+test('task 3 height-only masonry relayout reuses assigned columns and cached heights', () => {
 	const masonryStart = pageSource.indexOf('function masonry');
 	assert.notEqual(masonryStart, -1, 'Missing masonry action');
 	const layoutBody = functionBody(pageSource, 'layout', masonryStart);
-	const resetColumn = layoutBody.indexOf("style.removeProperty('grid-column-start')");
-	const resetRowStart = layoutBody.indexOf("style.removeProperty('grid-row-start')");
-	const resetRowEnd = layoutBody.indexOf("style.gridRowEnd = 'span 1'");
-	const columnRead = layoutBody.indexOf('gridTemplateColumns');
-	const heightRead = layoutBody.indexOf('getBoundingClientRect().height');
 
-	assert.ok(resetColumn !== -1, 'layout must clear stale grid-column-start');
-	assert.ok(resetRowStart !== -1, 'layout must clear stale grid-row-start');
-	assert.ok(resetRowEnd !== -1, 'layout must reset grid-row-end before measuring');
-	assert.ok(columnRead !== -1, 'layout must read actual gridTemplateColumns');
-	assert.ok(heightRead !== -1, 'layout must measure item height');
-	assert.ok(resetColumn < columnRead, 'grid-column-start must be cleared before column detection');
-	assert.ok(resetRowStart < columnRead, 'grid-row-start must be cleared before column detection');
-	assert.ok(resetRowEnd < heightRead, 'grid-row-end must be reset before measuring height');
+	assert.match(layoutBody, /preferredColumns:\s*items\.map\(\(child\) => assignedColumns\.get\(child\) \?\? null\)/);
+	assert.doesNotMatch(layoutBody, /style\.removeProperty\('grid-column-start'\)[\s\S]*getBoundingClientRect\(\)\.height/);
+	assert.match(layoutBody, /measuredHeights\.get\(child\) \?\? child\.getBoundingClientRect\(\)\.height/);
+});
+
+test('task 3 ResizeObserver updates cached heights without structural invalidation', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const masonryBody = pageSource.slice(masonryStart, pageSource.indexOf('\n\tfunction readTab', masonryStart));
+
+	assert.match(masonryBody, /new ResizeObserver\(\(entries\) => \{[\s\S]*measuredHeights\.set\([\s\S]*schedule\(\)/);
+	assert.doesNotMatch(masonryBody, /new ResizeObserver\(\(entries\)[\s\S]*assignedColumns\.clear\(\)/);
+});
+
+test('task 3 structural masonry changes clear assignments so layout can rebalance', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const masonryBody = pageSource.slice(masonryStart, pageSource.indexOf('\n\tfunction readTab', masonryStart));
+
+	assert.match(masonryBody, /assignedItems/);
+	assert.match(masonryBody, /assignedColumnCount/);
+	assert.match(masonryBody, /assignedColumns\.clear\(\)/);
+	assert.match(masonryBody, /currentColumnCount !== assignedColumnCount|assignedColumnCount !== currentColumnCount/);
+	assert.match(masonryBody, /items\.length !== assignedItems\.length|assignedItems\.length !== items\.length/);
+	assert.match(masonryBody, /items\.some\(\(child, index\) => child !== assignedItems\[index\]\)/);
+});
+
+test('task 3 masonry keeps DOM order and server order stable', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const masonryBody = pageSource.slice(masonryStart, pageSource.indexOf('\n\tfunction readTab', masonryStart));
+
+	assert.match(pageSource, /\{#each \$displayServers as server \(server\.server_id\)\}/);
+	assert.match(pageSource, /role="list"[\s\S]*role="listitem"/);
+	assert.doesNotMatch(masonryBody, /appendChild|insertBefore|replaceChildren|sort\(/);
+});
+
+test('task 3 masonry FLIP uses active visual rects and cancels after next layout is known', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const masonryBody = pageSource.slice(masonryStart, pageSource.indexOf('\n\tfunction readTab', masonryStart));
+
+	assert.match(masonryBody, /layoutAnimations\.has\(child\) \? visualRects\.get\(child\) \?\? previousFinal : previousFinal/);
+	assert.ok(masonryBody.indexOf('const nextRects') < masonryBody.indexOf('animation.cancel()'));
 });
 
 test('persistent header shows semantic health and cadence without visible second-by-second copy', () => {
