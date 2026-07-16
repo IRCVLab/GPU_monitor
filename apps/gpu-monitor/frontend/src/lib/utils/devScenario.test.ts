@@ -30,8 +30,25 @@ function createState(overrides = {}) {
 				temperature: 41,
 				power_draw: 85,
 				users: []
+			},
+			{
+				index: 1,
+				name: 'RTX 6000',
+				utilization: 4,
+				memory_used: 1024,
+				memory_total: 48_000,
+				temperature: 43,
+				power_draw: 90,
+				users: []
 			}
 		],
+		gpu_inventory: {
+			state: 'healthy',
+			visible_count: 2,
+			expected_count: 2,
+			pci_count: 2,
+			missing_indices: []
+		},
 		system: {
 			cpu_percent: 31,
 			ram_used: 32_768,
@@ -51,13 +68,14 @@ function createOrderedStates() {
 	return [
 		createState({ server_id: 42, server_name: 'delta', display_order: 4 }),
 		createState({ server_id: 7, server_name: 'beta', display_order: 1 }),
-		createState({ server_id: 19, server_name: 'gamma', display_order: 8 })
+		createState({ server_id: 19, server_name: 'gamma', display_order: 8 }),
+		createState({ server_id: 31, server_name: 'epsilon', display_order: 9 })
 	];
 }
 
 test('dev scenario util exports the supported simulator API', async () => {
 	const mod = await loadDevScenarioModule();
-	assert.deepEqual(mod.DEV_SCENARIOS, ['normal', 'stale', 'io', 'offline', 'mixed']);
+	assert.deepEqual(mod.DEV_SCENARIOS, ['normal', 'stale', 'io', 'offline', 'gpu_missing', 'mixed']);
 	assert.equal(typeof mod.applyDevScenario, 'function');
 });
 
@@ -79,13 +97,13 @@ test('stale scenario only rewrites the first server immutably and preserves orde
 	const original = structuredClone(input);
 	const result = applyDevScenario(input, 'stale', nowMs);
 
-	assert.deepEqual(result.map((state) => state.server_id), [42, 7, 19]);
+	assert.deepEqual(result.map((state) => state.server_id), [42, 7, 19, 31]);
 	assert.notEqual(result, input);
 	assert.notEqual(result[0], input[0]);
 	assert.equal(result[1], input[1]);
 	assert.equal(result[0].status, 'online');
 	assert.equal(result[0].last_seen, '2026-07-16T00:08:30.000Z');
-	assert.equal(result[0].status_reason?.code, 'dev-sim-stale');
+	assert.equal(result[0].status_reason?.code, 'stale_snapshot');
 	assert.match(result[0].status_reason?.message ?? '', /stale/i);
 	assert.deepEqual(input, original);
 });
@@ -98,7 +116,7 @@ test('io scenario injects PSI pressure values and a bottleneck reason without mu
 	const result = applyDevScenario(input, 'io', nowMs);
 
 	assert.equal(result[0].status, 'online');
-	assert.equal(result[0].status_reason?.code, 'dev-sim-io');
+	assert.equal(result[0].status_reason?.code, 'io_pressure');
 	assert.match(result[0].status_reason?.message ?? '', /bottleneck/i);
 	assert.equal(result[0].system?.io_pressure_some, 38.4);
 	assert.equal(result[0].system?.io_pressure_full, 12.8);
@@ -116,23 +134,54 @@ test('offline scenario forces a timeout snapshot about five minutes old', async 
 
 	assert.equal(result[0].status, 'offline');
 	assert.equal(result[0].last_seen, '2026-07-16T00:05:00.000Z');
-	assert.equal(result[0].status_reason?.code, 'dev-sim-offline');
+	assert.equal(result[0].status_reason?.code, 'timeout');
 	assert.match(result[0].status_reason?.message ?? '', /SSH timeout/i);
 	assert.deepEqual(input, original);
 });
 
-test('mixed scenario deterministically applies stale, io, and offline to the first three servers', async () => {
+
+test('gpu_missing scenario degrades the first server with one deterministic missing visible GPU', async () => {
+	const { applyDevScenario } = await loadDevScenarioModule();
+	const nowMs = Date.parse('2026-07-16T00:10:00.000Z');
+	const input = createOrderedStates();
+	const original = structuredClone(input);
+	const result = applyDevScenario(input, 'gpu_missing', nowMs);
+
+	assert.deepEqual(result.map((state) => state.server_id), [42, 7, 19, 31]);
+	assert.notEqual(result, input);
+	assert.notEqual(result[0], input[0]);
+	assert.equal(result[1], input[1]);
+	assert.equal(result[0].status, 'degraded');
+	assert.equal(result[0].status_reason?.code, 'gpu_device_missing');
+	assert.match(result[0].status_reason?.message ?? '', /GPU/i);
+	assert.deepEqual(result[0].gpus.map((gpu) => gpu.index), [0]);
+	assert.deepEqual(result[0].gpu_inventory, {
+		state: 'missing',
+		visible_count: 1,
+		expected_count: 2,
+		pci_count: 2,
+		missing_indices: [1]
+	});
+	assert.deepEqual(input, original);
+});
+
+test('mixed scenario deterministically applies stale, io, offline, and gpu missing to four distinct servers', async () => {
 	const { applyDevScenario } = await loadDevScenarioModule();
 	const nowMs = Date.parse('2026-07-16T00:10:00.000Z');
 	const input = createOrderedStates();
 	const result = applyDevScenario(input, 'mixed', nowMs);
 
-	assert.deepEqual(result.map((state) => state.server_id), [42, 7, 19]);
+	const original = structuredClone(input);
+	assert.deepEqual(result.map((state) => state.server_id), [42, 7, 19, 31]);
 	assert.equal(result[0].status, 'online');
-	assert.equal(result[0].status_reason?.code, 'dev-sim-stale');
+	assert.equal(result[0].status_reason?.code, 'stale_snapshot');
 	assert.equal(result[1].status, 'online');
-	assert.equal(result[1].status_reason?.code, 'dev-sim-io');
+	assert.equal(result[1].status_reason?.code, 'io_pressure');
 	assert.equal(result[1].system?.io_pressure_some, 38.4);
 	assert.equal(result[2].status, 'offline');
-	assert.equal(result[2].status_reason?.code, 'dev-sim-offline');
+	assert.equal(result[2].status_reason?.code, 'timeout');
+	assert.equal(result[3].status, 'degraded');
+	assert.equal(result[3].status_reason?.code, 'gpu_device_missing');
+	assert.deepEqual(result[3].gpu_inventory?.missing_indices, [1]);
+	assert.deepEqual(input, original);
 });

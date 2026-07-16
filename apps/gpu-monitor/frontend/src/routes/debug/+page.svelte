@@ -27,9 +27,13 @@ const scenarioMeta: Record<DevScenario, { title: string; summary: string }> = {
 		title: 'offline',
 		summary: '첫 서버를 SSH timeout 오프라인 스냅샷으로 전환합니다.'
 	},
+	gpu_missing: {
+		title: 'gpu_missing',
+		summary: '첫 서버를 GPU 누락(degraded) 스냅샷으로 전환합니다.'
+	},
 	mixed: {
 		title: 'mixed',
-		summary: '앞의 3개 서버에 stale / io / offline 을 순서대로 적용합니다.'
+		summary: '앞의 4개 서버에 stale / io / offline / GPU 누락을 순서대로 적용합니다.'
 	}
 };
 const statusText: Record<ServerState['status'], string> = {
@@ -158,7 +162,7 @@ onMount(() => {
 					</div>
 				</div>
 
-				<div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+				<div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
 					{#each DEV_SCENARIOS as scenario}
 						<button
 							type="button"

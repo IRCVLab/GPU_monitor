@@ -1,6 +1,6 @@
-import type { ServerState, StatusReason, SystemInfo } from '$lib/types';
+import type { GpuInfo, GpuInventory, ServerState, StatusReason, SystemInfo } from '$lib/types';
 
-export const DEV_SCENARIOS = ['normal', 'stale', 'io', 'offline', 'mixed'] as const;
+export const DEV_SCENARIOS = ['normal', 'stale', 'io', 'offline', 'gpu_missing', 'mixed'] as const;
 export type DevScenario = (typeof DEV_SCENARIOS)[number];
 
 const STALE_AGE_MS = 90_000;
@@ -43,7 +43,7 @@ function applyStaleState(state: ServerState, nowMs: number): ServerState {
 		status: 'online',
 		last_seen: isoAt(nowMs, STALE_AGE_MS),
 		status_reason: createReason(
-			'dev-sim-stale',
+			'stale_snapshot',
 			'SIMULATION · telemetry is stale by about 90 seconds',
 			nowMs
 		)
@@ -63,7 +63,7 @@ function applyIoState(state: ServerState, nowMs: number): ServerState {
 			io_pressure_supported: true
 		},
 		status_reason: createReason(
-			'dev-sim-io',
+			'io_pressure',
 			'SIMULATION · I/O bottleneck pressure is elevated',
 			nowMs
 		)
@@ -76,8 +76,54 @@ function applyOfflineState(state: ServerState, nowMs: number): ServerState {
 		status: 'offline',
 		last_seen: isoAt(nowMs, OFFLINE_AGE_MS),
 		status_reason: createReason(
-			'dev-sim-offline',
+			'timeout',
 			'SIMULATION · SSH timeout while collecting telemetry',
+			nowMs
+		)
+	};
+}
+
+function cloneGpu(gpu: GpuInfo): GpuInfo {
+	return {
+		index: gpu.index,
+		name: gpu.name,
+		utilization: gpu.utilization,
+		memory_used: gpu.memory_used,
+		memory_total: gpu.memory_total,
+		temperature: gpu.temperature,
+		power_draw: gpu.power_draw,
+		users: [...gpu.users]
+	};
+}
+
+function buildMissingInventory(state: ServerState, visibleGpus: GpuInfo[], missingIndex: number | null): GpuInventory {
+	const current = state.gpu_inventory;
+	const expectedCount = Math.max(current?.expected_count ?? state.gpus.length, visibleGpus.length + 1);
+	const missingIndices = missingIndex === null ? current?.missing_indices ?? [] : [missingIndex];
+
+	return {
+		state: 'missing',
+		visible_count: visibleGpus.length,
+		expected_count: expectedCount,
+		pci_count: Math.max(current?.pci_count ?? expectedCount, expectedCount),
+		missing_indices: missingIndices
+	};
+}
+
+function applyGpuMissingState(state: ServerState, nowMs: number): ServerState {
+	const visibleGpus = state.gpus.map(cloneGpu);
+	const removed = visibleGpus.length > 0 ? visibleGpus.pop() ?? null : null;
+	const missingIndex = removed?.index ?? state.gpu_inventory?.missing_indices?.[0] ?? null;
+	const degradedGpus = removed ? visibleGpus : state.gpus.map(cloneGpu);
+
+	return {
+		...state,
+		status: 'degraded',
+		gpus: degradedGpus,
+		gpu_inventory: buildMissingInventory(state, degradedGpus, missingIndex),
+		status_reason: createReason(
+			'gpu_device_missing',
+			'SIMULATION · GPU inventory mismatch detected (missing GPU device)',
 			nowMs
 		)
 	};
@@ -104,9 +150,11 @@ export function applyDevScenario(
 	if (scenario === 'stale') return replaceAt(states, 0, applyStaleState, nowMs);
 	if (scenario === 'io') return replaceAt(states, 0, applyIoState, nowMs);
 	if (scenario === 'offline') return replaceAt(states, 0, applyOfflineState, nowMs);
+	if (scenario === 'gpu_missing') return replaceAt(states, 0, applyGpuMissingState, nowMs);
 
 	let next = replaceAt(states, 0, applyStaleState, nowMs);
 	next = replaceAt(next, 1, applyIoState, nowMs);
 	next = replaceAt(next, 2, applyOfflineState, nowMs);
+	next = replaceAt(next, 3, applyGpuMissingState, nowMs);
 	return next;
 }
