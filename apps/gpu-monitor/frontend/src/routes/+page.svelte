@@ -79,6 +79,10 @@
 		let enabled = initialEnabled;
 		let itemObserver: ResizeObserver | null = null;
 		let previousRects = new Map<HTMLElement, FlipRect>();
+		let assignedColumns = new Map<HTMLElement, number>();
+		let measuredHeights = new Map<HTMLElement, number>();
+		let assignedItems: HTMLElement[] = [];
+		let assignedColumnCount = 0;
 		const layoutAnimations = new Map<HTMLElement, Animation>();
 		const containerObserver = new ResizeObserver(() => schedule());
 		const mutationObserver = new MutationObserver(() => observeItems());
@@ -98,6 +102,23 @@
 			return Number.isFinite(value) && value >= 0 ? value : 16;
 		}
 
+		function clearPlacement(child: HTMLElement): void {
+			child.style.removeProperty('grid-column-start');
+			child.style.removeProperty('grid-row-start');
+			child.style.removeProperty('grid-row-end');
+		}
+
+		function clearAssignments(): void {
+			assignedColumns.clear();
+			assignedItems = [];
+			assignedColumnCount = 0;
+		}
+
+		function clearMasonryState(): void {
+			clearAssignments();
+			measuredHeights.clear();
+		}
+
 		function layout(): void {
 			frame = 0;
 			const items = Array.from(node.children).filter(
@@ -110,32 +131,42 @@
 				})
 			);
 
-			for (const child of items) {
-				child.style.removeProperty('grid-column-start');
-				child.style.removeProperty('grid-row-start');
-				child.style.removeProperty('grid-row-end');
-			}
-
 			if (enabled) {
-				for (const child of items) child.style.gridRowEnd = 'span 1';
-
 				const styles = getComputedStyle(node);
 				const template = styles.gridTemplateColumns.trim();
 				const currentColumnCount = template === '' || template === 'none' ? 1 : template.split(/\s+/).length;
+				const structureChanged =
+					currentColumnCount !== assignedColumnCount ||
+					items.length !== assignedItems.length ||
+					items.some((child, index) => child !== assignedItems[index]);
+
+				if (structureChanged) clearAssignments();
+
 				const currentRowSize = rowSize(styles);
 				const currentGap = rowGap(styles);
 				const spans = items.map((child) => {
-					const height = child.getBoundingClientRect().height;
+					const height = measuredHeights.get(child) ?? child.getBoundingClientRect().height;
+					measuredHeights.set(child, height);
 					return Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
 				});
-				const placements = placeOrderedMasonryItems({ columnCount: currentColumnCount, spans });
+				const placements = placeOrderedMasonryItems({
+					columnCount: currentColumnCount,
+					spans,
+					preferredColumns: items.map((child) => assignedColumns.get(child) ?? null)
+				});
 
 				items.forEach((child, index) => {
 					const placement = placements[index];
+					assignedColumns.set(child, placement.gridColumnStart);
 					child.style.gridColumnStart = String(placement.gridColumnStart);
 					child.style.gridRowStart = String(placement.gridRowStart);
 					child.style.gridRowEnd = placement.gridRowEnd;
 				});
+				assignedItems = items;
+				assignedColumnCount = currentColumnCount;
+			} else {
+				clearMasonryState();
+				for (const child of items) clearPlacement(child);
 			}
 
 			const nextRects = new Map(items.map((child) => [child, documentRect(child)]));
@@ -169,11 +200,21 @@
 
 		function observeItems(): void {
 			itemObserver?.disconnect();
-			itemObserver = new ResizeObserver(() => schedule());
-			for (const child of Array.from(node.children)) {
-				if (!(child instanceof HTMLElement)) continue;
-				itemObserver.observe(child);
+			clearAssignments();
+			const currentItems = Array.from(node.children).filter(
+				(child): child is HTMLElement => child instanceof HTMLElement
+			);
+			const currentSet = new Set(currentItems);
+			for (const child of Array.from(measuredHeights.keys())) {
+				if (!currentSet.has(child)) measuredHeights.delete(child);
 			}
+			itemObserver = new ResizeObserver((entries) => {
+				for (const entry of entries) {
+					if (entry.target instanceof HTMLElement) measuredHeights.set(entry.target, entry.contentRect.height);
+				}
+				schedule();
+			});
+			for (const child of currentItems) itemObserver.observe(child);
 			schedule();
 		}
 
@@ -183,6 +224,9 @@
 
 		return {
 			update(nextEnabled: boolean) {
+				if (enabled !== nextEnabled) {
+					clearMasonryState();
+				}
 				enabled = nextEnabled;
 				schedule();
 			},
@@ -191,15 +235,12 @@
 				for (const animation of layoutAnimations.values()) animation.cancel();
 				layoutAnimations.clear();
 				previousRects.clear();
+				clearMasonryState();
 				itemObserver?.disconnect();
 				containerObserver.disconnect();
 				mutationObserver.disconnect();
 				for (const child of Array.from(node.children)) {
-					if (child instanceof HTMLElement) {
-						child.style.removeProperty('grid-column-start');
-						child.style.removeProperty('grid-row-start');
-						child.style.removeProperty('grid-row-end');
-					}
+					if (child instanceof HTMLElement) clearPlacement(child);
 				}
 			}
 		};

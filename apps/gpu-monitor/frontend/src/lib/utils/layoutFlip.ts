@@ -48,7 +48,7 @@ export function animateFlip(
 			{ transform: 'translate3d(0, 0, 0)' }
 		],
 		{
-			duration: 360,
+			duration: 400,
 			easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
 			fill: 'both'
 		}
