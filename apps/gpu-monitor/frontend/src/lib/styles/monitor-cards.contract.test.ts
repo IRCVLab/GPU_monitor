@@ -309,8 +309,23 @@ test('GPU advisory hold cue stays dense while the exact index gets a visible hol
 	assert.match(cueRule, /display:\s*inline-flex/);
 	assert.match(cueRule, /font-size:\s*0\.6[0-9]rem/);
 	assert.match(cueRule, /line-height:\s*1/);
-	assert.match(cueRule, /pointer-events:\s*none/);
-	assert.match(cueRule, /color:\s*color-mix\(in srgb, #f59e0b/);
+	assert.doesNotMatch(cueRule, /pointer-events:\s*none/, 'interactive cue must receive hover and focus');
+	assert.doesNotMatch(cueRule, /#f59e0b|#ef4444/, 'base cue should remain neutral');
+
+	const normalRule = cssRule('.monitor-gpu-row__hold-cue.note-priority--normal');
+	assert.doesNotMatch(normalRule, /#f59e0b|#ef4444/, 'normal priority must remain neutral');
+	assert.match(normalRule, /border-color:\s*color-mix\(in srgb, var\(--ops-border\)/);
+	assert.match(normalRule, /background:\s*color-mix\(in srgb, var\(--ops-muted\)/);
+
+	const highRule = cssRule('.monitor-gpu-row__hold-cue.note-priority--high');
+	assert.match(highRule, /border-color:\s*color-mix\(in srgb, #f59e0b/);
+	assert.match(highRule, /background:\s*color-mix\(in srgb, #f59e0b/);
+	assert.match(highRule, /color:\s*color-mix\(in srgb, #f59e0b/);
+
+	const urgentRule = cssRule('.monitor-gpu-row__hold-cue.note-priority--urgent');
+	assert.match(urgentRule, /border-color:\s*color-mix\(in srgb, #ef4444/);
+	assert.match(urgentRule, /background:\s*color-mix\(in srgb, #ef4444/);
+	assert.match(urgentRule, /color:\s*color-mix\(in srgb, #ef4444/);
 
 	const indexRule = cssRule('.monitor-gpu-row__index');
 	assert.match(indexRule, /position:\s*relative/);

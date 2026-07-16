@@ -388,7 +388,7 @@
   gap: 0.24rem;
   max-width: 100%;
   padding: 0.14rem 0.34rem;
-  border: 1px solid color-mix(in srgb, #f59e0b 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
   border-radius: 0.38rem;
   background: color-mix(in srgb, var(--ops-muted) 62%, var(--ops-card));
   color: color-mix(in srgb, var(--ops-fg) 60%, transparent);
@@ -400,6 +400,8 @@
 }
 
 .monitor-gpu-row__hold-cue.note-priority--normal {
+  border-color: color-mix(in srgb, var(--ops-border) 88%, transparent);
+  background: color-mix(in srgb, var(--ops-muted) 62%, var(--ops-card));
   color: color-mix(in srgb, var(--ops-fg) 60%, transparent);
 }
 
