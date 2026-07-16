@@ -131,7 +131,7 @@ class ServerCollectorGpuInventoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_collector_keeps_one_sample_inventory_suspect_online(self) -> None:
         collector = self._collector()
         collector._sync_collect_gpu = lambda: self._gpu_data([0, 1])
-        collector._sync_collect_system = lambda: "1.0,1048576,2097152,0.0,0.0,0,1000,2000,10.0,3"
+        collector._sync_collect_system = lambda: "1.0,1048576,2097152,0.0,0.0,0,1000,2000,10.0,3,7.5,6,0.8,1.2,1.5,64"
 
         data, degraded, reason = await collector._collect_once()
 
@@ -139,14 +139,20 @@ class ServerCollectorGpuInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reason)
         self.assertEqual(data["gpu_inventory"]["state"], "suspect")
         self.assertEqual(data["gpu_inventory"]["missing_indices"], [2])
+        self.assertEqual(data["system"]["cpu_pressure_some"], 7.5)
+        self.assertEqual(data["system"]["cpu_running_tasks"], 6)
+        self.assertEqual(data["system"]["load_avg_1"], 0.8)
+        self.assertEqual(data["system"]["load_avg_5"], 1.2)
+        self.assertEqual(data["system"]["load_avg_15"], 1.5)
+        self.assertEqual(data["system"]["cpu_count"], 64)
         self.assertEqual(collector._test_history_load_calls, 1)
 
     async def test_collector_marks_two_inventory_mismatches_degraded_and_adds_disk_rate(self) -> None:
         collector = self._collector()
         collector._sync_collect_gpu = lambda: self._gpu_data([0, 1])
         samples = iter([
-            "1.0,1048576,2097152,0.0,0.0,0,1000,2000,10.0,3",
-            "1.0,1048576,2097152,0.0,0.0,0,3000,5000,12.0,3",
+            "1.0,1048576,2097152,0.0,0.0,0,1000,2000,10.0,3,7.5,6,0.8,1.2,1.5,64",
+            "1.0,1048576,2097152,0.0,0.0,0,3000,5000,12.0,3,8.5,7,1.8,2.2,2.5,64",
         ])
         collector._sync_collect_system = lambda: next(samples)
 
@@ -159,6 +165,12 @@ class ServerCollectorGpuInventoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["gpu_inventory"]["visible_count"], 2)
         self.assertEqual(data["gpu_inventory"]["expected_count"], 3)
         self.assertEqual(data["gpu_inventory"]["missing_indices"], [2])
+        self.assertEqual(data["system"]["cpu_pressure_some"], 8.5)
+        self.assertEqual(data["system"]["cpu_running_tasks"], 7)
+        self.assertEqual(data["system"]["load_avg_1"], 1.8)
+        self.assertEqual(data["system"]["load_avg_5"], 2.2)
+        self.assertEqual(data["system"]["load_avg_15"], 2.5)
+        self.assertEqual(data["system"]["cpu_count"], 64)
         self.assertEqual(data["system"]["disk_read_bytes_per_second"], 1000.0)
         self.assertEqual(data["system"]["disk_write_bytes_per_second"], 1500.0)
         self.assertEqual(data["system"]["disk_sample_seconds"], 2.0)

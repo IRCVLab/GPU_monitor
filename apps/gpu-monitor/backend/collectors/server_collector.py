@@ -498,6 +498,12 @@ class ServerCollector:
                     "io_pressure_full": system_info.io_pressure_full,
                     "io_blocked_tasks": system_info.io_blocked_tasks,
                     "io_pressure_supported": system_info.io_pressure_supported,
+                    "cpu_pressure_some": system_info.cpu_pressure_some,
+                    "cpu_running_tasks": system_info.cpu_running_tasks,
+                    "load_avg_1": system_info.load_avg_1,
+                    "load_avg_5": system_info.load_avg_5,
+                    "load_avg_15": system_info.load_avg_15,
+                    "cpu_count": system_info.cpu_count,
                     "disk_read_bytes_per_second": (
                         disk_rate.read_bytes_per_second if disk_rate is not None else None
                     ),
