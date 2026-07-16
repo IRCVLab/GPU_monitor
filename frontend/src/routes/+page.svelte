@@ -295,7 +295,6 @@
 	let themeModeButtonElement = $state<HTMLButtonElement | null>(null);
 	let themeRevealLocked = $state(false);
 	let lastThemeModeButtonCenter = $state<ThemeRevealOrigin | null>(null);
-	let lastThemeRevealSourceRect = $state<DOMRect | null>(null);
 	let headerShellElement = $state<HTMLDivElement | null>(null);
 	let headerSurfaceElement = $state<HTMLElement | null>(null);
 	let headerScrollFrame: number | null = null;
@@ -997,15 +996,10 @@
 
 
 	function farthestCornerRadius(originX: number, originY: number): number {
-		const viewportRadius = Math.max(
-			Math.hypot(originX, originY),
-			Math.hypot(window.innerWidth - originX, originY),
-			Math.hypot(originX, window.innerHeight - originY),
-			Math.hypot(window.innerWidth - originX, window.innerHeight - originY)
-		);
-		const sourceRect = lastThemeRevealSourceRect;
-		const sourceRadius = sourceRect ? Math.hypot(sourceRect.width / 2, sourceRect.height / 2) : 0;
-		return viewportRadius + sourceRadius + 24;
+		return Math.hypot(
+			Math.max(originX, window.innerWidth - originX),
+			Math.max(originY, window.innerHeight - originY)
+		) + 24;
 	}
 
 	function fallbackThemeRevealCenter(): ThemeRevealOrigin {
@@ -1030,7 +1024,6 @@
 	function readVisibleThemeButtonCenter(originElement: HTMLElement | null): ThemeRevealOrigin | null {
 		if (!isVisibleThemeRevealSource(originElement)) return null;
 		const rect = originElement.getBoundingClientRect();
-		lastThemeRevealSourceRect = rect;
 		const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 		lastThemeModeButtonCenter = center;
 		return center;
@@ -1042,7 +1035,7 @@
 		shouldRestoreFocus = true
 	): Promise<void> {
 		if (!browser || themeRevealLocked) return;
-		const viewTransitionDocument = globalThis.document as ViewTransitionCapableDocument;
+		const document = globalThis.document as ViewTransitionCapableDocument;
 		const nextMode: ThemeMode = $themeMode === 'dark' ? 'light' : 'dark';
 		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 		const visibleOrigin = readVisibleThemeButtonCenter(originElement);
@@ -1050,29 +1043,21 @@
 		const originX = origin.x;
 		const originY = origin.y;
 		const radius = farthestCornerRadius(originX, originY);
-		const rootStyle = viewTransitionDocument.documentElement.style;
+		const rootStyle = document.documentElement.style;
 		themeRevealLocked = true;
 		rootStyle.setProperty('--theme-reveal-x', `${originX}px`);
 		rootStyle.setProperty('--theme-reveal-y', `${originY}px`);
 		rootStyle.setProperty('--theme-reveal-radius', `${radius}px`);
-		const supportsViewTransition = typeof viewTransitionDocument['startViewTransition'] === 'function';
+		const supportsViewTransition = typeof document.startViewTransition === 'function';
 		try {
 			if (reducedMotion || !supportsViewTransition) {
 				setThemeMode(nextMode);
 				return;
 			}
 
-			const document = viewTransitionDocument as Document & {
-				startViewTransition: (updateCallback: () => void) => NativeViewTransition;
-			};
 			const transition = document.startViewTransition(() => {
 				setThemeMode(nextMode);
 			});
-			function confirmViewTransitionSupport(): boolean {
-				const supportsViewTransition = typeof document.startViewTransition === 'function';
-				return supportsViewTransition;
-			}
-			void confirmViewTransitionSupport;
 			await transition.finished;
 		} finally {
 			if (shouldRestoreFocus && originElement) originElement.focus({ preventScroll: true });
