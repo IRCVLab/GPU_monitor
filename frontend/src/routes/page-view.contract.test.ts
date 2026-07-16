@@ -516,12 +516,37 @@ test('theme mode toggle uses the native View Transition API with destination rev
 	assert.match(revealBody, /const originX = origin\.x/);
 	assert.match(revealBody, /const originY = origin\.y/);
 	assert.match(revealBody, /const radius = farthestCornerRadius\(originX, originY\)/);
-	assert.match(revealBody, /document\.documentElement\.style\.setProperty\('--theme-reveal-x', `\$\{originX\}px`\)/);
-	assert.match(revealBody, /document\.documentElement\.style\.setProperty\('--theme-reveal-y', `\$\{originY\}px`\)/);
-	assert.match(revealBody, /document\.documentElement\.style\.setProperty\('--theme-reveal-radius', `\$\{radius\}px`\)/);
-	assert.match(revealBody, /const transition\s*=\s*document\.startViewTransition\(\(\) => \{\s*setThemeMode\(nextMode\);?\s*\}\)/);
-	assert.match(revealBody, /await transition\.finished/);
-	assert.match(revealBody, /finally \{[\s\S]*originElement\.focus\(\{ preventScroll: true \}\)[\s\S]*themeRevealLocked = false[\s\S]*removeProperty\('--theme-reveal-x'\)[\s\S]*removeProperty\('--theme-reveal-y'\)[\s\S]*removeProperty\('--theme-reveal-radius'\)[\s\S]*\}/);
+
+	const lockIndex = revealBody.indexOf('themeRevealLocked = true');
+	const setXIndex = revealBody.indexOf("setProperty('--theme-reveal-x'");
+	const setYIndex = revealBody.indexOf("setProperty('--theme-reveal-y'");
+	const setRadiusIndex = revealBody.indexOf("setProperty('--theme-reveal-radius'");
+	const startTransitionIndex = revealBody.indexOf('document.startViewTransition');
+	const awaitFinishedIndex = revealBody.indexOf('await transition.finished');
+	const finallyIndex = revealBody.indexOf('finally', awaitFinishedIndex);
+	for (const [label, index] of Object.entries({ lockIndex, setXIndex, setYIndex, setRadiusIndex, startTransitionIndex, awaitFinishedIndex, finallyIndex })) {
+		assert.ok(index >= 0, `missing ${label} in runThemeModeReveal`);
+	}
+	assert.ok(lockIndex < startTransitionIndex, 'rapid-click lock must be set before startViewTransition');
+	assert.ok(setXIndex < startTransitionIndex, 'x reveal variable must be set before startViewTransition');
+	assert.ok(setYIndex < startTransitionIndex, 'y reveal variable must be set before startViewTransition');
+	assert.ok(setRadiusIndex < startTransitionIndex, 'radius reveal variable must be set before startViewTransition');
+	assert.ok(startTransitionIndex < awaitFinishedIndex, 'transition.finished must be awaited after startViewTransition');
+	assert.ok(awaitFinishedIndex < finallyIndex, 'cleanup finally must be paired after awaiting transition.finished');
+
+	const startTransitionCall = revealBody.slice(startTransitionIndex, awaitFinishedIndex);
+	assert.match(startTransitionCall, /document\.startViewTransition\(\s*\(\)\s*=>\s*\{[\s\S]*setThemeMode\(nextMode\)[\s\S]*\}\s*\)/);
+	assert.equal((startTransitionCall.match(/setThemeMode\(nextMode\)/g) ?? []).length, 1, 'mode switch belongs inside the native transition callback exactly once');
+
+	const postFinishedBeforeFinally = revealBody.slice(awaitFinishedIndex + 'await transition.finished'.length, finallyIndex);
+	assert.doesNotMatch(postFinishedBeforeFinally, /setThemeMode\(nextMode\)/, 'mode switch must not be delayed until after transition.finished');
+	const finallyBody = revealBody.slice(finallyIndex);
+	assert.match(finallyBody, /originElement\.focus\(\{ preventScroll: true \}\)/);
+	assert.match(finallyBody, /themeRevealLocked\s*=\s*false/);
+	assert.match(finallyBody, /removeProperty\('--theme-reveal-x'\)/);
+	assert.match(finallyBody, /removeProperty\('--theme-reveal-y'\)/);
+	assert.match(finallyBody, /removeProperty\('--theme-reveal-radius'\)/);
+	assert.doesNotMatch(finallyBody, /setThemeMode\(nextMode\)/, 'cleanup finally must not perform a delayed mode switch');
 });
 
 test('theme mode reveal has no legacy overlay, proxy, edge animation, or delayed post-overlay mode switch', () => {
