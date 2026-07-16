@@ -94,13 +94,10 @@ test('full gpu state cues use one accent with inverse available and occupied tre
 test('task 2 card gpu list and footer use compact spacing', () => {
 	const listRule = cssRule(cardCss, '.monitor-card__gpu-list');
 	assertDeclaration(listRule, 'gap', '0.55rem');
-	assert.ok(
-		/padding\s*:\s*0 0\.9rem 0\.9rem\s*;/.test(listRule) ||
-		(/padding-top\s*:\s*0\.4rem\s*;/.test(listRule) &&
-			/padding-right\s*:\s*0\.9rem\s*;/.test(listRule) &&
-			/padding-bottom\s*:\s*0\.9rem\s*;/.test(listRule) &&
-			/padding-left\s*:\s*0\.9rem\s*;/.test(listRule))
-	);
+	assertDeclaration(listRule, 'padding-top', '0.4rem');
+	assertDeclaration(listRule, 'padding-right', '0.9rem');
+	assertDeclaration(listRule, 'padding-bottom', '0.9rem');
+	assertDeclaration(listRule, 'padding-left', '0.9rem');
 
 	const footerRule = cssRule(cardCss, '.monitor-card__footer');
 	assertDeclaration(footerRule, 'gap', '0.12rem');
