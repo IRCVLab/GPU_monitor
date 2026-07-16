@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { cubicOut } from 'svelte/easing';
+  import { prefersReducedMotion } from 'svelte/motion';
+  import { fly } from 'svelte/transition';
   import type { GpuInfo } from '$lib/types';
   import type { CompactGpuState } from '$lib/utils/compactGpuAvailability';
 
@@ -27,6 +30,20 @@
       ? Math.min(100, (gpu.memory_used / gpu.memory_total) * 100)
       : 0
   );
+  const displayUsers = $derived.by(() => [...gpu.users].sort());
+  const displayUsersSignature = $derived(displayUsers.join('\u0000') || 'idle');
+  const identityInFly = $derived({
+    y: prefersReducedMotion.current ? 0 : 2,
+    opacity: prefersReducedMotion.current ? 1 : 0,
+    duration: prefersReducedMotion.current ? 0 : 220,
+    easing: cubicOut
+  });
+  const identityOutFly = $derived({
+    y: prefersReducedMotion.current ? 0 : -2,
+    opacity: prefersReducedMotion.current ? 1 : 0,
+    duration: prefersReducedMotion.current ? 0 : 160,
+    easing: cubicOut
+  });
   const primaryHold = $derived(advisoryHolds[0] ?? null);
   const holdDetailText = $derived.by(() =>
     advisoryHolds
@@ -40,7 +57,7 @@
   );
   const holdAriaDetail = $derived(holdDetailText ? `, advisory ${holdDetailText}` : '');
   const gpuAriaLabel = $derived.by(() => {
-    const usage = gpu.users.length > 0 ? gpu.users.join(', ') : 'idle';
+    const usage = displayUsers.length > 0 ? displayUsers.join(', ') : 'idle';
     return `GPU ${gpu.index}, users ${usage}, utilization ${utilValue} percent, memory ${memUsedGB} of ${memTotalGB} gigabytes${holdAriaDetail}`;
   });
 </script>
@@ -50,13 +67,19 @@
 
   <div class="monitor-gpu-row__body">
     <div class="monitor-gpu-row__users">
-      {#if gpu.users.length > 0}
-        {#each gpu.users as user, index (`${gpu.index}-${user}-${index}`)}
-          <span class="monitor-gpu-row__user">{user}</span>
-        {/each}
-      {:else}
-        <span class="monitor-gpu-row__idle">idle</span>
-      {/if}
+      <div class="monitor-gpu-row__identity-slot">
+        {#key displayUsersSignature}
+          <div class="monitor-gpu-row__identity-set" in:fly={identityInFly} out:fly={identityOutFly}>
+            {#if displayUsers.length > 0}
+              {#each displayUsers as user, index (`${gpu.index}-${user}-${index}`)}
+                <span class="monitor-gpu-row__user">{user}</span>
+              {/each}
+            {:else}
+              <span class="monitor-gpu-row__idle">idle</span>
+            {/if}
+          </div>
+        {/key}
+      </div>
 
       {#if primaryHold}
         <span class="monitor-gpu-row__hold-cue" title={holdDetailText} aria-label={holdDetailText}>

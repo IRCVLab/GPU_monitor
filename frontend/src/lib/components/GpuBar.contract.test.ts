@@ -74,3 +74,17 @@ test('GpuBar preserves telemetry truth in aria-label while adding advisory hold 
 	assert.match(source, /holdAriaDetail/, 'aria label should include advisory hold details when present');
 	assert.match(source, /title=\{holdDetailText\}|aria-label=\{holdDetailText\}/, 'hold cue should expose owner/time/memo detail accessibly');
 });
+
+test('GpuBar sorts display users, keys a height-stable identity slot, and flies identity changes with reduced-motion fallback', () => {
+	assert.match(source, /displayUsers\s*=\s*\$derived\.by\(\(\)\s*=>\s*\[\.\.\.gpu\.users\]\.sort\(\)\)/);
+	assert.ok(source.includes("const displayUsersSignature = $derived(displayUsers.join('\\u0000') || 'idle');"));
+	assert.match(source, /import\s*\{\s*prefersReducedMotion\s*\}\s*from\s*'svelte\/motion'/);
+	assert.match(source, /import\s*\{\s*cubicOut\s*\}\s*from\s*'svelte\/easing'/);
+	assert.match(source, /import\s*\{\s*fly\s*\}\s*from\s*'svelte\/transition'/);
+	assert.match(source, /const identityInFly\s*=\s*\$derived\(\{[\s\S]*y:\s*prefersReducedMotion\.current\s*\?\s*0\s*:\s*2,[\s\S]*opacity:\s*prefersReducedMotion\.current\s*\?\s*1\s*:\s*0,[\s\S]*duration:\s*prefersReducedMotion\.current\s*\?\s*0\s*:\s*220,[\s\S]*easing:\s*cubicOut[\s\S]*\}\)/);
+	assert.match(source, /const identityOutFly\s*=\s*\$derived\(\{[\s\S]*y:\s*prefersReducedMotion\.current\s*\?\s*0\s*:\s*-2,[\s\S]*opacity:\s*prefersReducedMotion\.current\s*\?\s*1\s*:\s*0,[\s\S]*duration:\s*prefersReducedMotion\.current\s*\?\s*0\s*:\s*160,[\s\S]*easing:\s*cubicOut[\s\S]*\}\)/);
+	assert.match(source, /class="monitor-gpu-row__identity-slot"/);
+	assert.match(source, /\{#key displayUsersSignature\}[\s\S]*class="monitor-gpu-row__identity-set"[\s\S]*in:fly=\{identityInFly\}[\s\S]*out:fly=\{identityOutFly\}/);
+	assert.match(source, /\{#each displayUsers as user, index \(`/);
+	assert.doesNotMatch(source, /\{#each gpu\.users as user, index/);
+});

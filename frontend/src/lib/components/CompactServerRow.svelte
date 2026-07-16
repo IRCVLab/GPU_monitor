@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { cubicOut } from 'svelte/easing';
+	import { prefersReducedMotion } from 'svelte/motion';
+	import { fly } from 'svelte/transition';
 	import type { GpuInfo, ServerState, ServerStatus } from '$lib/types';
 	import type { CompactGpuState } from '$lib/utils/compactGpuAvailability';
 	import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
@@ -53,6 +56,18 @@
 		occupied: '사용 중',
 		unknown: '상태 확인 필요'
 	};
+	const slotIdentityInFly = $derived({
+		y: prefersReducedMotion.current ? 0 : 2,
+		opacity: prefersReducedMotion.current ? 1 : 0,
+		duration: prefersReducedMotion.current ? 0 : 220,
+		easing: cubicOut
+	});
+	const slotIdentityOutFly = $derived({
+		y: prefersReducedMotion.current ? 0 : -2,
+		opacity: prefersReducedMotion.current ? 1 : 0,
+		duration: prefersReducedMotion.current ? 0 : 160,
+		easing: cubicOut
+	});
 
 	const visibleSlots = $derived(compactGpuBankSlots(server.gpus, bankIndex));
 	const visibleStatusLabel = $derived(statusConfig[server.status]?.label ?? statusConfig.unknown.label);
@@ -63,6 +78,14 @@
 
 	function gpuState(gpu: GpuInfo): CompactGpuState {
 		return getCompactGpuState(server.status, server.last_seen, gpu);
+	}
+
+	function displayUsers(gpu: GpuInfo): string[] {
+		return [...gpu.users].sort();
+	}
+
+	function displayUsersSignature(users: readonly string[]): string {
+		return users.join('\u0000') || 'idle';
 	}
 
 	function holdLabel(gpu: GpuInfo): string {
@@ -78,12 +101,12 @@
 		return parts.join(' · ');
 	}
 
-	function popoverItem(gpu: GpuInfo): CompactPopoverItem {
+	function popoverItem(gpu: GpuInfo, users: readonly string[]): CompactPopoverItem {
 		const state = gpuState(gpu);
 		return {
 			gpuIndex: gpu.index,
 			stateLabel: gpuStateLabels[state],
-			ownersLabel: gpu.users.length > 0 ? gpu.users.join(', ') : 'idle',
+			ownersLabel: users.length > 0 ? users.join(', ') : 'idle',
 			holdLabel: holdLabel(gpu)
 		};
 	}
@@ -114,8 +137,8 @@
 		hideTooltip();
 	}
 
-	function slotAriaLabel(gpu: GpuInfo): string {
-		const item = popoverItem(gpu);
+	function slotAriaLabel(gpu: GpuInfo, users: readonly string[]): string {
+		const item = popoverItem(gpu, users);
 		return item.holdLabel
 			? `${server.server_name} G${gpu.index}, ${item.stateLabel}, ${item.ownersLabel}, ${item.holdLabel}`
 			: `${server.server_name} G${gpu.index}, ${item.stateLabel}, ${item.ownersLabel}`;
@@ -148,33 +171,40 @@
 	{#each visibleSlots as gpu, offset (`compact-slot-${server.server_id}-${bankIndex}-${offset}`)}
 		{#if gpu}
 			{@const state = gpuState(gpu)}
+			{@const users = displayUsers(gpu)}
 			<div class="compact-slot" data-state={state} data-held={heldGpuIndices?.has(gpu.index) ? 'true' : undefined}>
 				<button
 					type="button"
 					class="compact-slot__users"
-					aria-label={slotAriaLabel(gpu)}
+					aria-label={slotAriaLabel(gpu, users)}
 					data-compact-trigger="true"
-					onmouseenter={(event) => openTooltip(event.currentTarget, popoverItem(gpu))}
+					onmouseenter={(event) => openTooltip(event.currentTarget, popoverItem(gpu, users))}
 					onmouseleave={hideTooltip}
-					onfocus={(event) => openTooltip(event.currentTarget, popoverItem(gpu))}
+					onfocus={(event) => openTooltip(event.currentTarget, popoverItem(gpu, users))}
 					onblur={handleTriggerBlur}
 					onclick={openFull}
 				>
-					{#if state === 'available'}
-						<span class="compact-slot__free" aria-hidden="true">
-							<span class="compact-slot__free-dot"></span>
-						</span>
-					{:else if state === 'unknown'}
-						<span class="compact-slot__unknown" aria-hidden="true">
-							<span class="compact-slot__unknown-mark"></span>
-						</span>
-					{:else}
-						<span class="compact-slot__user-list" aria-hidden="true">
-							{#each gpu.users as user, index (`${gpu.index}-${user}-${index}`)}
-								<span class="compact-slot__username">{user}</span>
-							{/each}
-						</span>
-					{/if}
+					<div class="compact-slot__identity-slot" aria-hidden="true">
+						{#key `${gpu.index}:${state}:${displayUsersSignature(users)}`}
+							<span class="compact-slot__identity-set" data-state={state} in:fly={slotIdentityInFly} out:fly={slotIdentityOutFly}>
+								{#if state === 'available'}
+									<span class="compact-slot__free">
+										<span class="compact-slot__free-dot"></span>
+									</span>
+								{:else if state === 'unknown'}
+									<span class="compact-slot__unknown">
+										<span class="compact-slot__unknown-mark"></span>
+									</span>
+								{:else}
+									<span class="compact-slot__user-list">
+										{#each users as user, index (`${gpu.index}-${user}-${index}`)}
+											<span class="compact-slot__username">{user}</span>
+										{/each}
+									</span>
+								{/if}
+							</span>
+						{/key}
+					</div>
 				</button>
 			</div>
 		{:else}
