@@ -16,11 +16,18 @@ export function placeOrderedMasonryItems({
 	const columns = Math.max(1, Math.floor(columnCount));
 	const nextRows = Array.from({ length: columns }, () => 1);
 
-	return spans.map((spanValue, index) => {
-		const columnIndex = index % columns;
+	let previousGridRowStart = 1;
+
+	return spans.map((spanValue) => {
+		let columnIndex = 0;
+		for (let index = 1; index < nextRows.length; index += 1) {
+			if (nextRows[index] < nextRows[columnIndex]) columnIndex = index;
+		}
+
 		const span = Math.max(1, Math.ceil(spanValue));
-		const gridRowStart = nextRows[columnIndex];
-		nextRows[columnIndex] += span;
+		const gridRowStart = Math.max(nextRows[columnIndex], previousGridRowStart);
+		nextRows[columnIndex] = gridRowStart + span;
+		previousGridRowStart = gridRowStart;
 
 		return {
 			gridColumnStart: columnIndex + 1,
