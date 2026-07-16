@@ -651,6 +651,18 @@
   color: color-mix(in srgb, var(--ops-fg) 44%, transparent);
 }
 
+.monitor-card__system-inline-metric {
+  display: inline;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.64rem;
+  line-height: 1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--ops-fg) 38%, transparent);
+}
+
 .monitor-card__pressure-cause {
   flex: 0 0 auto;
   font-size: 0.64rem;
@@ -1393,6 +1405,11 @@
 
   .monitor-card__disclosure-shell {
     transition-duration: 1ms;
+  }
+
+  .monitor-card__load-gauge::after,
+  .monitor-card__load-gauge-fill {
+    transition: none;
   }
 
   .monitor-card:hover,
