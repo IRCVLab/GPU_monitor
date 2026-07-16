@@ -4,7 +4,7 @@
 
 **Goal:** Replace throughput-based ambiguity with CPU/I/O pressure semantics, keep Masonry columns stable during card height changes, correct failure reveal behavior, shorten expiry copy, and reduce avoidable client work.
 
-**Architecture:** Extend the existing single remote system command with optional CPU PSI/runnable-task fields. Keep pressure classification in a pure frontend utility, keep MB/s in expanded detail, and preserve backward compatibility. Replace stateless Masonry reassignment with identity-based sticky columns plus one-row left bias, then share the existing page clock across Full cards.
+**Architecture:** Extend the existing single remote system command with optional CPU PSI/runnable-task plus load-average telemetry. Keep the compact summary centered on raw 1-minute load versus logical CPU count, use normalized load ratio for visual/state logic, retain backend disk-rate fields for API compatibility only, and preserve backward compatibility. Replace stateless Masonry reassignment with identity-based sticky columns plus one-row left bias, then share the existing page clock across Full cards.
 
 **Tech Stack:** Python 3 dataclasses/unittest, Svelte 5 runes, TypeScript utilities, CSS Grid/ResizeObserver/Web Animations, Node test runner, Playwright.
 
@@ -15,7 +15,7 @@
 - Keep one system SSH command per server collection cycle and `collect_interval = 10`.
 - Keep the frontend fixed 10-second HTTP refresh and visual cadence even when WebSocket is connected.
 - CPU pressure uses `/proc/pressure/cpu some avg10`; never use system-wide CPU `full`.
-- I/O collapsed status uses PSI, never MB/s.
+- The frontend removes MB/s from the UI entirely; backend disk-rate fields remain for API compatibility only.
 - Thresholds are exact: `<5 = 여유`, `>=5 and <20 = 압박`, `>=20 = 병목`.
 - Similar-height left bias is exactly one masonry row.
 - Height-only card changes preserve the assigned column; structural/order/column-count changes may recompute.
@@ -39,8 +39,10 @@
 **Interfaces:**
 - Produces `SystemInfo.cpu_pressure_some: float | None`.
 - Produces `SystemInfo.cpu_running_tasks: int | None`.
-- Appends these as CSV fields 10 and 11, preserving 3/6/10-field parsing.
-- API `system` payload exposes `cpu_pressure_some` and `cpu_running_tasks`.
+- Produces `SystemInfo.load_avg_1: float | None`, `load_avg_5: float | None`, `load_avg_15: float | None`.
+- Produces `SystemInfo.cpu_count: int | None`.
+- Appends CPU pressure/runnable-task as CSV fields 10/11 and load averages/CPU count as fields 12-15, preserving 3/6/10/12/16-field parsing.
+- API `system` payload exposes `cpu_pressure_some`, `cpu_running_tasks`, `load_avg_1`, `load_avg_5`, `load_avg_15`, and `cpu_count`.
 
 - [ ] **Step 1: Write failing parser and command tests**
 
@@ -52,13 +54,22 @@ def test_parse_system_reads_cpu_pressure_and_running_tasks(self):
     self.assertEqual(info.cpu_pressure_some, 7.5)
     self.assertEqual(info.cpu_running_tasks, 6)
 
+def test_parse_system_reads_load_average_and_cpu_count(self):
+    info = parse_system("12.0,1048576,2097152,1.0,0.2,2,100,200,3.0,4,7.5,6,0.8,1.2,1.5,64")
+    self.assertEqual(info.load_avg_1, 0.8)
+    self.assertEqual(info.load_avg_5, 1.2)
+    self.assertEqual(info.load_avg_15, 1.5)
+    self.assertEqual(info.cpu_count, 64)
+
 def test_system_command_reads_cpu_some_without_cpu_full(self):
     self.assertIn("/proc/pressure/cpu", SYSTEM_CMD_PROC)
     self.assertIn("procs_running", SYSTEM_CMD_PROC)
+    self.assertIn("os.getloadavg", SYSTEM_CMD_PROC)
+    self.assertIn("os.cpu_count", SYSTEM_CMD_PROC)
     self.assertNotIn("cpu_pressure_full", SYSTEM_CMD_PROC)
 ```
 
-Retain explicit legacy parser assertions for 3, 6, and 10 fields.
+Retain explicit legacy parser assertions for 3, 6, 10, and 12 fields.
 
 - [ ] **Step 2: Run RED**
 
@@ -66,22 +77,24 @@ Retain explicit legacy parser assertions for 3, 6, and 10 fields.
 PYTHONPATH=. .venv/bin/python -m unittest backend.tests.test_system_metrics backend.tests.test_gpu_health -v
 ```
 
-Expected: new field/command assertions fail because the fields are absent.
+Expected: new field/command assertions fail because CPU/load telemetry fields are absent.
 
 - [ ] **Step 3: Implement the minimal collector extension**
 
-Append optional dataclass fields and parse indices 10/11 only when `len(parts) >= 12`.
+Append optional dataclass fields and parse indices 10/11 when `len(parts) >= 12`, then parse load averages/CPU count at indices 12-15 when `len(parts) >= 16`.
 
 Generalize the embedded proc reader so it reads:
 
 ```python
 cpu_some = read_psi_some_avg10('/proc/pressure/cpu')
 io_some, io_full = read_io_psi_avg10()
+load1, load5, load15 = os.getloadavg()
+cpu_count = os.cpu_count()
 ```
 
 Return `procs_running` from the existing `/proc/stat` read. Do not invoke another command or sleep.
 
-Expose the two optional fields in the collector state and manager/router fallback payloads.
+Expose the optional CPU/load fields in the collector state while keeping existing backend disk-rate fields/API compatibility unchanged.
 
 - [ ] **Step 4: Run GREEN and backend suite**
 
@@ -117,7 +130,7 @@ git commit -m "feat: collect cpu pressure telemetry"
 - `type PressureLevel = 'unknown' | 'idle' | 'pressure' | 'bottleneck'`
 - `classifyPressure(avg10: number | null | undefined): PressureLevel`
 - `pressureLabel(level): '–' | '여유' | '압박' | '병목'`
-- Frontend `SystemInfo` accepts optional CPU pressure/running fields.
+- Frontend `SystemInfo` accepts optional CPU pressure/running fields plus load averages and CPU count.
 
 - [ ] **Step 1: Write pressure boundary tests**
 
@@ -165,18 +178,15 @@ Normalize the optional CPU fields without inventing zero values.
 
 - [ ] **Step 4: Implement the UI hierarchy**
 
-Collapsed CPU text:
+Collapsed compact summary:
 
 ```text
-idle:       CPU 72%
-pressure:   CPU 72% · 압박
-bottleneck: CPU 72% · 병목
-unknown:    CPU 72%
+부하 3.2 / 32
 ```
 
-Collapsed I/O text is only `여유/압박/병목/–`. Do not select MB/s when PSI is idle or unavailable.
+Use normalized load ratio (`load_avg_1 / cpu_count`) for visual/state logic, not for the displayed numerator/denominator text. CPU PSI and I/O PSI explain the cause in expanded detail. Do not show MB/s anywhere in the UI.
 
-Expanded details retain disk R/W rates as supporting context and add CPU stall/runnable facts. Keep the layout dense and tabular.
+Expanded details show 1/5/15 load plus CPU stall/runnable facts and I/O pressure facts. Keep the layout dense and tabular.
 
 - [ ] **Step 5: Run GREEN/check/build**
 

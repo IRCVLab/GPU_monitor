@@ -9,14 +9,14 @@ Branch: `feature/compact-gpu-dashboard`
 
 The dashboard must answer two questions without requiring the researcher to interpret device-specific throughput:
 
-1. Is CPU work waiting because CPU capacity is contended?
-2. Is work waiting on I/O, regardless of whether the server has one disk, RAID, NVMe, or many mount points?
+1. What is the server's overall load relative to its logical CPU capacity?
+2. If pressure exists, is work waiting because CPU capacity is contended or because tasks are stalled on I/O?
 
 It must also keep user-defined server order visually understandable while cards expand, remove ambiguous failure overlays, shorten hold expiry copy, and reduce avoidable client work without changing the 10-second monitoring contract.
 
 ## Non-goals
 
-- Do not infer storage saturation from MB/s.
+- Do not infer storage saturation from MB/s or render MB/s in the UI.
 - Do not add an agent or daemon to GPU servers.
 - Do not add another SSH command or shorten the 10-second collector cadence.
 - Do not remove the existing fixed 10-second frontend refresh request/animation contract.
@@ -57,9 +57,9 @@ The tooltip must say that this is a recent 10-second stall ratio, not absolute h
 
 A high-capacity NVMe/RAID server can be healthy at a high MB/s value, while a latency-bound workload can be stalled at a low MB/s value. Device count and parallelism make a single throughput threshold misleading.
 
-### Chosen: PSI-first classification with throughput as context
+### Chosen: load-average summary with PSI cause diagnosis
 
-Read CPU PSI and the existing I/O PSI in the same current remote Python command. Reuse the already-read `/proc/stat` to expose `procs_running`. Keep disk R/W rates for expanded detail only.
+Read CPU PSI, the existing I/O PSI, 1/5/15 load averages, and logical CPU count in the same current remote Python command. Reuse the already-read `/proc/stat` to expose `procs_running`. Keep backend disk R/W rates only for API compatibility; the frontend does not render them.
 
 ### Rejected: per-server monitoring daemon
 
@@ -67,10 +67,12 @@ A daemon would add deployment, lifecycle, and failure surface to every GPU serve
 
 ## Telemetry contract
 
-Append optional fields to the existing CSV payload so old 3-, 6-, and 10-field parsers remain compatible:
+Append optional fields to the existing CSV payload so old 3-, 6-, 10-, and 12-field parsers remain compatible:
 
 - `cpu_pressure_some`: `/proc/pressure/cpu` `some avg10`
 - `cpu_running_tasks`: `procs_running` from `/proc/stat`
+- `load_avg_1`, `load_avg_5`, `load_avg_15`: `os.getloadavg()`
+- `cpu_count`: logical CPU count from `os.cpu_count()`
 
 Do not collect CPU `full`.
 
@@ -78,8 +80,12 @@ Expose optional frontend fields:
 
 - `cpu_pressure_some: number | null`
 - `cpu_running_tasks: number | null`
+- `load_avg_1: number | null`
+- `load_avg_5: number | null`
+- `load_avg_15: number | null`
+- `cpu_count: number | null`
 
-The collector continues to execute one system command per normal collection cycle. The existing disk counters, I/O PSI, PCI inventory, CPU utilization sample, and 10-second cadence remain unchanged.
+The collector continues to execute one system command per normal collection cycle. The existing disk counters, I/O PSI, PCI inventory, CPU utilization sample, and 10-second cadence remain unchanged, and the disk-rate API fields stay backward-compatible even though the UI no longer renders MB/s.
 
 ## System UI hierarchy
 
@@ -87,30 +93,27 @@ The collector continues to execute one system command per normal collection cycl
 
 Keep one compact baseline.
 
-- CPU:
-  - healthy PSI: `CPU 72%`
-  - pressure: `CPU 72% · 압박`
-  - bottleneck: `CPU 72% · 병목`
-  - color level follows PSI severity before raw utilization severity.
-- I/O:
-  - `I/O 여유`, `I/O 압박`, `I/O 병목`, or `I/O –`
-  - never show MB/s as the collapsed busy-state answer.
+- Compact summary text: `부하 3.2 / 32`
+  - numerator is raw `load_avg_1`
+  - denominator is logical `cpu_count`
+  - normalized ratio (`load_avg_1 / cpu_count`) drives visual/state logic only
 - Historical/offline telemetry keeps the current neutral `–` placeholders.
-- GPU-only degradation with current telemetry keeps current CPU/I/O pressure labels.
+- GPU-only degradation with current telemetry keeps the current load summary.
 
 ### Expanded row
 
 Keep dense, tabular facts.
 
+- 1/5/15 load averages
+- logical CPU count
 - CPU utilization
 - CPU stall `some avg10`
 - runnable task count
 - I/O stall `some/full avg10`
 - blocked task count
-- disk read/write MB/s as context
 - existing RAM, GPU power, disk capacity, mounts
 
-Expanded historical values remain under the `마지막 수집값` label.
+Expanded historical values remain under the `마지막 수집값` label. Backend disk-rate fields remain compatible for non-UI consumers, but the frontend does not render MB/s.
 
 ## Stable Masonry
 

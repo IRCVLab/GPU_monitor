@@ -14,6 +14,13 @@ class SystemMetricsTests(unittest.TestCase):
         self.assertIn('/sys/bus/pci/devices', SYSTEM_CMD_PROC)
         self.assertIn('0x10de', SYSTEM_CMD_PROC)
 
+    def test_system_proc_command_reads_cpu_some_running_tasks_and_loadavg_without_cpu_full(self) -> None:
+        self.assertIn('/proc/pressure/cpu', SYSTEM_CMD_PROC)
+        self.assertIn('procs_running', SYSTEM_CMD_PROC)
+        self.assertIn('os.getloadavg', SYSTEM_CMD_PROC)
+        self.assertIn('os.cpu_count', SYSTEM_CMD_PROC)
+        self.assertNotIn('cpu_pressure_full', SYSTEM_CMD_PROC)
+
     def test_parse_system_reads_extended_psi_and_blocked_tasks(self) -> None:
         info = parse_system("12.5,1073741824,2147483648,0.33,0.11,7")
 
@@ -40,6 +47,26 @@ class SystemMetricsTests(unittest.TestCase):
         self.assertEqual(info.disk_write_bytes_total, 8192)
         self.assertEqual(info.disk_sample_time, 123.25)
         self.assertEqual(info.pci_gpu_count, 2)
+
+    def test_parse_system_reads_cpu_pressure_and_running_tasks(self) -> None:
+        info = parse_system("12.0,1048576,2097152,1.0,0.2,2,100,200,3.0,4,7.5,6")
+
+        self.assertEqual(info.cpu_pressure_some, 7.5)
+        self.assertEqual(info.cpu_running_tasks, 6)
+        self.assertIsNone(info.load_avg_1)
+        self.assertIsNone(info.load_avg_5)
+        self.assertIsNone(info.load_avg_15)
+        self.assertIsNone(info.cpu_count)
+
+    def test_parse_system_reads_load_average_and_cpu_count(self) -> None:
+        info = parse_system("12.0,1048576,2097152,1.0,0.2,2,100,200,3.0,4,7.5,6,0.8,1.2,1.5,64")
+
+        self.assertEqual(info.cpu_pressure_some, 7.5)
+        self.assertEqual(info.cpu_running_tasks, 6)
+        self.assertEqual(info.load_avg_1, 0.8)
+        self.assertEqual(info.load_avg_5, 1.2)
+        self.assertEqual(info.load_avg_15, 1.5)
+        self.assertEqual(info.cpu_count, 64)
 
     def test_parse_system_preserves_six_field_output_without_disk_or_pci_fields(self) -> None:
         info = parse_system("12.5,1073741824,2147483648,0.33,0.11,7")
