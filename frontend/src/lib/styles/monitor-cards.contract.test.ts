@@ -131,8 +131,8 @@ test('System and Memo disclosure motion uses mounted grid-track animation withou
 	assertDeclaration(shellRule, 'opacity', '0');
 	assert.match(shellRule, /transform:\s*translateY\(-0\.12rem\)/);
 	assert.match(shellRule, /transition:[^;]*grid-template-rows[^;]*opacity[^;]*transform[^;]*visibility/s);
-	assert.match(shellRule, /grid-template-rows\s+0s\s+linear\s+260ms/, 'closing grid track should switch discretely after fade finishes');
-	assert.match(shellRule, /visibility\s+0s\s+linear\s+260ms/, 'closing visibility should wait until fade finishes');
+	assert.match(shellRule, /grid-template-rows\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)/, 'closing grid track should switch discretely after fade finishes');
+	assert.match(shellRule, /visibility\s+0s\s+linear\s+var\(--monitor-card-settle-duration\)/, 'closing visibility should wait until fade finishes');
 	assertDeclaration(shellRule, 'pointer-events', 'none');
 
 	const expandedRule = cssRule(".monitor-card__disclosure-shell[data-expanded='true']");
@@ -152,11 +152,11 @@ test('System and Memo disclosure motion uses mounted grid-track animation withou
 	assert.doesNotMatch(css, /transition[^;]*(?:height|top)/, 'Task 4a forbids height/top transition shortcuts');
 });
 
-test('reduced motion makes disclosure and load gauge state changes effectively immediate', () => {
+test('reduced motion makes card rail, disclosure, and load gauge state changes immediate', () => {
 	const reduced = mediaBlock('(prefers-reduced-motion: reduce)');
-	assert.match(reduced, /\.monitor-card__disclosure-shell\s*\{[^}]*transition-duration:\s*1ms;/s);
-	assert.match(reduced, /\.monitor-card__footer-disclosure\s*\{[^}]*transition-duration:\s*1ms;/s);
+	assert.match(reduced, /\.monitor-card::before[\s\S]*\.monitor-card__footer-disclosure,[\s\S]*\.monitor-card__disclosure-shell[\s\S]*transition:\s*none;/s);
 	assert.match(reduced, /\.monitor-card__load-gauge::after,\s*\.monitor-card__load-gauge-fill\s*\{[^}]*transition:\s*none;/s);
+	assert.doesNotMatch(reduced, /transition-duration:\s*1ms;/, 'reduced motion should remove Task 4 transitions instead of leaving 1ms motion');
 });
 
 test('collapsed utility controls keep the chevron affordance and remove decorative markers', () => {
