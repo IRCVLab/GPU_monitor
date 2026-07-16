@@ -1,5 +1,10 @@
-import type { EventLog, Note, NoteKind, ServerRecord, ServerState } from '$lib/types';
-import { buildNotePayload, type CreateNoteInput } from '$lib/utils/notePayload';
+import type { EventLog, Note, NoteKind, NotePriority, ServerRecord, ServerState } from '$lib/types';
+import {
+	buildNotePayload,
+	normalizeNoteDisplayName,
+	normalizeNotePriority,
+	type CreateNoteInput
+} from '$lib/utils/notePayload';
 
 const BASE = '/api';
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -102,7 +107,9 @@ export async function getServerStatus(): Promise<Record<number, ServerState>> {
 	return handleResponse<Record<number, ServerState>>(res);
 }
 
-interface NoteResponse extends Omit<Note, 'kind' | 'gpu_indices'> {
+interface NoteResponse extends Omit<Note, 'display_name' | 'priority' | 'kind' | 'gpu_indices'> {
+	display_name?: string | null;
+	priority?: NotePriority | null;
 	kind?: NoteKind;
 	gpu_indices?: number[];
 }
@@ -110,6 +117,8 @@ interface NoteResponse extends Omit<Note, 'kind' | 'gpu_indices'> {
 function normalizeNoteResponse(note: NoteResponse): Note {
 	return {
 		...note,
+		display_name: normalizeNoteDisplayName(note.display_name),
+		priority: normalizeNotePriority(note.priority),
 		kind: note.kind ?? 'memo',
 		gpu_indices: note.gpu_indices ?? []
 	};
