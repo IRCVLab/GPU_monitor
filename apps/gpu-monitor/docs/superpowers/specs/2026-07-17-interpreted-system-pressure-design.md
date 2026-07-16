@@ -27,7 +27,7 @@ Raw load average is useful for expert diagnosis but is not an appropriate defaul
 - PSI `some avg10` is the rolling percentage of wall-clock time in which at least one task was stalled by the resource.
 - I/O PSI `full avg10` is the rolling percentage of wall-clock time in which all non-idle tasks were simultaneously stalled on I/O.
 - PSI percentages do not sum per-task wait time. Ten tasks waiting during the same one second still represent one second of wall-clock pressure.
-- The kernel also exposes cumulative `total` stall time, but this UI does not need it for the current at-a-glance job.
+- The kernel also exposes cumulative `total` stall time for custom-window rate calculations and spike detection. This snapshot dashboard does not collect or display it because the interpreted `avg10` signal already serves the current at-a-glance job.
 
 ## Design decision
 
@@ -97,7 +97,7 @@ I/O 전체 지연  0.0%
 차단 작업  0
 ```
 
-The labels must make the values self-describing. Do not rely on native `title` tooltips for essential interpretation. Accessible names may include the full definition, but ordinary comprehension must come from visible labels.
+The labels must make the values self-describing. Detailed CPU and I/O delay values also expose a supplementary custom tooltip on pointer hover and keyboard focus. CPU tooltip: `최근 10초 동안 최소 한 작업이 CPU를 배정받지 못한 시간 비율`. I/O tooltip: `최근 10초 동안 최소 한 작업이 I/O 완료를 기다린 시간 비율`. `I/O 전체 지연` tooltip: `최근 10초 동안 모든 비유휴 작업이 동시에 I/O를 기다린 시간 비율`. Do not rely on native `title` tooltips for essential interpretation; ordinary comprehension must come from visible labels.
 
 ## Information hierarchy
 
@@ -111,7 +111,7 @@ The labels must make the values self-describing. Do not rely on native `title` t
 
 - Preserve the current dense one-line collapsed rhythm.
 - Use existing warning and destructive semantic colors only for `혼잡` and `병목`.
-- Do not add a new legend, meter, gauge, tooltip dependency, or color family.
+- Do not add a new legend, meter, gauge, tooltip dependency, or color family. Implement the supplementary tooltip with existing Svelte/CSS patterns.
 - Preserve the mounted symmetric disclosure animation and reduced-motion behavior.
 - Keep all figures tabular and aligned.
 - No layout reordering and no card-order changes.
@@ -119,7 +119,7 @@ The labels must make the values self-describing. Do not rely on native `title` t
 ## Accessibility
 
 - The System disclosure retains `aria-expanded` and `aria-controls`.
-- Visible text communicates the interpretation without hover.
+- Visible text communicates the interpretation without hover. Supplementary PSI tooltips open on hover and focus, use `role="tooltip"`, and are connected with `aria-describedby`. They dismiss on `Escape`, remain visible while the pointer is over either trigger or tooltip, close after focus/pointer leaves both, contain no interactive content, and never rely on native `title`.
 - Screen-reader output identifies resource, severity, percentage, and time window.
 - Unknown and historical states are not communicated by color alone.
 - Reduced-motion behavior remains unchanged.
@@ -143,6 +143,7 @@ This preserves expert convention but repeats the current usability failure. Esse
 - Update `frontend/src/lib/utils/resourcePressure.ts` and its tests so the internal `pressure` level keeps the same thresholds while visible copy becomes `혼잡`.
 - Update `frontend/src/lib/components/ServerCard.note-contract.test.ts` to remove the existing collapsed load/tooltip contract and assert interpreted exception cues, visible expanded delay labels, and historical behavior.
 - Add pure cause-selection coverage for unequal severity, equal severity, blocked-task promotion, unavailable data, and historical data.
+- Add contract and browser coverage for custom PSI tooltips: exact copy, `role="tooltip"`, `aria-describedby`, hover/focus opening, `Escape` dismissal, persistence while hovering trigger or tooltip, close after focus/pointer leaves both, no interactive content, and no native `title` explanation path.
 - Keep existing page-view contracts for disclosure motion, server ordering, and reduced motion.
 
 ## Acceptance criteria
@@ -158,6 +159,8 @@ This preserves expert convention but repeats the current usability failure. Esse
 - Positive `io_blocked_tasks` with otherwise-low PSI renders at least `I/O 혼잡`.
 - Expanded System visibly names CPU `some avg10` and I/O `some avg10` as recent-10-second delay percentages.
 - Expanded diagnostics retain raw 1/5/15-minute load, runnable tasks, logical CPU count, I/O full, and blocked tasks.
+- Detailed CPU/I/O PSI values provide the specified accessible tooltips without hiding their visible interpretation; hover/focus, `Escape`, hover persistence, and close behavior match the interaction contract.
+- PSI cumulative `total` is neither added to the collector payload nor displayed in the dashboard.
 - Unknown telemetry uses `확인 불가`; historical collapsed telemetry renders exactly `마지막 수집값 · CPU – · RAM – · 저장 –` with no contention label.
 - Existing disclosure motion, server order, GPU content, and LIVE service remain unchanged.
 - Contract tests, `svelte-check`, production build, and Playwright desktop/mobile checks pass.
