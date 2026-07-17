@@ -63,6 +63,7 @@ function loadViewer() {
   assert(html.includes('<link rel="stylesheet" href="styles.css">'), 'index must link styles.css');
   assert(html.includes('data-tab="advisor"'), 'index must expose an AI Advisor tab');
   assert(html.includes('id="panel-advisor"'), 'index must contain the AI Advisor panel');
+  assert(html.includes('id="rescanWithLlm"'), 'header rescan controls must expose a w/ LLM scan option');
   const elements = new Map();
   const getEl = (id) => {
     if (!elements.has(id)) elements.set(id, new FakeElement('div'));
@@ -128,6 +129,20 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
     "sudo rm -rf -- '/data/simple file.bin'",
     "sudo rm -rf -- '/data/O'\"'\"'Hara/checkpoint.pt'",
   ]);
+})();
+
+(function testScanWithLlmOptionStaysClickableBeforeAdvisorStatusLoads() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.renderAdvisorGlobalControls, 'function', 'advisor global controls must be testable');
+  viewer.advisorState.status = { enabled: false, message: 'AI status has not loaded yet' };
+  const toggle = viewer.document.getElementById('rescanWithLlm');
+  toggle.disabled = false;
+
+  viewer.renderAdvisorGlobalControls();
+
+  assert.strictEqual(toggle.disabled, false, 'w/ LLM is a scan request option and must remain clickable even before AI status resolves');
+  toggle.checked = true;
+  assert.strictEqual(viewer.rescanWithLlmRequested(), true, 'checked w/ LLM option must be sent with the next rescan request');
 })();
 
 (function testTreemapHidesMicroTilesInsteadOfInflatingThem() {

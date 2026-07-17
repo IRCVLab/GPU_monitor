@@ -92,6 +92,12 @@
     cursor: pointer; transition: border-color .18s var(--ease), box-shadow .18s var(--ease), color .18s var(--ease); }
   .rescan-btn:hover:not(:disabled) { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .rescan-btn:disabled { color: var(--text2); cursor: default; }
+  .scan-llm-toggle { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; border: 1px solid var(--separator);
+    border-radius: 999px; padding: 4px 9px; background: var(--surface); color: var(--text2); font: 800 12px var(--font);
+    white-space: nowrap; cursor: pointer; }
+  .scan-llm-toggle input { margin: 0; accent-color: var(--accent); }
+  .scan-llm-toggle:has(input:checked) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .scan-llm-toggle:has(input:disabled) { opacity: .55; cursor: default; }
   #lastUpd { white-space: nowrap; }
 
   select {

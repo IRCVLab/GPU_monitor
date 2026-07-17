@@ -224,6 +224,34 @@ async function runAdvisor(options) {
   return advisorState.payload;
 }
 
+async function loadAdvisorLatest(options) {
+  const opts = options || {};
+  const hostId = opts.hostId || currentAdvisorHostId();
+  loadAdvisorExclusions(hostId);
+  try {
+    const result = await fetchAdvisorJson("/ai/latest?host_id=" + encodeURIComponent(hostId), { cache: "no-store" });
+    const body = result.body;
+    advisorState.apiBaseUrl = result.url.endsWith("/ai/latest?host_id=" + encodeURIComponent(hostId))
+      ? result.url.slice(0, -("/ai/latest?host_id=" + encodeURIComponent(hostId)).length)
+      : advisorState.apiBaseUrl;
+    advisorState.payload = body;
+    advisorState.recommendations = filterExcludedRecommendations(body.recommendations || [], advisorState.exclusions);
+    advisorState.warning = body.advisor_error || null;
+    advisorState.error = null;
+    if (typeof advisorSetRecommendations === "function") advisorSetRecommendations(advisorState.recommendations);
+  } catch (e) {
+    if (!opts.silent) advisorState.error = String(e && e.message ? e.message : e);
+    advisorState.payload = null;
+    advisorState.recommendations = [];
+    advisorState.warning = null;
+    if (typeof advisorSetRecommendations === "function") advisorSetRecommendations([]);
+  } finally {
+    if (typeof renderAdvisorPanel === "function") renderAdvisorPanel();
+    if (typeof refreshAdvisorBadges === "function") refreshAdvisorBadges();
+  }
+  return advisorState.payload;
+}
+
 function addAdvisorExclusion(hostId, exclusion) {
   const rows = loadAdvisorExclusions(hostId);
   const item = { ...(exclusion || {}), created_at: advisorNowUnix() };
@@ -253,6 +281,7 @@ if (typeof globalThis !== "undefined") {
     fetchAdvisorJson,
     fetchAdvisorStatus,
     runAdvisor,
+    loadAdvisorLatest,
     loadAdvisorExclusions,
     saveAdvisorExclusions,
     addAdvisorExclusion,
@@ -286,5 +315,6 @@ if (typeof module !== "undefined" && module.exports) {
     fetchAdvisorJson,
     fetchAdvisorStatus,
     runAdvisor,
+    loadAdvisorLatest,
   };
 }

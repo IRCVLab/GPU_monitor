@@ -120,6 +120,17 @@ class ServeSafetyTest(unittest.TestCase):
         with urlopen(req, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    def wait_rescan_done(self, timeout: float = 5.0) -> dict:
+        deadline = time.time() + timeout
+        last: dict = {}
+        while time.time() < deadline:
+            last = self.get_json("/rescan-status")
+            ai = last.get("ai") if isinstance(last.get("ai"), dict) else {}
+            if not last.get("scanning") and not ai.get("running"):
+                return last
+            time.sleep(0.05)
+        self.fail(f"rescan did not finish: {last}")
+
     def test_rescan_and_ai_are_disabled_by_default_and_data_files_are_served(self) -> None:
         self.start_server()
         caps = self.get_json("/capabilities")
@@ -184,6 +195,51 @@ class ServeSafetyTest(unittest.TestCase):
         self.assertEqual(payload["mode"], "rule-only")
         self.assertEqual(payload["output_language"], "ko")
         self.assertIn("추천", payload["summary"]["headline"])
+
+    def test_rescan_with_llm_runs_advisor_after_scan_and_serves_cached_latest(self) -> None:
+        scanner = self.data_dir / "fake_scanner.py"
+        scanner.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env python3",
+                    "import json, sys",
+                    "out = sys.argv[sys.argv.index('--out') + 1]",
+                    "snapshot = " + json.dumps(sample_snapshot()),
+                    "open(out, 'w', encoding='utf-8').write(json.dumps(snapshot) + '\\n')",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        scanner.chmod(0o755)
+        self.start_server(
+            {
+                "STORAGE_VIZ_ENABLE_RESCAN": "1",
+                "STORAGE_VIZ_SCANNER": str(scanner),
+                "STORAGE_VIZ_OUTPUT": str(self.data_dir / "hinton.json"),
+                "STORAGE_VIZ_HOST_ID": "hinton",
+                "STORAGE_VIZ_AI_ENABLED": "1",
+                "STORAGE_VIZ_AI_PROVIDER": "mock",
+            }
+        )
+
+        started = self.post_json("/rescan", {"with_llm": True})
+        self.assertEqual(started["status"], "started")
+        self.assertEqual(started["with_llm"], True)
+
+        status = self.wait_rescan_done()
+        self.assertIsNone(status["error"])
+        self.assertEqual(status["ai"]["requested"], True)
+        self.assertEqual(status["ai"]["running"], False)
+        self.assertIsNone(status["ai"]["error"])
+        self.assertEqual(status["ai"]["mode"], "mock")
+        self.assertGreater(status["ai"]["recommendations"], 0)
+        self.assertTrue(Path(status["ai"]["cache_file"]).is_file())
+
+        latest = self.get_json("/ai/latest?host_id=hinton")
+        self.assertEqual(latest["host_id"], "hinton")
+        self.assertEqual(latest["mode"], "mock")
+        self.assertGreater(len(latest["recommendations"]), 0)
 
 
 if __name__ == "__main__":

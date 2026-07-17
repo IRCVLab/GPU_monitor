@@ -217,6 +217,42 @@ async function testAdvisorStatusFallsBackToSidecarPort() {
   }
 }
 
+async function testAdvisorLatestCacheLoadsIntoCrossSurfaceState() {
+  const client = require("./advisor-client.js");
+  const badges = require("./advisor-badges.js");
+  const oldFetch = global.fetch;
+  const oldRender = global.renderAdvisorPanel;
+  const oldRefresh = global.refreshAdvisorBadges;
+  let rendered = 0, refreshed = 0;
+  global.renderAdvisorPanel = () => { rendered++; };
+  global.refreshAdvisorBadges = () => { refreshed++; };
+  global.fetch = async (url) => {
+    assert.strictEqual(String(url), "/ai/latest?host_id=hinton");
+    return { ok: true, json: async () => ({
+      schema_version: 1,
+      host_id: "hinton",
+      mode: "mock",
+      output_language: "ko",
+      summary: { health: "warning", headline: "캐시된 AI 추천", top_drivers: [] },
+      recommendations: [
+        { id: "cached-cache", action: "delete", category: "pip-cache", target_path: "/data/cache", badge: "AI: 캐시 정리", reason_short: "캐시입니다.", suggested_next_step: "review-delete-command" },
+      ],
+    }) };
+  };
+  try {
+    const payload = await client.loadAdvisorLatest({ hostId: "hinton" });
+    assert.strictEqual(payload.mode, "mock");
+    assert.strictEqual(client.advisorState.recommendations.length, 1, "latest cached advisor payload populates global state");
+    assert.strictEqual(badges.advisorRecommendationsForPath("/data/cache/wheel.whl").length, 1, "cached latest recommendations show on cross-surface badges");
+    assert(rendered > 0, "latest load should refresh advisor panel");
+    assert(refreshed > 0, "latest load should refresh treemap/top/stale badges");
+  } finally {
+    global.fetch = oldFetch;
+    global.renderAdvisorPanel = oldRender;
+    global.refreshAdvisorBadges = oldRefresh;
+  }
+}
+
 function testDeleteCommandGeneration() {
   const { shellQuote, buildDeleteCommands } = require("./selection.js");
   assert.strictEqual(shellQuote("/data/a b/it's.txt"), "'/data/a b/it'\"'\"'s.txt'");
@@ -246,6 +282,7 @@ async function main() {
   await testAdvisorRunIsGlobalNotTabScoped();
   await testAdvisorFallbackWarningIsNotHardError();
   await testAdvisorStatusFallsBackToSidecarPort();
+  await testAdvisorLatestCacheLoadsIntoCrossSurfaceState();
   console.log("viewer regression tests passed");
 }
 

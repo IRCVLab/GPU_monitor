@@ -110,11 +110,16 @@ function setRescanUnsupported(btn, message) {
   btn.textContent = "Manual rescan";
   btn.title = message || "Manual rescan only: run scanner separately and refresh.";
 }
+function rescanWithLlmRequested() {
+  const el = document.getElementById("rescanWithLlm");
+  return !!(el && el.checked && !el.disabled);
+}
 async function pollRescan() {
   let st;
   try { st = await (await fetch("/rescan-status", { cache: "no-store" })).json(); }
   catch (e) { return; }   // endpoint not available (e.g. plain static server)
   const btn = document.getElementById("rescanBtn"); if (!btn) return;
+  const ai = st && typeof st.ai === "object" ? st.ai : {};
   if (st.supported === false) {
     setRescanUnsupported(btn, st.message);
     return;
@@ -123,6 +128,11 @@ async function pollRescan() {
     sawScanRunning = true;
     const secs = Math.max(0, Math.floor(Date.now() / 1000 - st.started));
     btn.disabled = true; btn.textContent = "⟳ Scanning… " + secs + "s";
+    if (!rescanTimer) rescanTimer = setInterval(pollRescan, 2000);
+  } else if (ai.running) {
+    sawScanRunning = true;
+    const secs = Math.max(0, Math.floor(Date.now() / 1000 - ai.started));
+    btn.disabled = true; btn.textContent = "AI 분석 중… " + secs + "s";
     if (!rescanTimer) rescanTimer = setInterval(pollRescan, 2000);
   } else {
     btn.disabled = false; btn.textContent = "↻ Rescan";
@@ -139,7 +149,11 @@ async function triggerRescan() {
   const btn = document.getElementById("rescanBtn");
   btn.disabled = true; btn.textContent = "⟳ Starting…";
   try {
-    const r = await fetch("/rescan", { method: "POST" });
+    const r = await fetch("/rescan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ with_llm: rescanWithLlmRequested() }),
+    });
     if (r.status === 503) {
       const body = await r.json().catch(() => ({}));
       setRescanUnsupported(btn, body.error || body.message);
@@ -148,6 +162,10 @@ async function triggerRescan() {
   } catch (e) {}
   sawScanRunning = true;
   pollRescan();
+}
+
+if (typeof globalThis !== "undefined") {
+  Object.assign(globalThis, { rescanWithLlmRequested, pollRescan, triggerRescan });
 }
 
 let resizeTimer = null;

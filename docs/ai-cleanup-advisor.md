@@ -57,6 +57,31 @@ required for correctness checks.
 `ollama`, `openai-compatible`, or rule-only fallback so the UI does not pretend a
 real model ran when no model server is available.
 
+## Scan-linked execution
+
+The preferred operator UX is not a separate AI-only tab flow. When server-side
+rescan is explicitly enabled, the header exposes a `w/ LLM` checkbox. That sends:
+
+```http
+POST /rescan
+Content-Type: application/json
+
+{"with_llm": true}
+```
+
+The runtime contract is:
+
+1. Run the normal scanner and write the host snapshot.
+2. If the scan succeeded and AI is enabled, run the advisor immediately after the
+   scan in the same background pipeline.
+3. Cache the validated advisor payload in `data/<host>.advisor.json`.
+4. Let the viewer load `GET /ai/latest?host_id=<id>` so treemap, Top files, and
+   Stale rows receive badges without requiring the user to visit the AI tab.
+
+`STORAGE_VIZ_SCAN_WITH_LLM=1` makes this the default for server-side rescans.
+The manual `AI 분석` button remains available to refresh advice on an existing
+snapshot, while the AI tab remains a grouped detail/exclusion surface.
+
 ## Prompting contract
 
 The LLM path is intentionally two-pass:

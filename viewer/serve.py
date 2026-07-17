@@ -36,9 +36,9 @@ import subprocess
 import sys
 import threading
 import time
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
-from ai_advisor import AdvisorConfig, DEFAULT_MODEL, build_advisor_response, load_snapshot
+from ai_advisor import AdvisorConfig, DEFAULT_MODEL, build_advisor_response, load_snapshot, snapshot_fingerprint
 
 VIEWER_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.environ.get("STORAGE_VIZ_ROOT", VIEWER_DIR.parent)).resolve()
@@ -65,7 +65,22 @@ AI_MESSAGE = (
     if AI_SUPPORTED
     else "AI Advisor is disabled. Set STORAGE_VIZ_AI_ENABLED=1 to enable local recommendations."
 )
+SCAN_WITH_LLM_DEFAULT = os.environ.get("STORAGE_VIZ_SCAN_WITH_LLM", "").lower() in {"1", "true", "yes", "on"}
 SAFE_HOST_TOKEN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _empty_ai_scan_state(*, requested: bool = False, running: bool = False, error: str | None = None) -> dict:
+    return {
+        "requested": requested,
+        "running": running,
+        "started": 0,
+        "finished": 0,
+        "duration": 0,
+        "error": error,
+        "mode": None,
+        "recommendations": 0,
+        "cache_file": str((DATA_DIR / f"{HOST_ID}.advisor.json").resolve()),
+    }
 
 state = {
     "supported": RESCAN_SUPPORTED,
@@ -79,6 +94,8 @@ state = {
     "targets": TARGETS,
     "run_as_root": RUN_AS_ROOT,
     "scanner": str(SCANNER),
+    "with_llm": False,
+    "ai": _empty_ai_scan_state(requested=False),
 }
 lock = threading.Lock()
 
@@ -91,7 +108,85 @@ def scan_command() -> list[str]:
     return [str(SCANNER), "--out", str(DATA_FILE), *TARGETS]
 
 
-def run_scan() -> None:
+def _host_file_token(host_id: str) -> str | None:
+    if not SAFE_HOST_TOKEN.fullmatch(str(host_id or "")):
+        return None
+    hosts = _load_hosts_manifest()
+    match = next((h for h in hosts if h.get("id") == host_id), None)
+    if not match:
+        return host_id
+    file_token = str(match.get("file") or host_id)
+    return file_token if SAFE_HOST_TOKEN.fullmatch(file_token) else None
+
+
+def _advisor_cache_path_for_host(host_id: str) -> Path:
+    token = _host_file_token(host_id) or HOST_ID
+    return _safe_data_file_path(token, ".advisor.json") or (DATA_DIR / f"{token}.advisor.json").resolve()
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}-{threading.get_ident()}")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _snapshot_file_signature(path: Path) -> dict:
+    st = path.stat()
+    return {"snapshot_size": st.st_size, "snapshot_mtime_ns": st.st_mtime_ns}
+
+
+def _load_advisor_cache(host_id: str, *, require_fresh: bool = True) -> dict | None:
+    path = _advisor_cache_path_for_host(host_id)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if require_fresh:
+        snapshot_path = _snapshot_path_for_host(host_id)
+        if not snapshot_path:
+            return None
+        cache_meta = payload.get("_cache") if isinstance(payload.get("_cache"), dict) else {}
+        try:
+            current_signature = _snapshot_file_signature(snapshot_path)
+        except OSError:
+            return None
+        if cache_meta and all(cache_meta.get(k) == v for k, v in current_signature.items()):
+            return payload
+        try:
+            fingerprint = snapshot_fingerprint(load_snapshot(snapshot_path))
+        except Exception:
+            return None
+        if payload.get("snapshot_fingerprint") != fingerprint:
+            return None
+    return payload
+
+
+def _public_advisor_payload(payload: dict) -> dict:
+    out = dict(payload)
+    out.pop("_cache", None)
+    return out
+
+
+def _run_advisor_for_host(host_id: str, snapshot_path: Path) -> dict:
+    snapshot = load_snapshot(snapshot_path)
+    payload = build_advisor_response(
+        snapshot,
+        host_id=host_id,
+        exclusions=[],
+        config=replace(AI_CONFIG, output_language="ko"),
+        max_items=AI_CONFIG.max_recommendations,
+    )
+    payload["_cache"] = {**_snapshot_file_signature(snapshot_path), "created_by": "scan-with-llm"}
+    _write_json_atomic(_advisor_cache_path_for_host(host_id), payload)
+    return payload
+
+
+def run_scan(with_llm: bool = False) -> None:
     t0 = time.time()
     err = None
     try:
@@ -121,6 +216,43 @@ def run_scan() -> None:
             duration=round(time.time() - t0, 1),
             error=err,
         )
+    if not with_llm:
+        return
+    ai_started = time.time()
+    if err:
+        with lock:
+            state["ai"] = _empty_ai_scan_state(requested=True, running=False, error="AI skipped because scan failed")
+        return
+    if not AI_SUPPORTED:
+        with lock:
+            state["ai"] = _empty_ai_scan_state(requested=True, running=False, error=AI_MESSAGE)
+        return
+    with lock:
+        state["ai"] = {
+            **_empty_ai_scan_state(requested=True, running=True),
+            "started": ai_started,
+        }
+    try:
+        payload = _run_advisor_for_host(HOST_ID, DATA_FILE)
+        with lock:
+            state["ai"] = {
+                **_empty_ai_scan_state(requested=True, running=False),
+                "started": ai_started,
+                "finished": time.time(),
+                "duration": round(time.time() - ai_started, 1),
+                "error": payload.get("advisor_error"),
+                "mode": payload.get("mode"),
+                "recommendations": len(payload.get("recommendations") or []),
+                "cache_file": str(_advisor_cache_path_for_host(HOST_ID)),
+            }
+    except Exception as exc:
+        with lock:
+            state["ai"] = {
+                **_empty_ai_scan_state(requested=True, running=False, error=str(exc)),
+                "started": ai_started,
+                "finished": time.time(),
+                "duration": round(time.time() - ai_started, 1),
+            }
 
 
 def _safe_data_file_path(basename: str, suffix: str = ".json") -> Path | None:
@@ -187,6 +319,16 @@ def _normalize_ai_language(value: object, fallback: str = "ko") -> str:
     if raw.startswith("en"):
         return "en"
     return fallback if fallback in {"ko", "en"} else "ko"
+
+
+def _request_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "with_llm", "llm"}
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -284,6 +426,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     config=request_config,
                     max_items=max_items,
                 )
+                if not exclusions:
+                    cache_path = _advisor_cache_path_for_host(host_id)
+                    payload["_cache"] = {**_snapshot_file_signature(snapshot_path), "created_by": "manual-ai-refresh"}
+                    _write_json_atomic(cache_path, payload)
+                    payload = _public_advisor_payload(payload)
             except Exception as exc:
                 return self._json({"error": f"AI recommendation failed: {exc}"}, 500)
             return self._json(payload)
@@ -291,8 +438,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         if not RESCAN_SUPPORTED:
             return self._json({"supported": False, "error": RESCAN_MESSAGE}, 503)
+        body = self._read_json_body() if self.headers.get("Content-Length") else {}
+        if body is None:
+            return self._json({"error": "invalid JSON request body"}, 400)
+        with_llm = _request_bool(body.get("with_llm"), SCAN_WITH_LLM_DEFAULT) or _request_bool(body.get("llm"), False)
         with lock:
-            if state["scanning"]:
+            if state["scanning"] or (isinstance(state.get("ai"), dict) and state["ai"].get("running")):
                 return self._json({"status": "already_running", "started": state["started"], "supported": True})
             state.update(
                 supported=True,
@@ -300,19 +451,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 scanning=True,
                 started=time.time(),
                 error=None,
+                with_llm=with_llm,
+                ai=_empty_ai_scan_state(requested=with_llm),
             )
-        threading.Thread(target=run_scan, daemon=True).start()
-        return self._json({"status": "started", "supported": True, "data_file": str(DATA_FILE), "targets": TARGETS})
+        threading.Thread(target=run_scan, args=(with_llm,), daemon=True).start()
+        return self._json({"status": "started", "supported": True, "with_llm": with_llm, "data_file": str(DATA_FILE), "targets": TARGETS})
 
     def do_GET(self) -> None:
         route = self.path.split("?")[0]
+        if route == "/ai/latest":
+            query = parse_qs(urlsplit(self.path).query)
+            host_id = str((query.get("host_id") or [""])[0]).strip()
+            if not SAFE_HOST_TOKEN.fullmatch(host_id):
+                return self._json({"error": "host_id must be a safe host token"}, 400)
+            payload = _load_advisor_cache(host_id)
+            if not payload:
+                return self._json({"error": "cached AI recommendations not found"}, 404)
+            return self._json(_public_advisor_payload(payload))
         if route == "/ai/status":
             return self._json(_ai_status())
         if route == "/rescan-status":
             with lock:
                 return self._json(dict(state))
         if route == "/capabilities":
-            return self._json({"rescan": RESCAN_SUPPORTED, "message": RESCAN_MESSAGE, "ai": AI_SUPPORTED})
+            return self._json({"rescan": RESCAN_SUPPORTED, "message": RESCAN_MESSAGE, "ai": AI_SUPPORTED, "scan_with_llm_default": SCAN_WITH_LLM_DEFAULT})
         data_path = self._data_path()
         if data_path is not None:
             return self._serve_data_file(data_path)

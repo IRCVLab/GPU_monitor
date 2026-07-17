@@ -44,12 +44,15 @@ data/<hostname>.json
        ├─ optional bounded read-only metadata collector
        ├─ optional local LLM provider
        └─ strict recommendation schema + safety filters
+            ├─ optional data/<hostname>.advisor.json scan-linked cache
             └─ viewer badges/details/exclusions
 ```
 
 The advisor can recommend delete, move, dedupe, archive, investigate, or keep,
 but recommendations are evidence-backed suggestions. Only safe delete-type
 recommendations may be staged into the existing copy-only cleanup command panel.
+When `POST /rescan` is called with `with_llm=true`, the scanner remains the source
+of measurement truth and the advisor runs only after a successful scan.
 
 ## Host manifest contract
 

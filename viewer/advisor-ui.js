@@ -52,6 +52,7 @@ function renderAdvisorGlobalControls() {
   const run = document.getElementById("advisorGlobalRun");
   const pill = document.getElementById("advisorGlobalStatus");
   const count = document.getElementById("advisorGlobalCount");
+  const scanWithLlm = document.getElementById("rescanWithLlm");
   const label = advisorStatusLabel();
   if (pill) {
     pill.className = "advisor-global-status " + (label === "비활성" ? "disabled" : label === "오류" ? "failed" : advisorState && advisorState.running ? "running" : "ready");
@@ -66,6 +67,13 @@ function renderAdvisorGlobalControls() {
     run.disabled = !!(advisorState && advisorState.running) || !(advisorState && advisorState.status && advisorState.status.enabled);
     run.textContent = advisorState && advisorState.running ? "AI 분석 중…" : "AI 분석";
     run.title = "현재 host를 분석하고 treemap/top/stale에 추천 배지를 표시합니다";
+  }
+  if (scanWithLlm) {
+    const enabled = !!(advisorState && advisorState.status && advisorState.status.enabled);
+    scanWithLlm.disabled = false;
+    scanWithLlm.title = enabled
+      ? "다음 Rescan이 끝나면 로컬 LLM 분석을 자동 실행합니다"
+      : "항상 선택 가능합니다. AI가 비활성/미연결이면 scan 후 상태에 오류가 표시됩니다";
   }
 }
 function renderAdvisorSummaryHtml() {
@@ -214,6 +222,7 @@ function onAdvisorHostChanged(host, data) {
   if (typeof advisorSetRecommendations === "function") advisorSetRecommendations([]);
   renderAdvisorPanel();
   advisorRefreshStatus();
+  if (typeof loadAdvisorLatest === "function") loadAdvisorLatest({ hostId: (host && host.id) || advisorCurrentHostId(), silent: true });
 }
 function initAdvisorUI() {
   bindAdvisorUi();

@@ -47,9 +47,14 @@ sudo STORAGE_VIZ_ROOT=/opt/storage-viz \
 `python -m http.server`. This keeps data routing and the Rescan button truthful:
 
 - `GET /capabilities` reports whether server-side rescan is supported.
-- `GET /rescan-status` returns progress/capability metadata, targets, output path, and any scanner error.
+- `GET /rescan-status` returns progress/capability metadata, targets, output path,
+  scanner error, and optional scan-linked AI analysis progress.
 - By default `POST /rescan` returns `503` with a manual-only message, so the HTTP
   service never starts privileged scans accidentally.
+- When server-side rescan is intentionally enabled, `POST /rescan` accepts
+  `{"with_llm": true}`. The scanner still runs first; after a successful scan the
+  server runs the local advisor in the background, writes
+  `data/<host>.advisor.json`, and exposes it through `GET /ai/latest?host_id=<id>`.
 - `GET /data/<host>.json` is served from `STORAGE_VIZ_DATA_DIR`, so the data directory
   does not have to be inside `viewer/`.
 
@@ -94,6 +99,7 @@ patterns, so the recommended path is a local model endpoint.
 | `STORAGE_VIZ_AI_NUM_PREDICT` | `4096` | Ollama output-token cap for the compact two-pass advisor. Lower this for stricter latency. |
 | `STORAGE_VIZ_AI_MAX_LLM_RECOMMENDATIONS` | `12` | Maximum recommendations the LLM may analyze/translate. Remaining rule findings stay deterministic. |
 | `STORAGE_VIZ_AI_CACHE_DIR` | implementation default | Cache for validated advisor results. Do not place generated cache files in tracked `data/`. |
+| `STORAGE_VIZ_SCAN_WITH_LLM` | unset/disabled | Makes server-side `POST /rescan` default to scan-linked LLM analysis. The UI checkbox sends `with_llm` explicitly. |
 
 Recommended Ollama setup:
 
