@@ -214,12 +214,16 @@ test('ServerCard exposes a non-text availability nudge without reordering cards'
 });
 
 
-test('ServerCard derives CPU and I/O cause labels only when pressure is non-idle', () => {
+test('ServerCard keeps expanded pressure classification while removing obsolete collapsed cause derivations', () => {
 	assert.match(source, /const cpuPressureLevel = \$derived\(classifyPressure\(cpuPressureSome\)\)/);
-	assert.match(source, /const ioPressureLevel = \$derived\.by/, 'I\/O pressure should be derived from PSI and blocked-task telemetry');
-	assert.match(source, /const loadPreviewCauses = \$derived\.by/, 'collapsed preview should gather only active cause labels');
-	assert.match(source, /pressureLabel\(cpuPressureLevel\)/, 'CPU copy should reuse the semantic pressure label helper');
-	assert.match(source, /pressureLabel\(ioPressureLevel\)/, 'I\/O copy should reuse the semantic pressure label helper');
+	assert.match(source, /const ioPressureLevel = \$derived\.by/, 'I\/O pressure should still be derived from PSI and blocked-task telemetry');
+	assert.doesNotMatch(source, /pressureLabel,/, 'pressureLabel import should be removed when collapsed cause copy is gone');
+	assert.doesNotMatch(source, /const cpuPressureLabelText/);
+	assert.doesNotMatch(source, /const ioPressureLabelText/);
+	assert.doesNotMatch(source, /const cpuPressureCauseLabel/);
+	assert.doesNotMatch(source, /const ioPressureCauseLabel/);
+	assert.doesNotMatch(source, /const loadPreviewCauses/);
+	assert.doesNotMatch(source, /#each loadPreviewCauses as cause/);
 	assert.doesNotMatch(source, /CPU 여유|I\/O 여유/, 'collapsed preview must not render healthy cause labels');
 });
 

@@ -36,7 +36,8 @@ test('NoteForm derives memo versus hold from selected GPUs and resets after succ
 });
 
 test('NoteForm keeps submission ungated by selected GPU guidance or server freshness context', () => {
-	const submit = source.match(new RegExp('async function handleSubmit\(\) \{[\s\S]*?\n\t\}'))?.[0] ?? '';
+	const submit = source.match(/async function handleSubmit\(\) \{[\s\S]*?\n\t\}/)?.[0] ?? '';
+	assert.ok(submit, 'handleSubmit body should be extracted');
 	assert.doesNotMatch(submit, /(serverStatus|lastSeen|telemetryStale|statusWarning|holdWarningText)/);
 });
 
