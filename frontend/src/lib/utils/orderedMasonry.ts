@@ -31,7 +31,6 @@ export function placeOrderedMasonryItems({
 	const biasRows = Math.max(0, Math.floor(leftBiasRows));
 	const nextRows = Array.from({ length: columns }, () => 1);
 
-	let previousGridRowStart = 1;
 
 	return spans.map((spanValue, itemIndex) => {
 		const preferredColumn = preferredColumns?.[itemIndex] ?? null;
@@ -52,9 +51,8 @@ export function placeOrderedMasonryItems({
 		}
 
 		const span = Math.max(1, Math.ceil(spanValue));
-		const gridRowStart = Math.max(nextRows[columnIndex], previousGridRowStart);
+		const gridRowStart = nextRows[columnIndex];
 		nextRows[columnIndex] = gridRowStart + span;
-		previousGridRowStart = gridRowStart;
 
 		return {
 			gridColumnStart: columnIndex + 1,

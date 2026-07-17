@@ -444,8 +444,7 @@
 }
 
 .ops-menu-row > span,
-.ops-menu-label,
-.ops-menu-shortcut-legend {
+.ops-menu-label {
 	font-size: 0.76rem;
 	font-weight: 650;
 	letter-spacing: 0.02em;
@@ -453,13 +452,6 @@
 	color: color-mix(in srgb, var(--ops-fg) 48%, transparent);
 }
 
-.ops-menu-shortcut-legend {
-	display: block;
-	margin-top: 0.35rem;
-	font-weight: 550;
-	text-transform: none;
-	color: color-mix(in srgb, var(--ops-fg) 42%, transparent);
-}
 
 
 

@@ -20,9 +20,9 @@
 	const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 	const MIN_FUTURE_MS = 60 * 1000;
 	const HOLD_PRIORITY_OPTIONS: { value: NotePriority; label: string; description: string }[] = [
-		{ value: 'normal', label: '보통', description: '가벼운 작업 공유용입니다. 예약 보장 아님.' },
-		{ value: 'high', label: '높음', description: '곧 사용할 작업을 강조합니다. 예약 보장 아님.' },
-		{ value: 'urgent', label: '긴급', description: '즉시 확인이 필요한 작업입니다. 예약 보장 아님.' }
+		{ value: 'normal', label: '보통', description: '가벼운 작업 공유용입니다.' },
+		{ value: 'high', label: '높음', description: '곧 사용할 작업을 강조합니다.' },
+		{ value: 'urgent', label: '긴급', description: '즉시 확인이 필요한 작업입니다.' }
 	];
 
 	let username = $state('');
@@ -188,7 +188,7 @@
 	<div class="note-form-row note-form-scope-row">
 		<div class="note-form-gpu-selector-head">
 			<span class="note-form-gpu-label">GPU 작업 공유</span>
-			<span class="note-form-gpu-hint">선택 시 작업 공유 · 예약 보장 아님</span>
+			<span class="note-form-gpu-hint">선택 시 참고 홀드가 생성됩니다.</span>
 		</div>
 		<div class="note-form-gpu-chip-row" role="group" aria-label="GPU 선택(선택 시 참고 홀드)">
 			{#each sortedGpus as gpu (gpu.index)}
@@ -207,6 +207,7 @@
 		{/if}
 
 		{#if selectedGpuIndices.length > 0}
+			<p class="note-form-hold-warning" aria-live="polite">참고 표시이며 예약을 보장하지 않습니다.</p>
 			<div class="note-form-hold-fields">
 				<input
 					type="text"

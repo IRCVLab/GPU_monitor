@@ -1175,7 +1175,7 @@
 
 				<div class="ops-actions">
 					<div class="relative ops-direct-control" bind:this={viewMenuEl}>
-						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen} aria-keyshortcuts="V" data-shortcut-tooltip="V 보기">{dashboardViewLabel($dashboardView)} <span aria-hidden="true">⌄</span></button>
+						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen} aria-keyshortcuts="V">{dashboardViewLabel($dashboardView)} <span aria-hidden="true">⌄</span></button>
 						{#if viewMenuOpen}
 							<div class="ops-popover ops-view-menu">
 								<div class="ops-menu-row" role="group" aria-label="대시보드 보기">
@@ -1193,7 +1193,6 @@
 									<div class="ops-view-divider"></div>
 								{/if}
 								<span class="ops-menu-label">Theme / Material</span>
-								<span class="ops-menu-shortcut-legend">V 보기 · 1/2/3 망 · C 명암</span>
 								<div class="ops-material-options" role="group" aria-label="재질 프리셋">
 									{#each materialThemeOptions as option}
 										<button
