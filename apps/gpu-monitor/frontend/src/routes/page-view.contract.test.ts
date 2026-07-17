@@ -668,10 +668,9 @@ test('Task 5 failure veil CSS has immediate reduced-motion transitions', () => {
 });
 
 
-test('Task 6 exposes shortcut discovery with menu legend and pointer-safe tooltips', () => {
+test('Task 6 keeps keyboard shortcuts while removing static view clutter', () => {
 	assert.match(pageSource, /Theme \/ Material/);
 	assert.doesNotMatch(pageSource, /<span class="ops-menu-label">재질<\/span>/);
-	assert.match(pageSource, /V 보기 · 1\/2\/3 망 · C 명암/);
 
 	assert.match(pageSource, /shortcut: '1'[\s\S]*tooltip: '1 내부망'/);
 	assert.match(pageSource, /shortcut: '2'[\s\S]*tooltip: '2 외부망'/);
@@ -681,13 +680,15 @@ test('Task 6 exposes shortcut discovery with menu legend and pointer-safe toolti
 	assert.match(pageSource, /class="ops-indicator-network"[\s\S]*aria-keyshortcuts=\{tab\.shortcut\}/);
 	assert.match(pageSource, /class="ops-network ops-network-desktop"[\s\S]*aria-keyshortcuts=\{tab\.shortcut\}/);
 	assert.match(pageSource, /class="ops-mode-action"[\s\S]*aria-keyshortcuts="C"[\s\S]*data-shortcut-tooltip="C 명암"/);
-	assert.match(pageSource, /class="ops-utility-action"[\s\S]*aria-keyshortcuts="V"[\s\S]*data-shortcut-tooltip="V 보기"/);
+	assert.match(pageSource, /class="ops-utility-action"[\s\S]*aria-keyshortcuts="V"/);
+	assert.doesNotMatch(pageSource, /class="ops-utility-action"[\s\S]*data-shortcut-tooltip="V 보기"/);
+	assert.doesNotMatch(pageSource, /ops-menu-shortcut-legend/);
 
 	assert.match(dashboardCss, /\[data-shortcut-tooltip\]::after/);
 	assert.match(dashboardCss, /pointer-events:\s*none;/);
 	assert.match(dashboardCss, /\[data-shortcut-tooltip\]:is\(:hover, :focus-visible\)::after/);
 	assert.match(dashboardCss, /content:\s*attr\(data-shortcut-tooltip\);/);
-	assert.match(dashboardCss, /\.ops-menu-shortcut-legend/);
+	assert.doesNotMatch(dashboardCss, /\.ops-menu-shortcut-legend/);
 });
 
 test('Task 6 central material variables are consumed by dashboard, menu, veil, and controls', () => {

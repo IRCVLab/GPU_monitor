@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./ServerCard.svelte', import.meta.url), 'utf8');
 
-test('ServerCard renders advisory hold chips and wires the dense NoteForm props', () => {
+test('ServerCard renders advisory hold chips, wires the dense NoteForm props, and keeps only concise composer guidance', () => {
 	assert.match(source, /note\.kind === 'hold'/);
 	assert.match(source, /note\.gpu_indices/);
 	assert.match(source, /monitor-note-item__kind">HOLD<\/span>/);
@@ -13,6 +13,10 @@ test('ServerCard renders advisory hold chips and wires the dense NoteForm props'
 		source,
 		/<NoteForm[\s\S]*serverId=\{server\.server_id\}[\s\S]*gpus=\{server\.gpus\}[\s\S]*serverStatus=\{server\.status\}[\s\S]*lastSeen=\{server\.last_seen\}[\s\S]*active=\{notesExpanded\}[\s\S]*onCreated=\{onNoteCreated\}/
 	);
+	const composerHead = source.match(/monitor-card__memo-group--composer[\s\S]*?<div class="monitor-card__memo-group-head">[\s\S]*?<\/div>/)?.[0] ?? '';
+	assert.match(composerHead, /monitor-card__memo-group-title">작성<\/span>/);
+	assert.match(composerHead, /GPU 선택 시 작업 공유/);
+	assert.doesNotMatch(composerHead, /예약 보장 아님|보장하지 않습니다/);
 });
 
 test('ServerCard derives active unexpired hold notes per GPU and passes cues into GpuBar', () => {
@@ -94,31 +98,27 @@ test('ServerCard hides the normal status label while keeping exception labels vi
 	assert.match(source, /\{:else\}\s*<span class="monitor-card__status-text">\{statusMeta\.label\}<\/span>/);
 });
 
-test('ServerCard renders collapsed System as one resource-leading CPU RAM Storage load line', () => {
+test('ServerCard renders collapsed System as one resource-leading CPU RAM Storage line with normalized load labels only', () => {
 	const preview = source.match(/<span class="monitor-card__footer-preview monitor-card__system-preview">[\s\S]*?monitor-card__footer-disclosure/)?.[0] ?? '';
 	const cpuIndex = preview.indexOf('CPU {cpuPreviewText}');
 	const ramIndex = preview.indexOf('RAM {ramPreviewText}');
 	const storageIndex = preview.indexOf('Storage {storagePreviewText}');
 	const loadIndex = preview.indexOf('monitor-card__load-preview');
 
-	assert.ok(cpuIndex >= 0 && cpuIndex < ramIndex && ramIndex < storageIndex && storageIndex < loadIndex, 'CPU, RAM and Storage must remain visible before secondary load context');
-	assert.doesNotMatch(preview, /monitor-card__load-gauge/, 'normal collapsed summary should not spend width on a load gauge');
+	assert.ok(cpuIndex >= 0 && cpuIndex < ramIndex && ramIndex < storageIndex && storageIndex < loadIndex, 'CPU, RAM and Storage must remain visible before load context');
+	assert.doesNotMatch(preview, /monitor-card__load-gauge/, 'collapsed summary should not spend width on a load gauge');
 	assert.match(preview, /monitor-card__load-text">\{loadPreviewText\}<\/span>/, 'collapsed system preview should retain compact load text');
-	assert.match(preview, /monitor-card__load-preview" title=\{loadAverageHelpText\}/, 'collapsed load context should explain how load relates to logical CPU count');
+	assert.match(preview, /monitor-card__load-preview" title=\{loadAverageHelpText\}/, 'collapsed load context should keep the explanatory tooltip');
 	assert.match(source, /aria-describedby=\{`system-load-help-\$\{server\.server_id\}`\}/, 'system disclosure should expose load help to keyboard and assistive technology users');
-	assert.match(preview, /\{\/if\}\s*<span id=\{`system-load-help-\$\{server\.server_id\}`\} class=\"monitor-card__sr-only\">\{loadAverageHelpText\}<\/span>/, 'load help target must remain mounted after the collapsed-only preview closes');
-	assert.ok(source.includes('return `${loadPreviewPrefixText}부하 ${loadText} · CPU ${cpuText}`;'), 'load and logical CPU must read as separate facts, not a hard maximum fraction');
-	assert.match(source, /const loadAverageHelpText = /);
-	for (const phrase of ['1·5·15분 평균', '실행 가능', 'I/O 대기', '최댓값이 아닙니다']) assert.ok(source.includes(phrase));
-	assert.match(preview, /#each loadPreviewCauses as cause/, 'collapsed system preview should append only active cause labels');
-	assert.match(preview, /· \{cause\.label\}/, 'pressure cause labels should be separated from the dense summary');
+	assert.match(preview, /\{\/if\}\s*<span id=\{`system-load-help-\$\{server\.server_id\}`\} class="monitor-card__sr-only">\{loadAverageHelpText\}<\/span>/, 'load help target must remain mounted after the collapsed-only preview closes');
+	for (const label of ['부하 여유', '부하 보통', '부하 높음', '부하 –']) assert.ok(source.includes(label), `missing collapsed load label: ${label}`);
+	assert.doesNotMatch(source, /loadPreviewPrefixText/);
+	assert.doesNotMatch(source, /return `\$\{loadPreviewPrefixText\}부하 \$\{loadText\} · CPU \$\{cpuText\}`;/, 'collapsed preview must not expose raw load or CPU count');
+	assert.doesNotMatch(source, /마지막 ·/, 'historical or offline preview should stay neutral');
+	assert.doesNotMatch(preview, /#each loadPreviewCauses as cause/, 'collapsed system preview should not append separate pressure causes');
+	assert.doesNotMatch(preview, /· \{cause\.label\}/, 'collapsed system preview should not append cause chips');
 	assert.match(source, /const ramPreviewText = \$derived\([\s\S]*?`\$\{ramPct\.toFixed\(0\)\}%`/, 'collapsed RAM preview should use percentage only');
 	assert.match(source, /const storagePreviewText = \$derived\([\s\S]*?`\$\{storagePct\.toFixed\(0\)\}%`/, 'collapsed Storage preview should use percentage only');
-	assert.match(source, /CPU 압박/);
-	assert.match(source, /CPU 병목/);
-	assert.match(source, /I\/O 압박/);
-	assert.match(source, /I\/O 병목/);
-	assert.match(source, /마지막 ·/, 'historical collapsed preview should prefix the last-sample cue');
 	assert.doesNotMatch(preview, /monitor-card__system-preview-segment/, 'old segmented preview pills should be removed');
 	assert.doesNotMatch(source, /monitor-card__system-preview-item/, 'old 4-tile micro-grid should be removed');
 });
@@ -200,7 +200,8 @@ test('ServerCard separates memo history from the composer and provides a deliber
 	assert.match(source, /monitor-card__memo-group monitor-card__memo-group--composer/);
 	assert.match(source, /monitor-card__memo-group-title">기록<\/span>/);
 	assert.match(source, /monitor-card__memo-group-title">작성<\/span>/);
-	assert.match(source, /GPU 선택 시 작업 공유 · 예약 보장 아님/);
+	assert.match(source, /GPU 선택 시 작업 공유/);
+	assert.doesNotMatch(source, /GPU 선택 시 작업 공유[\s\S]*예약 보장 아님/);
 	assert.match(source, /monitor-card__memo-empty/);
 });
 
@@ -279,13 +280,12 @@ test('ServerCard treats gpu_device_missing with stale refresh copy as historical
 	assert.match(source, /const isHistoricalSystemTelemetry = \$derived\(isHistoricalSystemTelemetryStatus\(server\.status, statusReasonCode, refreshText\)\)/);
 });
 
-test('historical and offline System preview keeps a neutral last-sample load cue', () => {
+test('historical and offline System preview keeps a neutral qualitative load cue', () => {
 	assert.match(source, /const systemPreviewUnavailableText = '–';/);
-	assert.match(source, /const loadPreviewPrefixText = \$derived/);
-	assert.match(source, /const loadPreviewText = \$derived\.by/, 'collapsed preview should derive compact load context');
+	assert.match(source, /const loadPreviewText = \$derived\(collapsedLoadLabel\(loadLevel\)\)/, 'collapsed preview should derive a compact qualitative load cue');
 	assert.match(source, /\{#if isHistoricalSystemTelemetry && server\.system\}[\s\S]*monitor-card__last-sample-label[\s\S]*마지막 수집값[\s\S]*\{\/if\}/);
-	assert.match(source, /마지막 ·/, 'historical preview should prefix the last-sample cue');
-	assert.match(source, /부하 – · CPU –/, 'neutral fallback should keep load and CPU capacity as separate facts');
+	assert.doesNotMatch(source, /마지막 ·/, 'historical collapsed preview should stay neutral');
+	assert.match(source, /부하 –/, 'neutral fallback should use the qualitative unavailable load label');
 });
 
 test('expanded historical System keeps raw last-sample resource and pressure values', () => {

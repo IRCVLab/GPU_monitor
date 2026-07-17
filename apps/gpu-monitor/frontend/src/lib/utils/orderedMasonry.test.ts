@@ -18,29 +18,19 @@ test('falls back to one masonry grid track for none or invalid templates', () =>
 	assert.equal(countResolvedGridTracks('repeat(auto-fit, minmax(0, 1fr))'), 1);
 });
 
-function assertRowStartsAreMonotonic(placements: ReturnType<typeof placeOrderedMasonryItems>): void {
-	for (let index = 1; index < placements.length; index += 1) {
-		assert.ok(
-			placements[index].gridRowStart >= placements[index - 1].gridRowStart,
-			`placement ${index} starts at row ${placements[index].gridRowStart}, before previous row ${placements[index - 1].gridRowStart}`
-		);
-	}
-}
-
-test('places uneven DOM-order items with one-row left-biased non-decreasing row starts', () => {
+test('places uneven DOM-order items with deterministic left bias and column-local row starts', () => {
 	const placements = placeOrderedMasonryItems({
 		columnCount: 3,
 		spans: [2, 3, 1, 4, 2, 5]
 	});
 
-	assertRowStartsAreMonotonic(placements);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridColumnStart),
 		[1, 2, 3, 1, 3, 2]
 	);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridRowStart),
-		[1, 1, 1, 3, 3, 4]
+		[1, 1, 1, 3, 2, 4]
 	);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridRowEnd),
@@ -54,14 +44,13 @@ test('uses stable leftmost tie breaking among columns within the left-bias row w
 		spans: [2, 1, 1, 1, 1]
 	});
 
-	assertRowStartsAreMonotonic(placements);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridColumnStart),
 		[1, 2, 2, 3, 1]
 	);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridRowStart),
-		[1, 1, 2, 2, 3]
+		[1, 1, 2, 1, 3]
 	);
 });
 
@@ -72,7 +61,6 @@ test('places the next item in the earlier column when row starts differ by one m
 		leftBiasRows: 1
 	});
 
-	assertRowStartsAreMonotonic(placements);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridColumnStart),
 		[1, 2, 3, 1]
@@ -83,21 +71,29 @@ test('places the next item in the earlier column when row starts differ by one m
 	);
 });
 
-test('keeps preferred columns during height-only relayout', () => {
-	const previous = placeOrderedMasonryItems({ columnCount: 3, spans: [4, 1, 4, 1, 4] });
+test('height-only relayout keeps preferred columns and only moves later items in the same preferred column', () => {
+	const previous = placeOrderedMasonryItems({ columnCount: 3, spans: [4, 1, 4, 1, 4, 1] });
 	const previousColumns = previous.map((placement) => placement.gridColumnStart);
+
+	assert.deepEqual(previousColumns, [1, 2, 2, 3, 3, 1]);
+	assert.deepEqual(
+		previous.map((placement) => placement.gridRowStart),
+		[1, 1, 2, 1, 2, 5]
+	);
 
 	const changed = placeOrderedMasonryItems({
 		columnCount: 3,
-		spans: [4, 4, 4, 1, 4],
+		spans: [6, 1, 4, 1, 4, 1],
 		preferredColumns: previousColumns
 	});
 
-	assertRowStartsAreMonotonic(changed);
-	assert.deepEqual(previousColumns, [1, 2, 2, 3, 3]);
 	assert.deepEqual(
 		changed.map((placement) => placement.gridColumnStart),
 		previousColumns
+	);
+	assert.deepEqual(
+		changed.map((placement) => placement.gridRowStart),
+		[1, 1, 2, 1, 2, 7]
 	);
 });
 
@@ -108,7 +104,6 @@ test('ignores invalid preferred columns so structural relayout can rebalance', (
 		preferredColumns: [3, null, 0, 2]
 	});
 
-	assertRowStartsAreMonotonic(placements);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridColumnStart),
 		[1, 2, 1, 2]
@@ -122,7 +117,6 @@ test('left bias does not choose an earlier column when it is more than one row b
 		leftBiasRows: 1
 	});
 
-	assertRowStartsAreMonotonic(placements);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridColumnStart),
 		[1, 2, 3, 2]
@@ -140,9 +134,12 @@ test('drops preferred columns that no longer exist after responsive column-count
 		preferredColumns: [1, 3, 2]
 	});
 
-	assertRowStartsAreMonotonic(placements);
 	assert.deepEqual(
 		placements.map((placement) => placement.gridColumnStart),
 		[1, 2, 2]
+	);
+	assert.deepEqual(
+		placements.map((placement) => placement.gridRowStart),
+		[1, 1, 3]
 	);
 });

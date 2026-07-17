@@ -5,7 +5,7 @@
   import GpuBar from '$lib/components/GpuBar.svelte';
   import NoteForm from '$lib/components/NoteForm.svelte';
   import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
-  import { classifyLoadRatio, classifyPressure, normalizeLoadRatio, pressureLabel } from '$lib/utils/resourcePressure';
+  import { classifyLoadRatio, classifyPressure, normalizeLoadRatio, pressureLabel, type PressureLevel } from '$lib/utils/resourcePressure';
 
   let {
     server,
@@ -274,15 +274,19 @@
     if (someLevel === 'idle' || fullLevel === 'idle') return 'idle';
     return 'unknown';
   });
-  const loadPreviewPrefixText = $derived(isHistoricalSystemTelemetry && server.system ? '마지막 · ' : '');
-  const loadPreviewText = $derived.by(() => {
-    const loadText = formatFixed(loadAvg1);
-    const cpuText = formatRoundedCount(cpuCount, false);
-    if (loadText === systemPreviewUnavailableText && cpuText === systemPreviewUnavailableText) {
-      return `${loadPreviewPrefixText}부하 – · CPU –`;
+  function collapsedLoadLabel(level: PressureLevel): '부하 –' | '부하 여유' | '부하 보통' | '부하 높음' {
+    switch (level) {
+      case 'idle':
+        return '부하 여유';
+      case 'pressure':
+        return '부하 보통';
+      case 'bottleneck':
+        return '부하 높음';
+      default:
+        return '부하 –';
     }
-    return `${loadPreviewPrefixText}부하 ${loadText} · CPU ${cpuText}`;
-  });
+  }
+  const loadPreviewText = $derived(collapsedLoadLabel(loadLevel));
   const cpuPressureLabelText = $derived(pressureLabel(cpuPressureLevel));
   const ioPressureLabelText = $derived(pressureLabel(ioPressureLevel));
   const cpuPressureCauseLabel = $derived(
@@ -492,9 +496,6 @@
                 <span class="monitor-card__load-preview" title={loadAverageHelpText} data-level={loadLevel}>
                   <span class="monitor-card__load-text">{loadPreviewText}</span>
                 </span>
-                {#each loadPreviewCauses as cause}
-                  <span class="monitor-card__pressure-cause" data-level={cause.level}>· {cause.label}</span>
-                {/each}
               </span>
             {/if}
             <span id={`system-load-help-${server.server_id}`} class="monitor-card__sr-only">{loadAverageHelpText}</span>
@@ -735,7 +736,7 @@
               <div class="monitor-card__memo-group monitor-card__memo-group--composer">
                 <div class="monitor-card__memo-group-head">
                   <span class="monitor-card__memo-group-title">작성</span>
-                  <span class="monitor-card__memo-group-meta">GPU 선택 시 작업 공유 · 예약 보장 아님</span>
+                  <span class="monitor-card__memo-group-meta">GPU 선택 시 작업 공유</span>
                 </div>
                 <NoteForm
                   serverId={server.server_id}
