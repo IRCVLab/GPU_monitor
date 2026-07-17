@@ -196,6 +196,13 @@ test('collapsed system preview keeps one resource-leading summary line with seco
 	assert.match(loadPreviewRule, /display:\s*inline-flex/);
 	assert.match(loadPreviewRule, /align-items:\s*center/);
 	assert.match(loadPreviewRule, /flex:\s*0 0 auto/);
+	assertDeclaration(loadPreviewRule, 'gap', '0.26rem');
+
+	const psiPreviewRule = cssRule('.monitor-card__psi-preview');
+	assertDeclaration(psiPreviewRule, 'font-size', '0.6rem');
+	assertDeclaration(psiPreviewRule, 'font-weight', '560');
+	assert.match(psiPreviewRule, /color:\s*color-mix\(in srgb, var\(--ops-fg\) 44%, transparent\)/);
+	assertDeclaration(psiPreviewRule, 'white-space', 'nowrap');
 
 	const inlineMetricRule = cssRule('.monitor-card__system-inline-metric');
 	assert.match(inlineMetricRule, /display:\s*inline/);
