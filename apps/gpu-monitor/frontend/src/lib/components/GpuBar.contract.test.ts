@@ -80,45 +80,33 @@ test('GpuBar cue prefixes the owner with a visible HOLD label without changing t
 	assert.doesNotMatch(source, /<span class="monitor-gpu-row__hold-owner">HOLD \{primaryHoldDisplayName\}<\/span>/, 'owner label should not be mutated into a synthetic HOLD username');
 });
 
-test('GpuBar preserves telemetry truth in aria-label while adding advisory hold detail', () => {
+test('GpuBar preserves telemetry truth in aria-label while adding only a concise advisory summary', () => {
 	const oneLine = normalized();
+	assert.match(source, /<div class="monitor-gpu-row" role="group"/, 'telemetry row must expose its concise accessible name on an explicit group role');
 	assert.match(
 		oneLine,
 		/GPU \$\{gpu\.index\}.*users \$\{usage\}.*utilization \$\{utilValue\} percent.*memory \$\{memUsedGB\} of \$\{memTotalGB\} gigabytes/,
 		'aria label must retain telemetry users/utilization/memory'
 	);
-	assert.match(source, /holdAriaDetail/, 'aria label should include advisory hold details when present');
-	assert.match(source, /resolveDisplayName\(entry\.note\)|resolveDisplayName\(note\)/, 'aria detail should use the shared display fallback');
+	assert.match(source, /compactHoldAriaText/, 'aria label should include the compact hold summary when present');
+	assert.match(source, /primaryHoldDisplayName/, 'aria summary should use the shared display fallback');
+	assert.doesNotMatch(source, /entry\.note\.content/, 'GPU row aria must not repeat memo bodies');
 });
 
+test('GpuBar renders a static compact HOLD summary without interactive or duplicate detail UI', () => {
+	assert.match(source, /<span[\s\S]*class=\{`monitor-gpu-row__hold-cue/);
+	assert.match(source, /class=\{`monitor-gpu-row__hold-cue[\s\S]*aria-hidden="true"/, 'visible cue should not duplicate the row-level accessible summary');
+	assert.doesNotMatch(source, /<button[\s\S]*class=\{`monitor-gpu-row__hold-cue/);
+	assert.doesNotMatch(source, /tooltipOpen|tooltipId|openTooltip|closeTooltip|handleTooltipKeydown/);
+	assert.doesNotMatch(source, /onmouseenter=|onmouseleave=|onfocus=|onblur=|onkeydown=/);
+	assert.doesNotMatch(source, /role="tooltip"|monitor-gpu-row__tooltip/);
+	assert.doesNotMatch(source, /GPU G\{gpu\.index\} · \{gpu\.name\}/, 'hold cue must not repeat GPU identity or model');
+	assert.doesNotMatch(source, /entry\.remaining|entry\.note\.content/, 'hold cue must leave expiry and memo bodies to the Memo panel');
+	assert.match(source, /monitor-gpu-row__hold-kind[\s\S]*monitor-gpu-row__hold-owner[\s\S]*monitor-gpu-row__hold-priority/, 'cue should read HOLD, owner, then exceptional priority');
+	assert.match(source, /\{holdAdvisory\.secondarySummary\}/, 'multiple holds should remain summarized as +N');
+	assert.match(cssRule('.monitor-gpu-row__hold-cue'), /pointer-events:\s*none/, 'static cue must not advertise a hover interaction');
+	assert.doesNotMatch(cardCss, /\.monitor-gpu-row__tooltip(?:\s|\{|[-_])/, 'obsolete tooltip styling should be removed');
 
-test('GpuBar exposes a stable tooltip id that includes server scope', () => {
-	assert.match(source, /primaryHold\.server_id/);
-	assert.match(source, /gpu-hold-tooltip-\$\{primaryHold\.server_id\}-\$\{gpu\.index\}/);
-	assert.doesNotMatch(source, /`gpu-hold-tooltip-\$\{gpu\.index\}`/);
-});
-test('GpuBar exposes a custom accessible tooltip on hover and focus instead of title-only hints', () => {
-	assert.match(source, /let\s+tooltipOpen\s*=\s*\$state\(false\)/);
-	assert.match(source, /function\s+openTooltip\(\)\s*\{/);
-	assert.match(source, /function\s+closeTooltip\(\)\s*\{/);
-	assert.match(source, /function\s+handleTooltipKeydown\(event:\s*KeyboardEvent\)\s*\{/);
-	assert.match(source, /event\.key\s*===\s*'Escape'/);
-	assert.match(source, /<button[\s\S]*type="button"[\s\S]*class=\{`monitor-gpu-row__hold-cue/);
-	assert.match(source, /onmouseenter=\{openTooltip\}/);
-	assert.match(source, /onmouseleave=\{closeTooltip\}/);
-	assert.match(source, /onfocus=\{openTooltip\}/);
-	assert.match(source, /onblur=\{closeTooltip\}/);
-	assert.match(source, /onkeydown=\{handleTooltipKeydown\}/);
-	assert.match(source, /role="tooltip"/);
-	assert.doesNotMatch(source, /class="monitor-gpu-row__hold-cue"[^>]*title=/, 'GpuBar cue must not rely on title-only hints');
-});
-
-test('GpuBar tooltip content includes gpu identity, resolved display name, priority, expiry, memo summary, and semantic priority styles', () => {
-	assert.match(source, /GPU G\{gpu\.index\} · \{gpu\.name\}/);
-	assert.match(source, /\{resolveDisplayName\(entry\.note\)\}|\{resolveDisplayName\(note\)\}/);
-	assert.match(source, /\{priorityMeta\.label\}/);
-	assert.match(source, /\{entry\.remaining\}/);
-	assert.match(source, /\{entry\.note\.content\}/);
 	const gpuListRule = cssRule('.monitor-card__gpu-list');
 	assertDeclaration(gpuListRule, 'padding-top', '0.4rem');
 	assert.match(cardCss, /\.monitor-gpu-row__hold-cue\.note-priority--normal[\s\S]*color:/, 'normal cues should stay neutral');

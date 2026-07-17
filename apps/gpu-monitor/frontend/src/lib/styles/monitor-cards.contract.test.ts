@@ -316,7 +316,7 @@ test('GPU advisory hold cue stays dense while the exact index gets a visible hol
 	assert.match(cueRule, /display:\s*inline-flex/);
 	assert.match(cueRule, /font-size:\s*0\.6[0-9]rem/);
 	assert.match(cueRule, /line-height:\s*1/);
-	assert.doesNotMatch(cueRule, /pointer-events:\s*none/, 'interactive cue must receive hover and focus');
+	assert.match(cueRule, /pointer-events:\s*none/, 'static cue must never open detail UI or move the card');
 	assert.doesNotMatch(cueRule, /#f59e0b|#ef4444/, 'base cue should remain neutral');
 
 	const normalRule = cssRule('.monitor-gpu-row__hold-cue.note-priority--normal');
@@ -343,6 +343,7 @@ test('GPU advisory hold cue stays dense while the exact index gets a visible hol
 	const notchRule = cssRule(".monitor-gpu-row__index[data-has-hold='true']::after");
 	assert.match(notchRule, /content:\s*''/);
 	assert.match(notchRule, /position:\s*absolute/);
+	assert.doesNotMatch(css, /\.monitor-gpu-row__tooltip(?:\s|\{|[-_])/, 'detail belongs exclusively in the Memo panel');
 });
 
 test('html.light full GPU hold collar keeps a strong 2px deep-orange cue and matching notch', () => {

@@ -44,51 +44,31 @@
     duration: prefersReducedMotion.current ? 0 : 160,
     easing: cubicOut
   });
-  let tooltipOpen = $state(false);
-
   const holdAdvisory = $derived(buildHoldAdvisory(advisoryHolds.map(({ note }) => note)));
   const primaryHold = $derived(holdAdvisory.primary);
   const primaryPriorityMeta = $derived(primaryHold ? getNotePriorityMeta(primaryHold.priority) : null);
   const primaryHoldDisplayName = $derived(primaryHold ? resolveDisplayName(primaryHold) : '');
-  const orderedHoldEntries = $derived.by(() =>
-    holdAdvisory.ordered
-      .map((note) => advisoryHolds.find((entry) => entry.note.id === note.id))
-      .filter((entry): entry is AdvisoryHoldCue => Boolean(entry))
-  );
-  const tooltipId = $derived(primaryHold ? `gpu-hold-tooltip-${primaryHold.server_id}-${gpu.index}` : `gpu-hold-tooltip-legacy-${gpu.index}`);
-  const holdDetailText = $derived.by(() =>
-    orderedHoldEntries
-      .map((entry, index) => {
-        const priorityMeta = getNotePriorityMeta(entry.note.priority);
-        const detail = [`HOLD ${index + 1}`, resolveDisplayName(entry.note), priorityMeta.label];
-        if (entry.remaining) detail.push(entry.remaining);
-        if (entry.note.content) detail.push(entry.note.content);
-        return detail.join(' · ');
-      })
-      .join('; ')
-  );
-  const holdAriaDetail = $derived(holdDetailText ? `, advisory ${holdDetailText}` : '');
+  const compactHoldAriaText = $derived.by(() => {
+    if (!primaryHold) return '';
+
+    const summary = [`HOLD ${primaryHoldDisplayName}`];
+    if (primaryHold.priority !== 'normal' && primaryPriorityMeta) {
+      summary.push(primaryPriorityMeta.label);
+    }
+    if (holdAdvisory.secondarySummary) {
+      summary.push(holdAdvisory.secondarySummary);
+    }
+    return summary.join(', ');
+  });
+  const holdAriaDetail = $derived(compactHoldAriaText ? `, advisory ${compactHoldAriaText}` : '');
   const gpuAriaLabel = $derived.by(() => {
     const usage = displayUsers.length > 0 ? displayUsers.join(', ') : 'idle';
     return `GPU ${gpu.index}, users ${usage}, utilization ${utilValue} percent, memory ${memUsedGB} of ${memTotalGB} gigabytes${holdAriaDetail}`;
   });
 
-  function openTooltip() {
-    tooltipOpen = true;
-  }
-
-  function closeTooltip() {
-    tooltipOpen = false;
-  }
-
-  function handleTooltipKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      closeTooltip();
-    }
-  }
 </script>
 
-<div class="monitor-gpu-row" data-state={availabilityState} aria-label={gpuAriaLabel}>
+<div class="monitor-gpu-row" role="group" data-state={availabilityState} aria-label={gpuAriaLabel}>
   <span class="monitor-gpu-row__index" data-has-hold={primaryHold ? 'true' : 'false'}>G{gpu.index}</span>
 
   <div class="monitor-gpu-row__body">
@@ -108,44 +88,19 @@
       </div>
 
       {#if primaryHold}
-        <button
-          type="button"
+        <span
           class={`monitor-gpu-row__hold-cue ${primaryPriorityMeta?.className ?? ''}`}
-          aria-describedby={tooltipOpen ? tooltipId : undefined}
-          aria-label={holdDetailText}
-          onmouseenter={openTooltip}
-          onmouseleave={closeTooltip}
-          onfocus={openTooltip}
-          onblur={closeTooltip}
-          onkeydown={handleTooltipKeydown}
+          aria-hidden="true"
         >
+          <span class="monitor-gpu-row__hold-kind">HOLD</span>
+          <span class="monitor-gpu-row__hold-owner">{primaryHoldDisplayName}</span>
           {#if primaryHold.priority !== 'normal'}
             <span class="monitor-gpu-row__hold-priority">{primaryPriorityMeta?.label}</span>
           {/if}
-          <span class="monitor-gpu-row__hold-kind">HOLD</span>
-          <span class="monitor-gpu-row__hold-owner">{primaryHoldDisplayName}</span>
           {#if holdAdvisory.secondarySummary}
             <span class="monitor-gpu-row__hold-more">{holdAdvisory.secondarySummary}</span>
           {/if}
-        </button>
-        {#if tooltipOpen}
-          <div id={tooltipId} role="tooltip" class="monitor-gpu-row__tooltip">
-            <div class="monitor-gpu-row__tooltip-title">GPU G{gpu.index} · {gpu.name}</div>
-            {#each orderedHoldEntries as entry (entry.note.id)}
-              {@const priorityMeta = getNotePriorityMeta(entry.note.priority)}
-              <div class="monitor-gpu-row__tooltip-note">
-                <div class="monitor-gpu-row__tooltip-note-head">
-                  <span class="monitor-gpu-row__tooltip-note-owner">{resolveDisplayName(entry.note)}</span>
-                  <span class={`monitor-gpu-row__tooltip-note-priority ${priorityMeta.className}`}>{priorityMeta.label}</span>
-                </div>
-                <div class="monitor-gpu-row__tooltip-note-meta">
-                  <span class="monitor-gpu-row__tooltip-note-expiry">{entry.remaining}</span>
-                </div>
-                <p class="monitor-gpu-row__tooltip-note-memo">{entry.note.content}</p>
-              </div>
-            {/each}
-          </div>
-        {/if}
+        </span>
       {/if}
     </div>
 

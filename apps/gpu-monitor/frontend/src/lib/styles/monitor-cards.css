@@ -405,6 +405,7 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
   line-height: 1;
   letter-spacing: 0.02em;
   white-space: nowrap;
+  pointer-events: none;
 }
 
 .monitor-gpu-row__hold-cue.note-priority--normal {
@@ -425,11 +426,6 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
   color: color-mix(in srgb, #ef4444 82%, var(--ops-fg));
 }
 
-.monitor-gpu-row__hold-cue:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ops-primary) 12%, transparent);
-}
-
 .monitor-gpu-row__hold-priority,
 .monitor-gpu-row__hold-kind {
   flex: 0 0 auto;
@@ -440,71 +436,6 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
 .monitor-gpu-row__hold-more {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.monitor-gpu-row__tooltip {
-  margin-top: 0.18rem;
-  display: grid;
-  gap: 0.34rem;
-  padding: 0.52rem 0.58rem;
-  border: 1px solid color-mix(in srgb, var(--ops-border) 92%, transparent);
-  border-radius: 0.62rem;
-  background: color-mix(in srgb, var(--ops-card) 94%, black 6%);
-  box-shadow: 0 10px 24px color-mix(in srgb, black 18%, transparent);
-  color: color-mix(in srgb, var(--ops-fg) 90%, transparent);
-}
-
-.monitor-gpu-row__tooltip-title {
-  font-size: 0.67rem;
-  font-weight: 700;
-  color: color-mix(in srgb, var(--ops-fg) 80%, transparent);
-}
-
-.monitor-gpu-row__tooltip-note {
-  display: grid;
-  gap: 0.16rem;
-}
-
-.monitor-gpu-row__tooltip-note-head,
-.monitor-gpu-row__tooltip-note-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.24rem 0.34rem;
-}
-
-.monitor-gpu-row__tooltip-note-owner {
-  font-size: 0.68rem;
-  font-weight: 600;
-}
-
-.monitor-gpu-row__tooltip-note-priority {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.06rem 0.28rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ops-muted) 68%, var(--ops-card));
-  font-size: 0.61rem;
-  line-height: 1.1;
-}
-
-.monitor-gpu-row__tooltip-note-priority.note-priority--high {
-  color: color-mix(in srgb, #f59e0b 82%, var(--ops-fg));
-}
-
-.monitor-gpu-row__tooltip-note-priority.note-priority--urgent {
-  color: color-mix(in srgb, #ef4444 82%, var(--ops-fg));
-}
-
-.monitor-gpu-row__tooltip-note-meta,
-.monitor-gpu-row__tooltip-note-memo {
-  font-size: 0.64rem;
-  line-height: 1.35;
-  color: color-mix(in srgb, var(--ops-fg) 64%, transparent);
-}
-
-.monitor-gpu-row__tooltip-note-memo {
-  margin: 0;
 }
 
 .monitor-gpu-row__metrics {
