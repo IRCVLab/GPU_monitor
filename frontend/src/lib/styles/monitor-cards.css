@@ -716,6 +716,7 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
+  gap: 0.26rem;
   overflow: hidden;
 }
 
@@ -735,11 +736,11 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.58rem;
+  font-size: 0.6rem;
   line-height: 1;
-  font-weight: 500;
+  font-weight: 560;
   font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--ops-fg) 24%, transparent);
+  color: color-mix(in srgb, var(--ops-fg) 44%, transparent);
 }
 
 .monitor-card__load-preview[data-level='pressure'] .monitor-card__load-text {
