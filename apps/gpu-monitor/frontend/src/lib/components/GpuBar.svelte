@@ -122,6 +122,7 @@
           {#if primaryHold.priority !== 'normal'}
             <span class="monitor-gpu-row__hold-priority">{primaryPriorityMeta?.label}</span>
           {/if}
+          <span class="monitor-gpu-row__hold-kind">HOLD</span>
           <span class="monitor-gpu-row__hold-owner">{primaryHoldDisplayName}</span>
           {#if holdAdvisory.secondarySummary}
             <span class="monitor-gpu-row__hold-more">{holdAdvisory.secondarySummary}</span>

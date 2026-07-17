@@ -108,9 +108,9 @@ test('ServerCard renders collapsed System as one resource-leading CPU RAM Storag
 	assert.ok(cpuIndex >= 0 && cpuIndex < ramIndex && ramIndex < storageIndex && storageIndex < loadIndex, 'CPU, RAM and Storage must remain visible before load context');
 	assert.doesNotMatch(preview, /monitor-card__load-gauge/, 'collapsed summary should not spend width on a load gauge');
 	assert.match(preview, /monitor-card__load-text">\{loadPreviewText\}<\/span>/, 'collapsed system preview should retain compact load text');
-	assert.match(preview, /monitor-card__load-preview" title=\{loadAverageHelpText\}/, 'collapsed load context should keep the explanatory tooltip');
+	assert.match(preview, /monitor-card__load-preview" title=\{ioPressureHelpText\}/, 'collapsed load context should keep the PSI-aware explanatory tooltip');
 	assert.match(source, /aria-describedby=\{`system-load-help-\$\{server\.server_id\}`\}/, 'system disclosure should expose load help to keyboard and assistive technology users');
-	assert.match(preview, /\{\/if\}\s*<span id=\{`system-load-help-\$\{server\.server_id\}`\} class="monitor-card__sr-only">\{loadAverageHelpText\}<\/span>/, 'load help target must remain mounted after the collapsed-only preview closes');
+	assert.match(preview, /\{\/if\}\s*<span id=\{`system-load-help-\$\{server\.server_id\}`\} class="monitor-card__sr-only">\{ioPressureHelpText\}<\/span>/, 'load help target must remain mounted after the collapsed-only preview closes with PSI guidance');
 	for (const label of ['부하 여유', '부하 보통', '부하 높음', '부하 –']) assert.ok(source.includes(label), `missing collapsed load label: ${label}`);
 	assert.doesNotMatch(source, /loadPreviewPrefixText/);
 	assert.doesNotMatch(source, /return `\$\{loadPreviewPrefixText\}부하 \$\{loadText\} · CPU \$\{cpuText\}`;/, 'collapsed preview must not expose raw load or CPU count');
@@ -121,6 +121,21 @@ test('ServerCard renders collapsed System as one resource-leading CPU RAM Storag
 	assert.match(source, /const storagePreviewText = \$derived\([\s\S]*?`\$\{storagePct\.toFixed\(0\)\}%`/, 'collapsed Storage preview should use percentage only');
 	assert.doesNotMatch(preview, /monitor-card__system-preview-segment/, 'old segmented preview pills should be removed');
 	assert.doesNotMatch(source, /monitor-card__system-preview-item/, 'old 4-tile micro-grid should be removed');
+});
+
+test('collapsed system preview shows PSI alongside elevated qualitative load cues without regressing to raw load facts', () => {
+	const preview = source.match(/<span class="monitor-card__footer-preview monitor-card__system-preview">[\s\S]*?monitor-card__footer-disclosure/)?.[0] ?? '';
+	assert.match(source, /const collapsedCpuPsiText = \$derived\.by/, 'collapsed preview should derive rounded CPU PSI percentages from telemetry');
+	assert.match(source, /const collapsedIoPsiText = \$derived\.by/, 'collapsed preview should derive rounded I\/O PSI percentages from telemetry');
+	assert.match(source, /cpuPressureSome/, 'collapsed PSI summary must read CPU PSI some');
+	assert.match(source, /ioSome/, 'collapsed PSI summary must prefer I\/O PSI some');
+	assert.match(source, /ioFull/, 'collapsed PSI summary must fall back to I\/O PSI full when some is unavailable');
+	assert.match(preview, /title=\{ioPressureHelpText\}/, 'collapsed load preview should use the PSI-aware help text');
+	assert.match(source, /aria-describedby=\{`system-load-help-\$\{server\.server_id\}`\}/, 'collapsed system control should keep the shared help target wired');
+	assert.match(source, /<span id=\{`system-load-help-\$\{server\.server_id\}`\} class="monitor-card__sr-only">\{ioPressureHelpText\}<\/span>/, 'collapsed system help target should explain PSI');
+	assert.match(preview, /\{#if loadLevel === 'pressure' \|\| loadLevel === 'bottleneck'\}[\s\S]*monitor-card__psi-preview[\s\S]*PSI CPU \{collapsedCpuPsiText\} · I\/O \{collapsedIoPsiText\}[\s\S]*\{\/if\}/, 'collapsed PSI summary should appear only for elevated live load states');
+	assert.doesNotMatch(preview, /Load avg|CPU count|논리 CPU|load_avg_1|loadDetailText|cpuCountText/, 'collapsed preview must not regress to raw load or CPU count details');
+	assert.doesNotMatch(preview, /\{#if isHistoricalSystemTelemetry[\s\S]*monitor-card__psi-preview/, 'historical telemetry must not show collapsed PSI summary');
 });
 
 test('expanded System follows pressure capacity bottleneck detail hierarchy', () => {

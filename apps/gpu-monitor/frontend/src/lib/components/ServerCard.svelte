@@ -287,6 +287,13 @@
     }
   }
   const loadPreviewText = $derived(collapsedLoadLabel(loadLevel));
+  const collapsedCpuPsiText = $derived.by(() =>
+    cpuPressureSome !== null ? `${Math.round(cpuPressureSome)}%` : systemPreviewUnavailableText
+  );
+  const collapsedIoPsiText = $derived.by(() => {
+    const collapsedIoPressure = ioSome ?? ioFull;
+    return collapsedIoPressure !== null ? `${Math.round(collapsedIoPressure)}%` : systemPreviewUnavailableText;
+  });
   const loadDetailText = $derived(`${formatFixed(loadAvg1)} · ${formatFixed(loadAvg5)} · ${formatFixed(loadAvg15)}`);
   const cpuCountText = $derived(formatRoundedCount(cpuCount, false));
   const cpuSystemDetailText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : systemPreviewUnavailableText);
@@ -473,12 +480,15 @@
                 <span class="monitor-card__system-inline-metric">CPU {cpuPreviewText}</span>
                 <span class="monitor-card__system-inline-metric">RAM {ramPreviewText}</span>
                 <span class="monitor-card__system-inline-metric">Storage {storagePreviewText}</span>
-                <span class="monitor-card__load-preview" title={loadAverageHelpText} data-level={loadLevel}>
+                <span class="monitor-card__load-preview" title={ioPressureHelpText} data-level={loadLevel}>
                   <span class="monitor-card__load-text">{loadPreviewText}</span>
+                  {#if loadLevel === 'pressure' || loadLevel === 'bottleneck'}
+                    <span class="monitor-card__psi-preview">PSI CPU {collapsedCpuPsiText} · I/O {collapsedIoPsiText}</span>
+                  {/if}
                 </span>
               </span>
             {/if}
-            <span id={`system-load-help-${server.server_id}`} class="monitor-card__sr-only">{loadAverageHelpText}</span>
+            <span id={`system-load-help-${server.server_id}`} class="monitor-card__sr-only">{ioPressureHelpText}</span>
             <span class="monitor-card__footer-disclosure" class:is-expanded={sysExpanded} aria-hidden="true"></span>
           </span>
         </button>

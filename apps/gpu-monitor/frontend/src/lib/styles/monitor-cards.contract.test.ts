@@ -338,6 +338,14 @@ test('GPU advisory hold cue stays dense while the exact index gets a visible hol
 	assert.match(notchRule, /position:\s*absolute/);
 });
 
+test('html.light full GPU hold collar keeps a strong 2px deep-orange cue and matching notch', () => {
+	const heldIndexRule = cssRule("html.light .monitor-gpu-row__index[data-has-hold='true']");
+	assert.match(heldIndexRule, /box-shadow:\s*inset 0 0 0 2px #c2410c/);
+
+	const notchRule = cssRule("html.light .monitor-gpu-row__index[data-has-hold='true']::after");
+	assert.match(notchRule, /background:\s*#c2410c/);
+});
+
 test('Mem receives the wider flexible track without wasting a 10ch value column', () => {
 	const metricsRule = cssRule('.monitor-gpu-row__metrics');
 	assertDeclaration(metricsRule, 'grid-template-columns', 'minmax(0, 0.72fr) minmax(0, 1.28fr)');

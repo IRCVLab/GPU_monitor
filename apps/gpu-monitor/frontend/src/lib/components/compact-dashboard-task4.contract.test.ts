@@ -277,6 +277,14 @@ test('task 4 compact tooltip stays passive, keyboard reachable, and availability
 	assert.doesNotMatch(rowSource, /getCompactGpuState\([^\n]*hold/);
 });
 
+test('task 4 compact light-mode HOLD collar keeps a strong 2px deep-orange cue and matching notch', () => {
+	const heldRule = cssRule(cssSource, "html.light .compact-slot[data-held='true']");
+	assert.match(heldRule, /box-shadow:\s*inset 0 0 0 2px #c2410c/);
+
+	const notchRule = cssRule(cssSource, "html.light .compact-slot[data-held='true']::after");
+	assert.match(notchRule, /background:\s*#c2410c/);
+});
+
 test('compact dashboard closes hold tooltips on hold refresh or expiry tick so stale advisory snapshots cannot persist', () => {
 	assert.match(dashboardSource, /const TOOLTIP_HEIGHT_ESTIMATE = 176;/);
 	assert.match(dashboardSource, /let holdTooltipVersion = \$state\(0\);/);
