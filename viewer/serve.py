@@ -21,13 +21,11 @@ Environment:
 from __future__ import annotations
 
 import contextlib
-from dataclasses import replace
 import http.server
 import json
 import os
 from pathlib import Path
 import posixpath
-import re
 import shlex
 import shutil
 import socket
@@ -37,8 +35,6 @@ import sys
 import threading
 import time
 from urllib.parse import unquote, urlsplit
-
-from ai_advisor import AdvisorConfig, DEFAULT_MODEL, build_advisor_response, load_snapshot
 
 VIEWER_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.environ.get("STORAGE_VIZ_ROOT", VIEWER_DIR.parent)).resolve()
@@ -58,15 +54,6 @@ RESCAN_MESSAGE = (
     else "Manual rescan only: this server does not start scans."
 )
 RUN_AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
-AI_CONFIG = AdvisorConfig.from_env()
-AI_SUPPORTED = AI_CONFIG.enabled
-AI_MESSAGE = (
-    "AI Advisor is enabled."
-    if AI_SUPPORTED
-    else "AI Advisor is disabled. Set STORAGE_VIZ_AI_ENABLED=1 to enable local recommendations."
-)
-SAFE_HOST_TOKEN = re.compile(r"^[A-Za-z0-9._-]+$")
-
 state = {
     "supported": RESCAN_SUPPORTED,
     "message": RESCAN_MESSAGE,
@@ -123,71 +110,6 @@ def run_scan() -> None:
         )
 
 
-def _safe_data_file_path(basename: str, suffix: str = ".json") -> Path | None:
-    if not SAFE_HOST_TOKEN.fullmatch(str(basename or "")):
-        return None
-    path = (DATA_DIR / f"{basename}{suffix}").resolve()
-    with contextlib.suppress(ValueError):
-        path.relative_to(DATA_DIR)
-        return path
-    return None
-
-
-def _load_hosts_manifest() -> list[dict]:
-    manifest = _safe_data_file_path("hosts")
-    if not manifest or not manifest.is_file():
-        return [{"id": "hinton", "label": "hinton", "file": "hinton", "default": True}]
-    try:
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return [{"id": "hinton", "label": "hinton", "file": "hinton", "default": True}]
-    if not isinstance(data, list):
-        return []
-    safe = []
-    for row in data:
-        if not isinstance(row, dict):
-            continue
-        host_id = str(row.get("id") or "").strip()
-        file_token = str(row.get("file") or host_id).strip()
-        if SAFE_HOST_TOKEN.fullmatch(host_id) and SAFE_HOST_TOKEN.fullmatch(file_token):
-            safe.append({**row, "id": host_id, "file": file_token})
-    return safe
-
-
-def _snapshot_path_for_host(host_id: str) -> Path | None:
-    if not SAFE_HOST_TOKEN.fullmatch(str(host_id or "")):
-        return None
-    hosts = _load_hosts_manifest()
-    match = next((h for h in hosts if h.get("id") == host_id), None)
-    if not match:
-        return None
-    file_token = str(match.get("file") or host_id)
-    for suffix in (".json", ".sample.json"):
-        path = _safe_data_file_path(file_token, suffix)
-        if path and path.is_file():
-            return path
-    return None
-
-
-def _ai_status() -> dict:
-    return {
-        "enabled": AI_SUPPORTED,
-        "provider": AI_CONFIG.provider,
-        "model": AI_CONFIG.model or DEFAULT_MODEL,
-        "message": AI_MESSAGE,
-        "cached": False,
-        "readonly_inspection": AI_CONFIG.readonly_inspection,
-    }
-
-
-def _normalize_ai_language(value: object, fallback: str = "ko") -> str:
-    raw = str(value or fallback or "ko").strip().lower().replace("_", "-")
-    if raw.startswith("ko"):
-        return "ko"
-    if raw.startswith("en"):
-        return "en"
-    return fallback if fallback in {"ko", "en"} else "ko"
-
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -207,19 +129,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_json_body(self, max_bytes: int = 128 * 1024) -> dict | None:
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            return None
-        if length < 0 or length > max_bytes:
-            return None
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return None
-        return body if isinstance(body, dict) else None
 
     def _data_path(self) -> Path | None:
         parsed = urlsplit(self.path)
@@ -253,40 +162,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         route = self.path.split("?")[0]
-        if route == "/ai/recommend":
-            if not AI_SUPPORTED:
-                return self._json({"enabled": False, "error": AI_MESSAGE, "status": _ai_status()}, 503)
-            body = self._read_json_body()
-            if body is None:
-                return self._json({"error": "invalid JSON request body"}, 400)
-            host_id = str(body.get("host_id") or "").strip()
-            if not SAFE_HOST_TOKEN.fullmatch(host_id):
-                return self._json({"error": "host_id must be a safe host token"}, 400)
-            snapshot_path = _snapshot_path_for_host(host_id)
-            if not snapshot_path:
-                return self._json({"error": "host snapshot not found"}, 404)
-            exclusions = body.get("exclusions") if isinstance(body.get("exclusions"), list) else []
-            try:
-                max_items = int(body.get("max_items") or AI_CONFIG.max_recommendations)
-            except (TypeError, ValueError):
-                max_items = AI_CONFIG.max_recommendations
-            max_items = max(1, min(max_items, AI_CONFIG.max_recommendations))
-            request_config = replace(
-                AI_CONFIG,
-                output_language=_normalize_ai_language(body.get("language"), AI_CONFIG.output_language),
-            )
-            try:
-                snapshot = load_snapshot(snapshot_path)
-                payload = build_advisor_response(
-                    snapshot,
-                    host_id=host_id,
-                    exclusions=exclusions,
-                    config=request_config,
-                    max_items=max_items,
-                )
-            except Exception as exc:
-                return self._json({"error": f"AI recommendation failed: {exc}"}, 500)
-            return self._json(payload)
         if route != "/rescan":
             return self._json({"error": "not found"}, 404)
         if not RESCAN_SUPPORTED:
@@ -306,13 +181,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         route = self.path.split("?")[0]
-        if route == "/ai/status":
-            return self._json(_ai_status())
         if route == "/rescan-status":
             with lock:
                 return self._json(dict(state))
         if route == "/capabilities":
-            return self._json({"rescan": RESCAN_SUPPORTED, "message": RESCAN_MESSAGE, "ai": AI_SUPPORTED})
+            return self._json({"rescan": RESCAN_SUPPORTED, "message": RESCAN_MESSAGE})
         data_path = self._data_path()
         if data_path is not None:
             return self._serve_data_file(data_path)

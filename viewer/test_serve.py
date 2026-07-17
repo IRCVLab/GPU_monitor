@@ -59,9 +59,6 @@ class ServeSafetyTest(unittest.TestCase):
     def start_server(self, extra_env: dict[str, str] | None = None) -> None:
         self.port = free_port()
         env = os.environ.copy()
-        for key in list(env):
-            if key.startswith("STORAGE_VIZ_AI_"):
-                env.pop(key, None)
         env.update(
             STORAGE_VIZ_DATA_DIR=str(self.data_dir),
             STORAGE_VIZ_BIND="127.0.0.1",
@@ -120,16 +117,12 @@ class ServeSafetyTest(unittest.TestCase):
         with urlopen(req, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def test_rescan_and_ai_are_disabled_by_default_and_data_files_are_served(self) -> None:
+    def test_rescan_disabled_by_default_and_data_files_are_served(self) -> None:
         self.start_server()
         caps = self.get_json("/capabilities")
         self.assertEqual(caps["rescan"], False)
+        self.assertNotIn("ai", caps)
         self.assertIn("Manual rescan only", caps["message"])
-
-        ai = self.get_json("/ai/status")
-        self.assertEqual(ai["enabled"], False)
-        self.assertEqual(ai["model"], "qwen2.5:14b")
-        self.assertIn("disabled", ai["message"].lower())
 
         status = self.get_json("/rescan-status")
         self.assertEqual(status["supported"], False)
@@ -140,50 +133,19 @@ class ServeSafetyTest(unittest.TestCase):
             urlopen(Request(self.url("/rescan"), method="POST"), timeout=3)
         self.assertEqual(ctx.exception.code, 503)
 
-        with self.assertRaises(HTTPError) as ctx:
-            self.post_json("/ai/recommend", {"host_id": "hinton"})
-        self.assertEqual(ctx.exception.code, 503)
-
         self.assertEqual(self.get_json("/data/hosts.json")[0]["id"], "hinton")
         self.assertEqual(self.get_json("/data/hinton.sample.json")["hostname"], "hinton")
 
-    def test_enabled_mock_ai_returns_validated_recommendations_without_path_escape(self) -> None:
-        self.start_server({"STORAGE_VIZ_AI_ENABLED": "1", "STORAGE_VIZ_AI_PROVIDER": "mock"})
-        status = self.get_json("/ai/status")
-        self.assertEqual(status["enabled"], True)
-        self.assertEqual(status["provider"], "mock")
-        self.assertEqual(status["model"], "qwen2.5:14b")
-        self.assertEqual(status["readonly_inspection"], False)
-
-        payload = self.post_json("/ai/recommend", {"host_id": "hinton", "exclusions": [], "max_items": 10})
-        self.assertEqual(payload["schema_version"], 1)
-        self.assertEqual(payload["host_id"], "hinton")
-        self.assertIn(payload["mode"], {"mock", "rule+llm"})
-        categories = {rec["category"] for rec in payload["recommendations"]}
-        self.assertIn("pip-cache", categories)
-        self.assertTrue(all(rec["target_path"].startswith("/") for rec in payload["recommendations"]))
-
-        hidden = self.post_json("/ai/recommend", {"host_id": "hinton", "exclusions": [{"type": "action", "action": "delete"}]})
-        self.assertNotIn("delete", {rec["action"] for rec in hidden["recommendations"]})
+    def test_removed_analysis_endpoints_return_404(self) -> None:
+        self.start_server()
+        removed_prefix = "/" + "ai"
+        with self.assertRaises(HTTPError) as ctx:
+            self.get_json(removed_prefix + "/status")
+        self.assertEqual(ctx.exception.code, 404)
 
         with self.assertRaises(HTTPError) as ctx:
-            self.post_json("/ai/recommend", {"host_id": "../hinton"})
-        self.assertEqual(ctx.exception.code, 400)
-
-    def test_ai_recommend_request_language_overrides_server_default(self) -> None:
-        self.start_server(
-            {
-                "STORAGE_VIZ_AI_ENABLED": "1",
-                "STORAGE_VIZ_AI_PROVIDER": "none",
-                "STORAGE_VIZ_AI_OUTPUT_LANGUAGE": "en",
-            }
-        )
-
-        payload = self.post_json("/ai/recommend", {"host_id": "hinton", "language": "ko", "max_items": 10})
-
-        self.assertEqual(payload["mode"], "rule-only")
-        self.assertEqual(payload["output_language"], "ko")
-        self.assertIn("추천", payload["summary"]["headline"])
+            self.post_json(removed_prefix + "/recommend", {"host_id": "hinton"})
+        self.assertEqual(ctx.exception.code, 404)
 
 
 if __name__ == "__main__":

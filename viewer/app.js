@@ -38,7 +38,6 @@ function showTab(name) {
     if (name === "treemap") renderTreemap();
     if (name === "users") { if (!usersInited) renderUsers(); else if (usersChart) usersChart.resize(); }
     if (name === "stale") renderStaleWindow();
-    if (name === "advisor" && typeof renderAdvisorPanel === "function") renderAdvisorPanel();
   });
 }
 
@@ -53,10 +52,6 @@ function renderAll() {
   currentMountIdx = 0; userMountFilter = topMountFilter = staleMountFilter = "";
   topRowsCache = null; staleRowsCache = null;
   cleanupSelected.clear(); renderCleanupPanel();
-  if (typeof advisorState !== "undefined") { advisorState.payload = null; advisorState.recommendations = []; advisorState.error = null; }
-  if (typeof loadAdvisorExclusions === "function") loadAdvisorExclusions((document.getElementById("hostSel") || {}).value || (DATA && DATA.hostname) || "hinton");
-  if (typeof renderAdvisorPanel === "function") renderAdvisorPanel();
-
   // Fast first paint: header + hero + controls now.
   renderHeader();
   updateLastUpdated();
@@ -68,7 +63,6 @@ function renderAll() {
     renderTreemap();           // builds only the active mount's tree
     renderTopFiles();          // 200 rows
     prepStale();               // computes filtered set + caption; window paints on tab show
-    if (typeof advisorRefreshAnnotations === "function") advisorRefreshAnnotations();
     // users chart inits lazily on first Users-tab activation
   });
 }
@@ -85,7 +79,6 @@ async function selectHost(host) {
     return;
   }
   renderAll();
-  if (typeof onAdvisorHostChanged === "function") onAdvisorHostChanged(host, DATA);
 }
 
 /* ---- Last-updated label + optional server-side rescan ---- */
@@ -164,9 +157,7 @@ async function init() {
   bindSort("#staleHead", staleSort, renderStale);
   bindCopy();
   bindCleanupSelection();
-  if (typeof bindAdvisorUi === "function") bindAdvisorUi();
   if (typeof bindTreemapCleanupMode === "function") bindTreemapCleanupMode();
-  if (typeof initAdvisorUI === "function") initAdvisorUI();
 
   // Hover-highlight EXACTLY the topmost tile under the cursor (e.target is the
   // top element), so a parent group is never highlighted by mistake.
@@ -242,7 +233,6 @@ async function init() {
 
   const rb = document.getElementById("rescanBtn");
   if (rb) rb.onclick = triggerRescan;
-  if (typeof fetchAdvisorStatus === "function") fetchAdvisorStatus();
   pollRescan();                          // reflect a scan already running (started by another viewer)
   setInterval(pollRescan, 5000);         // stay in sync with other viewers
   setInterval(updateLastUpdated, 30000); // keep "x min ago" fresh

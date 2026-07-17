@@ -52,17 +52,15 @@ function loadViewer() {
   assert.deepStrictEqual(scriptFiles, [
     'data-client.js',
     'selection.js',
-    'advisor-client.js',
-    'advisor-ui.js',
-    'advisor-badges.js',
     'treemap.js',
     'tables.js',
     'app.js',
   ], 'viewer code must be loaded from ordered external scripts');
   assert(!/<style\b/i.test(html), 'viewer stylesheet must be externalized');
   assert(html.includes('<link rel="stylesheet" href="styles.css">'), 'index must link styles.css');
-  assert(html.includes('data-tab="advisor"'), 'index must expose an AI Advisor tab');
-  assert(html.includes('id="panel-advisor"'), 'index must contain the AI Advisor panel');
+  const removedName = 'ad' + 'visor';
+  assert(!html.includes('data-tab="' + removedName + '"'), 'removed analysis tab must not exist');
+  assert(!html.includes('id="panel-' + removedName + '"'), 'removed analysis panel must not exist');
   const elements = new Map();
   const getEl = (id) => {
     if (!elements.has(id)) elements.set(id, new FakeElement('div'));
@@ -113,10 +111,6 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
   assert.strictEqual(typeof viewer.cleanupCheckboxHtml, 'function', 'cleanupCheckboxHtml must be exposed for table rows');
   assert.strictEqual(typeof viewer.renderCleanupPanel, 'function', 'renderCleanupPanel must be exposed for selection updates');
   assert.strictEqual(typeof viewer.bindCleanupSelection, 'function', 'bindCleanupSelection must be exposed before app init');
-  assert.strictEqual(typeof viewer.fetchAdvisorStatus, 'function', 'advisor client must be exposed before app init');
-  assert.strictEqual(typeof viewer.renderAdvisorPanel, 'function', 'advisor UI must be exposed before app init');
-  assert.strictEqual(typeof viewer.advisorBadgesHtml, 'function', 'advisor badges must be exposed before table/treemap renderers');
-
   assert.strictEqual(viewer.shellQuotePath('/data/simple file.bin'), "'/data/simple file.bin'");
   assert.strictEqual(viewer.shellQuotePath("/data/O'Hara/checkpoint.pt"), "'/data/O'\"'\"'Hara/checkpoint.pt'");
 
