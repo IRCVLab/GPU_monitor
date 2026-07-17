@@ -5,7 +5,7 @@
   import GpuBar from '$lib/components/GpuBar.svelte';
   import NoteForm from '$lib/components/NoteForm.svelte';
   import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
-  import { classifyLoadRatio, classifyPressure, normalizeLoadRatio, pressureLabel, type PressureLevel } from '$lib/utils/resourcePressure';
+  import { classifyLoadRatio, classifyPressure, normalizeLoadRatio, type PressureLevel } from '$lib/utils/resourcePressure';
 
   let {
     server,
@@ -287,26 +287,6 @@
     }
   }
   const loadPreviewText = $derived(collapsedLoadLabel(loadLevel));
-  const cpuPressureLabelText = $derived(pressureLabel(cpuPressureLevel));
-  const ioPressureLabelText = $derived(pressureLabel(ioPressureLevel));
-  const cpuPressureCauseLabel = $derived(
-    cpuPressureLevel === 'pressure' ? 'CPU 압박' : cpuPressureLevel === 'bottleneck' ? 'CPU 병목' : null
-  );
-  const ioPressureCauseLabel = $derived(
-    ioPressureLevel === 'pressure' ? 'I/O 압박' : ioPressureLevel === 'bottleneck' ? 'I/O 병목' : null
-  );
-  const loadPreviewCauses = $derived.by(() => {
-    if (isHistoricalSystemTelemetry) return [];
-
-    const causes = [];
-    if (cpuPressureCauseLabel) {
-      causes.push({ key: 'cpu', label: cpuPressureCauseLabel, level: cpuPressureLevel, detail: cpuPressureLabelText });
-    }
-    if (ioPressureCauseLabel) {
-      causes.push({ key: 'io', label: ioPressureCauseLabel, level: ioPressureLevel, detail: ioPressureLabelText });
-    }
-    return causes;
-  });
   const loadDetailText = $derived(`${formatFixed(loadAvg1)} · ${formatFixed(loadAvg5)} · ${formatFixed(loadAvg15)}`);
   const cpuCountText = $derived(formatRoundedCount(cpuCount, false));
   const cpuSystemDetailText = $derived(server.system ? `${cpuPct.toFixed(0)}%` : systemPreviewUnavailableText);
