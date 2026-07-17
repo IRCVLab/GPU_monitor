@@ -18,6 +18,9 @@ TiB = 1024 ** 4
 KiB = 1024
 
 SCAN_START = 1719200000  # ~2024-06-24, fixed for reproducibility
+SCAN_DURATION_SEC = 42
+SCAN_FINISHED = SCAN_START + SCAN_DURATION_SEC
+SCAN_GENERATION = "hinton-1719200000-v1"
 
 # uid -> name (lab users)
 USERS = {
@@ -44,6 +47,7 @@ def add_user(uid, mount, nbytes):
 def node(name, uid, nbytes, files, mtime, other_bytes=0, children=None):
     n = {
         "name": name,
+        "kind": "directory",
         "bytes": nbytes,
         "files": files,
         "uid": uid,
@@ -66,10 +70,10 @@ def mtime(days_ago):
 
 
 # ---------------------------------------------------------------------------
-# Mount "/" (ext4) - OS + a couple of home dirs that didn't get their own mount
+# Mount "/" (ext4) scanned at "/home" - home dirs on root filesystem
 # ---------------------------------------------------------------------------
 def build_root():
-    mount = "/"
+    mount = "/home"
     home_children = [
         node("shchoi", 1008, 0, 0, mtime(3), children=[
             leaf(".cache", 1008, mount, 8 * GiB, 40210, mtime(2)),
@@ -83,28 +87,11 @@ def build_root():
     home_children[0]["files"] = 40210 + 8800 + 120400 + 220
     add_user(1008, mount, 8 * GiB + 22 * GiB + 11 * GiB + 900 * MiB)
 
-    home = node("home", 0, 0, 0, mtime(1), children=home_children, other_bytes=300 * MiB)
-    home["bytes"] = sum(c["bytes"] for c in home_children) + home["other_bytes"]
-    home["files"] = sum(c["files"] for c in home_children) + 120
-    add_user(0, mount, 300 * MiB)
-
-    usr = leaf("usr", 0, mount, 14 * GiB, 412000, mtime(120))
-    usr["other_bytes"] = 0
-    var = node("var", 0, 0, 0, mtime(1), children=[
-        leaf("log", 0, mount, 3 * GiB, 2200, mtime(0)),
-        leaf("lib", 0, mount, 9 * GiB, 88000, mtime(5)),
-        leaf("cache", 0, mount, 2 * GiB, 30200, mtime(7)),
-    ], other_bytes=600 * MiB)
-    var["bytes"] = sum(c["bytes"] for c in var["children"]) + var["other_bytes"]
-    var["files"] = sum(c["files"] for c in var["children"]) + 410
-    add_user(0, mount, 600 * MiB)
-
-    children = [home, usr, var]
-    root_other = 1 * GiB + 512 * MiB  # /bin /etc /opt /tmp small stuff
-    add_user(0, mount, root_other + 14 * GiB)  # usr is root too
-    tree = node("/", 0, 0, 0, mtime(0), children=children, other_bytes=root_other)
-    tree["bytes"] = sum(c["bytes"] for c in children) + root_other
-    tree["files"] = sum(c["files"] for c in children) + 9000
+    other = 300 * MiB  # /home dotfiles and small unexpanded user directories
+    tree = node("/home", 0, 0, 0, mtime(1), children=home_children, other_bytes=other)
+    tree["bytes"] = sum(c["bytes"] for c in home_children) + tree["other_bytes"]
+    tree["files"] = sum(c["files"] for c in home_children) + 120
+    add_user(0, mount, other)
     return mount, tree
 
 
@@ -224,6 +211,77 @@ def build_data3():
 
 
 # ---------------------------------------------------------------------------
+# Synthetic mount metadata. Values are privacy-safe and deterministic; they are
+# intentionally not read from the developer machine running this generator.
+# ---------------------------------------------------------------------------
+MOUNT_META = {
+    "/": {
+        "mount_id": "rootfs",
+        "major_minor": "8:1",
+        "mount_source": "/dev/storage-viz/rootfs",
+        "mount_root": "/",
+        "mountpoint": "/",
+        "scan_root": "/home",
+    },
+    "/data": {
+        "mount_id": "data",
+        "major_minor": "8:16",
+        "mount_source": "/dev/storage-viz/data",
+        "mount_root": "/",
+        "mountpoint": "/data",
+        "scan_root": "/data",
+    },
+    "/data1": {
+        "mount_id": "data1",
+        "major_minor": "8:32",
+        "mount_source": "/dev/storage-viz/data1",
+        "mount_root": "/",
+        "mountpoint": "/data1",
+        "scan_root": "/data1",
+    },
+    "/data3": {
+        "mount_id": "data3",
+        "major_minor": "8:48",
+        "mount_source": "/dev/storage-viz/data3",
+        "mount_root": "/",
+        "mountpoint": "/data3",
+        "scan_root": "/data3",
+    },
+}
+
+
+def count_blocked(scan_root):
+    prefix = scan_root.rstrip("/") + "/"
+    return sum(
+        1 for item in blocked
+        if item["path"] == scan_root or item["path"].startswith(prefix)
+    )
+
+
+def selected_root_from_mount(mount):
+    meta = next(item for item in MOUNT_META.values() if item["mount_id"] == mount["mount_id"])
+    blocked_count = count_blocked(meta["scan_root"])
+    error_count = mount["errors"]
+    status = "complete" if blocked_count == 0 and error_count == 0 else "partial"
+    return {
+        "mount_id": meta["mount_id"],
+        "major_minor": meta["major_minor"],
+        "mount_source": meta["mount_source"],
+        "mount_root": meta["mount_root"],
+        "mountpoint": meta["mountpoint"],
+        "scan_root": meta["scan_root"],
+        "fstype": mount["fstype"],
+        "status": status,
+        "scanned_bytes": mount["scanned_bytes"],
+        "scanned_files": mount["scanned_files"],
+        "scanned_dirs": mount["scanned_dirs"],
+        "blocked_count": blocked_count,
+        "error_count": error_count,
+        "error_code": "EACCES" if blocked_count else ("EIO" if error_count else None),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Assemble mounts with df_* metadata
 # ---------------------------------------------------------------------------
 def fs_total(scanned, headroom_frac):
@@ -244,8 +302,11 @@ def make_mount(path, fstype, builder, headroom):
         used = int(total * 0.97)
     avail = total - used
     use_pct = round(used / total * 100)
+    meta = MOUNT_META[path]
     return {
-        "path": path,
+        "path": meta["scan_root"],
+        "mount_id": meta["mount_id"],
+        "scan_root": meta["scan_root"],
         "fstype": fstype,
         "df_total": total,
         "df_used": used,
@@ -259,12 +320,21 @@ def make_mount(path, fstype, builder, headroom):
     }
 
 
+# ---------------------------------------------------------------------------
+# blocked[] - dirs the scanner couldn't enter
+# ---------------------------------------------------------------------------
+blocked = [
+    {"path": "/home/jusung", "reason": "EACCES"},
+    {"path": "/data/private_collab", "reason": "EACCES"},
+]
+
 mounts = [
     make_mount("/", "ext4", build_root, 0.62),
     make_mount("/data", "xfs", build_data, 0.86),
     make_mount("/data1", "ext4", build_data1, 0.74),
     make_mount("/data3", "xfs", build_data3, 0.90),
 ]
+selected_roots = [selected_root_from_mount(mount) for mount in mounts]
 
 # ---------------------------------------------------------------------------
 # users[] aggregated across mounts
@@ -318,13 +388,14 @@ TOP_TEMPLATES = [
     ("/data/donguk/features/clip_feats.npy", 1004, 34, 13),
     ("/data3/archive/2023_projects/logs_archive.tar.gz", 0, 27, 402),
     ("/data/shared/public_datasets/coco2017.zip", 0, 25, 81),
-    ("/var/lib/docker/overlay2_blob.img", 0, 9, 5),
+    ("/home/shchoi/docker/overlay2_blob.img", 1008, 9, 5),
     ("/data/sungoh/tmp/scratch_blob.bin", 1003, 40, 0),
 ]
 top_files = []
 for path, uid, gib, days in TOP_TEMPLATES:
     top_files.append({
         "path": path,
+        "kind": "file",
         "bytes": int(gib * GiB + random.randint(0, 900) * MiB),
         "uid": uid,
         "owner": USERS[uid],
@@ -350,12 +421,13 @@ STALE_TEMPLATES = [
     ("/data3/archive/2023_projects/logs_archive.tar.gz", 0, 27, 402),
     ("/data/jaehyeon/eval/old_results.parquet", 1006, 5, 220),
     ("/data1/geonyeong/samples/grid_render.mp4", 1007, 8, 140),
-    ("/var/log/journal_archive.gz", 0, 3, 130),
+    ("/home/minseo/journal_archive.gz", 1010, 3, 130),
 ]
 stale = []
 for path, uid, gib, days in STALE_TEMPLATES:
     stale.append({
         "path": path,
+        "kind": "file",
         "bytes": int(gib * GiB + random.randint(0, 800) * MiB),
         "uid": uid,
         "owner": USERS[uid],
@@ -364,21 +436,17 @@ for path, uid, gib, days in STALE_TEMPLATES:
     })
 stale.sort(key=lambda f: f["bytes"], reverse=True)
 
-# ---------------------------------------------------------------------------
-# blocked[] - dirs the scanner couldn't enter
-# ---------------------------------------------------------------------------
-blocked = [
-    {"path": "/home/jusung", "reason": "EACCES"},
-    {"path": "/data/private_collab", "reason": "EACCES"},
-]
-
 doc = {
     "schema_version": 1,
     "hostname": "hinton",
+    "server_id": "hinton",
     "scanner_version": "0.1.0",
     "scan_started_unix": SCAN_START,
-    "scan_duration_sec": 42.1,
+    "scan_finished_unix": SCAN_FINISHED,
+    "scan_duration_sec": SCAN_DURATION_SEC,
+    "scan_generation": SCAN_GENERATION,
     "run_as_root": True,
+    "selected_roots": selected_roots,
     "mounts": mounts,
     "users": users,
     "top_files": top_files,
