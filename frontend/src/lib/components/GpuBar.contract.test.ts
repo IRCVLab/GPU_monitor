@@ -73,6 +73,13 @@ test('GpuBar ranks advisory holds through shared noteAdvisory helpers and keeps 
 	);
 });
 
+test('GpuBar cue prefixes the owner with a visible HOLD label without changing telemetry truth', () => {
+	assert.match(source, /<span class="monitor-gpu-row__hold-kind">HOLD<\/span>/, 'full GPU cue should show a literal HOLD kind label');
+	assert.match(source, /<span class="monitor-gpu-row__hold-owner">\{primaryHoldDisplayName\}<\/span>/, 'owner label should remain separate from the HOLD kind');
+	assert.match(source, /monitor-gpu-row__hold-kind[\s\S]*monitor-gpu-row__hold-owner/, 'visible cue order should read HOLD before the display name');
+	assert.doesNotMatch(source, /<span class="monitor-gpu-row__hold-owner">HOLD \{primaryHoldDisplayName\}<\/span>/, 'owner label should not be mutated into a synthetic HOLD username');
+});
+
 test('GpuBar preserves telemetry truth in aria-label while adding advisory hold detail', () => {
 	const oneLine = normalized();
 	assert.match(
