@@ -1,129 +1,156 @@
 {
   "schema_version": 1,
   "hostname": "hinton",
+  "server_id": "hinton",
   "scanner_version": "0.1.0",
   "scan_started_unix": 1719200000,
-  "scan_duration_sec": 42.1,
+  "scan_finished_unix": 1719200042,
+  "scan_duration_sec": 42,
+  "scan_generation": "hinton-1719200000-v1",
   "run_as_root": true,
+  "selected_roots": [
+    {
+      "mount_id": "rootfs",
+      "major_minor": "8:1",
+      "mount_source": "/dev/storage-viz/rootfs",
+      "mount_root": "/",
+      "mountpoint": "/",
+      "scan_root": "/home",
+      "fstype": "ext4",
+      "status": "partial",
+      "scanned_bytes": 51724156928,
+      "scanned_files": 174870,
+      "scanned_dirs": 36921,
+      "blocked_count": 1,
+      "error_count": 6,
+      "error_code": "EACCES"
+    },
+    {
+      "mount_id": "data",
+      "major_minor": "8:16",
+      "mount_source": "/dev/storage-viz/data",
+      "mount_root": "/",
+      "mountpoint": "/data",
+      "scan_root": "/data",
+      "fstype": "xfs",
+      "status": "partial",
+      "scanned_bytes": 7532298895360,
+      "scanned_files": 3211400,
+      "scanned_dirs": 21598,
+      "blocked_count": 1,
+      "error_count": 12,
+      "error_code": "EACCES"
+    },
+    {
+      "mount_id": "data1",
+      "major_minor": "8:32",
+      "mount_source": "/dev/storage-viz/data1",
+      "mount_root": "/",
+      "mountpoint": "/data1",
+      "scan_root": "/data1",
+      "fstype": "ext4",
+      "status": "complete",
+      "scanned_bytes": 1149977493504,
+      "scanned_files": 376400,
+      "scanned_dirs": 11041,
+      "blocked_count": 0,
+      "error_count": 0,
+      "error_code": null
+    },
+    {
+      "mount_id": "data3",
+      "major_minor": "8:48",
+      "mount_source": "/dev/storage-viz/data3",
+      "mount_root": "/",
+      "mountpoint": "/data3",
+      "scan_root": "/data3",
+      "fstype": "xfs",
+      "status": "partial",
+      "scanned_bytes": 5194762944512,
+      "scanned_files": 1031290,
+      "scanned_dirs": 53808,
+      "blocked_count": 0,
+      "error_count": 2,
+      "error_code": "EIO"
+    }
+  ],
   "mounts": [
     {
-      "path": "/",
+      "path": "/home",
+      "mount_id": "rootfs",
+      "scan_root": "/home",
       "fstype": "ext4",
-      "df_total": 135530139251,
-      "df_used": 87389833789,
-      "df_avail": 48140305462,
+      "df_total": 83426059561,
+      "df_used": 53793123205,
+      "df_avail": 29632936356,
       "df_use_pct": 64,
-      "scanned_bytes": 84028686336,
-      "scanned_files": 716680,
+      "scanned_bytes": 51724156928,
+      "scanned_files": 174870,
       "scanned_dirs": 36921,
       "errors": 6,
       "tree": {
-        "name": "/",
-        "bytes": 84028686336,
-        "files": 716680,
+        "name": "/home",
+        "kind": "directory",
+        "bytes": 51724156928,
+        "files": 174870,
         "uid": 0,
-        "mtime": 1719200000,
-        "other_bytes": 1610612736,
+        "mtime": 1719113600,
+        "other_bytes": 314572800,
         "children": [
           {
-            "name": "home",
-            "bytes": 51724156928,
-            "files": 174870,
-            "uid": 0,
-            "mtime": 1719113600,
-            "other_bytes": 314572800,
+            "name": "shchoi",
+            "kind": "directory",
+            "bytes": 44967133184,
+            "files": 169630,
+            "uid": 1008,
+            "mtime": 1718940800,
+            "other_bytes": 943718400,
             "children": [
               {
-                "name": "shchoi",
-                "bytes": 44967133184,
-                "files": 169630,
+                "name": ".cache",
+                "kind": "directory",
+                "bytes": 8589934592,
+                "files": 40210,
                 "uid": 1008,
-                "mtime": 1718940800,
-                "other_bytes": 943718400,
-                "children": [
-                  {
-                    "name": ".cache",
-                    "bytes": 8589934592,
-                    "files": 40210,
-                    "uid": 1008,
-                    "mtime": 1719027200,
-                    "other_bytes": 0
-                  },
-                  {
-                    "name": "projects",
-                    "bytes": 23622320128,
-                    "files": 8800,
-                    "uid": 1008,
-                    "mtime": 1719113600,
-                    "other_bytes": 0
-                  },
-                  {
-                    "name": "miniconda3",
-                    "bytes": 11811160064,
-                    "files": 120400,
-                    "uid": 1008,
-                    "mtime": 1715744000,
-                    "other_bytes": 0
-                  }
-                ]
+                "mtime": 1719027200,
+                "other_bytes": 0
               },
               {
-                "name": "minseo",
-                "bytes": 6442450944,
-                "files": 5120,
-                "uid": 1010,
-                "mtime": 1711424000,
+                "name": "projects",
+                "kind": "directory",
+                "bytes": 23622320128,
+                "files": 8800,
+                "uid": 1008,
+                "mtime": 1719113600,
+                "other_bytes": 0
+              },
+              {
+                "name": "miniconda3",
+                "kind": "directory",
+                "bytes": 11811160064,
+                "files": 120400,
+                "uid": 1008,
+                "mtime": 1715744000,
                 "other_bytes": 0
               }
             ]
           },
           {
-            "name": "usr",
-            "bytes": 15032385536,
-            "files": 412000,
-            "uid": 0,
-            "mtime": 1708832000,
+            "name": "minseo",
+            "kind": "directory",
+            "bytes": 6442450944,
+            "files": 5120,
+            "uid": 1010,
+            "mtime": 1711424000,
             "other_bytes": 0
-          },
-          {
-            "name": "var",
-            "bytes": 15661531136,
-            "files": 120810,
-            "uid": 0,
-            "mtime": 1719113600,
-            "other_bytes": 629145600,
-            "children": [
-              {
-                "name": "log",
-                "bytes": 3221225472,
-                "files": 2200,
-                "uid": 0,
-                "mtime": 1719200000,
-                "other_bytes": 0
-              },
-              {
-                "name": "lib",
-                "bytes": 9663676416,
-                "files": 88000,
-                "uid": 0,
-                "mtime": 1718768000,
-                "other_bytes": 0
-              },
-              {
-                "name": "cache",
-                "bytes": 2147483648,
-                "files": 30200,
-                "uid": 0,
-                "mtime": 1718595200,
-                "other_bytes": 0
-              }
-            ]
           }
         ]
       }
     },
     {
       "path": "/data",
+      "mount_id": "data",
+      "scan_root": "/data",
       "fstype": "xfs",
       "df_total": 8758487087627,
       "df_used": 7833590851174,
@@ -135,6 +162,7 @@
       "errors": 12,
       "tree": {
         "name": "/data",
+        "kind": "directory",
         "bytes": 7532298895360,
         "files": 3211400,
         "uid": 0,
@@ -143,6 +171,7 @@
         "children": [
           {
             "name": "sungjin",
+            "kind": "directory",
             "bytes": 2222645575680,
             "files": 126700,
             "uid": 1002,
@@ -151,6 +180,7 @@
             "children": [
               {
                 "name": "datasets",
+                "kind": "directory",
                 "bytes": 1288490188800,
                 "files": 88000,
                 "uid": 1002,
@@ -159,6 +189,7 @@
               },
               {
                 "name": "checkpoints",
+                "kind": "directory",
                 "bytes": 687194767360,
                 "files": 4200,
                 "uid": 1002,
@@ -167,6 +198,7 @@
               },
               {
                 "name": "runs",
+                "kind": "directory",
                 "bytes": 225485783040,
                 "files": 33000,
                 "uid": 1002,
@@ -177,6 +209,7 @@
           },
           {
             "name": "sungoh",
+            "kind": "directory",
             "bytes": 970662608896,
             "files": 1315600,
             "uid": 1003,
@@ -185,6 +218,7 @@
             "children": [
               {
                 "name": "imagenet",
+                "kind": "directory",
                 "bytes": 515396075520,
                 "files": 1300000,
                 "uid": 1003,
@@ -193,6 +227,7 @@
               },
               {
                 "name": "models",
+                "kind": "directory",
                 "bytes": 343597383680,
                 "files": 2100,
                 "uid": 1003,
@@ -201,6 +236,7 @@
               },
               {
                 "name": "tmp",
+                "kind": "directory",
                 "bytes": 96636764160,
                 "files": 12000,
                 "uid": 1003,
@@ -211,6 +247,7 @@
           },
           {
             "name": "donguk",
+            "kind": "directory",
             "bytes": 1171452329984,
             "files": 246900,
             "uid": 1004,
@@ -219,6 +256,7 @@
             "children": [
               {
                 "name": "video_raw",
+                "kind": "directory",
                 "bytes": 966367641600,
                 "files": 5400,
                 "uid": 1004,
@@ -227,6 +265,7 @@
               },
               {
                 "name": "features",
+                "kind": "directory",
                 "bytes": 193273528320,
                 "files": 240000,
                 "uid": 1004,
@@ -237,6 +276,7 @@
           },
           {
             "name": "dohyun",
+            "kind": "directory",
             "bytes": 609885356032,
             "files": 67300,
             "uid": 1005,
@@ -245,6 +285,7 @@
             "children": [
               {
                 "name": "nerf_scenes",
+                "kind": "directory",
                 "bytes": 440234147840,
                 "files": 64000,
                 "uid": 1005,
@@ -253,6 +294,7 @@
               },
               {
                 "name": "ckpt",
+                "kind": "directory",
                 "bytes": 161061273600,
                 "files": 1800,
                 "uid": 1005,
@@ -263,6 +305,7 @@
           },
           {
             "name": "jaehyeon",
+            "kind": "directory",
             "bytes": 845034815488,
             "files": 61700,
             "uid": 1006,
@@ -271,6 +314,7 @@
             "children": [
               {
                 "name": "llm_corpus",
+                "kind": "directory",
                 "bytes": 773094113280,
                 "files": 9200,
                 "uid": 1006,
@@ -279,6 +323,7 @@
               },
               {
                 "name": "eval",
+                "kind": "directory",
                 "bytes": 64424509440,
                 "files": 51000,
                 "uid": 1006,
@@ -289,6 +334,7 @@
           },
           {
             "name": "shared",
+            "kind": "directory",
             "bytes": 1680405954560,
             "files": 1393000,
             "uid": 0,
@@ -297,6 +343,7 @@
             "children": [
               {
                 "name": "public_datasets",
+                "kind": "directory",
                 "bytes": 1610612736000,
                 "files": 410000,
                 "uid": 0,
@@ -305,6 +352,7 @@
               },
               {
                 "name": "conda_envs",
+                "kind": "directory",
                 "bytes": 42949672960,
                 "files": 980000,
                 "uid": 0,
@@ -318,6 +366,8 @@
     },
     {
       "path": "/data1",
+      "mount_id": "data1",
+      "scan_root": "/data1",
       "fstype": "ext4",
       "df_total": 1554023639870,
       "df_used": 1195976593244,
@@ -329,6 +379,7 @@
       "errors": 0,
       "tree": {
         "name": "/data1",
+        "kind": "directory",
         "bytes": 1149977493504,
         "files": 376400,
         "uid": 0,
@@ -337,6 +388,7 @@
         "children": [
           {
             "name": "geonyeong",
+            "kind": "directory",
             "bytes": 707595862016,
             "files": 318800,
             "uid": 1007,
@@ -345,6 +397,7 @@
             "children": [
               {
                 "name": "diffusion",
+                "kind": "directory",
                 "bytes": 558345748480,
                 "files": 78000,
                 "uid": 1007,
@@ -353,6 +406,7 @@
               },
               {
                 "name": "samples",
+                "kind": "directory",
                 "bytes": 139586437120,
                 "files": 240000,
                 "uid": 1007,
@@ -363,6 +417,7 @@
           },
           {
             "name": "shchoi",
+            "kind": "directory",
             "bytes": 429496729600,
             "files": 57500,
             "uid": 1008,
@@ -371,6 +426,7 @@
             "children": [
               {
                 "name": "backups",
+                "kind": "directory",
                 "bytes": 322122547200,
                 "files": 1200,
                 "uid": 1008,
@@ -379,6 +435,7 @@
               },
               {
                 "name": "scratch",
+                "kind": "directory",
                 "bytes": 102005473280,
                 "files": 56000,
                 "uid": 1008,
@@ -392,6 +449,8 @@
     },
     {
       "path": "/data3",
+      "mount_id": "data3",
+      "scan_root": "/data3",
       "fstype": "xfs",
       "df_total": 5771958827235,
       "df_used": 5402553462292,
@@ -403,6 +462,7 @@
       "errors": 2,
       "tree": {
         "name": "/data3",
+        "kind": "directory",
         "bytes": 5194762944512,
         "files": 1031290,
         "uid": 0,
@@ -411,6 +471,7 @@
         "children": [
           {
             "name": "archive",
+            "kind": "directory",
             "bytes": 4767413698560,
             "files": 1009200,
             "uid": 0,
@@ -419,6 +480,7 @@
             "children": [
               {
                 "name": "2023_projects",
+                "kind": "directory",
                 "bytes": 2254857830400,
                 "files": 520000,
                 "uid": 0,
@@ -427,6 +489,7 @@
               },
               {
                 "name": "2024_projects",
+                "kind": "directory",
                 "bytes": 1825361100800,
                 "files": 480000,
                 "uid": 0,
@@ -435,6 +498,7 @@
               },
               {
                 "name": "old_checkpoints",
+                "kind": "directory",
                 "bytes": 644245094400,
                 "files": 8000,
                 "uid": 1002,
@@ -445,6 +509,7 @@
           },
           {
             "name": "donguk_archive",
+            "kind": "directory",
             "bytes": 408021893120,
             "files": 22000,
             "uid": 1004,
@@ -459,13 +524,13 @@
     {
       "uid": 0,
       "name": "root",
-      "bytes": 5915650555904,
-      "files": 1885371,
+      "bytes": 5868313640960,
+      "files": 1870323,
       "by_mount": {
-        "/": 47651487744,
         "/data": 1712618209280,
         "/data1": 12884901888,
-        "/data3": 4142495956992
+        "/data3": 4142495956992,
+        "/home": 314572800
       }
     },
     {
@@ -530,8 +595,8 @@
       "bytes": 518487277568,
       "files": 166375,
       "by_mount": {
-        "/": 88990547968,
-        "/data1": 429496729600
+        "/data1": 429496729600,
+        "/home": 88990547968
       }
     },
     {
@@ -540,13 +605,14 @@
       "bytes": 6442450944,
       "files": 3477,
       "by_mount": {
-        "/": 6442450944
+        "/home": 6442450944
       }
     }
   ],
   "top_files": [
     {
       "path": "/data3/archive/2023_projects/backup_full.img",
+      "kind": "file",
       "bytes": 408242094080,
       "uid": 0,
       "owner": "root",
@@ -554,6 +620,7 @@
     },
     {
       "path": "/data/shared/public_datasets/laion_subset.tar",
+      "kind": "file",
       "bytes": 343679172608,
       "uid": 0,
       "owner": "root",
@@ -561,6 +628,7 @@
     },
     {
       "path": "/data/sungjin/datasets/pile_dedup.bin",
+      "kind": "file",
       "bytes": 279464378368,
       "uid": 1002,
       "owner": "sungjin",
@@ -568,6 +636,7 @@
     },
     {
       "path": "/data3/archive/2024_projects/dataset_v3.tar",
+      "kind": "file",
       "bytes": 258450915328,
       "uid": 0,
       "owner": "root",
@@ -575,6 +644,7 @@
     },
     {
       "path": "/data/sungoh/imagenet/imagenet_full.tar",
+      "kind": "file",
       "bytes": 225919893504,
       "uid": 1003,
       "owner": "sungoh",
@@ -582,6 +652,7 @@
     },
     {
       "path": "/data/jaehyeon/llm_corpus/c4_en.jsonl",
+      "kind": "file",
       "bytes": 202800889856,
       "uid": 1006,
       "owner": "jaehyeon",
@@ -589,6 +660,7 @@
     },
     {
       "path": "/data3/donguk_archive/raw_capture_2023.tar",
+      "kind": "file",
       "bytes": 139671371776,
       "uid": 1004,
       "owner": "donguk",
@@ -596,6 +668,7 @@
     },
     {
       "path": "/data1/shchoi/backups/home_snapshot_0601.tar.zst",
+      "kind": "file",
       "bytes": 128967507968,
       "uid": 1008,
       "owner": "shchoi",
@@ -603,6 +676,7 @@
     },
     {
       "path": "/data/sungjin/datasets/audio_set.tar",
+      "kind": "file",
       "bytes": 102941851648,
       "uid": 1002,
       "owner": "sungjin",
@@ -610,6 +684,7 @@
     },
     {
       "path": "/data/donguk/video_raw/session_4k_master.mov",
+      "kind": "file",
       "bytes": 102280200192,
       "uid": 1004,
       "owner": "donguk",
@@ -617,6 +692,7 @@
     },
     {
       "path": "/data/donguk/video_raw/drone_flight_8k.mov",
+      "kind": "file",
       "bytes": 82284904448,
       "uid": 1004,
       "owner": "donguk",
@@ -624,6 +700,7 @@
     },
     {
       "path": "/data/sungoh/imagenet/val_high_res.tar",
+      "kind": "file",
       "bytes": 69081235456,
       "uid": 1003,
       "owner": "sungoh",
@@ -631,6 +708,7 @@
     },
     {
       "path": "/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt",
+      "kind": "file",
       "bytes": 56743690240,
       "uid": 1002,
       "owner": "sungjin",
@@ -638,6 +716,7 @@
     },
     {
       "path": "/data/sungjin/checkpoints/run0421_final.pt",
+      "kind": "file",
       "bytes": 51344572416,
       "uid": 1002,
       "owner": "sungjin",
@@ -645,6 +724,7 @@
     },
     {
       "path": "/data/dohyun/nerf_scenes/city_block_raw.zip",
+      "kind": "file",
       "bytes": 44492128256,
       "uid": 1005,
       "owner": "dohyun",
@@ -652,6 +732,7 @@
     },
     {
       "path": "/data/sungoh/tmp/scratch_blob.bin",
+      "kind": "file",
       "bytes": 43020976128,
       "uid": 1003,
       "owner": "sungoh",
@@ -659,6 +740,7 @@
     },
     {
       "path": "/data/donguk/features/clip_feats.npy",
+      "kind": "file",
       "bytes": 36579573760,
       "uid": 1004,
       "owner": "donguk",
@@ -666,6 +748,7 @@
     },
     {
       "path": "/data3/archive/2023_projects/logs_archive.tar.gz",
+      "kind": "file",
       "bytes": 29602349056,
       "uid": 0,
       "owner": "root",
@@ -673,6 +756,7 @@
     },
     {
       "path": "/data/shared/public_datasets/coco2017.zip",
+      "kind": "file",
       "bytes": 27506245632,
       "uid": 0,
       "owner": "root",
@@ -680,6 +764,7 @@
     },
     {
       "path": "/data/jaehyeon/llm_corpus/wiki_dump.xml.bz2",
+      "kind": "file",
       "bytes": 23657971712,
       "uid": 1006,
       "owner": "jaehyeon",
@@ -687,6 +772,7 @@
     },
     {
       "path": "/data1/shchoi/scratch/core.dump",
+      "kind": "file",
       "bytes": 20182990848,
       "uid": 1008,
       "owner": "shchoi",
@@ -694,6 +780,7 @@
     },
     {
       "path": "/data1/geonyeong/diffusion/sd_xl_weights.safetensors",
+      "kind": "file",
       "bytes": 14669578240,
       "uid": 1007,
       "owner": "geonyeong",
@@ -701,6 +788,7 @@
     },
     {
       "path": "/data/sungoh/models/vit_huge.bin",
+      "kind": "file",
       "bytes": 12178161664,
       "uid": 1003,
       "owner": "sungoh",
@@ -708,20 +796,23 @@
     },
     {
       "path": "/data/dohyun/ckpt/nerf_big_080000.pth",
+      "kind": "file",
       "bytes": 10331619328,
       "uid": 1005,
       "owner": "dohyun",
       "mtime": 1718854400
     },
     {
-      "path": "/var/lib/docker/overlay2_blob.img",
+      "path": "/home/shchoi/docker/overlay2_blob.img",
+      "kind": "file",
       "bytes": 9708765184,
-      "uid": 0,
-      "owner": "root",
+      "uid": 1008,
+      "owner": "shchoi",
       "mtime": 1718768000
     },
     {
       "path": "/data1/geonyeong/samples/grid_render.mp4",
+      "kind": "file",
       "bytes": 8930721792,
       "uid": 1007,
       "owner": "geonyeong",
@@ -729,6 +820,7 @@
     },
     {
       "path": "/data/sungjin/runs/tensorboard_events.bin",
+      "kind": "file",
       "bytes": 8442085376,
       "uid": 1002,
       "owner": "sungjin",
@@ -736,6 +828,7 @@
     },
     {
       "path": "/data/shared/conda_envs/env_torch.tar.gz",
+      "kind": "file",
       "bytes": 6515851264,
       "uid": 0,
       "owner": "root",
@@ -743,6 +836,7 @@
     },
     {
       "path": "/data/jaehyeon/eval/results_dump.parquet",
+      "kind": "file",
       "bytes": 6014631936,
       "uid": 1006,
       "owner": "jaehyeon",
@@ -750,6 +844,7 @@
     },
     {
       "path": "/home/shchoi/miniconda3/pkgs/cuda_toolkit.tar",
+      "kind": "file",
       "bytes": 4798283776,
       "uid": 1008,
       "owner": "shchoi",
@@ -759,6 +854,7 @@
   "stale": [
     {
       "path": "/data3/archive/2023_projects/backup_full.img",
+      "kind": "file",
       "bytes": 408699273216,
       "uid": 0,
       "owner": "root",
@@ -767,6 +863,7 @@
     },
     {
       "path": "/data3/archive/2024_projects/dataset_v3.tar",
+      "kind": "file",
       "bytes": 257915092992,
       "uid": 0,
       "owner": "root",
@@ -775,6 +872,7 @@
     },
     {
       "path": "/data/sungoh/imagenet/imagenet_full.tar",
+      "kind": "file",
       "bytes": 226209300480,
       "uid": 1003,
       "owner": "sungoh",
@@ -783,6 +881,7 @@
     },
     {
       "path": "/data3/donguk_archive/raw_capture_2023.tar",
+      "kind": "file",
       "bytes": 140325683200,
       "uid": 1004,
       "owner": "donguk",
@@ -791,6 +890,7 @@
     },
     {
       "path": "/data/donguk/video_raw/drone_flight_8k.mov",
+      "kind": "file",
       "bytes": 81777393664,
       "uid": 1004,
       "owner": "donguk",
@@ -799,6 +899,7 @@
     },
     {
       "path": "/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt",
+      "kind": "file",
       "bytes": 55928946688,
       "uid": 1002,
       "owner": "sungjin",
@@ -807,6 +908,7 @@
     },
     {
       "path": "/data/sungjin/checkpoints/run0119_obsolete.pt",
+      "kind": "file",
       "bytes": 51032096768,
       "uid": 1002,
       "owner": "sungjin",
@@ -815,6 +917,7 @@
     },
     {
       "path": "/data/dohyun/nerf_scenes/abandoned_scene.zip",
+      "kind": "file",
       "bytes": 44042289152,
       "uid": 1005,
       "owner": "dohyun",
@@ -823,6 +926,7 @@
     },
     {
       "path": "/data/sungoh/tmp/scratch_blob.bin",
+      "kind": "file",
       "bytes": 43058724864,
       "uid": 1003,
       "owner": "sungoh",
@@ -831,6 +935,7 @@
     },
     {
       "path": "/data3/archive/2023_projects/logs_archive.tar.gz",
+      "kind": "file",
       "bytes": 29089595392,
       "uid": 0,
       "owner": "root",
@@ -839,6 +944,7 @@
     },
     {
       "path": "/data1/shchoi/scratch/core.dump",
+      "kind": "file",
       "bytes": 19876806656,
       "uid": 1008,
       "owner": "shchoi",
@@ -847,6 +953,7 @@
     },
     {
       "path": "/data1/geonyeong/samples/grid_render.mp4",
+      "kind": "file",
       "bytes": 8849981440,
       "uid": 1007,
       "owner": "geonyeong",
@@ -855,6 +962,7 @@
     },
     {
       "path": "/home/minseo/old_env.tar.gz",
+      "kind": "file",
       "bytes": 6835666944,
       "uid": 1010,
       "owner": "minseo",
@@ -863,6 +971,7 @@
     },
     {
       "path": "/data/jaehyeon/eval/old_results.parquet",
+      "kind": "file",
       "bytes": 6121586688,
       "uid": 1006,
       "owner": "jaehyeon",
@@ -870,10 +979,11 @@
       "age_days": 220
     },
     {
-      "path": "/var/log/journal_archive.gz",
+      "path": "/home/minseo/journal_archive.gz",
+      "kind": "file",
       "bytes": 3673161728,
-      "uid": 0,
-      "owner": "root",
+      "uid": 1010,
+      "owner": "minseo",
       "mtime": 1707968000,
       "age_days": 130
     }
