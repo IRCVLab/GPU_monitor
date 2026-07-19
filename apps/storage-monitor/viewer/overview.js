@@ -19,6 +19,7 @@ const STATUS_META = Object.freeze({
   config_drift: { tone: "warning", shape: "◆", label: "구성 차이" },
   partial_scan: { tone: "warning", shape: "▲", label: "일부 수집" },
   stale_snapshot: { tone: "warning", shape: "◌", label: "오래됨" },
+  snapshot_load_failed: { tone: "warning", shape: "◆", label: "불러오기 실패" },
   active_scan: { tone: "info", shape: "◌", label: "스캔 중" },
   pressure_warning: { tone: "warning", shape: "▲", label: "여유 적음" },
   pressure_critical: { tone: "critical", shape: "■", label: "여유 부족" },
@@ -100,7 +101,7 @@ function hasActiveScan(activeJob) {
   return !!(activeJob && (activeJob.state === "requested" || activeJob.state === "running"));
 }
 
-function derivePrimaryStatus(summaryInput, snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
+function derivePrimaryStatus(summaryInput, snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS, error = null) {
   const summary = normalizeSummary(summaryInput);
   const mounts = summarizeMounts(snapshot, thresholds);
   const pressure = strongestPressure(mounts);
@@ -112,6 +113,7 @@ function derivePrimaryStatus(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
   if (summary.configuration_sync === "drifted") return statusPresentation("config_drift");
   if (summary.latest_scan_result === "partial") return statusPresentation("partial_scan");
   if (summary.freshness === "stale") return statusPresentation("stale_snapshot");
+  if (error) return statusPresentation("snapshot_load_failed");
   if (hasActiveScan(summary.active_job)) return statusPresentation("active_scan");
   if (pressure === "critical") return statusPresentation("pressure_critical");
   if (pressure === "warning") return statusPresentation("pressure_warning");
@@ -127,7 +129,7 @@ function deriveSecondaryStatus(summaryInput, primaryCode) {
 function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS, error = null) {
   const summary = normalizeSummary(summaryInput);
   const mounts = summarizeMounts(snapshot, thresholds);
-  const primaryStatus = derivePrimaryStatus(summary, snapshot, thresholds);
+  const primaryStatus = derivePrimaryStatus(summary, snapshot, thresholds, error);
   const secondaryStatus = deriveSecondaryStatus(summary, primaryStatus.code);
   const totalAvailableBytes = mounts.reduce((sum, mount) => sum + mount.freeBytes, 0);
   return {
@@ -191,6 +193,7 @@ function createStatusBadge(doc, status, extraClass) {
 }
 
 function createOverviewRowElement(doc, row, handlers = {}) {
+  const item = makeEl(doc, "li", "overview-item");
   const button = makeEl(doc, "button", "overview-row");
   button.type = "button";
   button.dataset.serverId = row.id;
@@ -247,7 +250,8 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       activate();
     }
   };
-  return button;
+  item.appendChild(button);
+  return item;
 }
 
 function renderOverviewList(container, rows, handlers = {}) {

@@ -20,8 +20,9 @@ class FakeClassList {
 }
 
 class FakeElement {
-  constructor(tag = 'div') {
+  constructor(tag = 'div', ownerDocument = null) {
     this.tagName = tag.toUpperCase();
+    this.ownerDocument = ownerDocument;
     this.children = [];
     this.style = {};
     this.dataset = {};
@@ -29,13 +30,19 @@ class FakeElement {
     this.classList = new FakeClassList(this);
     this.attributes = {};
     this.offsetHeight = 0;
+    this.offsetWidth = 0;
     this.clientHeight = 640;
     this.clientWidth = 1000;
     this.hidden = false;
     this.value = '';
     this.listeners = new Map();
   }
-  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  appendChild(child) {
+    if (!child.ownerDocument) child.ownerDocument = this.ownerDocument;
+    this.children.push(child);
+    child.parentNode = this;
+    return child;
+  }
   removeChild(child) { this.children = this.children.filter(c => c !== child); child.parentNode = null; }
   remove() { if (this.parentNode) this.parentNode.removeChild(this); }
   set innerHTML(value) { this._innerHTML = String(value); this.children = []; }
@@ -79,23 +86,34 @@ function loadViewer() {
   assert(html.includes('<link rel="stylesheet" href="styles.css">'), 'index must link styles.css');
   const h1Count = (html.match(/<h1\b/gi) || []).length;
   assert.strictEqual(h1Count, 1, 'viewer must keep exactly one logical h1');
+  assert(/<ul\s+id="overviewList"/.test(html), 'overview list must be a real ul');
+  assert(!/id="overviewList"[^>]*role="list"/.test(html), 'overview list should rely on native list semantics instead of role=list');
   assert(html.includes('id="overviewView"'), 'overview shell must be present');
-  assert(html.includes('id="overviewList"'), 'overview list container must be present');
   assert(html.includes('id="overviewBack"'), 'detail back-to-overview control must be present');
   const removedName = 'ad' + 'visor';
   assert(!html.includes('data-tab="' + removedName + '"'), 'removed analysis tab must not exist');
   assert(!html.includes('id="panel-' + removedName + '"'), 'removed analysis panel must not exist');
 
   const elements = new Map();
+  let doc = null;
   const getEl = (id) => {
     if (!elements.has(id)) {
-      const el = new FakeElement('div');
+      const el = new FakeElement('div', doc);
       el.id = id;
       elements.set(id, el);
     }
     return elements.get(id);
   };
   const historyCalls = [];
+  doc = {
+    createElement: (tag) => new FakeElement(tag, doc),
+    getElementById: getEl,
+    querySelector: () => new FakeElement('div', doc),
+    querySelectorAll: () => [],
+    addEventListener() {},
+    body: new FakeElement('body', null),
+  };
+  doc.body.ownerDocument = doc;
   const context = {
     console,
     Math,
@@ -117,14 +135,7 @@ function loadViewer() {
       addEventListener() {},
       matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
     },
-    document: {
-      createElement: (tag) => new FakeElement(tag),
-      getElementById: getEl,
-      querySelector: () => new FakeElement('div'),
-      querySelectorAll: () => [],
-      addEventListener() {},
-      body: new FakeElement('body'),
-    },
+    document: doc,
     navigator: { clipboard: { writeText: async () => undefined } },
     fetch: async () => ({ ok: false, json: async () => ({}) }),
     echarts: { init: () => ({ setOption() {}, off() {}, on() {}, resize() {}, dispose() {} }) },
@@ -148,84 +159,132 @@ function textTree(node) {
 }
 
 function numericPx(value) { return Number(String(value || '0').replace(/px$/, '')); }
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+function hangulString(text) {
+  return /[가-힣]/.test(text || '');
+}
 
-(function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
+function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.buildOverviewServer, 'function', 'overview row builder must be exposed');
   assert.strictEqual(typeof viewer.renderOverviewList, 'function', 'overview renderer must be exposed');
 
-  const rows = [
-    viewer.buildOverviewServer(
-      {
-        id: 'beta-2',
-        display_name: 'beta',
-        order: 20,
-        mount_count: 2,
-        snapshot_availability: 'available',
-        freshness: 'fresh',
-        latest_pull_status: 'succeeded',
-        latest_scan_result: 'failed',
-        configuration_sync: 'in_sync',
-        active_job: { id: 'job-1', server_id: 'beta-2', kind: 'rescan', state: 'running', actor: 'operator-1', requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null },
-      },
-      {
-        server_id: 'beta-2',
-        mounts: [
-          { path: '/data', df_use_pct: 95, df_avail: 800 * 1024 ** 3 },
-          { path: '/archive', df_use_pct: 60, df_avail: 2 * 1024 ** 4 },
-        ],
-      },
-      viewer.DEFAULT_CAPACITY_THRESHOLDS,
-    ),
-    viewer.buildOverviewServer(
-      {
-        id: 'alpha-1',
-        display_name: 'alpha',
-        order: 10,
-        mount_count: 1,
-        snapshot_availability: 'available',
-        freshness: 'stale',
-        latest_pull_status: 'succeeded',
-        latest_scan_result: 'complete',
-        configuration_sync: 'in_sync',
-        active_job: null,
-      },
-      {
-        server_id: 'alpha-1',
-        mounts: [{ path: '/scratch', df_use_pct: 81, df_avail: 700 * 1024 ** 3 }],
-      },
-      viewer.DEFAULT_CAPACITY_THRESHOLDS,
-    ),
-  ];
+  const failedRow = viewer.buildOverviewServer(
+    {
+      id: 'beta-2',
+      display_name: 'beta',
+      order: 20,
+      mount_count: 2,
+      snapshot_availability: 'available',
+      freshness: 'fresh',
+      latest_pull_status: 'succeeded',
+      latest_scan_result: 'failed',
+      configuration_sync: 'in_sync',
+      active_job: { id: 'job-1', server_id: 'beta-2', kind: 'rescan', state: 'running', actor: 'operator-1', requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null },
+    },
+    {
+      server_id: 'beta-2',
+      mounts: [
+        { path: '/data', df_use_pct: 95, df_avail: 800 * 1024 ** 3 },
+        { path: '/archive', df_use_pct: 60, df_avail: 2 * 1024 ** 4 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  const staleRow = viewer.buildOverviewServer(
+    {
+      id: 'alpha-1',
+      display_name: 'alpha',
+      order: 10,
+      mount_count: 1,
+      snapshot_availability: 'available',
+      freshness: 'stale',
+      latest_pull_status: 'succeeded',
+      latest_scan_result: 'complete',
+      configuration_sync: 'in_sync',
+      active_job: null,
+    },
+    {
+      server_id: 'alpha-1',
+      mounts: [{ path: '/scratch', df_use_pct: 81, df_avail: 700 * 1024 ** 3 }],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
 
   const overviewList = viewer.__elements.get('overviewList') || viewer.document.getElementById('overviewList');
   const opened = [];
-  viewer.renderOverviewList(overviewList, rows, { onOpenServer: (serverId) => opened.push(serverId) });
+  viewer.renderOverviewList(overviewList, [failedRow, staleRow], { onOpenServer: (serverId) => opened.push(serverId) });
 
   assert.strictEqual(overviewList.children.length, 2, 'all servers must render into one dense list');
-  assert.strictEqual(overviewList.children[0].dataset.serverId, 'beta-2', 'inventory order must not change because of severity');
-  assert.strictEqual(overviewList.children[1].dataset.serverId, 'alpha-1', 'inventory order must remain stable for later rows');
+  assert.strictEqual(overviewList.children[0].tagName, 'LI', 'overview list items must use native li semantics');
+  assert.strictEqual(overviewList.children[0].children[0].tagName, 'BUTTON', 'each overview li must contain a button for whole-row activation');
+  assert.strictEqual(overviewList.children[0].children[0].dataset.serverId, 'beta-2', 'inventory order must not change because of severity');
+  assert.strictEqual(overviewList.children[1].children[0].dataset.serverId, 'alpha-1', 'inventory order must remain stable for later rows');
 
-  const betaText = textTree(overviewList.children[0]);
-  assert(betaText.includes('beta'), 'row must contain the server display name');
-  assert(betaText.includes('스캔 실패'), 'higher-priority exceptional status must render concise Korean text');
-  assert(betaText.includes('스캔 중'), 'active scan must remain visible as a secondary cue');
-  assert(betaText.includes('95%'), 'capacity bars must still show percentage text');
-  assert(betaText.includes('800 GB'), 'capacity bars must still show available-byte text');
+  const failedButton = overviewList.children[0].children[0];
+  const failedText = textTree(failedButton);
+  assert(failedText.includes('beta'), 'row must contain the server display name');
+  assert.strictEqual(failedButton.getAttribute('data-primary-status'), failedRow.primaryStatus.code, 'rendered primary status code must match the overview model');
+  const primaryBadge = failedButton.children[0].children[1].children[0];
+  assert(primaryBadge, 'primary exceptional badge must be visible');
+  assert(hangulString(textTree(primaryBadge)), 'primary exceptional badge must expose visible Korean text');
+  assert(primaryBadge.children[0].textContent.length > 0, 'primary exceptional badge must expose a visible shape cue');
+  assert(failedText.includes('95%'), 'capacity bars must still show percentage text');
+  assert(failedText.includes('800 GB'), 'capacity bars must still show available-byte text');
 
-  const alphaText = textTree(overviewList.children[1]);
-  assert(alphaText.includes('오래됨'), 'stale freshness must render as an exceptional state');
-  assert(alphaText.includes('81%'), 'warning-capacity rows must still expose their compact bar text');
+  const staleButton = overviewList.children[1].children[0];
+  assert.strictEqual(staleButton.getAttribute('data-primary-status'), staleRow.primaryStatus.code, 'rendered stale status code must match the overview model');
+  assert(hangulString(textTree(staleButton.children[0].children[1].children[0])), 'stale status badge must expose visible Korean text');
+  assert(textTree(staleButton).includes('81%'), 'warning-capacity rows must still expose their compact bar text');
 
-  overviewList.children[0].onclick();
+  failedButton.onclick();
   assert.deepStrictEqual(opened, ['beta-2'], 'clicking a row should open its detail workspace');
   let prevented = false;
-  overviewList.children[1].onkeydown({ key: 'Enter', preventDefault() { prevented = true; } });
+  staleButton.onkeydown({ key: 'Enter', preventDefault() { prevented = true; } });
   assert.strictEqual(prevented, true, 'Enter activation must prevent duplicate default behavior');
   assert.deepStrictEqual(opened, ['beta-2', 'alpha-1'], 'Enter should activate the row');
-})();
+}
 
-(function testRouteNavigationAndBackShellContract() {
+function testSnapshotLoadFailureRendersAsVisibleException() {
+  const viewer = loadViewer();
+  const row = viewer.buildOverviewServer(
+    {
+      id: 'gamma-3',
+      display_name: 'gamma',
+      order: 30,
+      mount_count: 3,
+      snapshot_availability: 'available',
+      freshness: 'fresh',
+      latest_pull_status: 'succeeded',
+      latest_scan_result: 'complete',
+      configuration_sync: 'in_sync',
+      active_job: null,
+    },
+    null,
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+    new Error('network failed'),
+  );
+  assert.strictEqual(row.primaryStatus.code, 'snapshot_load_failed', 'healthy summaries with client snapshot failures must expose a dedicated exceptional status');
+  const overviewList = viewer.document.getElementById('overviewList');
+  viewer.renderOverviewList(overviewList, [row], { onOpenServer() {} });
+  const button = overviewList.children[0].children[0];
+  assert.strictEqual(button.getAttribute('data-primary-status'), 'snapshot_load_failed');
+  const badge = button.children[0].children[1].children[0];
+  assert(badge, 'snapshot load failures must render a visible status badge');
+  assert(hangulString(textTree(badge)), 'snapshot load failure badge must render Korean text');
+  assert(badge.children[0].textContent.length > 0, 'snapshot load failure badge must render a visible shape cue');
+}
+
+function testRouteNavigationAndBackShellContract() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.applyRouteState, 'function', 'route application helper must be exposed');
   assert.strictEqual(typeof viewer.navigateToOverview, 'function', 'overview navigation helper must be exposed');
@@ -236,16 +295,107 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
   viewer.applyRouteState({ serverId: null, tab: 'treemap' }, { skipHistory: true });
   assert.strictEqual(overviewView.hidden, false, 'overview route must show the overview shell');
   assert.strictEqual(detailView.hidden, true, 'overview route must hide the detail shell');
-  viewer.applyRouteState({ serverId: 'beta-2', tab: 'users' }, { skipHistory: true });
+  viewer.applyRouteState({ serverId: 'beta-2', tab: 'users' }, { skipHistory: true, skipDataLoad: true });
   assert.strictEqual(overviewView.hidden, true, 'detail route must hide the overview shell');
   assert.strictEqual(detailView.hidden, false, 'detail route must show the detail shell');
   assert.strictEqual(back.hidden, false, 'detail route must expose the back-to-overview control');
   viewer.navigateToOverview({ skipHistory: true });
   assert.strictEqual(overviewView.hidden, false, 'back navigation must restore the overview shell');
   assert.strictEqual(detailView.hidden, true, 'back navigation must hide the detail shell again');
-})();
+}
 
-(function testDeleteCommandQuoting() {
+async function testBootstrapDetectionIsExplicitAndSequential() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.loadBootstrapDataWith, 'function', 'bootstrap detection helper must be exposed for explicit mode tests');
+
+  let staticCalls = 0;
+  let summariesCalls = 0;
+  const staticBootstrap = { mode: 'static', session: {}, summaries: [{ id: 'sample' }], snapshots: [] };
+  const staticResult = await viewer.loadBootstrapDataWith({
+    loadSession: async () => { const err = new Error('missing'); err.status = 404; throw err; },
+    loadStaticBootstrap: async () => { staticCalls += 1; return staticBootstrap; },
+    loadServerSummaries: async () => { summariesCalls += 1; return []; },
+    loadOrderedSnapshotsForOverview: async () => [],
+    loadServerSnapshot: async () => ({})
+  });
+  assert.strictEqual(staticResult, staticBootstrap, 'only an exact 404 session probe may select static mode');
+  assert.strictEqual(staticCalls, 1, 'static mode must be chosen explicitly from the session probe');
+  assert.strictEqual(summariesCalls, 0, 'server summary fetch must not run after a static-mode decision');
+
+  let networkStaticCalls = 0;
+  await assert.rejects(() => viewer.loadBootstrapDataWith({
+    loadSession: async () => { throw new Error('network down'); },
+    loadStaticBootstrap: async () => { networkStaticCalls += 1; return staticBootstrap; },
+    loadServerSummaries: async () => [],
+    loadOrderedSnapshotsForOverview: async () => [],
+    loadServerSnapshot: async () => ({})
+  }), /network down/, 'status-less session failures must surface instead of falling back to static data');
+  assert.strictEqual(networkStaticCalls, 0, 'status-less session failures must not select static mode');
+
+  let apiStaticCalls = 0;
+  await assert.rejects(() => viewer.loadBootstrapDataWith({
+    loadSession: async () => ({ authenticated: true, can_rescan: false, csrf_token: 'csrf' }),
+    loadStaticBootstrap: async () => { apiStaticCalls += 1; return staticBootstrap; },
+    loadServerSummaries: async () => { throw new Error('servers unavailable'); },
+    loadOrderedSnapshotsForOverview: async () => [],
+    loadServerSnapshot: async () => ({})
+  }), /servers unavailable/, 'after /api/session succeeds, later API failures must remain API failures');
+  assert.strictEqual(apiStaticCalls, 0, 'post-session API failures must never fall back to static samples');
+}
+
+async function testDetailNavigationGuardsAgainstStaleAsyncCompletion() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.rememberBootstrap, 'function', 'bootstrap state setter must be exposed for navigation tests');
+  assert.strictEqual(typeof viewer.ensureDetailLoaded, 'function', 'detail loader must be exposed for race regressions');
+  assert.strictEqual(typeof viewer.getCurrentDetailDebugState, 'function', 'detail debug getter must be exposed for race regressions');
+
+  const alpha = deferred();
+  const beta = deferred();
+  viewer.loadSnapshotForCurrentSource = (serverId) => {
+    if (serverId === 'alpha-1') return alpha.promise;
+    if (serverId === 'beta-2') return beta.promise;
+    throw new Error('unexpected server ' + serverId);
+  };
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+      { id: 'beta-2', display_name: 'beta', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+  });
+
+  viewer.navigateToServer('alpha-1', { skipHistory: true });
+  viewer.navigateToServer('beta-2', { skipHistory: true });
+
+  alpha.resolve({ server_id: 'alpha-1', hostname: 'alpha-host', mounts: [], users: [], top_files: [], stale: [] });
+  await flushPromises();
+  const afterAlpha = viewer.getCurrentDetailDebugState();
+  assert.strictEqual(afterAlpha.currentServerId, 'beta-2', 'late alpha completion must not change the current detail target');
+  assert.notStrictEqual(afterAlpha.data && afterAlpha.data.hostname, 'alpha-host', 'late alpha completion must not assign alpha data into beta detail');
+  assert.strictEqual(viewer.document.getElementById('detailError').hidden, true, 'late alpha completion must not surface alpha errors into beta detail');
+
+  beta.resolve({ server_id: 'beta-2', hostname: 'beta-host', mounts: [], users: [], top_files: [], stale: [] });
+  await flushPromises();
+  const afterBeta = viewer.getCurrentDetailDebugState();
+  assert.strictEqual(afterBeta.currentServerId, 'beta-2');
+  assert.strictEqual(afterBeta.data && afterBeta.data.hostname, 'beta-host', 'beta detail should render once beta completes');
+
+  const rejectAlpha = deferred();
+  const slowBeta = deferred();
+  viewer.loadSnapshotForCurrentSource = (serverId) => serverId === 'alpha-1' ? rejectAlpha.promise : slowBeta.promise;
+  viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
+  viewer.navigateToServer('beta-2', { skipHistory: true, forceReload: true });
+  rejectAlpha.reject(new Error('alpha exploded'));
+  await flushPromises();
+  assert.strictEqual(viewer.document.getElementById('detailError').hidden, true, 'late alpha failure must not replace beta detail with an alpha error');
+  slowBeta.resolve({ server_id: 'beta-2', hostname: 'beta-host-2', mounts: [], users: [], top_files: [], stale: [] });
+  await flushPromises();
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'beta-host-2');
+}
+
+function testDeleteCommandQuoting() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.shellQuotePath, 'function', 'shellQuotePath must be exposed for command generation');
   assert.strictEqual(typeof viewer.buildDeleteCommands, 'function', 'buildDeleteCommands must be exposed for command generation');
@@ -263,9 +413,9 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
     "sudo rm -rf -- '/data/simple file.bin'",
     "sudo rm -rf -- '/data/O'\"'\"'Hara/checkpoint.pt'",
   ]);
-})();
+}
 
-(function testTreemapHidesMicroTilesInsteadOfInflatingThem() {
+function testTreemapHidesMicroTilesInsteadOfInflatingThem() {
   const viewer = loadViewer();
   const GiB = 1024 ** 3;
   const MiB = 1024 ** 2;
@@ -292,9 +442,9 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
 
   const bigArea = numericPx(big.style.width) * numericPx(big.style.height);
   assert.ok(bigArea > 590000, `large tile should retain almost all proportional area; got ${bigArea}`);
-})();
+}
 
-(function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
+function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.isTreemapCleanupGesture, 'function', 'treemap cleanup gesture must be detectable');
   assert.strictEqual(typeof viewer.setTreemapModifierActive, 'function', 'temporary shortcut state must be controllable');
@@ -339,9 +489,9 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
   assert.ok(project.children.some(c => c.className === 'tm-cleanup-badge'), 'real-path tile should have a hidden selected-state badge');
   assert.ok(!other.dataset.cleanupPath, 'aggregate non-path tiles must not be selectable');
   assert.ok(!other.children.some(c => c.className === 'tm-cleanup-badge'), 'aggregate non-path tiles must not show cleanup controls');
-})();
+}
 
-(function testTreemapGroupTilesStayBehindDescendants() {
+function testTreemapGroupTilesStayBehindDescendants() {
   const viewer = loadViewer();
   const root = {
     name: '/',
@@ -369,9 +519,9 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
   assert.ok(child, 'child tile should render above parent group');
   assert.strictEqual(group.style.zIndex, '1', 'group background/header must stay in lower stacking layer');
   assert.strictEqual(child.style.zIndex, '2', 'descendant tiles must stay above group backgrounds');
-})();
+}
 
-(function testTreemapDoesNotExposeTopLevelCleanupCandidates() {
+function testTreemapDoesNotExposeTopLevelCleanupCandidates() {
   const viewer = loadViewer();
   const root = {
     name: '/',
@@ -389,9 +539,9 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
   assert.ok(home, 'top-level tile should still render visually');
   assert.ok(!home.dataset.cleanupPath, 'top-level tile must not be selectable for cleanup commands');
   assert.ok(!home.children.some(c => c.className === 'tm-cleanup-badge'), 'top-level tile must not show selected-state badge');
-})();
+}
 
-(function testTreemapScaleNoteExplainsHiddenTinyItemsBilingually() {
+function testTreemapScaleNoteExplainsHiddenTinyItemsBilingually() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.renderTreemapScaleNote, 'function', 'scale note renderer should be testable');
   const el = new FakeElement('div');
@@ -401,6 +551,24 @@ function numericPx(value) { return Number(String(value || '0').replace(/px$/, ''
   assert.ok(note, 'scale note should be rendered when tiny items are hidden');
   assert.ok(note.innerHTML.includes('too small to draw proportionally'), 'English note should explain why items are hidden');
   assert.ok(note.innerHTML.includes('실제 비율'), 'Korean note should explain true-scale hiding');
-})();
+}
 
-console.log('viewer regression tests passed');
+async function main() {
+  testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars();
+  testSnapshotLoadFailureRendersAsVisibleException();
+  testRouteNavigationAndBackShellContract();
+  await testBootstrapDetectionIsExplicitAndSequential();
+  await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
+  testDeleteCommandQuoting();
+  testTreemapHidesMicroTilesInsteadOfInflatingThem();
+  testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes();
+  testTreemapGroupTilesStayBehindDescendants();
+  testTreemapDoesNotExposeTopLevelCleanupCandidates();
+  testTreemapScaleNoteExplainsHiddenTinyItemsBilingually();
+  console.log('viewer regression tests passed');
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
