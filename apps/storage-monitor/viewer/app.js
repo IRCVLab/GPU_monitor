@@ -1,5 +1,18 @@
 "use strict";
 
+let currentServerId = null;
+let currentServerSummary = null;
+let currentSession = { authenticated: false, can_rescan: false, csrf_token: "" };
+let currentOverviewSummaries = [];
+let currentOverviewSnapshotEntries = [];
+let currentOverviewRows = [];
+let currentDataSource = "static";
+let staticHostById = new Map();
+let snapshotCache = new Map();
+let resizeTimer = null;
+let rescanTimer = null;
+let rescanSawActive = false;
+
 /* =========================================================================
    Wiring
    ========================================================================= */
@@ -9,7 +22,7 @@ function bindSort(sel, sortState, rerender) {
     const act = () => {
       const key = th.dataset.key;
       if (sortState.key === key) sortState.dir *= -1;
-      else { sortState.key = key; sortState.dir = (key === "path" || key === "owner" || key === "name" || key === "mount") ? 1 : -1; }
+      else sortState.key = key, sortState.dir = (key === "path" || key === "owner" || key === "name" || key === "mount") ? 1 : -1;
       rerender();
     };
     th.onclick = act;
@@ -30,14 +43,67 @@ function bindCopy() {
   });
 }
 
-function showTab(name) {
-  currentTab = name;
-  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + name));
+function syncHistory(route, replace) {
+  if (!window.history) return;
+  const href = buildRouteHref(window.location.pathname, route);
+  if (replace) window.history.replaceState(route, "", href);
+  else window.history.pushState(route, "", href);
+}
+
+function setShellMode(isDetail) {
+  const overviewView = document.getElementById("overviewView");
+  const detailView = document.getElementById("detailView");
+  const back = document.getElementById("overviewBack");
+  const detailActions = document.getElementById("detailActions");
+  const detailHead = document.getElementById("detailHead");
+  const warnBanner = document.getElementById("warnBanner");
+  const caps = document.getElementById("caps");
+  const detailTabs = document.getElementById("detailTabs");
+  if (overviewView) overviewView.hidden = !!isDetail;
+  if (detailView) detailView.hidden = !isDetail;
+  if (back) back.hidden = !isDetail;
+  if (detailActions) detailActions.hidden = !isDetail;
+  if (detailHead) detailHead.hidden = !isDetail;
+  if (warnBanner) warnBanner.hidden = !isDetail;
+  if (caps) caps.hidden = !isDetail;
+  if (detailTabs) detailTabs.hidden = !isDetail;
+  const subtitle = document.getElementById("brandSubtitle");
+  if (subtitle) subtitle.textContent = isDetail && currentServerSummary
+    ? currentServerSummary.display_name + " 상세 보기"
+    : "고정 순서 서버 저장소 개요";
+}
+
+function showDetailError(message) {
+  const err = document.getElementById("detailError");
+  const panels = document.getElementById("detailPanels");
+  if (err) {
+    err.textContent = message;
+    err.hidden = false;
+  }
+  if (panels) panels.hidden = true;
+}
+
+function clearDetailError() {
+  const err = document.getElementById("detailError");
+  const panels = document.getElementById("detailPanels");
+  if (err) {
+    err.textContent = "";
+    err.hidden = true;
+  }
+  if (panels) panels.hidden = false;
+}
+
+function showTab(name, options) {
+  const updateRoute = !options || options.updateRoute !== false;
+  currentTab = KNOWN_DETAIL_TABS.has(name) ? name : "treemap";
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === currentTab));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + currentTab));
+  if (updateRoute && currentServerId) syncHistory({ serverId: currentServerId, tab: currentTab }, true);
   requestAnimationFrame(() => {
-    if (name === "treemap") renderTreemap();
-    if (name === "users") { if (!usersInited) renderUsers(); else if (usersChart) usersChart.resize(); }
-    if (name === "stale") renderStaleWindow();
+    if (!DATA) return;
+    if (currentTab === "treemap") renderTreemap();
+    if (currentTab === "users") { if (!usersInited) renderUsers(); else if (usersChart) usersChart.resize(); }
+    if (currentTab === "stale") renderStaleWindow();
   });
 }
 
@@ -52,36 +118,192 @@ function renderAll() {
   currentMountIdx = 0; userMountFilter = topMountFilter = staleMountFilter = "";
   topRowsCache = null; staleRowsCache = null;
   cleanupSelected.clear(); renderCleanupPanel();
-  // Fast first paint: header + hero + controls now.
   renderHeader();
   updateLastUpdated();
   renderMountSeg();
   populateFilters();
-
-  // Defer the heavier work so the hero shows immediately.
   requestAnimationFrame(() => {
-    renderTreemap();           // builds only the active mount's tree
-    renderTopFiles();          // 200 rows
-    prepStale();               // computes filtered set + caption; window paints on tab show
-    // users chart inits lazily on first Users-tab activation
+    renderTreemap();
+    renderTopFiles();
+    prepStale();
   });
 }
 
-async function selectHost(host) {
-  // dispose charts on host switch (frees ECharts instances)
-  treemapStack = [];
-  if (usersChart) { usersChart.dispose(); usersChart = null; usersInited = false; }
-  try { DATA = await loadHost(host); }
-  catch (e) {
-    console.error("[storage-viz] failed to load host", host.id, e);
-    document.getElementById("main").innerHTML = '<div class="err">Could not load data for <b>' + escapeHtml(host.label) +
-      '</b>.<br>Tried <code>data/' + escapeHtml(host.file) + '.json</code> and <code>.sample.json</code>.<br>' + escapeHtml(String(e)) + '</div>';
-    return;
+function showOverviewError(message) {
+  const err = document.getElementById("overviewError");
+  if (err) {
+    err.textContent = message;
+    err.hidden = false;
   }
-  renderAll();
 }
 
-/* ---- Last-updated label + optional server-side rescan ---- */
+function clearOverviewError() {
+  const err = document.getElementById("overviewError");
+  if (err) {
+    err.textContent = "";
+    err.hidden = true;
+  }
+}
+
+function updateOverviewStatus() {
+  const el = document.getElementById("overviewStatus");
+  if (el) el.textContent = currentOverviewRows.length + " servers";
+}
+
+function renderOverview() {
+  clearOverviewError();
+  currentOverviewRows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries, DEFAULT_CAPACITY_THRESHOLDS);
+  const list = document.getElementById("overviewList");
+  renderOverviewList(list, currentOverviewRows, { onOpenServer: (serverId) => navigateToServer(serverId) });
+  updateOverviewStatus();
+}
+
+async function loadStaticBootstrap() {
+  await loadHostManifest();
+  staticHostById = new Map(HOSTS.map(host => [host.id, host]));
+  const summaries = HOSTS.map((host, index) => ({
+    id: host.id,
+    display_name: host.label,
+    order: index,
+    mount_count: 0,
+    snapshot_availability: "available",
+    freshness: "fresh",
+    latest_pull_status: "succeeded",
+    latest_scan_result: "complete",
+    configuration_sync: "in_sync",
+    active_job: null,
+  }));
+  const snapshots = await loadOrderedSnapshotsForOverview(summaries, async (serverId) => {
+    const host = staticHostById.get(serverId);
+    if (!host) throw new Error("unknown static host");
+    return loadHost(host);
+  });
+  for (const row of summaries) {
+    const entry = snapshots.find(item => item.id === row.id);
+    if (entry && entry.snapshot && Array.isArray(entry.snapshot.mounts)) row.mount_count = entry.snapshot.mounts.length;
+  }
+  return {
+    mode: "static",
+    session: { authenticated: false, can_rescan: false, csrf_token: "" },
+    summaries,
+    snapshots,
+  };
+}
+
+function shouldFallbackToStatic(error) {
+  return !error || error.status == null || error.status === 404;
+}
+
+async function loadBootstrapData() {
+  try {
+    const [session, summaries] = await Promise.all([loadSession(), loadServerSummaries()]);
+    staticHostById = new Map();
+    return {
+      mode: "api",
+      session,
+      summaries,
+      snapshots: await loadOrderedSnapshotsForOverview(summaries, loadServerSnapshot),
+    };
+  } catch (error) {
+    if (!shouldFallbackToStatic(error)) throw error;
+    console.warn("[storage-viz] API bootstrap unavailable; falling back to static data", error);
+    return loadStaticBootstrap();
+  }
+}
+
+function rememberBootstrap(bootstrap) {
+  currentDataSource = bootstrap.mode;
+  currentSession = bootstrap.session || { authenticated: false, can_rescan: false, csrf_token: "" };
+  currentOverviewSummaries = bootstrap.summaries || [];
+  currentOverviewSnapshotEntries = bootstrap.snapshots || [];
+  snapshotCache = new Map();
+  for (const entry of currentOverviewSnapshotEntries) if (entry && entry.id && entry.snapshot) snapshotCache.set(entry.id, entry.snapshot);
+}
+
+function updateSnapshotEntry(serverId, snapshot, error) {
+  let found = false;
+  currentOverviewSnapshotEntries = currentOverviewSnapshotEntries.map((entry) => {
+    if (entry.id !== serverId) return entry;
+    found = true;
+    return { id: serverId, snapshot, error: error || null };
+  });
+  if (!found) currentOverviewSnapshotEntries.push({ id: serverId, snapshot, error: error || null });
+}
+
+async function loadSnapshotForCurrentSource(serverId) {
+  if (currentDataSource === "api") return loadServerSnapshot(serverId);
+  const host = staticHostById.get(serverId);
+  if (!host) throw new Error("unknown host");
+  return loadHost(host);
+}
+
+function currentRoute() {
+  return parseRoute(window.location);
+}
+
+async function ensureDetailLoaded(serverId, forceReload) {
+  const summary = currentOverviewSummaries.find(item => item.id === serverId);
+  currentServerSummary = summary || null;
+  if (!summary) {
+    showDetailError("Unknown server: " + serverId);
+    return;
+  }
+  let snapshot = !forceReload ? snapshotCache.get(serverId) : null;
+  if (!snapshot) {
+    try {
+      snapshot = await loadSnapshotForCurrentSource(serverId);
+      snapshotCache.set(serverId, snapshot);
+      updateSnapshotEntry(serverId, snapshot, null);
+      renderOverview();
+    } catch (error) {
+      console.error("[storage-viz] failed to load snapshot", serverId, error);
+      updateSnapshotEntry(serverId, null, error);
+      renderOverview();
+      showDetailError("Could not load snapshot for " + summary.display_name + ".");
+      return;
+    }
+  }
+  DATA = snapshot;
+  clearDetailError();
+  renderAll();
+  updateLastUpdated();
+  syncRescanButton();
+}
+
+function applyRouteState(route, options) {
+  const opts = options || {};
+  const safeRoute = {
+    serverId: route && route.serverId && SAFE_SERVER_ID_RE.test(route.serverId) ? route.serverId : null,
+    tab: route && route.tab ? route.tab : "treemap",
+  };
+  if (!opts.skipHistory) syncHistory(safeRoute, !!opts.replaceHistory);
+  currentServerId = safeRoute.serverId;
+  setShellMode(!!safeRoute.serverId);
+  if (!safeRoute.serverId) return safeRoute;
+  showTab(safeRoute.tab, { updateRoute: false });
+  if (!opts.skipDataLoad) void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload);
+  return safeRoute;
+}
+
+function navigateToServer(serverId, options) {
+  const opts = options || {};
+  return applyRouteState({ serverId, tab: opts.tab || currentTab || "treemap" }, {
+    skipHistory: !!opts.skipHistory,
+    replaceHistory: !!opts.replaceHistory,
+    skipDataLoad: !!opts.skipDataLoad,
+    forceReload: !!opts.forceReload,
+  });
+}
+
+function navigateToOverview(options) {
+  const opts = options || {};
+  return applyRouteState({ serverId: null, tab: "treemap" }, {
+    skipHistory: !!opts.skipHistory,
+    replaceHistory: !!opts.replaceHistory,
+    skipDataLoad: true,
+  });
+}
+
 function fmtRel(unix) {
   if (!unix) return "—";
   const s = Math.max(0, Math.floor(Date.now() / 1000) - unix);
@@ -97,61 +319,101 @@ function updateLastUpdated() {
     el.title = "Last scan: " + fmtDate(DATA.scan_started_unix);
   } else el.textContent = "";
 }
-let rescanTimer = null, sawScanRunning = false;
+
 function setRescanUnsupported(btn, message) {
+  if (!btn) return;
   btn.disabled = true;
   btn.textContent = "Manual rescan";
   btn.title = message || "Manual rescan only: run scanner separately and refresh.";
 }
-async function pollRescan() {
-  let st;
-  try { st = await (await fetch("/rescan-status", { cache: "no-store" })).json(); }
-  catch (e) { return; }   // endpoint not available (e.g. plain static server)
-  const btn = document.getElementById("rescanBtn"); if (!btn) return;
-  if (st.supported === false) {
-    setRescanUnsupported(btn, st.message);
-    return;
-  }
-  if (st.scanning) {
-    sawScanRunning = true;
-    const secs = Math.max(0, Math.floor(Date.now() / 1000 - st.started));
-    btn.disabled = true; btn.textContent = "⟳ Scanning… " + secs + "s";
-    if (!rescanTimer) rescanTimer = setInterval(pollRescan, 2000);
-  } else {
-    btn.disabled = false; btn.textContent = "↻ Rescan";
-    if (rescanTimer) { clearInterval(rescanTimer); rescanTimer = null; }
-    if (sawScanRunning) {            // a scan we were watching just finished → reload fresh data
-      sawScanRunning = false;
-      if (st.error) console.error("[storage-viz] scan error:", st.error);
-      const h = HOSTS.find(x => x.id === document.getElementById("hostSel").value) || HOSTS[0];
-      if (h) await selectHost(h);
-    }
+
+function syncRescanButton() {
+  const btn = document.getElementById("rescanBtn");
+  if (!btn) return;
+  if (!currentServerId || currentDataSource !== "api") return setRescanUnsupported(btn, "Manual rescan only in API-backed mode.");
+  if (!currentSession.can_rescan) return setRescanUnsupported(btn, "Read-only session: manual rescan is disabled.");
+  btn.disabled = false;
+  btn.textContent = "↻ Rescan";
+  btn.title = "Run a fresh scan now";
+}
+
+function clearRescanPoll() {
+  if (rescanTimer) {
+    clearInterval(rescanTimer);
+    rescanTimer = null;
   }
 }
-async function triggerRescan() {
-  const btn = document.getElementById("rescanBtn");
-  btn.disabled = true; btn.textContent = "⟳ Starting…";
+
+async function refreshOverviewData(options) {
+  const opts = options || {};
+  const route = currentRoute();
   try {
-    const r = await fetch("/rescan", { method: "POST" });
-    if (r.status === 503) {
-      const body = await r.json().catch(() => ({}));
-      setRescanUnsupported(btn, body.error || body.message);
+    const bootstrap = await loadBootstrapData();
+    rememberBootstrap(bootstrap);
+    renderOverview();
+    if (route.serverId) {
+      navigateToServer(route.serverId, { skipHistory: true, tab: route.tab, forceReload: !!opts.forceReload });
+    } else {
+      navigateToOverview({ skipHistory: true });
+    }
+  } catch (error) {
+    console.error("[storage-viz] failed to refresh overview", error);
+    showOverviewError("Overview refresh failed.");
+  }
+}
+
+async function pollRescanJob() {
+  const btn = document.getElementById("rescanBtn");
+  if (!btn || !currentServerId || currentDataSource !== "api") return;
+  try {
+    const body = await loadServerJob(currentServerId);
+    const job = body && body.job;
+    if (job && (job.state === "requested" || job.state === "running")) {
+      rescanSawActive = true;
+      btn.disabled = true;
+      btn.textContent = job.state === "requested" ? "⟳ Queued…" : "⟳ Scanning…";
+      if (!rescanTimer) rescanTimer = setInterval(() => { void pollRescanJob(); }, 2000);
       return;
     }
-  } catch (e) {}
-  sawScanRunning = true;
-  pollRescan();
+    clearRescanPoll();
+    syncRescanButton();
+    if (rescanSawActive) {
+      rescanSawActive = false;
+      await refreshOverviewData({ forceReload: true });
+    }
+  } catch (error) {
+    clearRescanPoll();
+    setRescanUnsupported(btn, "Rescan status unavailable.");
+  }
 }
 
-let resizeTimer = null;
-async function init() {
-  await loadHostManifest();
-  const sel = document.getElementById("hostSel");
-  sel.innerHTML = "";
-  HOSTS.forEach(h => { const o = document.createElement("option"); o.value = h.id; o.textContent = h.label; sel.appendChild(o); });
-  sel.onchange = () => { const h = HOSTS.find(x => x.id === sel.value); if (h) selectHost(h); };
+async function triggerRescan() {
+  const btn = document.getElementById("rescanBtn");
+  if (!btn || !currentServerId || currentDataSource !== "api" || !currentSession.can_rescan) return;
+  btn.disabled = true;
+  btn.textContent = "⟳ Starting…";
+  try {
+    await postServerRescan(currentServerId, currentSession.csrf_token);
+  } catch (error) {
+    setRescanUnsupported(btn, (error && error.body && error.body.error) || "Rescan unavailable.");
+    return;
+  }
+  await pollRescanJob();
+}
 
-  document.querySelectorAll(".tab").forEach(t => { t.onclick = () => showTab(t.dataset.tab); });
+async function init() {
+  const initialRoute = currentRoute();
+  let bootstrap;
+  try {
+    bootstrap = await loadBootstrapData();
+  } catch (error) {
+    console.error("[storage-viz] failed to initialize overview", error);
+    showOverviewError("Overview data is unavailable.");
+    navigateToOverview({ skipHistory: true });
+    return;
+  }
+  rememberBootstrap(bootstrap);
+  renderOverview();
   bindSort("#usersTbl", usersSort, renderUsersTable);
   bindSort("#topTbl", topSort, renderTopFiles);
   bindSort("#staleHead", staleSort, renderStale);
@@ -159,12 +421,15 @@ async function init() {
   bindCleanupSelection();
   if (typeof bindTreemapCleanupMode === "function") bindTreemapCleanupMode();
 
-  // Hover-highlight EXACTLY the topmost tile under the cursor (e.target is the
-  // top element), so a parent group is never highlighted by mistake.
+  document.querySelectorAll(".tab").forEach(t => { t.onclick = () => showTab(t.dataset.tab); });
+  const back = document.getElementById("overviewBack");
+  if (back) back.onclick = () => navigateToOverview();
+
   (function () {
     const tmEl = document.getElementById("treemap");
     const tip = document.getElementById("tmtip");
     let last = null;
+    if (!tmEl || !tip) return;
     const showTip = (d, x, y) => {
       tip.innerHTML =
         '<div class="tip-path">' + escapeHtml(d.other ? d.path.replace(/\/[^/]*$/, "") + "/ (other small files)" : d.path) + '</div>' +
@@ -182,7 +447,7 @@ async function init() {
     };
     tmEl.addEventListener("mousemove", (e) => {
       const tile = e.target.closest(".tmtile");
-      const hl = (tile && !tile.classList.contains("tmgroup")) ? tile : null; // highlight leaves only
+      const hl = (tile && !tile.classList.contains("tmgroup")) ? tile : null;
       if (hl !== last) { if (last) last.classList.remove("tmhover"); if (hl) hl.classList.add("tmhover"); last = hl; }
       if (tile && tile._tip) showTip(tile._tip, e.clientX, e.clientY);
       else tip.classList.remove("show");
@@ -192,13 +457,8 @@ async function init() {
 
   document.getElementById("ownerFilter").onchange = (e) => { topOwnerFilter = e.target.value; renderTopFiles(); };
   document.getElementById("staleOwnerFilter").onchange = (e) => { staleOwnerFilter = e.target.value; renderStale(); };
+  document.getElementById("staleViewport").addEventListener("scroll", () => requestAnimationFrame(renderStaleWindow), { passive: true });
 
-  // virtualized stale: re-render window on scroll
-  document.getElementById("staleViewport").addEventListener("scroll", () => {
-    requestAnimationFrame(renderStaleWindow);
-  }, { passive: true });
-
-  // debounced resize
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
@@ -207,11 +467,11 @@ async function init() {
       if (currentTab === "stale") renderStaleWindow();
     }, 150);
   });
+  window.addEventListener("popstate", () => {
+    const route = currentRoute();
+    applyRouteState(route, { skipHistory: true });
+  });
 
-  // Observe the scroll container (main): whenever its size settles/changes
-  // (header height resolving, caps wrapping, font load, window resize, zoom),
-  // recompute the treemap height to fit inside it and resize the canvas. This is
-  // what prevents the chart from being taller than the visible area (bottom clip).
   if (window.ResizeObserver) {
     let roTimer = null;
     const ro = new ResizeObserver(() => {
@@ -220,11 +480,9 @@ async function init() {
     });
     ro.observe(document.getElementById("main"));
   }
-  // One more recompute after fonts/layout fully settle (covers first paint).
   window.addEventListener("load", () => { if (currentTab === "treemap") renderTreemap(); });
   setTimeout(() => { if (currentTab === "treemap") renderTreemap(); }, 400);
 
-  // re-theme charts when the OS switches light/dark
   if (window.matchMedia) {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onScheme = () => { if (DATA) renderTreemap(); if (usersInited) renderUsers(); };
@@ -233,10 +491,13 @@ async function init() {
 
   const rb = document.getElementById("rescanBtn");
   if (rb) rb.onclick = triggerRescan;
-  pollRescan();                          // reflect a scan already running (started by another viewer)
-  setInterval(pollRescan, 5000);         // stay in sync with other viewers
-  setInterval(updateLastUpdated, 30000); // keep "x min ago" fresh
+  syncRescanButton();
+  setInterval(updateLastUpdated, 30000);
 
-  if (HOSTS.length) selectHost(HOSTS[0]);
+  if (initialRoute.serverId) navigateToServer(initialRoute.serverId, { skipHistory: true, tab: initialRoute.tab });
+  else navigateToOverview({ skipHistory: true });
 }
+
 document.addEventListener("DOMContentLoaded", init);
+
+if (typeof globalThis !== "undefined") Object.assign(globalThis, { applyRouteState, navigateToOverview, navigateToServer });

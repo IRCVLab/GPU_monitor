@@ -13,21 +13,32 @@
 <div id="app">
   <header>
     <div class="head-row">
-      <div class="brand"><span class="logo"></span>storage<span style="color:var(--text2)">·</span>viz
-        <span class="host">— <b id="h-host">…</b></span>
-        <span style="margin-left:10px;padding:2px 9px;border-radius:6px;background:#0071e3;color:#fff;font-size:12px;font-weight:800;font-family:ui-monospace,monospace">BUILD&nbsp;B30</span></div>
-      <div class="head-meta hide-sm">Scanned <b id="h-scan">…</b></div>
-      <div class="head-meta hide-sm" id="h-scanner">…</div>
+      <div class="brand-wrap">
+        <button type="button" id="overviewBack" class="overview-back" hidden>← 서버 목록</button>
+        <div class="brand-shell">
+          <span class="logo" aria-hidden="true"></span>
+          <div>
+            <h1 class="brand-title">storage<span class="brand-dot">·</span>viz</h1>
+            <p class="brand-subtitle" id="brandSubtitle">고정 순서 서버 저장소 개요</p>
+          </div>
+        </div>
+      </div>
       <div class="head-spacer"></div>
-      <div class="host-pick">
+      <div class="head-actions detail-only" id="detailActions" hidden>
         <span class="head-meta" id="lastUpd" title="last scan time"></span>
         <button id="rescanBtn" class="rescan-btn" title="Run a fresh scan now">↻ Rescan</button>
-        <label for="hostSel">Host</label><select id="hostSel"></select>
       </div>
     </div>
-    <div class="warn-banner" id="warnBanner"></div>
-    <div class="caps" id="caps"></div>
-    <nav class="tabs">
+    <div class="detail-head detail-only" id="detailHead" hidden>
+      <div class="detail-title"><span class="detail-server" id="h-host">—</span></div>
+      <div class="detail-meta-wrap">
+        <div class="head-meta">Scanned <b id="h-scan">—</b></div>
+        <div class="head-meta" id="h-scanner">—</div>
+      </div>
+    </div>
+    <div class="warn-banner detail-only" id="warnBanner" hidden></div>
+    <div class="caps detail-only" id="caps" hidden></div>
+    <nav class="tabs detail-only" id="detailTabs" hidden>
       <div class="seg-tabs" id="tabs" role="tablist">
         <button class="tab active" data-tab="treemap" role="tab">Treemap</button>
         <button class="tab" data-tab="users" role="tab">Users</button>
@@ -38,87 +49,94 @@
   </header>
 
   <main id="main">
-    <!-- TREEMAP -->
-    <section class="panel active" id="panel-treemap">
-      <div class="toolbar">
-        <div class="grp"><label>Mount</label><div class="seg" id="mountSeg"></div></div>
-        <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택">Ctrl/⌘ click: select</button>
-        <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택</span>
-      </div>
-      <div id="treemap"></div>
-      <div class="legend" id="treemapLegend"></div>
+    <section id="overviewView" class="overview-view">
+      <p class="overview-lead">서버 순서는 바뀌지 않습니다. 운영 예외는 짧은 한국어 상태로만 강조하고, 각 행의 용량 막대는 항상 유지합니다.</p>
+      <div id="overviewError" class="err" hidden></div>
+      <p id="overviewStatus" class="overview-status" aria-live="polite"></p>
+      <div id="overviewList" class="overview-list" role="list"></div>
     </section>
 
-    <!-- USERS -->
-    <section class="panel" id="panel-users">
-      <div class="toolbar">
-        <div class="grp"><label>Storage</label><div class="seg" id="userMountSeg"></div></div>
-        <span class="hint">Bars stacked by storage. Pick one to re-rank within it. Click a bar/row for the breakdown.</span>
-      </div>
-      <div class="mount-legend" id="userMountLegend"></div>
-      <div id="usersChart"></div>
-      <div class="card" style="margin-top:18px"><div class="tbl-scroll">
-        <table id="usersTbl">
-          <thead><tr>
-            <th class="sortable" data-key="name">User<span class="arrow"></span></th>
-            <th class="sortable num" data-key="bytes">Usage<span class="arrow"></span></th>
-            <th class="num" data-key="pct">Share<span class="arrow"></span></th>
-            <th class="sortable num" data-key="files">Files<span class="arrow"></span></th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
-      </div></div>
-      <div class="rowcount" id="usersCount"></div>
-    </section>
+    <section id="detailView" class="detail-view" hidden>
+      <div id="detailError" class="err" hidden></div>
+      <div id="detailPanels">
+        <section class="panel active" id="panel-treemap">
+          <div class="toolbar">
+            <div class="grp"><label>Mount</label><div class="seg" id="mountSeg"></div></div>
+            <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택">Ctrl/⌘ click: select</button>
+            <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택</span>
+          </div>
+          <div id="treemap"></div>
+          <div class="legend" id="treemapLegend"></div>
+        </section>
 
-    <!-- TOP FILES -->
-    <section class="panel" id="panel-topfiles">
-      <h2 class="panel-title">Top files</h2>
-      <p class="panel-sub">The largest individual files found in the scan.</p>
-      <div class="toolbar">
-        <div class="grp"><label for="ownerFilter">Owner</label><select id="ownerFilter"><option value="">All</option></select></div>
-        <div class="grp"><label>Storage</label><div class="seg" id="topMountSeg"></div></div>
-        <span class="hint">Sort by any column · hover a row to copy its path</span>
-      </div>
-      <div class="card"><div class="tbl-scroll">
-        <table id="topTbl">
-          <thead><tr>
-            <th class="selectcell" title="Select rows for a copy-only delete command">Select</th>
-            <th class="sortable num" data-key="bytes" style="width:168px">Size<span class="arrow"></span></th>
-            <th class="sortable num" data-key="age" style="width:96px">Age<span class="arrow"></span></th>
-            <th class="sortable" data-key="owner" style="width:168px">Owner<span class="arrow"></span></th>
-            <th class="sortable" data-key="mount" style="width:96px">Storage<span class="arrow"></span></th>
-            <th class="sortable pathcell" data-key="path">Path<span class="arrow"></span></th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
-      </div></div>
-      <div class="rowcount" id="topCount"></div>
-    </section>
+        <section class="panel" id="panel-users">
+          <div class="toolbar">
+            <div class="grp"><label>Storage</label><div class="seg" id="userMountSeg"></div></div>
+            <span class="hint">Bars stacked by storage. Pick one to re-rank within it. Click a bar/row for the breakdown.</span>
+          </div>
+          <div class="mount-legend" id="userMountLegend"></div>
+          <div id="usersChart"></div>
+          <div class="card" style="margin-top:18px"><div class="tbl-scroll">
+            <table id="usersTbl">
+              <thead><tr>
+                <th class="sortable" data-key="name">User<span class="arrow"></span></th>
+                <th class="sortable num" data-key="bytes">Usage<span class="arrow"></span></th>
+                <th class="num" data-key="pct">Share<span class="arrow"></span></th>
+                <th class="sortable num" data-key="files">Files<span class="arrow"></span></th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div></div>
+          <div class="rowcount" id="usersCount"></div>
+        </section>
 
-    <!-- STALE (virtualized) -->
-    <section class="panel" id="panel-stale">
-      <h2 class="panel-title">Stale files</h2>
-      <p class="panel-sub" id="staleCaption">Big, long-untouched files — the prime cleanup candidates.</p>
-      <div class="toolbar">
-        <div class="grp"><label for="staleOwnerFilter">Owner</label><select id="staleOwnerFilter"><option value="">All</option></select></div>
-        <div class="grp"><label>Storage</label><div class="seg" id="staleMountSeg"></div></div>
-        <span class="hint">Sorted by size · rows tint redder with age · scroll for more</span>
-      </div>
-      <div class="card">
-        <div class="vhead" id="staleHead">
-          <div class="vc vc-select" title="Select rows for a copy-only delete command">Select</div>
-          <div class="vc vc-size sortable" data-key="bytes" style="text-align:right">Size<span class="arrow"></span></div>
-          <div class="vc vc-age sortable" data-key="age_days" style="text-align:right">Age<span class="arrow"></span></div>
-          <div class="vc vc-own sortable" data-key="owner">Owner<span class="arrow"></span></div>
-          <div class="vc vc-mnt sortable" data-key="mount">Storage<span class="arrow"></span></div>
-          <div class="vc vc-path sortable" data-key="path">Path<span class="arrow"></span></div>
-        </div>
-        <div id="staleViewport"><div id="staleSpacer"><div id="staleRows"></div></div></div>
-      </div>
-      <div class="rowcount" id="staleCount"></div>
-    </section>
+        <section class="panel" id="panel-topfiles">
+          <h2 class="panel-title">Top files</h2>
+          <p class="panel-sub">The largest individual files found in the scan.</p>
+          <div class="toolbar">
+            <div class="grp"><label for="ownerFilter">Owner</label><select id="ownerFilter"><option value="">All</option></select></div>
+            <div class="grp"><label>Storage</label><div class="seg" id="topMountSeg"></div></div>
+            <span class="hint">Sort by any column · hover a row to copy its path</span>
+          </div>
+          <div class="card"><div class="tbl-scroll">
+            <table id="topTbl">
+              <thead><tr>
+                <th class="selectcell" title="Select rows for a copy-only delete command">Select</th>
+                <th class="sortable num" data-key="bytes" style="width:168px">Size<span class="arrow"></span></th>
+                <th class="sortable num" data-key="age" style="width:96px">Age<span class="arrow"></span></th>
+                <th class="sortable" data-key="owner" style="width:168px">Owner<span class="arrow"></span></th>
+                <th class="sortable" data-key="mount" style="width:96px">Storage<span class="arrow"></span></th>
+                <th class="sortable pathcell" data-key="path">Path<span class="arrow"></span></th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div></div>
+          <div class="rowcount" id="topCount"></div>
+        </section>
 
+        <section class="panel" id="panel-stale">
+          <h2 class="panel-title">Stale files</h2>
+          <p class="panel-sub" id="staleCaption">Big, long-untouched files — the prime cleanup candidates.</p>
+          <div class="toolbar">
+            <div class="grp"><label for="staleOwnerFilter">Owner</label><select id="staleOwnerFilter"><option value="">All</option></select></div>
+            <div class="grp"><label>Storage</label><div class="seg" id="staleMountSeg"></div></div>
+            <span class="hint">Sorted by size · rows tint redder with age · scroll for more</span>
+          </div>
+          <div class="card">
+            <div class="vhead" id="staleHead">
+              <div class="vc vc-select" title="Select rows for a copy-only delete command">Select</div>
+              <div class="vc vc-size sortable" data-key="bytes" style="text-align:right">Size<span class="arrow"></span></div>
+              <div class="vc vc-age sortable" data-key="age_days" style="text-align:right">Age<span class="arrow"></span></div>
+              <div class="vc vc-own sortable" data-key="owner">Owner<span class="arrow"></span></div>
+              <div class="vc vc-mnt sortable" data-key="mount">Storage<span class="arrow"></span></div>
+              <div class="vc vc-path sortable" data-key="path">Path<span class="arrow"></span></div>
+            </div>
+            <div id="staleViewport"><div id="staleSpacer"><div id="staleRows"></div></div></div>
+          </div>
+          <div class="rowcount" id="staleCount"></div>
+        </section>
+      </div>
+    </section>
   </main>
 </div>
 <div id="tmtip"></div>
@@ -138,6 +156,7 @@
 <script src="selection.js"></script>
 <script src="treemap.js"></script>
 <script src="tables.js"></script>
+<script src="overview.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

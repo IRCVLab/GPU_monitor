@@ -27,19 +27,37 @@ class FakeElement {
     this.dataset = {};
     this.className = '';
     this.classList = new FakeClassList(this);
+    this.attributes = {};
     this.offsetHeight = 0;
     this.clientHeight = 640;
     this.clientWidth = 1000;
+    this.hidden = false;
+    this.value = '';
+    this.listeners = new Map();
   }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
-  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(c => c !== this); }
+  removeChild(child) { this.children = this.children.filter(c => c !== child); child.parentNode = null; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
   set innerHTML(value) { this._innerHTML = String(value); this.children = []; }
   get innerHTML() { return this._innerHTML || ''; }
-  set textContent(value) { this._textContent = String(value); }
+  set textContent(value) { this._textContent = String(value); this.children = []; }
   get textContent() { return this._textContent || ''; }
-  setAttribute(name, value) { this[name] = String(value); }
-  getAttribute(name) { return this[name]; }
-  addEventListener() {}
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
+    if (name === 'class') this.className = String(value);
+    if (name === 'id') this.id = String(value);
+    if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase())] = String(value);
+  }
+  getAttribute(name) {
+    if (name === 'class') return this.className;
+    if (name === 'id') return this.id;
+    return this.attributes[name];
+  }
+  addEventListener(type, handler) { this.listeners.set(type, handler); }
+  dispatch(type, event = {}) {
+    const handler = this.listeners.get(type);
+    if (handler) handler(Object.assign({ target: this, currentTarget: this, preventDefault() {} }, event));
+  }
   querySelectorAll() { return []; }
   querySelector() { return null; }
 }
@@ -54,22 +72,35 @@ function loadViewer() {
     'selection.js',
     'treemap.js',
     'tables.js',
+    'overview.js',
     'app.js',
-  ], 'viewer code must be loaded from ordered external scripts');
+  ], 'viewer code must be loaded from ordered external scripts including overview.js before app.js');
   assert(!/<style\b/i.test(html), 'viewer stylesheet must be externalized');
   assert(html.includes('<link rel="stylesheet" href="styles.css">'), 'index must link styles.css');
+  const h1Count = (html.match(/<h1\b/gi) || []).length;
+  assert.strictEqual(h1Count, 1, 'viewer must keep exactly one logical h1');
+  assert(html.includes('id="overviewView"'), 'overview shell must be present');
+  assert(html.includes('id="overviewList"'), 'overview list container must be present');
+  assert(html.includes('id="overviewBack"'), 'detail back-to-overview control must be present');
   const removedName = 'ad' + 'visor';
   assert(!html.includes('data-tab="' + removedName + '"'), 'removed analysis tab must not exist');
   assert(!html.includes('id="panel-' + removedName + '"'), 'removed analysis panel must not exist');
+
   const elements = new Map();
   const getEl = (id) => {
-    if (!elements.has(id)) elements.set(id, new FakeElement('div'));
+    if (!elements.has(id)) {
+      const el = new FakeElement('div');
+      el.id = id;
+      elements.set(id, el);
+    }
     return elements.get(id);
   };
+  const historyCalls = [];
   const context = {
     console,
     Math,
     Date,
+    URLSearchParams,
     setTimeout,
     clearTimeout,
     setInterval,
@@ -78,6 +109,11 @@ function loadViewer() {
     window: {
       innerWidth: 1200,
       innerHeight: 800,
+      location: { pathname: '/viewer/index.html', search: '', hash: '' },
+      history: {
+        pushState: (_state, _title, href) => { historyCalls.push(['push', href]); const [pathAndQuery, hash = ''] = String(href).split('#'); const [pathname, search = ''] = pathAndQuery.split('?'); context.window.location.pathname = pathname; context.window.location.search = search ? '?' + search : ''; context.window.location.hash = hash ? '#' + hash : ''; },
+        replaceState: (_state, _title, href) => { historyCalls.push(['replace', href]); const [pathAndQuery, hash = ''] = String(href).split('#'); const [pathname, search = ''] = pathAndQuery.split('?'); context.window.location.pathname = pathname; context.window.location.search = search ? '?' + search : ''; context.window.location.hash = hash ? '#' + hash : ''; },
+      },
       addEventListener() {},
       matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
     },
@@ -99,10 +135,115 @@ function loadViewer() {
     const code = fs.readFileSync(path.join(__dirname, src), 'utf8');
     vm.runInContext(code, context, { filename: 'viewer/' + src });
   }
+  context.__elements = elements;
+  context.__historyCalls = historyCalls;
   return context;
 }
 
+function textTree(node) {
+  let out = node.textContent || '';
+  if (node.innerHTML) out += node.innerHTML;
+  for (const child of node.children || []) out += textTree(child);
+  return out;
+}
+
 function numericPx(value) { return Number(String(value || '0').replace(/px$/, '')); }
+
+(function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.buildOverviewServer, 'function', 'overview row builder must be exposed');
+  assert.strictEqual(typeof viewer.renderOverviewList, 'function', 'overview renderer must be exposed');
+
+  const rows = [
+    viewer.buildOverviewServer(
+      {
+        id: 'beta-2',
+        display_name: 'beta',
+        order: 20,
+        mount_count: 2,
+        snapshot_availability: 'available',
+        freshness: 'fresh',
+        latest_pull_status: 'succeeded',
+        latest_scan_result: 'failed',
+        configuration_sync: 'in_sync',
+        active_job: { id: 'job-1', server_id: 'beta-2', kind: 'rescan', state: 'running', actor: 'operator-1', requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null },
+      },
+      {
+        server_id: 'beta-2',
+        mounts: [
+          { path: '/data', df_use_pct: 95, df_avail: 800 * 1024 ** 3 },
+          { path: '/archive', df_use_pct: 60, df_avail: 2 * 1024 ** 4 },
+        ],
+      },
+      viewer.DEFAULT_CAPACITY_THRESHOLDS,
+    ),
+    viewer.buildOverviewServer(
+      {
+        id: 'alpha-1',
+        display_name: 'alpha',
+        order: 10,
+        mount_count: 1,
+        snapshot_availability: 'available',
+        freshness: 'stale',
+        latest_pull_status: 'succeeded',
+        latest_scan_result: 'complete',
+        configuration_sync: 'in_sync',
+        active_job: null,
+      },
+      {
+        server_id: 'alpha-1',
+        mounts: [{ path: '/scratch', df_use_pct: 81, df_avail: 700 * 1024 ** 3 }],
+      },
+      viewer.DEFAULT_CAPACITY_THRESHOLDS,
+    ),
+  ];
+
+  const overviewList = viewer.__elements.get('overviewList') || viewer.document.getElementById('overviewList');
+  const opened = [];
+  viewer.renderOverviewList(overviewList, rows, { onOpenServer: (serverId) => opened.push(serverId) });
+
+  assert.strictEqual(overviewList.children.length, 2, 'all servers must render into one dense list');
+  assert.strictEqual(overviewList.children[0].dataset.serverId, 'beta-2', 'inventory order must not change because of severity');
+  assert.strictEqual(overviewList.children[1].dataset.serverId, 'alpha-1', 'inventory order must remain stable for later rows');
+
+  const betaText = textTree(overviewList.children[0]);
+  assert(betaText.includes('beta'), 'row must contain the server display name');
+  assert(betaText.includes('스캔 실패'), 'higher-priority exceptional status must render concise Korean text');
+  assert(betaText.includes('스캔 중'), 'active scan must remain visible as a secondary cue');
+  assert(betaText.includes('95%'), 'capacity bars must still show percentage text');
+  assert(betaText.includes('800 GB'), 'capacity bars must still show available-byte text');
+
+  const alphaText = textTree(overviewList.children[1]);
+  assert(alphaText.includes('오래됨'), 'stale freshness must render as an exceptional state');
+  assert(alphaText.includes('81%'), 'warning-capacity rows must still expose their compact bar text');
+
+  overviewList.children[0].onclick();
+  assert.deepStrictEqual(opened, ['beta-2'], 'clicking a row should open its detail workspace');
+  let prevented = false;
+  overviewList.children[1].onkeydown({ key: 'Enter', preventDefault() { prevented = true; } });
+  assert.strictEqual(prevented, true, 'Enter activation must prevent duplicate default behavior');
+  assert.deepStrictEqual(opened, ['beta-2', 'alpha-1'], 'Enter should activate the row');
+})();
+
+(function testRouteNavigationAndBackShellContract() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.applyRouteState, 'function', 'route application helper must be exposed');
+  assert.strictEqual(typeof viewer.navigateToOverview, 'function', 'overview navigation helper must be exposed');
+
+  const overviewView = viewer.document.getElementById('overviewView');
+  const detailView = viewer.document.getElementById('detailView');
+  const back = viewer.document.getElementById('overviewBack');
+  viewer.applyRouteState({ serverId: null, tab: 'treemap' }, { skipHistory: true });
+  assert.strictEqual(overviewView.hidden, false, 'overview route must show the overview shell');
+  assert.strictEqual(detailView.hidden, true, 'overview route must hide the detail shell');
+  viewer.applyRouteState({ serverId: 'beta-2', tab: 'users' }, { skipHistory: true });
+  assert.strictEqual(overviewView.hidden, true, 'detail route must hide the overview shell');
+  assert.strictEqual(detailView.hidden, false, 'detail route must show the detail shell');
+  assert.strictEqual(back.hidden, false, 'detail route must expose the back-to-overview control');
+  viewer.navigateToOverview({ skipHistory: true });
+  assert.strictEqual(overviewView.hidden, false, 'back navigation must restore the overview shell');
+  assert.strictEqual(detailView.hidden, true, 'back navigation must hide the detail shell again');
+})();
 
 (function testDeleteCommandQuoting() {
   const viewer = loadViewer();
