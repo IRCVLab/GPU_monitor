@@ -116,9 +116,24 @@ function isTopLevelCleanupPath(path) {
   const normalized = String(path || "").replace(/\/+$/g, "") || "/";
   return normalized === "/" || pathDepth(normalized) <= 1;
 }
-function isTreemapCleanupSelectablePath(path) {
-  if (typeof isAbsoluteCleanupPath === "function" && !isAbsoluteCleanupPath(path)) return false;
-  return !isTopLevelCleanupPath(path);
+function treemapCleanupCandidate(path, kind, owner, bytes, source) {
+  return {
+    path,
+    kind,
+    owner,
+    bytes: Number(bytes) || 0,
+    source: source || "treemap",
+  };
+}
+function treemapCleanupSnapshot() {
+  if (typeof DATA !== "undefined" && DATA) return DATA;
+  if (typeof globalThis !== "undefined" && globalThis.DATA) return globalThis.DATA;
+  return null;
+}
+function isTreemapCleanupSelectablePath(path, kind, owner, bytes) {
+  const snapshot = treemapCleanupSnapshot();
+  if (typeof validateCleanupSelection !== "function" || !snapshot) return false;
+  return validateCleanupSelection(snapshot, treemapCleanupCandidate(path, kind, owner, bytes)).accepted;
 }
 function isTreemapCleanupGesture(e) {
   return !!(treemapModifierActive || (e && (e.ctrlKey || e.metaKey)));
@@ -130,13 +145,14 @@ function treemapShortcutCopy(active) {
         hint: "Release Ctrl/⌘ to leave selection mode · 키를 떼면 선택 모드 종료",
       }
     : {
-        label: "Ctrl/⌘ click: select",
-        hint: "Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택",
+        label: "Ctrl/⌘ click: inspect",
+        hint: "Click: drill · Ctrl/⌘ click: inspect path · 클릭: 열기 · Ctrl/⌘ 클릭: 경로 점검",
       };
 }
 function treemapCleanupItem(c, path, owner) {
   return {
     path,
+    kind: c && c.kind,
     bytes: Number(c && c.bytes) || 0,
     uid: c && c.uid,
     owner,
@@ -154,13 +170,14 @@ function syncTreemapCleanupTiles() {
   document.querySelectorAll(".tmtile[data-cleanup-path]").forEach(syncTreemapTileSelection);
 }
 function addTreemapCleanupMetadata(tile, c, path, owner) {
-  if (c._other || !isTreemapCleanupSelectablePath(path)) return;
+  if (c._other || !isTreemapCleanupSelectablePath(path, c && c.kind, owner, c && c.bytes)) return;
   tile.dataset.cleanupPath = path;
+  tile.dataset.cleanupKind = c.kind || "";
   tile.dataset.cleanupBytes = String(Number(c.bytes) || 0);
   tile.dataset.cleanupOwner = owner || "";
   tile.dataset.cleanupSource = "treemap";
   tile.setAttribute("role", "button");
-  tile.setAttribute("aria-label", "Select cleanup candidate " + path);
+  tile.setAttribute("aria-label", "Inspect snapshot path " + path);
   const badge = document.createElement("div");
   badge.className = "tm-cleanup-badge";
   badge.textContent = "✓";
@@ -203,7 +220,7 @@ function bindTreemapCleanupMode() {
   const btn = document.getElementById("treemapCleanupMode");
   if (btn && !btn._cleanupModeBound) {
     btn._cleanupModeBound = true;
-    btn.onclick = () => setTreemapModifierActive(false);
+    btn.onclick = () => setTreemapModifierActive(!treemapModifierActive);
   }
   if (!document._treemapCleanupShortcutBound) {
     document._treemapCleanupShortcutBound = true;
@@ -230,7 +247,7 @@ function tmTile(el, c, k, crumbPath, isGroup, level) {
   const owner = ownerByUid.get(c.uid) || ("uid " + c.uid);
   const path = treemapPath(crumbPath, c.name);
   const hasKids = !c._other && c.children && c.children.length;
-  const selectable = !c._other && isTreemapCleanupSelectablePath(path) && typeof toggleCleanupSelectedItem === "function";
+  const selectable = !c._other && isTreemapCleanupSelectablePath(path, c.kind, owner, c.bytes) && typeof toggleCleanupSelectedItem === "function";
   const t = document.createElement("div");
   t.className = "tmtile" + (isGroup ? " tmgroup" : "");
   t.style.zIndex = isGroup ? "1" : "2";

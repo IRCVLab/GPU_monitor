@@ -499,21 +499,73 @@ async function testOlderSameServerFailureCannotOverrideNewerSuccess() {
 function testDeleteCommandQuoting() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.shellQuotePath, 'function', 'shellQuotePath must be exposed for command generation');
-  assert.strictEqual(typeof viewer.buildDeleteCommands, 'function', 'buildDeleteCommands must be exposed for command generation');
+  assert.strictEqual(typeof viewer.validateCleanupSelection, 'function', 'cleanup selection validation must be exposed for command generation');
+  assert.strictEqual(typeof viewer.buildCleanupCommandPlan, 'function', 'fixed cleanup command planning must be exposed for command generation');
   assert.strictEqual(typeof viewer.cleanupCheckboxHtml, 'function', 'cleanupCheckboxHtml must be exposed for table rows');
   assert.strictEqual(typeof viewer.renderCleanupPanel, 'function', 'renderCleanupPanel must be exposed for selection updates');
   assert.strictEqual(typeof viewer.bindCleanupSelection, 'function', 'bindCleanupSelection must be exposed before app init');
   assert.strictEqual(viewer.shellQuotePath('/data/simple file.bin'), "'/data/simple file.bin'");
   assert.strictEqual(viewer.shellQuotePath("/data/O'Hara/checkpoint.pt"), "'/data/O'\"'\"'Hara/checkpoint.pt'");
 
-  const commands = viewer.buildDeleteCommands([
-    { path: '/data/simple file.bin' },
-    { path: "/data/O'Hara/checkpoint.pt" },
+  const snapshot = {
+    server_id: 'alpha-1',
+    selected_roots: [
+      { mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' },
+    ],
+    mounts: [
+      { mount_id: 'data', path: '/data', scan_root: '/data' },
+    ],
+  };
+  const validation = viewer.validateCleanupSelection(snapshot, { path: "/data/O'Hara/checkpoint.pt", kind: 'file' });
+  assert.strictEqual(validation.accepted, true, 'file selections inside selected scan roots must be accepted');
+
+  const plan = viewer.buildCleanupCommandPlan(snapshot, { path: "/data/O'Hara/checkpoint.pt", kind: 'file' }, { freshness: 'stale', revealDestructive: false });
+  assert.deepStrictEqual(Array.from(plan.inspectionCommands, entry => entry.command), [
+    "sudo du -shx -- '/data/O'\"'\"'Hara/checkpoint.pt'",
+    "sudo find '/data/O'\"'\"'Hara/checkpoint.pt' -xdev \\( -type f -o -type d \\) -printf '%s\\t%TY-%Tm-%Td %TH:%TM\\t%p\\n' | sort -nr | head -n 20",
+    "sudo stat -- '/data/O'\"'\"'Hara/checkpoint.pt'",
+    "sudo find '/data/O'\"'\"'Hara/checkpoint.pt' -xdev -printf '%TY-%Tm-%Td %TH:%TM\\t%s\\t%p\\n' | sort -r | head -n 20",
   ]);
-  assert.deepStrictEqual(Array.from(commands.split('\n')), [
-    "sudo rm -rf -- '/data/simple file.bin'",
-    "sudo rm -rf -- '/data/O'\"'\"'Hara/checkpoint.pt'",
-  ]);
+  assert.strictEqual(plan.destructiveVisible, false, 'destructive command must stay hidden by default');
+  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -i -- '/data/O'\"'\"'Hara/checkpoint.pt'");
+  assert.ok(plan.warnings.some(w => /stale/i.test(w)), 'stale snapshot warnings must stay visible in the plan');
+}
+
+function testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.setCleanupSelectedItem, 'function', 'cleanup selection setter must be exposed');
+  assert.strictEqual(typeof viewer.resetCleanupSelectionState, 'function', 'cleanup selection reset must be exposed');
+  assert.strictEqual(typeof viewer.buildCleanupCommandPlan, 'function', 'cleanup command planning must be exposed');
+
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+      { id: 'beta-2', display_name: 'beta', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+  });
+
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.DATA = {
+    server_id: 'alpha-1',
+    selected_roots: [{ mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' }],
+    mounts: [{ mount_id: 'data', path: '/data', scan_root: '/data' }],
+  };
+
+  assert.strictEqual(viewer.setCleanupSelectedItem({ path: '/data/one', kind: 'file', bytes: 10, source: 'top' }, true), true, 'first valid selection should be accepted');
+  viewer.cleanupSelectionState.revealDestructive = true;
+  let plan = viewer.renderCleanupPanel();
+  assert.strictEqual(plan.destructiveVisible, true, 'test fixture should be able to expose the destructive command after explicit reveal');
+
+  assert.strictEqual(viewer.setCleanupSelectedItem({ path: '/data/two', kind: 'file', bytes: 20, source: 'top' }, true), true, 'changing to a different valid selection should be accepted');
+  plan = viewer.renderCleanupPanel();
+  assert.strictEqual(plan.path, '/data/two');
+  assert.strictEqual(plan.destructiveVisible, false, 'changing the selected path must reset destructive reveal state');
+
+  viewer.applyRouteState({ serverId: 'beta-2', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(viewer.document.getElementById('cleanupPanel').getAttribute('aria-hidden'), 'true', 'switching servers must hide the cleanup panel until a fresh selection is made');
 }
 
 function testTreemapHidesMicroTilesInsteadOfInflatingThem() {
@@ -560,19 +612,30 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   assert.strictEqual(viewer.isTopLevelCleanupPath('/home'), true, 'absolute top-level directories are too broad to select');
   assert.strictEqual(viewer.isTopLevelCleanupPath('/home/project'), false, 'deeper paths may be selected');
   const idleCopy = viewer.treemapShortcutCopy(false);
-  assert.strictEqual(idleCopy.label, 'Ctrl/⌘ click: select');
-  assert.strictEqual(idleCopy.hint, 'Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택');
+  assert.strictEqual(idleCopy.label, 'Ctrl/⌘ click: inspect');
+  assert.strictEqual(idleCopy.hint, 'Click: drill · Ctrl/⌘ click: inspect path · 클릭: 열기 · Ctrl/⌘ 클릭: 경로 점검');
   const activeCopy = viewer.treemapShortcutCopy(true);
   assert.strictEqual(activeCopy.label, 'Selecting… / 선택 중');
   assert.strictEqual(activeCopy.hint, 'Release Ctrl/⌘ to leave selection mode · 키를 떼면 선택 모드 종료');
 
+  viewer.DATA = {
+    server_id: 'alpha-1',
+    selected_roots: [
+      { mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' },
+    ],
+    mounts: [
+      { mount_id: 'data', path: '/data', scan_root: '/data' },
+    ],
+  };
+
   const root = {
     name: '/data',
+    kind: 'directory',
     bytes: 600,
     other_bytes: 100,
     uid: 1001,
     children: [
-      { name: 'project', bytes: 500, uid: 1001, files: 20, children: [] },
+      { name: 'project', kind: 'directory', bytes: 500, uid: 1001, files: 20, children: [] },
     ],
   };
   const el = new FakeElement('div');
@@ -587,6 +650,7 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   const projectCleanup = project.children.find(c => c.className === 'tm-cleanup');
   assert.ok(!projectCleanup, 'treemap must not clutter every tile with a visible checkbox overlay');
   assert.strictEqual(project.dataset.cleanupPath, '/data/project', 'real-path tile should carry cleanup metadata for selection mode');
+  assert.strictEqual(project.dataset.cleanupKind, 'directory', 'treemap selection metadata must retain snapshot kind');
   assert.ok(project.children.some(c => c.className === 'tm-cleanup-badge'), 'real-path tile should have a hidden selected-state badge');
   assert.ok(!other.dataset.cleanupPath, 'aggregate non-path tiles must not be selectable');
   assert.ok(!other.children.some(c => c.className === 'tm-cleanup-badge'), 'aggregate non-path tiles must not show cleanup controls');
@@ -663,6 +727,7 @@ async function main() {
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
   testDeleteCommandQuoting();
+  testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange();
   testTreemapHidesMicroTilesInsteadOfInflatingThem();
   testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes();
   testTreemapGroupTilesStayBehindDescendants();

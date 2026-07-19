@@ -62,8 +62,8 @@
         <section class="panel active" id="panel-treemap">
           <div class="toolbar">
             <div class="grp"><label>Mount</label><div class="seg" id="mountSeg"></div></div>
-            <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택">Ctrl/⌘ click: select</button>
-            <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: select cleanup candidate · 클릭: 열기 · Ctrl/⌘ 클릭: 정리 후보 선택</span>
+            <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: inspect path · 클릭: 열기 · Ctrl/⌘ 클릭: 경로 점검">Ctrl/⌘ click: inspect</button>
+            <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: inspect path · 클릭: 열기 · Ctrl/⌘ 클릭: 경로 점검</span>
           </div>
           <div id="treemap"></div>
           <div class="legend" id="treemapLegend"></div>
@@ -101,7 +101,7 @@
           <div class="card"><div class="tbl-scroll">
             <table id="topTbl">
               <thead><tr>
-                <th class="selectcell" title="Select rows for a copy-only delete command">Select</th>
+                <th class="selectcell" title="Inspect a snapshot path and copy safe command templates">Inspect</th>
                 <th class="sortable num" data-key="bytes" style="width:168px">Size<span class="arrow"></span></th>
                 <th class="sortable num" data-key="age" style="width:96px">Age<span class="arrow"></span></th>
                 <th class="sortable" data-key="owner" style="width:168px">Owner<span class="arrow"></span></th>
@@ -116,7 +116,7 @@
 
         <section class="panel" id="panel-stale">
           <h2 class="panel-title">Stale files</h2>
-          <p class="panel-sub" id="staleCaption">Big, long-untouched files — the prime cleanup candidates.</p>
+          <p class="panel-sub" id="staleCaption">Big, long-untouched files — inspect these first before considering cleanup.</p>
           <div class="toolbar">
             <div class="grp"><label for="staleOwnerFilter">Owner</label><select id="staleOwnerFilter"><option value="">All</option></select></div>
             <div class="grp"><label>Storage</label><div class="seg" id="staleMountSeg"></div></div>
@@ -124,7 +124,7 @@
           </div>
           <div class="card">
             <div class="vhead" id="staleHead">
-              <div class="vc vc-select" title="Select rows for a copy-only delete command">Select</div>
+              <div class="vc vc-select" title="Inspect a snapshot path and copy safe command templates">Inspect</div>
               <div class="vc vc-size sortable" data-key="bytes" style="text-align:right">Size<span class="arrow"></span></div>
               <div class="vc vc-age sortable" data-key="age_days" style="text-align:right">Age<span class="arrow"></span></div>
               <div class="vc vc-own sortable" data-key="owner">Owner<span class="arrow"></span></div>
@@ -142,14 +142,27 @@
 <div id="tmtip"></div>
 <div id="cleanupPanel" class="cleanup-panel" aria-hidden="true" aria-live="polite">
   <div class="cleanup-head">
-    <div class="cleanup-title">Delete command builder</div>
-    <div class="cleanup-summary" id="cleanupSummary">0 selected</div>
-  </div>
-  <textarea id="cleanupCommands" readonly spellcheck="false" aria-label="Generated delete commands"></textarea>
-  <div class="cleanup-actions">
+    <div>
+      <div class="cleanup-title">Storage cleanup workflow</div>
+      <div class="cleanup-summary" id="cleanupSummary">No path selected</div>
+    </div>
     <button type="button" id="cleanupClear">Clear</button>
-    <button type="button" class="primary" id="cleanupCopy">Copy commands</button>
   </div>
+  <div id="cleanupWarnings" class="cleanup-warnings" aria-live="polite"></div>
+  <section class="cleanup-section" aria-labelledby="cleanupInspectHeading">
+    <div class="cleanup-section-head">
+      <h2 class="cleanup-section-title" id="cleanupInspectHeading">Inspect first</h2>
+    </div>
+    <ol id="cleanupInspectList" class="cleanup-command-list"></ol>
+  </section>
+  <section class="cleanup-section cleanup-danger" aria-labelledby="cleanupDangerHeading">
+    <div class="cleanup-section-head">
+      <h2 class="cleanup-section-title" id="cleanupDangerHeading">Removal command</h2>
+      <button type="button" class="danger" id="cleanupReveal">Reveal removal command</button>
+    </div>
+    <p id="cleanupDangerWarning" class="cleanup-safe" hidden></p>
+    <div id="cleanupDangerCommand"></div>
+  </section>
   <div class="cleanup-safe">Copy-only safety rail: storage-viz never runs these commands. Review ownership and paths before pasting into a shell.</div>
 </div>
 <script src="data-client.js"></script>
