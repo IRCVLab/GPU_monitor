@@ -223,11 +223,19 @@
   .cleanup-mode-btn {
     appearance: none; -webkit-appearance: none; border: 1px solid var(--separator);
     background: var(--surface); color: var(--text); border-radius: 999px; padding: 6px 12px;
-    font: 700 12px var(--font); cursor: default; box-shadow: var(--shadow);
+    font: 700 12px var(--font); cursor: pointer; box-shadow: var(--shadow);
     white-space: nowrap; line-height: 1.25;
   }
   .cleanup-mode-btn:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .cleanup-mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .cleanup-mode-btn:focus-visible,
+  .cleanup-select-btn:focus-visible,
+  .cleanup-copy-btn:focus-visible,
+  #cleanupClear:focus-visible,
+  #cleanupReveal:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
 
   /* ---- Treemap ---- */
   #treemap { position: relative; width: 100%; height: calc(100vh - 320px); min-height: 320px; border-radius: var(--r); overflow: hidden;
@@ -322,7 +330,13 @@
   .copybtn.done { color: var(--ok); border-color: var(--ok); opacity: 1; }
   .selectcell { width: 52px; text-align: center; }
   td.selectcell { padding-left: 12px; padding-right: 8px; }
-  .cleanup-check { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+  .cleanup-select-btn {
+    appearance: none; -webkit-appearance: none; border: 1px solid var(--separator); background: var(--surface);
+    color: var(--text); border-radius: 999px; padding: 4px 10px; font: 600 11px var(--font); cursor: pointer;
+    box-shadow: var(--shadow); transition: all .18s var(--ease);
+  }
+  .cleanup-select-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .cleanup-select-btn.is-selected { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   .owner-chip { display: inline-flex; align-items: center; gap: 8px; }
   .owner-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
@@ -367,18 +381,27 @@
     background: var(--surface); color: var(--text); border: 1px solid var(--separator); border-radius: 16px;
     box-shadow: var(--shadow-lg); padding: 14px; display: none; }
   .cleanup-panel.show { display: block; }
-  .cleanup-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .cleanup-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
   .cleanup-title { font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
-  .cleanup-summary { color: var(--text2); font: 12px var(--mono); white-space: nowrap; }
-  #cleanupCommands { width: 100%; min-height: 104px; resize: vertical; border: 1px solid var(--separator);
-    border-radius: 10px; background: var(--surface2); color: var(--text); padding: 10px;
-    font: 12px/1.45 var(--mono); white-space: pre; }
-  .delete-warnings { color: var(--warn); font-size: 12px; margin-top: 8px; max-height: 70px; overflow: auto; }
-  .cleanup-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 10px; }
-  .cleanup-actions button { appearance: none; -webkit-appearance: none; border: 1px solid var(--separator);
-    background: var(--surface); color: var(--text); border-radius: 8px; padding: 6px 11px; font: 600 12px var(--font); cursor: pointer; }
-  .cleanup-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .cleanup-actions button:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+  .cleanup-summary { color: var(--text2); font: 12px/1.45 var(--mono); white-space: normal; word-break: break-word; }
+  #cleanupClear, #cleanupReveal, .cleanup-copy-btn {
+    appearance: none; -webkit-appearance: none; border: 1px solid var(--separator); background: var(--surface);
+    color: var(--text); border-radius: 8px; padding: 6px 11px; font: 600 12px var(--font); cursor: pointer;
+    transition: all .18s var(--ease);
+  }
+  #cleanupClear:hover, #cleanupReveal:hover, .cleanup-copy-btn:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+  #cleanupReveal.danger,
+  .cleanup-danger .cleanup-copy-btn { border-color: color-mix(in srgb, var(--crit) 35%, var(--separator)); }
+  .cleanup-warnings { margin-bottom: 8px; }
+  .cleanup-note { margin: 0 0 6px; color: var(--warn); font-size: 12px; line-height: 1.45; }
+  .cleanup-section { margin-top: 12px; }
+  .cleanup-section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .cleanup-section-title { margin: 0; font-size: 13px; font-weight: 700; }
+  .cleanup-command-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .cleanup-command { border: 1px solid var(--separator); border-radius: 12px; background: var(--surface2); padding: 10px; }
+  .cleanup-command-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .cleanup-command-title { font-size: 12px; font-weight: 700; color: var(--text2); }
+  .cleanup-command-code { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); color: var(--text); }
   .cleanup-safe { color: var(--text2); font-size: 12px; margin-top: 8px; }
 
   .empty { color: var(--text2); padding: 48px; text-align: center; }

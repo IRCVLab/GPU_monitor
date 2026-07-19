@@ -119,7 +119,8 @@ function renderAll() {
   mountColor = {}; mountPaths.forEach((p, i) => mountColor[p] = MOUNT_PALETTE[i % MOUNT_PALETTE.length]);
   currentMountIdx = 0; userMountFilter = topMountFilter = staleMountFilter = "";
   topRowsCache = null; staleRowsCache = null;
-  cleanupSelected.clear(); renderCleanupPanel();
+  if (typeof resetCleanupSelectionState === "function") resetCleanupSelectionState();
+  else if (typeof renderCleanupPanel === "function") renderCleanupPanel();
   renderHeader();
   updateLastUpdated();
   renderMountSeg();
@@ -319,6 +320,7 @@ function applyRouteState(route, options) {
   currentServerId = safeRoute.serverId;
   currentServerSummary = safeRoute.serverId ? (currentOverviewSummaries.find(item => item.id === safeRoute.serverId) || null) : null;
   DATA = safeRoute.serverId ? (snapshotCache.get(safeRoute.serverId) || null) : null;
+  if (typeof resetCleanupSelectionState === "function") resetCleanupSelectionState();
   clearDetailError();
   setShellMode(!!safeRoute.serverId);
   if (!safeRoute.serverId) return safeRoute;

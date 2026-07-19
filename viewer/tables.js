@@ -224,7 +224,7 @@ function prepStale() {
   staleMaxAge = rows.reduce((m, f) => Math.max(m, f.age_days || 0), 1);
   const reclaim = rows.reduce((s, f) => s + (f.bytes || 0), 0);
   document.getElementById("staleCaption").innerHTML =
-    'Big, long-untouched files — the prime <b>cleanup candidates</b>. Deleting everything listed would reclaim ' +
+    'Big, long-untouched files — inspect these before cleanup. Reviewing or removing everything listed would reclaim ' +
     '<span class="reclaim">' + humanBytes(reclaim) + '</span>' + (staleMountFilter ? ' on ' + escapeHtml(staleMountFilter) : '') +
     '. Sorted by size; rows tint redder with age. Verify ownership before deleting.';
   document.getElementById("staleCount").textContent = rows.length.toLocaleString() + " files · " + humanBytes(reclaim) + " reclaimable";

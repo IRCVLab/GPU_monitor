@@ -231,21 +231,107 @@ function testTreemapFidelity() {
   assert(ratio > 900 && ratio < 1100, `600GB/600MB area ratio should remain ~1024, got ${ratio}`);
 }
 
-function testDeleteCommandGeneration() {
-  const { shellQuote, buildDeleteCommands } = require("./selection.js");
+function makeCleanupSnapshot() {
+  return {
+    server_id: "alpha-1",
+    hostname: "alpha",
+    scan_finished_unix: 1721390400,
+    selected_roots: [
+      {
+        mount_id: "rootfs",
+        mount_root: "/",
+        mountpoint: "/",
+        scan_root: "/home",
+        status: "partial",
+      },
+      {
+        mount_id: "data",
+        mount_root: "/",
+        mountpoint: "/data",
+        scan_root: "/data",
+        status: "complete",
+      },
+      {
+        mount_id: "archive",
+        mount_root: "/",
+        mountpoint: "/archive",
+        scan_root: "/archive",
+        status: "failed",
+      },
+    ],
+    mounts: [
+      { mount_id: "rootfs", path: "/home", scan_root: "/home" },
+      { mount_id: "data", path: "/data", scan_root: "/data" },
+    ],
+  };
+}
+
+function testCleanupCommandSafetyContracts() {
+  const {
+    shellQuote,
+    validateCleanupSelection,
+    buildCleanupCommandPlan,
+  } = require("./selection.js");
+
   assert.strictEqual(shellQuote("/data/a b/it's.txt"), "'/data/a b/it'\"'\"'s.txt'");
-  const result = buildDeleteCommands([
-    { path: "/data/parent", bytes: 100 },
-    { path: "/data/parent/child.bin", bytes: 50 },
-    { path: "relative/path", bytes: 1 },
-    { path: "/data/other file", bytes: 2 },
-  ]);
-  assert.deepStrictEqual(result.commands, [
-    "sudo rm -rf -- '/data/parent'",
-    "sudo rm -rf -- '/data/other file'",
-  ]);
-  assert(result.warnings.some(w => w.includes("relative/path")), "relative paths are warned");
-  assert(result.warnings.some(w => w.includes("/data/parent/child.bin")), "descendant duplicates are warned");
+  assert.strictEqual(typeof validateCleanupSelection, "function", "selection validation must be centralized as a pure function");
+  assert.strictEqual(typeof buildCleanupCommandPlan, "function", "fixed command template generation must be centralized as a pure function");
+
+  const snapshot = makeCleanupSnapshot();
+  const candidate = {
+    path: "/data/projects/-dash * glob \"quotes\" 유니코드's",
+    kind: "directory",
+    source: "treemap",
+  };
+  const validation = validateCleanupSelection(snapshot, candidate);
+  assert.deepStrictEqual({
+    accepted: validation.accepted,
+    kind: validation.kind,
+    path: validation.path,
+    scanRoot: validation.scanRoot,
+  }, {
+    accepted: true,
+    kind: "directory",
+    path: "/data/projects/-dash * glob \"quotes\" 유니코드's",
+    scanRoot: "/data",
+  }, "valid file/directory selections must stay opaque and stay anchored to the matched selected scan root");
+
+  const plan = buildCleanupCommandPlan(snapshot, candidate, { revealDestructive: false, freshness: "fresh" });
+  assert.deepStrictEqual(plan.inspectionCommands.map(entry => entry.command), [
+    "sudo du -shx -- '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s'",
+    "sudo find '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s' -xdev \\( -type f -o -type d \\) -printf '%s\\t%TY-%Tm-%Td %TH:%TM\\t%p\\n' | sort -nr | head -n 20",
+    "sudo stat -- '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s'",
+    "sudo find '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s' -xdev -printf '%TY-%Tm-%Td %TH:%TM\\t%s\\t%p\\n' | sort -r | head -n 20",
+  ], "inspection commands must remain first, fixed-template, and safely quoted");
+  assert.strictEqual(plan.destructiveVisible, false, "destructive output must stay hidden until an explicit reveal");
+  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -ri --one-file-system -- '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s'");
+  assert.ok(!plan.destructiveCommand.command.includes(" -f"), "destructive commands must never use force");
+  assert.ok(plan.warnings.some(w => /may have changed/i.test(w)), "copy-only panel must warn that the live path may have changed since the snapshot");
+
+  const stalePlan = buildCleanupCommandPlan(snapshot, { path: "/data/old.bin", kind: "file", source: "stale" }, { revealDestructive: true, freshness: "stale" });
+  assert.strictEqual(stalePlan.destructiveVisible, true, "destructive output may appear only after a separate explicit reveal");
+  assert.strictEqual(stalePlan.destructiveCommand.command, "sudo rm -i -- '/data/old.bin'");
+  assert.ok(stalePlan.warnings.some(w => /stale/i.test(w)), "retained stale snapshot state must be explicit in the warning text");
+
+  const rejectedCases = [
+    [{ path: "/data/link", kind: "symlink" }, "unsupported_kind"],
+    [{ path: "/data/device", kind: "other" }, "unsupported_kind"],
+    [{ path: "/data/missing-kind" }, "missing_kind"],
+    [{ path: "/" , kind: "directory" }, "root_path"],
+    [{ path: "/data", kind: "directory" }, "scan_root"],
+    [{ path: "/home", kind: "directory" }, "scan_root"],
+    [{ path: "/archive/project", kind: "directory" }, "selected_root_status"],
+    [{ path: "/tmp", kind: "directory" }, "top_level_root"],
+    [{ path: "/srv/projects/model.ckpt", kind: "file" }, "outside_selected_roots"],
+    [{ path: "relative/path", kind: "file" }, "noncanonical_path"],
+    [{ path: "/data/../escape", kind: "file" }, "noncanonical_path"],
+    [{ path: "/data/control\nchar", kind: "file" }, "control_character"],
+  ];
+  for (const [input, code] of rejectedCases) {
+    const rejected = validateCleanupSelection(snapshot, input);
+    assert.strictEqual(rejected.accepted, false, `${input.path || input.kind} must be rejected`);
+    assert.strictEqual(rejected.reason.code, code, `${input.path || input.kind} must expose a bounded rejection code`);
+  }
 }
 
 async function main() {
@@ -256,7 +342,7 @@ async function main() {
   testOverviewRouteHelpers();
   testRemovedAnalysisSurfaceIsAbsentFromViewerFiles();
   testTreemapFidelity();
-  testDeleteCommandGeneration();
+  testCleanupCommandSafetyContracts();
   console.log("viewer regression tests passed");
 }
 
