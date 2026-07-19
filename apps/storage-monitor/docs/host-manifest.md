@@ -1,7 +1,13 @@
-# Host manifest
+# Host manifest and central inventory
 
-The viewer chooses which JSON file to load from the tracked host manifest at
-`data/hosts.json`:
+There are two host lists with different jobs:
+
+- `data/hosts.json` is a tracked demo/static-viewer manifest for sample files.
+- `/etc/storage-viz/servers.json` is the central production inventory consumed by `storage-viz-dashboard.service`.
+
+## Static/demo host manifest
+
+`data/hosts.json` maps sample snapshots for local development:
 
 ```json
 [
@@ -9,23 +15,10 @@ The viewer chooses which JSON file to load from the tracked host manifest at
 ]
 ```
 
-Each entry maps to `data/<file>.json`, with `data/<file>.sample.json` as a
-fallback for demos. With `viewer/serve.py`, `/data/...` is served from
-`STORAGE_VIZ_DATA_DIR`, so host JSON files can live outside the viewer directory.
-Plain static serving still works through the checked-in `viewer/data -> ../data`
-symlink.
+Each entry maps to `data/<file>.json`, with `data/<file>.sample.json` as a fallback for demos.
 
-Recommended host entry fields:
+## Central production inventory
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `id` | yes | Stable DOM/select value. Use lowercase hostname-style text. |
-| `label` | yes | Human-readable label shown in the dropdown. |
-| `file` | yes | JSON basename without `.json`. |
-| `default` | no | If true, this host is shown first. |
+The central dashboard API (`/api/servers`) is backed by `/etc/storage-viz/servers.json`. Each enabled server entry includes display metadata, strict SSH coordinates, and scanner configuration digest material. Identity and host-key files are paths outside the repository, for example `/etc/storage-viz/keys/<server>_ed25519` and `/etc/storage-viz/known_hosts`.
 
-For a new host named `lecun`:
-
-1. Run or copy a scan to `$STORAGE_VIZ_DATA_DIR/lecun.json`.
-2. Add `{ "id": "lecun", "label": "lecun", "file": "lecun" }` to `data/hosts.json`.
-3. Reload the dashboard and select the host.
+Required production fields are documented in `config/servers.example.yaml`. Do not add password, token, inline private key, shell command, arbitrary SSH argument, or scan-root fields to the inventory.

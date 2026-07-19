@@ -398,4 +398,60 @@ FAKE_LOG="$TMP/archive.log" FAKE_CHECK_COUNT_FILE="$TMP/archive.count" POLICY_SE
 ! tar -tzf "$TMP/archive.tar" | grep -qx 'scanner/hstscan' || fail "deployment archive included scanner/hstscan executable"
 pass "deployment archive excludes scanner/hstscan executable"
 
+
+
+# Task 11 central dashboard/service and operations documentation contracts.
+FORBIDDEN_HOST_PRODUCT_RE="$(printf '%s' 'monitoring' '_v2')|166\.104\.167\.11|$(printf '%s' '/home/ircv/workspace/' 'monitoring')|$(printf '%s' 'GPU[ _-]?' 'Monitor')|$(printf '%s' 'gpu[_-]?' 'monitor')"
+CENTRAL_SERVICE="$DEPLOY/systemd/storage-viz-dashboard.service.in"
+assert_file "$CENTRAL_SERVICE"
+assert_contains "$CENTRAL_SERVICE" "User=storage-viz"
+assert_contains "$CENTRAL_SERVICE" "Group=storage-viz"
+assert_contains "$CENTRAL_SERVICE" "WorkingDirectory=/opt/storage-viz-dashboard"
+assert_contains "$CENTRAL_SERVICE" "Environment=STORAGE_VIZ_BIND=127.0.0.1"
+assert_contains "$CENTRAL_SERVICE" "Environment=STORAGE_VIZ_PORT=8088"
+assert_contains "$CENTRAL_SERVICE" "Environment=STORAGE_VIZ_INVENTORY=/etc/storage-viz/servers.json"
+assert_contains "$CENTRAL_SERVICE" "Environment=STORAGE_VIZ_DATA_DIR=/var/lib/storage-viz-dashboard/data"
+assert_contains "$CENTRAL_SERVICE" "Environment=STORAGE_VIZ_STATE_DIR=/var/lib/storage-viz-dashboard/state"
+assert_contains "$CENTRAL_SERVICE" "Environment=STORAGE_VIZ_TRUSTED_PROXY=1"
+assert_contains "$CENTRAL_SERVICE" "EnvironmentFile=-/etc/storage-viz/dashboard.env"
+assert_contains "$CENTRAL_SERVICE" "ExecStart=/usr/bin/python3 /opt/storage-viz-dashboard/viewer/serve.py"
+assert_contains "$CENTRAL_SERVICE" "Restart=on-failure"
+assert_contains "$CENTRAL_SERVICE" "NoNewPrivileges=yes"
+assert_contains "$CENTRAL_SERVICE" "ProtectSystem=strict"
+assert_contains "$CENTRAL_SERVICE" "ProtectHome=yes"
+assert_contains "$CENTRAL_SERVICE" "ReadWritePaths=/var/lib/storage-viz-dashboard /run/storage-viz-dashboard"
+assert_not_grep "$CENTRAL_SERVICE" "storage-viz-scan|$FORBIDDEN_HOST_PRODUCT_RE" "agent/product coupling"
+pass "central dashboard service has loopback/separate-path systemd contract"
+
+assert_grep "$ROOT/install.sh" 'storage-viz-dashboard\.service' "central dashboard service installation"
+assert_grep "$ROOT/install.sh" 'STORAGE_VIZ_BIND.*127\.0\.0\.1|DASHBOARD_BIND.*127\.0\.0\.1' "loopback default bind"
+assert_grep "$ROOT/install.sh" 'STORAGE_VIZ_PORT.*8088|DASHBOARD_PORT.*8088' "dashboard port default"
+assert_grep "$ROOT/install.sh" '/opt/storage-viz-dashboard' "separate central install root"
+assert_grep "$ROOT/install.sh" '/var/lib/storage-viz-dashboard' "separate central state/data path"
+assert_grep "$ROOT/install.sh" '/etc/storage-viz/servers\.json' "central inventory path"
+assert_grep "$ROOT/install.sh" '/etc/storage-viz/keys' "external identity directory"
+assert_grep "$ROOT/install.sh" '/etc/storage-viz/known_hosts' "external known-hosts path"
+assert_not_grep "$ROOT/install.sh" "storage-viz-scan\.service|storage-viz-scan\.timer|SCAN_TARGETS|hstscan|systemctl[[:space:]]+start|systemctl[[:space:]]+enable --now.*scan|$FORBIDDEN_HOST_PRODUCT_RE" "agent install/product coupling"
+pass "central installer uses separate dashboard assets and does not touch agent runtime"
+
+DOC_FILES=("$ROOT/README.md" "$ROOT/docs/architecture.md" "$ROOT/docs/operations.md" "$ROOT/docs/host-manifest.md")
+for doc in "${DOC_FILES[@]}"; do
+  assert_not_grep "$doc" "$FORBIDDEN_HOST_PRODUCT_RE|password[[:space:]]*[:=][[:space:]]*[^[:space:]<]+" "forbidden host/product/password value reference"
+done
+assert_grep "$ROOT/docs/operations.md" '127\.0\.0\.1' "loopback dashboard default"
+assert_grep "$ROOT/docs/operations.md" '8088' "dashboard port"
+assert_grep "$ROOT/docs/operations.md" 'storage-viz-dashboard\.service' "central service name"
+assert_grep "$ROOT/docs/operations.md" 'storage-viz-scan\.service' "agent scan service name"
+assert_grep "$ROOT/docs/operations.md" 'OnUnitActiveSec=6h|six-hour|6-hour' "six-hour collection cadence"
+assert_grep "$ROOT/docs/operations.md" 'reverse proxy|trusted proxy' "reverse-proxy auth documentation"
+assert_grep "$ROOT/docs/operations.md" 'STORAGE_VIZ_ALLOWED_ORIGINS' "exact-origin allowlist"
+assert_grep "$ROOT/docs/operations.md" 'CSRF|X-CSRF-Token' "CSRF protection"
+assert_grep "$ROOT/docs/operations.md" 'monitoring.*shchoi|shchoi.*monitoring' "monitoring/shchoi bootstrap rule"
+assert_grep "$ROOT/docs/operations.md" 'identity_file|known_hosts_file|/etc/storage-viz/keys|/etc/storage-viz/known_hosts' "external identity/known-host paths"
+assert_grep "$ROOT/docs/operations.md" 'copy-only|copy only' "copy-only cleanup workflow"
+assert_grep "$ROOT/docs/architecture.md" 'central|multi-server|multiserver' "central multi-server architecture"
+assert_grep "$ROOT/docs/host-manifest.md" 'data/hosts\.json|/api/servers|servers\.json' "central host manifest docs"
+pass "central operations docs record security/runtime contracts without secrets"
+
+
 pass "deploy asset tests complete"
