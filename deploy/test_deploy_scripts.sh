@@ -419,7 +419,7 @@ assert_contains "$CENTRAL_SERVICE" "Restart=on-failure"
 assert_contains "$CENTRAL_SERVICE" "NoNewPrivileges=yes"
 assert_contains "$CENTRAL_SERVICE" "ProtectSystem=strict"
 assert_contains "$CENTRAL_SERVICE" "ProtectHome=yes"
-assert_contains "$CENTRAL_SERVICE" "ReadWritePaths=/var/lib/storage-viz-dashboard /run/storage-viz-dashboard"
+assert_contains "$CENTRAL_SERVICE" "ReadWritePaths=/var/lib/storage-viz-dashboard/data /var/lib/storage-viz-dashboard/state"
 assert_not_grep "$CENTRAL_SERVICE" "storage-viz-scan|$FORBIDDEN_HOST_PRODUCT_RE" "agent/product coupling"
 pass "central dashboard service has loopback/separate-path systemd contract"
 
@@ -451,6 +451,50 @@ assert_grep "$ROOT/docs/operations.md" 'identity_file|known_hosts_file|/etc/stor
 assert_grep "$ROOT/docs/operations.md" 'copy-only|copy only' "copy-only cleanup workflow"
 assert_grep "$ROOT/docs/architecture.md" 'central|multi-server|multiserver' "central multi-server architecture"
 assert_grep "$ROOT/docs/host-manifest.md" 'data/hosts\.json|/api/servers|servers\.json' "central host manifest docs"
+assert_grep "$ROOT/docs/operations.md" 'NFS|nfs4|CIFS|SMB|sshfs|FUSE|distributed|virtual|container' "mandatory network/virtual/container mount exclusions"
+assert_grep "$ROOT/docs/architecture.md" 'inventory cannot override mount policy|cannot override mount policy' "inventory cannot override mount policy"
+assert_grep "$ROOT/docs/operations.md" '0600|0640|root:storage-viz|storage-viz.*read' "SSH identity owner/group/mode contract"
+assert_grep "$ROOT/viewer/serve.py" 'CentralPoller|poll_once|serve_forever' "automatic central polling startup source"
+
+RENDER_PREFIX="$TMP/render-prefix"
+RENDER_LOG="$TMP/render-systemctl.log"
+cat > "$FAKEBIN/systemctl" <<'FAKE'
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "${FAKE_LOG:?}"
+exit 0
+FAKE
+chmod +x "$FAKEBIN/systemctl"
+FAKE_LOG="$RENDER_LOG" PATH="$FAKEBIN:$PATH" \
+  STORAGE_VIZ_DASHBOARD_ROOT=/srv/storage-viz-central \
+  STORAGE_VIZ_CONFIG_DIR=/srv/storage-viz-etc \
+  STORAGE_VIZ_DATA_DIR=/srv/storage-viz-data \
+  STORAGE_VIZ_STATE_DIR=/srv/storage-viz-state \
+  STORAGE_VIZ_BIND=127.0.0.1 \
+  STORAGE_VIZ_PORT=18088 \
+  "$ROOT/install.sh" --dry-run --prefix "$RENDER_PREFIX" >"$TMP/render.out"
+RENDERED_UNIT="$RENDER_PREFIX/etc/systemd/system/storage-viz-dashboard.service"
+assert_contains "$RENDERED_UNIT" "WorkingDirectory=/srv/storage-viz-central"
+assert_contains "$RENDERED_UNIT" "Environment=STORAGE_VIZ_INVENTORY=/srv/storage-viz-etc/servers.json"
+assert_contains "$RENDERED_UNIT" "Environment=STORAGE_VIZ_DATA_DIR=/srv/storage-viz-data"
+assert_contains "$RENDERED_UNIT" "Environment=STORAGE_VIZ_STATE_DIR=/srv/storage-viz-state"
+assert_contains "$RENDERED_UNIT" "EnvironmentFile=-/srv/storage-viz-etc/dashboard.env"
+assert_contains "$RENDERED_UNIT" "ReadWritePaths=/srv/storage-viz-data /srv/storage-viz-state"
+[[ "$(stat -f %Lp "$RENDER_PREFIX/srv/storage-viz-etc/keys" 2>/dev/null || stat -c %a "$RENDER_PREFIX/srv/storage-viz-etc/keys")" == "750" ]] || fail "key directory mode is not 0750"
+[[ "$(stat -f %Lp "$RENDER_PREFIX/srv/storage-viz-etc/servers.json" 2>/dev/null || stat -c %a "$RENDER_PREFIX/srv/storage-viz-etc/servers.json")" == "640" ]] || fail "inventory mode is not 0640"
+[[ "$(stat -f %Lp "$RENDER_PREFIX/srv/storage-viz-etc/dashboard.env" 2>/dev/null || stat -c %a "$RENDER_PREFIX/srv/storage-viz-etc/dashboard.env")" == "640" ]] || fail "dashboard env mode is not 0640"
+[[ "$(stat -f %Lp "$RENDER_PREFIX/srv/storage-viz-etc/known_hosts" 2>/dev/null || stat -c %a "$RENDER_PREFIX/srv/storage-viz-etc/known_hosts")" == "644" ]] || fail "known_hosts mode is not 0644"
+! grep -q "^systemctl" "$RENDER_LOG" 2>/dev/null || fail "dry-run override rendering called systemctl"
+
+BAD_RENDER_PREFIX="$TMP/bad-render-prefix"
+if STORAGE_VIZ_DASHBOARD_ROOT="/srv/storage viz" "$ROOT/install.sh" --dry-run --prefix "$BAD_RENDER_PREFIX" >"$TMP/bad-render.out" 2>"$TMP/bad-render.err"; then
+  fail "installer accepted unsafe whitespace in template value"
+fi
+
+REAL_PREFIX="$TMP/prefix-real-install"
+FAKE_LOG="$TMP/prefix-systemctl.log" PATH="$FAKEBIN:$PATH" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 "$ROOT/install.sh" --prefix "$REAL_PREFIX" >"$TMP/prefix-real.out"
+! grep -q "^systemctl" "$TMP/prefix-systemctl.log" 2>/dev/null || fail "prefixed real install called systemctl"
+pass "rendered central units honor overrides, reject unsafe values, and prefixed installs are safe"
+
 pass "central operations docs record security/runtime contracts without secrets"
 
 

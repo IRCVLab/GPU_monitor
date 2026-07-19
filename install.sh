@@ -66,20 +66,55 @@ install_file() {
   chmod "$mode" "$dest"
 }
 
-render_service() {
-  local dest="$1"
-  sed \
-    -e "s#/opt/storage-viz-dashboard#$DASHBOARD_ROOT#g" \
-    -e "s#/etc/storage-viz/servers.json#$INVENTORY_FILE#g" \
-    -e "s#/var/lib/storage-viz-dashboard/data#$DATA_DIR#g" \
-    -e "s#/var/lib/storage-viz-dashboard/state#$STATE_DIR#g" \
-    -e "s#STORAGE_VIZ_BIND=127.0.0.1#STORAGE_VIZ_BIND=$DASHBOARD_BIND#g" \
-    -e "s#STORAGE_VIZ_PORT=8088#STORAGE_VIZ_PORT=$DASHBOARD_PORT#g" \
-    -e "s#User=storage-viz#User=$DASHBOARD_USER#g" \
-    -e "s#Group=storage-viz#Group=$DASHBOARD_GROUP#g" \
-    "$SOURCE_ROOT/deploy/systemd/storage-viz-dashboard.service.in" > "$dest"
+validate_template_value() {
+  local name="$1" value="$2"
+  if [[ -z "$value" || "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" =~ [[:cntrl:]] || "$value" =~ [[:space:]] ]]; then
+    echo "ERROR: unsafe $name value for systemd template" >&2
+    exit 2
+  fi
 }
 
+render_service() {
+  local dest="$1" env_file="$CONFIG_DIR/dashboard.env"
+  local name value
+  for name in DASHBOARD_ROOT INVENTORY_FILE DATA_DIR STATE_DIR DASHBOARD_BIND DASHBOARD_PORT DASHBOARD_USER DASHBOARD_GROUP env_file; do
+    case "$name" in
+      DASHBOARD_ROOT) value="$DASHBOARD_ROOT" ;;
+      INVENTORY_FILE) value="$INVENTORY_FILE" ;;
+      DATA_DIR) value="$DATA_DIR" ;;
+      STATE_DIR) value="$STATE_DIR" ;;
+      DASHBOARD_BIND) value="$DASHBOARD_BIND" ;;
+      DASHBOARD_PORT) value="$DASHBOARD_PORT" ;;
+      DASHBOARD_USER) value="$DASHBOARD_USER" ;;
+      DASHBOARD_GROUP) value="$DASHBOARD_GROUP" ;;
+      env_file) value="$env_file" ;;
+    esac
+    validate_template_value "$name" "$value"
+  done
+  python3 - "$SOURCE_ROOT/deploy/systemd/storage-viz-dashboard.service.in" "$dest"     "$DASHBOARD_ROOT" "$INVENTORY_FILE" "$env_file" "$DATA_DIR" "$STATE_DIR"     "$DASHBOARD_BIND" "$DASHBOARD_PORT" "$DASHBOARD_USER" "$DASHBOARD_GROUP" <<'PYRENDER'
+from pathlib import Path
+import sys
+src = Path(sys.argv[1])
+dest = Path(sys.argv[2])
+(dashboard_root, inventory_file, env_file, data_dir, state_dir,
+ bind, port, user, group) = sys.argv[3:12]
+text = src.read_text(encoding="utf-8")
+replacements = {
+    "/opt/storage-viz-dashboard": dashboard_root,
+    "/etc/storage-viz/servers.json": inventory_file,
+    "/etc/storage-viz/dashboard.env": env_file,
+    "/var/lib/storage-viz-dashboard/data": data_dir,
+    "/var/lib/storage-viz-dashboard/state": state_dir,
+    "STORAGE_VIZ_BIND=127.0.0.1": f"STORAGE_VIZ_BIND={bind}",
+    "STORAGE_VIZ_PORT=8088": f"STORAGE_VIZ_PORT={port}",
+    "User=storage-viz": f"User={user}",
+    "Group=storage-viz": f"Group={group}",
+}
+for old, new in replacements.items():
+    text = text.replace(old, new)
+dest.write_text(text, encoding="utf-8")
+PYRENDER
+}
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
@@ -96,6 +131,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   if [[ "$PREFIX" == "/" ]]; then
     PREFIX="$(mktemp -d "${TMPDIR:-/tmp}/storage-viz-dashboard-install.XXXXXX")"
   fi
+elif [[ "$PREFIX" != "/" ]]; then
+  ENABLE_SERVICE=0
 elif [[ "${STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT:-0}" != "1" && $EUID -ne 0 ]]; then
   echo "ERROR: run as root for a real install, or use --dry-run for local verification" >&2
   exit 1
@@ -120,6 +157,7 @@ printf '[*] ssh paths   : %s / %s\n' "$KEY_DIR" "$KNOWN_HOSTS_FILE"
 [[ "$DRY_RUN" == "1" ]] && printf '[*] mode        : dry-run under %s\n' "$PREFIX"
 
 mkdir -p "$APP_DEST" "$CONFIG_DEST" "$KEY_DEST" "$(dirname "$KNOWN_HOSTS_DEST")" "$DATA_DEST" "$STATE_DEST" "$(dirname "$UNIT_DEST")"
+chmod 0750 "$KEY_DEST"
 
 if [[ "$SOURCE_ROOT" != "$APP_DEST" ]]; then
   for item in collector config docs viewer README.md; do
@@ -175,6 +213,19 @@ DRYRUN
   exit 0
 fi
 
+if [[ "$PREFIX" != "/" ]]; then
+  cat <<PREFIXDONE
+
+[✓] prefixed install complete under $PREFIX.
+    $UNIT_DEST
+    $INV_DEST
+    $ENV_DEST
+
+No account changes, ownership changes, systemctl calls, remote connections, or scans were performed.
+PREFIXDONE
+  exit 0
+fi
+
 if command -v getent >/dev/null 2>&1 && ! getent group "$DASHBOARD_GROUP" >/dev/null; then
   groupadd --system "$DASHBOARD_GROUP"
 fi
@@ -183,7 +234,6 @@ if command -v id >/dev/null 2>&1 && ! id "$DASHBOARD_USER" >/dev/null 2>&1; then
 fi
 chown -R "$DASHBOARD_USER:$DASHBOARD_GROUP" "$DATA_DEST" "$STATE_DEST"
 chown -R "root:$DASHBOARD_GROUP" "$CONFIG_DEST"
-chmod 0750 "$KEY_DEST"
 
 if [[ "$ENABLE_SERVICE" == "1" ]]; then
   "$SYSTEMCTL" daemon-reload

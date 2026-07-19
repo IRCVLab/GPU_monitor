@@ -31,7 +31,7 @@ central host
       └─ serves viewer API behind reverse-proxy auth
 ```
 
-The central process never scans local filesystem roots for remote data. The per-server agent never receives browser-supplied paths or commands.
+The central process never scans local filesystem roots for remote data. The per-server agent never receives browser-supplied paths or commands, and central inventory cannot override mount policy. Agent mount policy excludes NFS/NFS4, CIFS/SMB, sshfs/FUSE, distributed, virtual, and container-backed filesystems from collection.
 
 ## Security model
 

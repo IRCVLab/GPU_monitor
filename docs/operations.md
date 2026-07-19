@@ -100,6 +100,14 @@ Security rules:
 
 The inventory must not contain passwords, tokens, private key material, shell commands, arbitrary SSH arguments, or scan roots. Scanner roots are local-only on each agent and stay controlled by `agent.scan_runner` policy.
 
+## Mount exclusion policy
+
+Agents scan only local filesystems selected by `agent.scan_runner` policy. The central inventory cannot override mount policy or add scan roots. Mandatory exclusions include network, distributed, virtual, and container-backed filesystems such as NFS/NFS4, CIFS/SMB, sshfs, generic FUSE mounts, distributed filesystems, proc/sys/dev pseudo filesystems, overlay/container layers, and other non-local mounts. These exclusions prevent recursive network scans, container internals, and virtual kernel trees from entering central reports.
+
+## SSH identity ownership and modes
+
+Store private identities under `/etc/storage-viz/keys`. Recommended ownership is `root:storage-viz` with directory mode `0750` and private key mode `0640` so the `storage-viz` service can read only the intended keys without making them world-readable. A stricter `0600` root-owned key is acceptable only if the service receives access through an equivalent narrow mechanism. Keep `/etc/storage-viz/known_hosts` `0644` or stricter and managed by operators.
+
 ## Per-server agent bootstrap
 
 The remote runtime identity is the existing `monitoring` account. Bootstrap is interactive only through `shchoi`; after bootstrap, `monitoring` may run exactly this noninteractive sudo command:

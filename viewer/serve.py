@@ -16,6 +16,7 @@ import shutil
 import socket
 import socketserver
 import sys
+import threading
 import time
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -111,6 +112,61 @@ elif INVENTORY_PATH:
     RESCAN_API_ENABLED = TRUSTED_PROXY and bool(OPERATORS)
 else:
     service = None
+
+
+class CentralPoller:
+    """Lifecycle-safe background poller for production inventory mode."""
+
+    def __init__(self, poll_service: Any, *, interval_seconds: int | None = None) -> None:
+        self.poll_service = poll_service
+        raw_interval = poll_service.poll_interval_seconds if interval_seconds is None else interval_seconds
+        self.interval_seconds = max(float(raw_interval), 0.001)
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def thread_ident(self) -> int | None:
+        thread = self._thread
+        return thread.ident if thread is not None else None
+
+    @property
+    def is_running(self) -> bool:
+        thread = self._thread
+        return bool(thread and thread.is_alive())
+
+    def start(self) -> bool:
+        with self._lock:
+            if self.is_running:
+                return False
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, name="storage-viz-central-poller", daemon=True)
+            self._thread.start()
+            return True
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=timeout)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.poll_service.poll_once()
+            except Exception as exc:
+                print(f"storage-viz central poll failed: {exc}", file=sys.stderr, flush=True)
+            if self._stop.wait(self.interval_seconds):
+                break
+
+
+def build_central_poller(active_service: Any) -> CentralPoller | None:
+    if isinstance(active_service, PollService):
+        return CentralPoller(active_service)
+    return None
+
+
+central_poller = build_central_poller(service)
 
 
 def _sign(text: str) -> str:
@@ -380,5 +436,11 @@ class Server(socketserver.ThreadingTCPServer):
 if __name__ == "__main__":
     with Server((BIND, PORT), Handler) as httpd:
         host, port = httpd.server_address[:2]
+        if central_poller is not None:
+            central_poller.start()
         print(f"storage-viz serving {VIEWER_DIR} on {host}:{port}", flush=True)
-        httpd.serve_forever()
+        try:
+            httpd.serve_forever()
+        finally:
+            if central_poller is not None:
+                central_poller.stop()
