@@ -291,6 +291,13 @@ REMOTE
   ssh_rc=$?
   [[ -n "$remote_out" ]] && append_artifact "$remote_out"
   rc="$ssh_rc"
+  if [[ "$rc" -ne 0 ]] && ! grep -Eq '^remote_cleanup=(removed|failed)$' "$ARTIFACT"; then
+    if ssh -p "$port" -o BatchMode=yes -o IdentitiesOnly=yes "$host" "rm -rf -- '$remote_tmp'" >/dev/null 2>&1; then
+      append_artifact "remote_cleanup=removed"
+    else
+      append_artifact "remote_cleanup=failed"
+    fi
+  fi
   if grep -Fqx 'remote_cleanup=failed' "$ARTIFACT"; then
     rc=2
   fi

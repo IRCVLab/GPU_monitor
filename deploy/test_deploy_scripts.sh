@@ -58,16 +58,19 @@ case "${VERIFY_SCENARIO:-success}" in
       exit 63
     fi
     ;;
-  scp_cleanup_fail)
+  scp_cleanup_fail|verify_empty_cleanup_fail)
     if [[ "$args" == *"mktemp -d /tmp/storage-viz-verify.XXXXXX"* ]]; then
       printf '/tmp/storage-viz-verify.FAKE01\n'
       exit 0
+    fi
+    if [[ "$args" == *"VERIFY_TMP="*"bash -s"* ]]; then
+      exit 255
     fi
     if [[ "$args" == *"rm -rf --"* ]]; then
       exit 44
     fi
     ;;
-  scp_fail|remote_fail|cleanup_fail|success)
+  scp_fail|remote_fail|verify_empty_fail|cleanup_fail|success)
     if [[ "$args" == *"mktemp -d /tmp/storage-viz-verify.XXXXXX"* ]]; then
       printf '/tmp/storage-viz-verify.FAKE01\n'
       exit 0
@@ -78,6 +81,9 @@ case "${VERIFY_SCENARIO:-success}" in
     fi
     if [[ "$args" == *"VERIFY_TMP="*"bash -s"* ]]; then
       case "${VERIFY_SCENARIO:-success}" in
+        verify_empty_fail)
+          exit 255
+          ;;
         remote_fail)
           printf 'command=fake-remote\nexit_code=7\nremote_cleanup=removed\n'
           exit 7
@@ -142,6 +148,19 @@ run_verify_fake remote_fail
 grep -Fq 'remote_cleanup=removed' "$ROOT/output/verification/linux-verification.txt" || fail "remote command failure did not preserve cleanup result"
 grep -Fq 'overall_exit_code=7' "$ROOT/output/verification/linux-verification.txt" || fail "remote command failure did not record nonzero overall result"
 pass "verify-linux records cleanup after remote command failure"
+
+run_verify_fake verify_empty_fail
+[[ "$(cat "$VERIFY_TMP/verify_empty_fail.rc")" != "0" ]] || fail "verify-linux succeeded after empty verification ssh failure"
+grep -Fq 'remote_cleanup=removed' "$ROOT/output/verification/linux-verification.txt" || fail "empty verification ssh failure did not run fallback cleanup"
+grep -Fq 'cleanup-call' "$VERIFY_TMP/cleanup.log" || fail "empty verification ssh failure did not invoke fallback cleanup ssh"
+grep -Fq 'overall_exit_code=255' "$ROOT/output/verification/linux-verification.txt" || fail "empty verification ssh failure did not preserve original nonzero exit"
+pass "verify-linux falls back to cleanup after empty verification ssh failure"
+
+run_verify_fake verify_empty_cleanup_fail
+[[ "$(cat "$VERIFY_TMP/verify_empty_cleanup_fail.rc")" != "0" ]] || fail "verify-linux succeeded after empty verification ssh and cleanup failure"
+grep -Fq 'remote_cleanup=failed' "$ROOT/output/verification/linux-verification.txt" || fail "empty verification ssh cleanup failure was not recorded"
+! grep -Fq 'overall_exit_code=0' "$ROOT/output/verification/linux-verification.txt" || fail "empty verification ssh cleanup failure produced zero overall result"
+pass "verify-linux records fallback cleanup failure after empty verification ssh failure"
 
 run_verify_fake forbidden_workdir
 [[ "$(cat "$VERIFY_TMP/forbidden_workdir.rc")" != "0" ]] || fail "verify-linux succeeded from forbidden remote workdir"
