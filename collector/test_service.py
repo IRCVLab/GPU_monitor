@@ -300,6 +300,17 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(self.tx.max_active, 1)
         self.assertEqual(self.store.load_snapshot(s.id)["scan_generation"], "alpha-1-1719208000-v1")
 
+    def test_api_helpers_preserve_inventory_order_and_unknown_server_boundary(self):
+        a = make_server("alpha-1", order=20); b = make_server("beta-2", order=10)
+        self.seed(a); self.seed(b)
+        svc = self.service([a, b])
+        summaries = svc.server_summaries()
+        self.assertEqual([item["id"] for item in summaries], ["alpha-1", "beta-2"])
+        self.assertEqual(summaries[0]["snapshot_availability"], "available")
+        self.assertEqual(svc.load_snapshot_for_api("alpha-1")["server_id"], "alpha-1")
+        with self.assertRaises(ValueError):
+            svc.load_state_for_api("../alpha-1")
+
     def test_scheduler_runs_sequential_polls_and_waits_remaining_interval(self):
         s = make_server(); self.seed(s)
         old_status = status_data(payload_for(s.id, started=1719200000, digest=s.scanner_digest))[0]
