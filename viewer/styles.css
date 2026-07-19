@@ -81,7 +81,8 @@
   .overview-view { display: block; }
   .overview-lead { margin: 0 0 10px; color: var(--text2); max-width: 78ch; }
   .overview-status { margin: 0 0 12px; color: var(--text2); font: 12px var(--mono); }
-  .overview-list { display: flex; flex-direction: column; border-top: 1px solid var(--separator); }
+  .overview-list { display: flex; flex-direction: column; border-top: 1px solid var(--separator); list-style: none; margin: 0; padding: 0; }
+  .overview-item { margin: 0; padding: 0; }
   .overview-row { width: 100%; text-align: left; border: none; border-bottom: 1px solid var(--separator); background: transparent; color: inherit;
     padding: 14px 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px; cursor: pointer; }
   .overview-row:hover { background: var(--hover); }

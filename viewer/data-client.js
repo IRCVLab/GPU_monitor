@@ -138,8 +138,6 @@ function normalizeHosts(input) {
     });
   }
   if (!out.length) return DEFAULT_HOSTS.slice();
-  const preferred = out.findIndex(h => h.default);
-  if (preferred > 0) out.unshift(out.splice(preferred, 1)[0]);
   return out;
 }
 async function loadHostManifest() {

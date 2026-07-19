@@ -12,6 +12,7 @@ let snapshotCache = new Map();
 let resizeTimer = null;
 let rescanTimer = null;
 let rescanSawActive = false;
+let detailLoadGeneration = 0;
 
 /* =========================================================================
    Wiring
@@ -191,24 +192,36 @@ async function loadStaticBootstrap() {
 }
 
 function shouldFallbackToStatic(error) {
-  return !error || error.status == null || error.status === 404;
+  return !!(error && error.status === 404);
+}
+
+async function loadBootstrapDataWith(loaders) {
+  const deps = loaders || {};
+  const sessionLoader = deps.loadSession || loadSession;
+  const summariesLoader = deps.loadServerSummaries || loadServerSummaries;
+  const orderedSnapshotLoader = deps.loadOrderedSnapshotsForOverview || loadOrderedSnapshotsForOverview;
+  const staticBootstrapLoader = deps.loadStaticBootstrap || loadStaticBootstrap;
+  const snapshotLoader = deps.loadServerSnapshot || loadServerSnapshot;
+  let session;
+  try {
+    session = await sessionLoader();
+  } catch (error) {
+    if (!shouldFallbackToStatic(error)) throw error;
+    console.warn("[storage-viz] API session probe returned 404; using static data", error);
+    return staticBootstrapLoader();
+  }
+  staticHostById = new Map();
+  const summaries = await summariesLoader();
+  return {
+    mode: "api",
+    session,
+    summaries,
+    snapshots: await orderedSnapshotLoader(summaries, snapshotLoader),
+  };
 }
 
 async function loadBootstrapData() {
-  try {
-    const [session, summaries] = await Promise.all([loadSession(), loadServerSummaries()]);
-    staticHostById = new Map();
-    return {
-      mode: "api",
-      session,
-      summaries,
-      snapshots: await loadOrderedSnapshotsForOverview(summaries, loadServerSnapshot),
-    };
-  } catch (error) {
-    if (!shouldFallbackToStatic(error)) throw error;
-    console.warn("[storage-viz] API bootstrap unavailable; falling back to static data", error);
-    return loadStaticBootstrap();
-  }
+  return loadBootstrapDataWith();
 }
 
 function rememberBootstrap(bootstrap) {
@@ -237,21 +250,31 @@ async function loadSnapshotForCurrentSource(serverId) {
   return loadHost(host);
 }
 
+function currentDetailLoader() {
+  if (typeof globalThis !== "undefined" && typeof globalThis.loadSnapshotForCurrentSource === "function") return globalThis.loadSnapshotForCurrentSource;
+  return loadSnapshotForCurrentSource;
+}
+
 function currentRoute() {
   return parseRoute(window.location);
 }
 
-async function ensureDetailLoaded(serverId, forceReload) {
+function isCurrentDetailGeneration(serverId, generation) {
+  return currentServerId === serverId && detailLoadGeneration === generation;
+}
+
+async function ensureDetailLoaded(serverId, forceReload, generationOverride) {
+  const generation = generationOverride == null ? detailLoadGeneration : generationOverride;
   const summary = currentOverviewSummaries.find(item => item.id === serverId);
   currentServerSummary = summary || null;
   if (!summary) {
-    showDetailError("Unknown server: " + serverId);
+    if (isCurrentDetailGeneration(serverId, generation)) showDetailError("Unknown server: " + serverId);
     return;
   }
   let snapshot = !forceReload ? snapshotCache.get(serverId) : null;
   if (!snapshot) {
     try {
-      snapshot = await loadSnapshotForCurrentSource(serverId);
+      snapshot = await currentDetailLoader()(serverId);
       snapshotCache.set(serverId, snapshot);
       updateSnapshotEntry(serverId, snapshot, null);
       renderOverview();
@@ -259,10 +282,11 @@ async function ensureDetailLoaded(serverId, forceReload) {
       console.error("[storage-viz] failed to load snapshot", serverId, error);
       updateSnapshotEntry(serverId, null, error);
       renderOverview();
-      showDetailError("Could not load snapshot for " + summary.display_name + ".");
+      if (isCurrentDetailGeneration(serverId, generation)) showDetailError("Could not load snapshot for " + summary.display_name + ".");
       return;
     }
   }
+  if (!isCurrentDetailGeneration(serverId, generation)) return;
   DATA = snapshot;
   clearDetailError();
   renderAll();
@@ -277,11 +301,15 @@ function applyRouteState(route, options) {
     tab: route && route.tab ? route.tab : "treemap",
   };
   if (!opts.skipHistory) syncHistory(safeRoute, !!opts.replaceHistory);
+  detailLoadGeneration += 1;
   currentServerId = safeRoute.serverId;
+  currentServerSummary = safeRoute.serverId ? (currentOverviewSummaries.find(item => item.id === safeRoute.serverId) || null) : null;
+  DATA = safeRoute.serverId ? (snapshotCache.get(safeRoute.serverId) || null) : null;
+  clearDetailError();
   setShellMode(!!safeRoute.serverId);
   if (!safeRoute.serverId) return safeRoute;
   showTab(safeRoute.tab, { updateRoute: false });
-  if (!opts.skipDataLoad) void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload);
+  if (!opts.skipDataLoad) void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload, detailLoadGeneration);
   return safeRoute;
 }
 
@@ -498,6 +526,23 @@ async function init() {
   else navigateToOverview({ skipHistory: true });
 }
 
-document.addEventListener("DOMContentLoaded", init);
+if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", init);
 
-if (typeof globalThis !== "undefined") Object.assign(globalThis, { applyRouteState, navigateToOverview, navigateToServer });
+function getCurrentDetailDebugState() {
+  return { currentServerId, currentServerSummary, data: DATA, detailLoadGeneration };
+}
+
+if (typeof globalThis !== "undefined") Object.assign(globalThis, {
+  applyRouteState,
+  navigateToOverview,
+  navigateToServer,
+  rememberBootstrap,
+  ensureDetailLoaded,
+  loadBootstrapDataWith,
+  loadSnapshotForCurrentSource,
+  getCurrentDetailDebugState,
+});
+if (typeof module !== "undefined" && module.exports) module.exports = {
+  loadBootstrapDataWith,
+  shouldFallbackToStatic,
+};

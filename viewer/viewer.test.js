@@ -31,6 +31,14 @@ function testHostManifestHelpers() {
   assert.strictEqual(hosts[1].label, "lecun");
   assert.strictEqual(hosts[0].default, true);
   assert.deepStrictEqual(normalizeHosts([]), [{ id: "hinton", label: "hinton", file: "hinton", default: true }]);
+
+  const ordered = normalizeHosts([
+    { id: "atlas", label: "Atlas", file: "atlas" },
+    { id: "beta", label: "Beta", file: "beta", default: true },
+    { id: "cedar", label: "Cedar", file: "cedar" },
+  ]);
+  assert.deepStrictEqual(ordered.map(h => h.id), ["atlas", "beta", "cedar"], "manifest order must remain exact even when default:true appears in the middle");
+  assert.strictEqual(ordered[1].default, true, "default metadata must remain attached to the original row");
 }
 
 async function testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures() {
@@ -114,22 +122,26 @@ function testOverviewCapacityThresholdsAndPrecedence() {
   assert.strictEqual(pressureLevel(1, DEFAULT_CAPACITY_THRESHOLDS.critical_free_bytes), "critical");
 
   const precedenceCases = [
-    [makeSummary({ snapshot_availability: "absent", latest_pull_status: "not_installed" }), null, "agent_missing"],
-    [makeSummary({ snapshot_availability: "absent", latest_pull_status: "succeeded" }), null, "snapshot_absent"],
-    [makeSummary({ latest_pull_status: "unreachable" }), makeSnapshot(), "pull_unreachable"],
-    [makeSummary({ latest_pull_status: "invalid_snapshot" }), makeSnapshot(), "pull_invalid"],
-    [makeSummary({ latest_scan_result: "failed" }), makeSnapshot(), "scan_failed"],
-    [makeSummary({ configuration_sync: "drifted" }), makeSnapshot(), "config_drift"],
-    [makeSummary({ latest_scan_result: "partial" }), makeSnapshot(), "partial_scan"],
-    [makeSummary({ freshness: "stale" }), makeSnapshot(), "stale_snapshot"],
-    [makeSummary({ active_job: { id: "job-1", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), makeSnapshot([{ path: "/data", df_use_pct: 95, df_avail: 900 * GiB }]), "active_scan"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 95, df_avail: 900 * GiB }]), "pressure_critical"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 10, df_avail: 20 * GiB }]), "pressure_critical"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 81, df_avail: 900 * GiB }]), "pressure_warning"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 55, df_avail: 900 * GiB }]), "normal"],
+    [makeSummary({ snapshot_availability: "absent", latest_pull_status: "not_installed" }), null, null, "agent_missing"],
+    [makeSummary({ snapshot_availability: "absent", latest_pull_status: "succeeded" }), null, null, "snapshot_absent"],
+    [makeSummary({ latest_pull_status: "unreachable" }), makeSnapshot(), null, "pull_unreachable"],
+    [makeSummary({ latest_pull_status: "invalid_snapshot" }), makeSnapshot(), null, "pull_invalid"],
+    [makeSummary({ latest_scan_result: "failed" }), makeSnapshot(), null, "scan_failed"],
+    [makeSummary({ configuration_sync: "drifted" }), makeSnapshot(), null, "config_drift"],
+    [makeSummary({ latest_scan_result: "partial" }), makeSnapshot(), null, "partial_scan"],
+    [makeSummary({ freshness: "stale" }), makeSnapshot(), null, "stale_snapshot"],
+    [makeSummary({ active_job: { id: "job-1", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), makeSnapshot([{ path: "/data", df_use_pct: 95, df_avail: 900 * GiB }]), null, "active_scan"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 95, df_avail: 900 * GiB }]), null, "pressure_critical"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 10, df_avail: 20 * GiB }]), null, "pressure_critical"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 81, df_avail: 900 * GiB }]), null, "pressure_warning"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 55, df_avail: 900 * GiB }]), null, "normal"],
+    [makeSummary(), null, new Error("snapshot load failed"), "snapshot_load_failed"],
+    [makeSummary({ active_job: { id: "job-9", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), null, new Error("snapshot load failed"), "snapshot_load_failed"],
+    [makeSummary({ freshness: "stale" }), null, new Error("snapshot load failed"), "stale_snapshot"],
+    [makeSummary({ latest_pull_status: "unreachable" }), null, new Error("snapshot load failed"), "pull_unreachable"],
   ];
-  for (const [summary, snapshot, expectedCode] of precedenceCases) {
-    const status = derivePrimaryStatus(summary, snapshot, DEFAULT_CAPACITY_THRESHOLDS);
+  for (const [summary, snapshot, error, expectedCode] of precedenceCases) {
+    const status = derivePrimaryStatus(summary, snapshot, DEFAULT_CAPACITY_THRESHOLDS, error);
     assert.strictEqual(status.code, expectedCode, `expected ${expectedCode} for ${JSON.stringify(summary)}`);
   }
 
@@ -137,6 +149,10 @@ function testOverviewCapacityThresholdsAndPrecedence() {
   assert.strictEqual(typeof severe.shape, "string");
   assert.ok(severe.shape.length > 0, "exceptional states must expose a visible shape cue");
   assert.ok(/[가-힣]/.test(severe.label), "exceptional states must use concise Korean copy");
+
+  const loadFailure = statusPresentation("snapshot_load_failed");
+  assert.ok(loadFailure.shape.length > 0, "client load failure must expose a visible shape cue");
+  assert.ok(/[가-힣]/.test(loadFailure.label), "client load failure must expose a concise Korean label");
 
   const model = buildOverviewServer(
     makeSummary({ latest_scan_result: "failed", active_job: { id: "job-2", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }),
@@ -147,6 +163,15 @@ function testOverviewCapacityThresholdsAndPrecedence() {
   assert.strictEqual(model.secondaryStatus.code, "active_scan", "active scan must remain available as a secondary cue");
   assert.strictEqual(model.mounts.length, 1, "capacity bars must remain present when an operational status wins");
   assert.strictEqual(model.mounts[0].pressure, "critical");
+
+  const loadFailureModel = buildOverviewServer(
+    makeSummary({ active_job: { id: "job-3", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }),
+    null,
+    DEFAULT_CAPACITY_THRESHOLDS,
+    new Error("snapshot load failed"),
+  );
+  assert.strictEqual(loadFailureModel.primaryStatus.code, "snapshot_load_failed", "client snapshot failure must be visible when summary state would otherwise be healthy/active/capacity-only");
+  assert.strictEqual(loadFailureModel.secondaryStatus.code, "active_scan", "active scan may remain visible as a secondary cue beneath client load failure");
 }
 
 function testOverviewRouteHelpers() {
