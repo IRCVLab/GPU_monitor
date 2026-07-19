@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Regression smoke tests for storage-viz's safe local server."""
-
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
@@ -12,9 +11,6 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVE = ROOT / "viewer" / "serve.py"
@@ -22,62 +18,46 @@ GiB = 1024 ** 3
 
 
 def free_port() -> int:
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    return port
+    sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close(); return port
 
 
-def sample_snapshot() -> dict:
+def sample_snapshot(server_id="hinton") -> dict:
     return {
         "schema_version": 1,
-        "hostname": "hinton",
-        "mounts": [
-            {"path": "/", "df_use_pct": 50, "df_avail": 100 * GiB, "tree": {"name": "/", "bytes": 1, "children": []}},
-            {"path": "/ssd", "df_use_pct": 95, "df_avail": 5 * GiB, "tree": {"name": "/ssd", "bytes": 1, "children": []}},
-        ],
-        "top_files": [
-            {"path": "/home/alice/.cache/pip/wheels/pkg.whl", "bytes": 6 * GiB, "uid": 1000, "owner": "alice", "mtime": 1710000000},
-            {"path": "/ssd/alice/run/checkpoint.pt", "bytes": 20 * GiB, "uid": 1000, "owner": "alice", "mtime": 1710000000},
-        ],
-        "stale": [],
-        "blocked": [],
+        "server_id": server_id,
+        "scan_generation": f"{server_id}-1719200000-v1",
+        "hostname": server_id,
+        "scan_started_unix": 1719200000,
+        "scan_finished_unix": 1719200042,
+        "config_digest": "a" * 64,
+        "selected_roots": [{"mount_id":"root","status":"complete","scan_root":"/","mountpoint":"/","scanned_bytes": 100}],
+        "mounts": [{"mount_id":"root","path":"/","scan_root":"/","df_use_pct":50,"df_avail":100*GiB,"tree":{"name":"/","bytes":1,"children":[]}}],
+        "top_files": [], "stale": [], "blocked": [],
     }
 
 
-class ServeSafetyTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory(prefix="storage-viz-serve-test.")
-        self.addCleanup(self.tmp.cleanup)
-        self.data_dir = Path(self.tmp.name)
-        (self.data_dir / "hosts.json").write_text('[{"id":"hinton","label":"hinton","file":"hinton"}]\n', encoding="utf-8")
-        (self.data_dir / "hinton.sample.json").write_text(json.dumps(sample_snapshot()) + "\n", encoding="utf-8")
-        self.proc: subprocess.Popen[str] | None = None
-        self.addCleanup(self._stop)
+class ApiServerTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="storage-viz-api-test."); self.addCleanup(self.tmp.cleanup)
+        self.sample_dir = Path(self.tmp.name) / "samples"; self.sample_dir.mkdir()
+        (self.sample_dir / "hinton.sample.json").write_text(json.dumps(sample_snapshot("hinton")) + "\n", encoding="utf-8")
+        self.proc = None; self.addCleanup(self._stop)
 
-    def start_server(self, extra_env: dict[str, str] | None = None) -> None:
+    def start_server(self, extra_env=None, expect_exit=False):
         self.port = free_port()
-        env = os.environ.copy()
-        env.update(
-            STORAGE_VIZ_DATA_DIR=str(self.data_dir),
-            STORAGE_VIZ_BIND="127.0.0.1",
-            STORAGE_VIZ_PORT=str(self.port),
-        )
-        if extra_env:
-            env.update(extra_env)
-        self.proc = subprocess.Popen(
-            [sys.executable, str(SERVE)],
-            cwd=str(ROOT),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        env = os.environ.copy(); env.update(STORAGE_VIZ_BIND="127.0.0.1", STORAGE_VIZ_PORT=str(self.port), STORAGE_VIZ_DEV_SAMPLE_DIR=str(self.sample_dir))
+        if extra_env: env.update(extra_env)
+        if env.get("STORAGE_VIZ_DEV_SAMPLE_DIR") == "": env.pop("STORAGE_VIZ_DEV_SAMPLE_DIR", None)
+        self.proc = subprocess.Popen([sys.executable, str(SERVE)], cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if expect_exit:
+            deadline = time.time() + 3
+            while time.time() < deadline and self.proc.poll() is None: time.sleep(0.05)
+            self.assertIsNotNone(self.proc.poll())
+            return
         deadline = time.time() + 5
         while time.time() < deadline:
             try:
-                self.get_json("/capabilities")
+                self.request("GET", "/api/session")
                 return
             except Exception:
                 if self.proc.poll() is not None:
@@ -86,66 +66,71 @@ class ServeSafetyTest(unittest.TestCase):
                 time.sleep(0.05)
         self.fail("serve.py did not become ready")
 
-    def _stop(self) -> None:
-        if getattr(self, "proc", None) and self.proc and self.proc.poll() is None:
+    def _stop(self):
+        if self.proc and self.proc.poll() is None:
             self.proc.terminate()
-            try:
-                self.proc.communicate(timeout=3)
+            try: self.proc.communicate(timeout=3)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.communicate(timeout=3)
-        if getattr(self, "proc", None):
-            for stream_name in ("stdout", "stderr"):
-                stream = getattr(self.proc, stream_name, None)
+                self.proc.kill(); self.proc.communicate(timeout=3)
+        if self.proc:
+            for stream in (self.proc.stdout, self.proc.stderr):
                 if stream and not stream.closed:
                     stream.close()
 
-    def url(self, path: str) -> str:
-        return f"http://127.0.0.1:{self.port}{path}"
 
-    def get_json(self, path: str) -> dict:
-        with urlopen(self.url(path), timeout=3) as response:
-            return json.loads(response.read().decode("utf-8"))
+    def write_inventory(self):
+        inv = Path(self.tmp.name) / "servers.json"
+        inv.write_text(json.dumps({"servers":[{"id":"hinton","display_name":"hinton","order":1,"host":"hinton.example.test","port":22,"enabled":True,"username":"monitoring","identity_file":"/etc/storage-viz/hinton.key","known_hosts_file":"/etc/storage-viz/known_hosts","scanner":{"server_id":"hinton"}}]}) + "\n", encoding="utf-8")
+        return inv
 
-    def post_json(self, path: str, body: dict) -> dict:
-        req = Request(
-            self.url(path),
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlopen(req, timeout=5) as response:
-            return json.loads(response.read().decode("utf-8"))
+    def request(self, method, path, body=None, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        data = json.dumps(body).encode() if body is not None else None
+        h = {"Content-Type":"application/json"} if body is not None else {}
+        if headers: h.update(headers)
+        conn.request(method, path, body=data, headers=h)
+        res = conn.getresponse(); raw = res.read(); hdrs = dict(res.getheaders()); conn.close()
+        parsed = json.loads(raw.decode() or "{}") if raw else {}
+        return res.status, hdrs, parsed
 
-    def test_rescan_disabled_by_default_and_data_files_are_served(self) -> None:
+    def test_dev_sample_api_is_read_only_and_ai_routes_404(self):
         self.start_server()
-        caps = self.get_json("/capabilities")
-        self.assertEqual(caps["rescan"], False)
-        self.assertNotIn("ai", caps)
-        self.assertIn("Manual rescan only", caps["message"])
+        code, headers, session = self.request("GET", "/api/session")
+        self.assertEqual(code, 200)
+        self.assertFalse(session["can_rescan"])
+        self.assertIn("SameSite=Lax", headers.get("Set-Cookie", ""))
+        code, _, servers = self.request("GET", "/api/servers")
+        self.assertEqual(code, 200); self.assertEqual(servers["servers"][0]["id"], "hinton")
+        self.assertEqual(self.request("GET", "/api/servers/hinton/snapshot")[2]["server_id"], "hinton")
+        self.assertEqual(self.request("GET", "/api/servers/unknown/snapshot")[0], 404)
+        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {})[0], 403)
+        self.assertEqual(self.request("GET", "/ai/status")[0], 404)
+        self.assertEqual(self.request("POST", "/ai/recommend", {})[0], 404)
+        self.assertEqual(self.request("GET", "/capabilities")[2]["rescan"], False)
+        self.assertEqual(self.request("POST", "/rescan", {})[0], 503)
 
-        status = self.get_json("/rescan-status")
-        self.assertEqual(status["supported"], False)
-        self.assertEqual(status["scanning"], False)
-        self.assertIn("data_file", status)
+    def test_direct_mode_with_inventory_still_disables_rescan(self):
+        inv = self.write_inventory()
+        self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state")})
+        code, _, sess = self.request("GET", "/api/session")
+        self.assertEqual(code, 200); self.assertFalse(sess["can_rescan"])
+        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
 
-        with self.assertRaises(HTTPError) as ctx:
-            urlopen(Request(self.url("/rescan"), method="POST"), timeout=3)
-        self.assertEqual(ctx.exception.code, 503)
+    def test_trusted_proxy_requires_loopback_exact_origin_operator_and_csrf(self):
+        inv = self.write_inventory()
+        self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1"})
+        self.assertEqual(self.request("GET", "/api/session")[0], 401)
+        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"viewer-1"})
+        self.assertEqual(code, 200); self.assertFalse(sess["can_rescan"])
+        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"operator-1"})
+        self.assertTrue(sess["can_rescan"])
+        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://evil.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://storage.test"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 404)
 
-        self.assertEqual(self.get_json("/data/hosts.json")[0]["id"], "hinton")
-        self.assertEqual(self.get_json("/data/hinton.sample.json")["hostname"], "hinton")
-
-    def test_removed_analysis_endpoints_return_404(self) -> None:
-        self.start_server()
-        removed_prefix = "/" + "ai"
-        with self.assertRaises(HTTPError) as ctx:
-            self.get_json(removed_prefix + "/status")
-        self.assertEqual(ctx.exception.code, 404)
-
-        with self.assertRaises(HTTPError) as ctx:
-            self.post_json(removed_prefix + "/recommend", {"host_id": "hinton"})
-        self.assertEqual(ctx.exception.code, 404)
+    def test_dev_sample_rejected_when_proxy_mode_not_loopback_or_combined_with_prod(self):
+        self.start_server({"STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_BIND":"0.0.0.0"}, expect_exit=True)
 
 
 if __name__ == "__main__":
