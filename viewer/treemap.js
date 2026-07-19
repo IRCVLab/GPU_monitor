@@ -177,6 +177,7 @@ function addTreemapCleanupMetadata(tile, c, path, owner) {
   tile.dataset.cleanupOwner = owner || "";
   tile.dataset.cleanupSource = "treemap";
   tile.setAttribute("role", "button");
+  tile.setAttribute("tabindex", "0");
   tile.setAttribute("aria-label", "Inspect snapshot path " + path);
   const badge = document.createElement("div");
   badge.className = "tm-cleanup-badge";
@@ -237,8 +238,24 @@ function bindTreemapCleanupMode() {
       if (document.hidden) setTreemapModifierActive(false);
     });
   }
-  document.addEventListener("cleanup-selection-rendered", syncTreemapCleanupTiles);
+  if (!document._treemapCleanupRenderedBound) {
+    document._treemapCleanupRenderedBound = true;
+    document.addEventListener("cleanup-selection-rendered", syncTreemapCleanupTiles);
+  }
   setTreemapModifierActive(false);
+}
+function activateTreemapTile(tile, c, path, owner, event) {
+  if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+  if (isTreemapCleanupGesture(event)) {
+    if (tile && c && path && owner != null && typeof toggleCleanupSelectedItem === "function") {
+      toggleTreemapCleanupTile(tile, c, path, owner);
+    }
+    return;
+  }
+  if (c && c.children && c.children.length) {
+    treemapStack.push({ node: c, name: c.name });
+    renderTreemap();
+  }
 }
 function tmTile(el, c, k, crumbPath, isGroup, level) {
   const base = c._other ? OTHER_COLOR : colorForUid(c.uid);
@@ -271,16 +288,15 @@ function tmTile(el, c, k, crumbPath, isGroup, level) {
     t.classList.add("drillable");
   }
   if (selectable || hasKids) {
-    t.onclick = (e) => {
-      e.stopPropagation();
-      if (isTreemapCleanupGesture(e)) {
-        if (selectable) toggleTreemapCleanupTile(t, c, path, owner);
-        return;
-      }
-      if (hasKids) {
-        treemapStack.push({ node: c, name: c.name });
-        renderTreemap();
-      }
+    if (selectable) {
+      t.setAttribute("role", "button");
+      t.setAttribute("tabindex", "0");
+    }
+    t.onclick = (e) => activateTreemapTile(t, c, path, owner, e);
+    t.onkeydown = (e) => {
+      if (!e || (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar")) return;
+      if (typeof e.preventDefault === "function") e.preventDefault();
+      activateTreemapTile(t, c, path, owner, e);
     };
   }
   el.appendChild(t);

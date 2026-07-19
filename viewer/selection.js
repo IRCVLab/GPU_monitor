@@ -84,6 +84,7 @@ function cleanupMounts(snapshot) {
 
 function cleanupPathWithinRoot(path, root) {
   if (!path || !root) return false;
+  if (root === "/") return String(path).startsWith("/");
   return path === root || path.startsWith(root + "/");
 }
 
@@ -403,6 +404,11 @@ function commandCardHtml(entry, copyLabel) {
   '</li>';
 }
 
+function scrollCleanupPanelControlIntoView(target) {
+  if (!target || typeof target.scrollIntoView !== "function") return;
+  target.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
 function renderCleanupPanel() {
   const panel = typeof document !== "undefined" ? document.getElementById("cleanupPanel") : null;
   const plan = currentCleanupPlan();
@@ -456,6 +462,11 @@ function renderCleanupPanel() {
     dangerCommand.innerHTML = plan.destructiveVisible
       ? commandCardHtml(plan.destructiveCommand, "Copy removal command:")
       : "";
+  }
+  if (plan.destructiveVisible) {
+    scrollCleanupPanelControlIntoView(dangerCommand || dangerWarning || reveal);
+  } else {
+    scrollCleanupPanelControlIntoView(reveal);
   }
 
   if (typeof document !== "undefined" && document.dispatchEvent && typeof CustomEvent !== "undefined") {
@@ -573,6 +584,8 @@ if (typeof module !== "undefined" && module.exports) {
     resetCleanupSelectionState,
     isAbsoluteCleanupPath,
     isCanonicalCleanupPath,
+    cleanupPathWithinRoot,
+    cleanupLongestMatchingRoot,
     pathDepth,
   };
 }

@@ -36,6 +36,9 @@ class FakeElement {
     this.hidden = false;
     this.value = '';
     this.listeners = new Map();
+    this.tabIndex = undefined;
+    this.focused = false;
+    this.scrollIntoViewCalls = [];
   }
   appendChild(child) {
     if (!child.ownerDocument) child.ownerDocument = this.ownerDocument;
@@ -53,6 +56,7 @@ class FakeElement {
     this.attributes[name] = String(value);
     if (name === 'class') this.className = String(value);
     if (name === 'id') this.id = String(value);
+    if (name === 'tabindex') this.tabIndex = Number(value);
     if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase())] = String(value);
   }
   getAttribute(name) {
@@ -64,6 +68,18 @@ class FakeElement {
   dispatch(type, event = {}) {
     const handler = this.listeners.get(type);
     if (handler) handler(Object.assign({ target: this, currentTarget: this, preventDefault() {} }, event));
+  }
+  focus() { this.focused = true; if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  scrollIntoView(options) { this.scrollIntoViewCalls.push(options || null); }
+  closest(selector) {
+    if (!selector || selector[0] !== '.') return null;
+    const className = selector.slice(1);
+    let cur = this;
+    while (cur) {
+      if ((cur.className || '').split(/\s+/).includes(className)) return cur;
+      cur = cur.parentNode || null;
+    }
+    return null;
   }
   querySelectorAll() { return []; }
   querySelector() { return null; }
@@ -105,13 +121,23 @@ function loadViewer() {
     return elements.get(id);
   };
   const historyCalls = [];
+  const docListeners = new Map();
   doc = {
     createElement: (tag) => new FakeElement(tag, doc),
     getElementById: getEl,
     querySelector: () => new FakeElement('div', doc),
     querySelectorAll: () => [],
-    addEventListener() {},
+    addEventListener(type, handler) {
+      const list = docListeners.get(type) || [];
+      list.push(handler);
+      docListeners.set(type, list);
+    },
+    dispatchEvent(event) {
+      const list = docListeners.get(event && event.type) || [];
+      for (const handler of list) handler(event);
+    },
     body: new FakeElement('body', null),
+    activeElement: null,
   };
   doc.body.ownerDocument = doc;
   const context = {
@@ -148,6 +174,7 @@ function loadViewer() {
   }
   context.__elements = elements;
   context.__historyCalls = historyCalls;
+  context.__docListeners = docListeners;
   return context;
 }
 
@@ -531,6 +558,15 @@ function testDeleteCommandQuoting() {
   assert.ok(plan.warnings.some(w => /stale/i.test(w)), 'stale snapshot warnings must stay visible in the plan');
 }
 
+function testTreemapCleanupModeBindsCleanupRenderedListenerOnce() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.bindTreemapCleanupMode, 'function', 'treemap cleanup binding must be exposed');
+  viewer.bindTreemapCleanupMode();
+  viewer.bindTreemapCleanupMode();
+  const listeners = viewer.__docListeners.get('cleanup-selection-rendered') || [];
+  assert.strictEqual(listeners.length, 1, 'cleanup-selection-rendered listener must not duplicate across repeated bindTreemapCleanupMode calls');
+}
+
 function testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.setCleanupSelectedItem, 'function', 'cleanup selection setter must be exposed');
@@ -635,7 +671,16 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
     other_bytes: 100,
     uid: 1001,
     children: [
-      { name: 'project', kind: 'directory', bytes: 500, uid: 1001, files: 20, children: [] },
+      {
+        name: 'project',
+        kind: 'directory',
+        bytes: 500,
+        uid: 1001,
+        files: 20,
+        children: [
+          { name: 'nested', kind: 'directory', bytes: 200, uid: 1001, files: 5, children: [] },
+        ],
+      },
     ],
   };
   const el = new FakeElement('div');
@@ -651,9 +696,29 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   assert.ok(!projectCleanup, 'treemap must not clutter every tile with a visible checkbox overlay');
   assert.strictEqual(project.dataset.cleanupPath, '/data/project', 'real-path tile should carry cleanup metadata for selection mode');
   assert.strictEqual(project.dataset.cleanupKind, 'directory', 'treemap selection metadata must retain snapshot kind');
+  assert.strictEqual(project.getAttribute('role'), 'button', 'selectable/drillable treemap tiles must expose button semantics');
+  assert.strictEqual(project.tabIndex, 0, 'selectable/drillable treemap tiles must be keyboard focusable');
+  assert.strictEqual(project.getAttribute('aria-selected'), 'false', 'unselected selectable tiles must expose aria-selected=false');
   assert.ok(project.children.some(c => c.className === 'tm-cleanup-badge'), 'real-path tile should have a hidden selected-state badge');
   assert.ok(!other.dataset.cleanupPath, 'aggregate non-path tiles must not be selectable');
   assert.ok(!other.children.some(c => c.className === 'tm-cleanup-badge'), 'aggregate non-path tiles must not show cleanup controls');
+
+  let drillCount = 0;
+  let inspectCount = 0;
+  viewer.renderTreemap = () => { drillCount += 1; };
+  viewer.toggleCleanupSelectedItem = () => { inspectCount += 1; return true; };
+  let enterPrevented = false;
+  project.onkeydown({ key: 'Enter', stopPropagation() {}, preventDefault() { enterPrevented = true; } });
+  assert.strictEqual(enterPrevented, true, 'Enter on a button-like tile must prevent default browser behavior');
+  assert.strictEqual(drillCount, 1, 'Enter must preserve primary drill behavior when cleanup mode is off');
+  assert.strictEqual(inspectCount, 0, 'Enter must not inspect while cleanup mode is off');
+
+  viewer.setTreemapModifierActive(true);
+  let spacePrevented = false;
+  project.onkeydown({ key: ' ', stopPropagation() {}, preventDefault() { spacePrevented = true; } });
+  assert.strictEqual(spacePrevented, true, 'Space on a button-like tile must prevent default browser scrolling');
+  assert.strictEqual(drillCount, 1, 'keyboard activation in cleanup mode must stop drilling');
+  assert.strictEqual(inspectCount, 1, 'keyboard activation in cleanup mode must inspect/select instead of drilling');
 }
 
 function testTreemapGroupTilesStayBehindDescendants() {
@@ -718,6 +783,37 @@ function testTreemapScaleNoteExplainsHiddenTinyItemsBilingually() {
   assert.ok(note.innerHTML.includes('실제 비율'), 'Korean note should explain true-scale hiding');
 }
 
+function testCleanupPanelResponsiveCssAndDangerListSemantics() {
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  assert(/<(ol|ul)\s+id="cleanupDangerCommand"/.test(html), 'destructive cleanup command container must be a real list to avoid orphan list items');
+  assert(/#cleanupPanel\b[\s\S]*max-height:\s*calc\(100vh\s*-/.test(css), 'cleanup panel must keep a fallback viewport-bounded max-height');
+  assert(/#cleanupPanel\b[\s\S]*max-height:\s*calc\(100dvh\s*-/.test(css), 'cleanup panel must keep a modern dynamic-viewport max-height');
+  assert(/#cleanupPanel\b[\s\S]*overflow-y:\s*auto/.test(css), 'cleanup panel must scroll internally when taller than the viewport');
+  assert(/#cleanupPanel\b[\s\S]*overscroll-behavior:\s*contain/.test(css), 'cleanup panel must contain overscroll inside the panel');
+  assert(/env\(safe-area-inset-top\)/.test(css) && /env\(safe-area-inset-bottom\)/.test(css), 'cleanup panel viewport bounds must include mobile safe-area insets');
+  assert(/#cleanupDangerCommand\b[\s\S]*list-style:\s*none/.test(css) || /\.cleanup-command-list\b[\s\S]*list-style:\s*none/.test(css), 'cleanup command lists must reset list bullets');
+}
+
+function testCleanupPanelRevealScrollsFocusedControlsIntoView() {
+  const viewer = loadViewer();
+  viewer.currentServerId = 'alpha-1';
+  viewer.currentServerSummary = { freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete' };
+  viewer.DATA = {
+    server_id: 'alpha-1',
+    selected_roots: [{ mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' }],
+    mounts: [{ mount_id: 'data', path: '/data', scan_root: '/data' }],
+  };
+  viewer.setCleanupSelectedItem({ path: '/data/project', kind: 'directory', bytes: 100, source: 'treemap' }, true);
+  const reveal = viewer.document.getElementById('cleanupReveal');
+  const danger = viewer.document.getElementById('cleanupDangerCommand');
+  assert.ok(reveal, 'reveal control must exist');
+  assert.ok(danger, 'destructive command list must exist');
+  viewer.cleanupSelectionState.revealDestructive = true;
+  viewer.renderCleanupPanel();
+  assert.ok(reveal.scrollIntoViewCalls.length > 0 || danger.scrollIntoViewCalls.length > 0, 'revealing the destructive command must scroll controls into view inside the cleanup panel');
+}
+
 async function main() {
   testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars();
   testSnapshotLoadFailureRendersAsVisibleException();
@@ -727,12 +823,15 @@ async function main() {
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
   testDeleteCommandQuoting();
+  testTreemapCleanupModeBindsCleanupRenderedListenerOnce();
   testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange();
   testTreemapHidesMicroTilesInsteadOfInflatingThem();
   testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes();
   testTreemapGroupTilesStayBehindDescendants();
   testTreemapDoesNotExposeTopLevelCleanupCandidates();
   testTreemapScaleNoteExplainsHiddenTinyItemsBilingually();
+  testCleanupPanelResponsiveCssAndDangerListSemantics();
+  testCleanupPanelRevealScrollsFocusedControlsIntoView();
   console.log('viewer regression tests passed');
 }
 
