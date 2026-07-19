@@ -143,7 +143,68 @@ Result: exit 0.
 - **XSS:** overview rendering still uses DOM node creation plus `textContent`, so the new error-state path does not introduce HTML interpolation from untrusted data.
 
 ### Commit
-- `4dbc71c21a057c49dd7f12813a572354b7036d82` — `fix: stabilize storage overview state`
+- `ecb6624f6d57ef85cd3e5934e5c4c8556d1ed532` — `fix: stabilize storage overview state`
 
 ### Concerns
 - The required Node regression suite intentionally logs simulated API/session/snapshot failures through the existing console paths while still passing; browser evidence from the controller run remains preserved, but the unit-test output is not completely silent.
+
+## Review fixes — second wave
+
+### Changed files
+- `viewer/app.js` — added per-server request versions so obsolete same-server completions are discarded before every shared mutation, while the newest same-server completion can still refresh cache/overview state off-route.
+- `viewer/data-client.js` — aligned frontend safe-ID validation with backend rules by rejecting exactly `.` and `..`, and exported the shared helper for API validation tests.
+- `viewer/overview.js` — added shared `isSafeServerId` route/helper validation so `.` and `..` never enter URL parsing or generated detail links.
+- `viewer/viewer.test.js` — added regressions for `.`/`..` rejection in API helpers and route helpers.
+- `viewer/viewer_regression_test.js` — added deterministic deferred-promise regressions for late obsolete same-server success/rejection, plus async-safe console muting for expected failure-path tests.
+
+### RED evidence
+Focused RED commands before production edits:
+
+`node viewer/viewer.test.js`
+
+Observed failure:
+- `TypeError: safeServerId is not a function`
+
+`node viewer/viewer_regression_test.js`
+
+Observed failures/noise:
+- expected simulated API/session/snapshot failure stacks still printed because console muting restored too early for async tests
+- `AssertionError [ERR_ASSERTION]: obsolete older alpha success must not rewrite overview status or mount metrics`
+
+### GREEN commands/results
+`node viewer/viewer.test.js`
+
+Result: passed (`viewer regression tests passed`).
+
+`node viewer/viewer_regression_test.js`
+
+Result: passed (`viewer regression tests passed`) with clean output.
+
+`python3 viewer/test_serve.py`
+
+Result: 6 tests passed, `OK`.
+
+`python3 -m unittest collector.test_service -v`
+
+Result: 19 tests passed, `OK`.
+
+`node --check viewer/app.js && node --check viewer/data-client.js && node --check viewer/overview.js && node --check viewer/viewer.test.js && node --check viewer/viewer_regression_test.js`
+
+Result: exit 0.
+
+`git diff --check`
+
+Result: exit 0.
+
+### Self-review findings
+- **Per-server request versions:** once a newer request starts for the same server, any older completion now exits before cache writes, overview-entry mutation, overview rerender, or detail/error mutation.
+- **Cross-route behavior:** the newest request for server A can still refresh A's cache while the route is on B, but it cannot overwrite B detail state because detail generation checks still gate `DATA` and error rendering.
+- **Safe IDs:** API helpers, route parsing, and route generation now reject `.` and `..` exactly, matching backend behavior without broadening the character policy.
+- **Console noise:** regression tests now stub `console.warn/error` through awaited completion and restore them in `finally`, so passing output stays clean without changing production logging.
+- **XSS/focus:** the new changes remain inside existing safe text/DOM rendering paths and preserve whole-row button semantics and focus treatment from the first fix wave.
+
+### Commit
+- `a984044e73a8f66f04fc6e730dbdcc2923130de6` — `fix: guard storage overview request versions`
+
+### Concerns
+- The report section was appended after creating the exact requested commit so it could record the true commit hash; this leaves the report file modified in the worktree alongside the controller's pre-existing untracked artifacts.
