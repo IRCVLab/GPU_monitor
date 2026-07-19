@@ -67,6 +67,29 @@ class JobsTest(unittest.TestCase):
         svc.release.set()
         jobs.wait_for_idle(timeout=2)
 
+
+    def test_restart_reconciles_persisted_running_job_to_failed_and_restores_cooldown(self):
+        a = make_server("alpha-1")
+        self.store.update_state("alpha-1", active_job={"id":"job-1","server_id":"alpha-1","kind":"rescan","state":"running","actor":"operator-1","requested_unix":self.clock.now - 100,"started_unix":self.clock.now - 99,"finished_unix":None,"result_code":None})
+        svc = BlockingService([a], self.store); svc.release.set()
+        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=900)
+        active = self.store.load_state("alpha-1")["active_job"]
+        self.assertEqual(active["state"], "failed")
+        self.assertEqual(active["result_code"], "INTERRUPTED")
+        cooldown = jobs.request_rescan("alpha-1", "operator-1")
+        self.assertEqual(cooldown[0], 429)
+        self.assertEqual(cooldown[1]["error"], "COOLDOWN")
+
+    def test_completed_threads_are_removed_from_bounded_bookkeeping(self):
+        a = make_server("alpha-1")
+        svc = BlockingService([a], self.store); svc.release.set()
+        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0)
+        for i in range(3):
+            self.clock.now += 1
+            self.assertEqual(jobs.request_rescan("alpha-1", "operator-1")[0], 202)
+            jobs.wait_for_idle(timeout=2)
+            self.assertLessEqual(jobs.active_thread_count(), 0)
+
     def test_unknown_server_cooldown_and_bounded_audit_fields(self):
         a = make_server("alpha-1")
         svc = BlockingService([a], self.store)

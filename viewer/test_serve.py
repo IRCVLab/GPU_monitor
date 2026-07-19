@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import http.client
+import re
 import json
 import os
 import socket
@@ -84,14 +85,22 @@ class ApiServerTest(unittest.TestCase):
         return inv
 
     def request(self, method, path, body=None, headers=None):
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
         data = json.dumps(body).encode() if body is not None else None
         h = {"Content-Type":"application/json"} if body is not None else {}
-        if headers: h.update(headers)
-        conn.request(method, path, body=data, headers=h)
+        return self.request_raw(method, path, data, headers={**h, **(headers or {})})
+
+    def request_raw(self, method, path, data=None, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        conn.request(method, path, body=data, headers=headers or {})
         res = conn.getresponse(); raw = res.read(); hdrs = dict(res.getheaders()); conn.close()
         parsed = json.loads(raw.decode() or "{}") if raw else {}
         return res.status, hdrs, parsed
+
+    def cookie_value(self, headers):
+        cookie = headers.get("Set-Cookie", "")
+        m = re.search(r"storage_viz_session=([^;]+)", cookie)
+        self.assertIsNotNone(m, cookie)
+        return "storage_viz_session=" + m.group(1)
 
     def test_dev_sample_api_is_read_only_and_ai_routes_404(self):
         self.start_server()
@@ -118,16 +127,48 @@ class ApiServerTest(unittest.TestCase):
 
     def test_trusted_proxy_requires_loopback_exact_origin_operator_and_csrf(self):
         inv = self.write_inventory()
-        self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1"})
+        self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_DATA_DIR":str(self.sample_dir), "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1"})
         self.assertEqual(self.request("GET", "/api/session")[0], 401)
+        self.assertEqual(self.request("GET", "/api/servers")[0], 401)
+        self.assertEqual(self.request("GET", "/data/hinton.sample.json")[0], 401)
         code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"viewer-1"})
         self.assertEqual(code, 200); self.assertFalse(sess["can_rescan"])
-        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        viewer_cookie = self.cookie_value(headers)
+        self.assertIn("SameSite=Strict", headers.get("Set-Cookie", ""))
+        self.assertIn("Secure", headers.get("Set-Cookie", ""))
+        self.assertEqual(self.request("GET", "/api/servers", headers={"X-Forwarded-User":"viewer-1"})[0], 200)
+        self.assertEqual(self.request("GET", "/data/hinton.sample.json", headers={"X-Forwarded-User":"viewer-1"})[0], 200)
+        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"Cookie":viewer_cookie, "X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
         code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"operator-1"})
         self.assertTrue(sess["can_rescan"])
-        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://evil.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
-        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://storage.test"})[0], 403)
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 404)
+        operator_cookie = self.cookie_value(headers)
+        code2, headers2, sess2 = self.request("GET", "/api/session", headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1"})
+        self.assertEqual(code2, 200); self.assertEqual(sess2["csrf_token"], sess["csrf_token"])
+        self.assertNotIn("Set-Cookie", headers2)
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403, "POST without Cookie must fail before server lookup")
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":"storage_viz_session=bad", "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://evil.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":"bad"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 404)
+        self.assertEqual(self.request_raw("POST", "/api/servers/hinton/rescan", b"", headers={"Content-Type":"application/json", "Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 400)
+        for raw in (b"[]", b"not-json", b"{}{}", b"{\"command\":\"scan\"}", b"{\"path\":\"/tmp\"}"):
+            self.assertEqual(self.request_raw("POST", "/api/servers/hinton/rescan", raw, headers={"Content-Type":"application/json", "Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 400)
+
+
+    def test_expired_session_cookie_is_rejected_on_post(self):
+        inv = self.write_inventory()
+        self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1", "STORAGE_VIZ_SESSION_TTL_SECONDS":"1"})
+        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"operator-1"})
+        self.assertEqual(code, 200)
+        cookie = self.cookie_value(headers)
+        time.sleep(1.2)
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+
+    def test_operator_mode_without_allowed_origin_fails_startup(self):
+        inv = self.write_inventory()
+        self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1"}, expect_exit=True)
 
     def test_dev_sample_rejected_when_proxy_mode_not_loopback_or_combined_with_prod(self):
         self.start_server({"STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_BIND":"0.0.0.0"}, expect_exit=True)

@@ -103,8 +103,7 @@ class PollService:
     def manual_rescan(self, server_id: str) -> dict[str, Any]:
         server = self._require_server(server_id)
         lock = self._locks[server.id]
-        if not lock.acquire(blocking=False):
-            return self.store.load_state(server.id)
+        lock.acquire()
         try:
             return self._manual_rescan_locked(server)
         finally:
