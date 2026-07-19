@@ -699,6 +699,8 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   assert.strictEqual(project.getAttribute('role'), 'button', 'selectable/drillable treemap tiles must expose button semantics');
   assert.strictEqual(project.tabIndex, 0, 'selectable/drillable treemap tiles must be keyboard focusable');
   assert.strictEqual(project.getAttribute('aria-selected'), 'false', 'unselected selectable tiles must expose aria-selected=false');
+  assert.match(project.getAttribute('aria-label'), /Click or Enter drills into \/data\/project/, 'drillable treemap tile label must describe primary drill behavior');
+  assert.match(project.getAttribute('aria-label'), /Ctrl\/Command click or selection mode inspects \/data\/project/, 'drillable treemap tile label must describe modifier/selection-mode inspection');
   assert.ok(project.children.some(c => c.className === 'tm-cleanup-badge'), 'real-path tile should have a hidden selected-state badge');
   assert.ok(!other.dataset.cleanupPath, 'aggregate non-path tiles must not be selectable');
   assert.ok(!other.children.some(c => c.className === 'tm-cleanup-badge'), 'aggregate non-path tiles must not show cleanup controls');

@@ -8,6 +8,7 @@ TIMER="$DEPLOY/systemd/storage-viz-scan.timer"
 SUDOERS="$DEPLOY/sudoers/storage-viz-monitoring"
 INSTALL="$DEPLOY/install-agent.sh"
 DEPLOY_SCRIPT="$DEPLOY/deploy-agent.sh"
+VERIFY_LINUX="$DEPLOY/verify-linux.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
@@ -15,11 +16,28 @@ assert_file() { [[ -f "$1" ]] || fail "missing file: $1"; }
 assert_contains() { local file="$1" text="$2"; grep -Fqx "$text" "$file" || fail "$file missing exact line: $text"; }
 assert_grep() { local file="$1" pattern="$2" desc="$3"; grep -Eq "$pattern" "$file" || fail "$file missing $desc ($pattern)"; }
 assert_not_grep() { local file="$1" pattern="$2" desc="$3"; ! grep -Eq "$pattern" "$file" || fail "$file contains forbidden $desc ($pattern)"; }
+file_mode() {
+  if stat -c %a "$1" >/dev/null 2>&1; then
+    stat -c %a "$1"
+  else
+    stat -f %Lp "$1"
+  fi
+}
 
-for f in "$SERVICE" "$TIMER" "$SUDOERS" "$INSTALL" "$DEPLOY_SCRIPT"; do
+for f in "$SERVICE" "$TIMER" "$SUDOERS" "$INSTALL" "$DEPLOY_SCRIPT" "$VERIFY_LINUX"; do
   assert_file "$f"
 done
 pass "all Task 5 deploy assets exist"
+
+assert_grep "$VERIFY_LINUX" 'mktemp -d /tmp/storage-viz-verify\.XXXXXX' "unique temporary Linux verification directory"
+assert_grep "$VERIFY_LINUX" 'git ls-files' "tracked-files-only transfer contract"
+assert_grep "$VERIFY_LINUX" 'trap.*rm -rf --' "temporary verification cleanup trap"
+assert_grep "$VERIFY_LINUX" 'make -C scanner clean all test' "scanner build/test verification command"
+assert_grep "$VERIFY_LINUX" 'deploy/install-agent\.sh --dry-run' "agent installer dry-run verification command"
+assert_grep "$VERIFY_LINUX" 'linux-verification\.txt' "repository-owned Linux verification artifact"
+assert_grep "$VERIFY_LINUX" '/home/ircv/workspace/monitoring\*' "forbidden GPU Monitor workspace guard"
+assert_not_grep "$VERIFY_LINUX" 'sudo|sshpass|expect|(^|[^A-Z])password|/home/ircv/workspace/monitoring[^*]' "sudo, password helpers, or concrete private snapshot paths"
+pass "Linux verification wrapper has tracked-files-only temp execution contract"
 
 assert_contains "$TIMER" "OnUnitActiveSec=6h"
 assert_contains "$TIMER" "Persistent=true"
@@ -112,7 +130,7 @@ FAKE_LOG="$TMP/install.log" PATH="$FAKEBIN:$PATH" "$INSTALL" --dry-run --prefix 
 [[ -f "$DRY_PREFIX/etc/systemd/system/storage-viz-scan.timer" ]] || fail "dry-run did not render timer under temp prefix"
 [[ -f "$DRY_PREFIX/etc/sudoers.d/storage-viz-monitoring" ]] || fail "dry-run did not render sudoers under temp prefix"
 python3 -m json.tool "$DRY_PREFIX/etc/storage-viz/scanner.yaml" >/dev/null || fail "scanner config is not strict JSON-compatible"
-[[ "$(stat -f %Lp "$DRY_PREFIX/etc/storage-viz/scanner.yaml" 2>/dev/null || stat -c %a "$DRY_PREFIX/etc/storage-viz/scanner.yaml")" == "644" ]] || fail "scanner config mode is not 0644"
+[[ "$(file_mode "$DRY_PREFIX/etc/storage-viz/scanner.yaml")" == "644" ]] || fail "scanner config mode is not 0644"
 ! grep -q 'systemctl must not run' "$TMP/install.out" || fail "dry-run attempted systemctl"
 grep -q 'systemd-analyze' "$TMP/install.log" || fail "dry-run did not validate units when systemd-analyze is available"
 grep -q 'visudo' "$TMP/install.log" || fail "dry-run did not validate sudoers when visudo is available"
@@ -479,10 +497,10 @@ assert_contains "$RENDERED_UNIT" "Environment=STORAGE_VIZ_DATA_DIR=/srv/storage-
 assert_contains "$RENDERED_UNIT" "Environment=STORAGE_VIZ_STATE_DIR=/srv/storage-viz-state"
 assert_contains "$RENDERED_UNIT" "EnvironmentFile=-/srv/storage-viz-etc/dashboard.env"
 assert_contains "$RENDERED_UNIT" "ReadWritePaths=/srv/storage-viz-data /srv/storage-viz-state"
-[[ "$(stat -f %Lp "$RENDER_PREFIX/srv/storage-viz-etc/keys" 2>/dev/null || stat -c %a "$RENDER_PREFIX/srv/storage-viz-etc/keys")" == "750" ]] || fail "key directory mode is not 0750"
-[[ "$(stat -f %Lp "$RENDER_PREFIX/srv/storage-viz-etc/servers.json" 2>/dev/null || stat -c %a "$RENDER_PREFIX/srv/storage-viz-etc/servers.json")" == "640" ]] || fail "inventory mode is not 0640"
-[[ "$(stat -f %Lp "$RENDER_PREFIX/srv/storage-viz-etc/dashboard.env" 2>/dev/null || stat -c %a "$RENDER_PREFIX/srv/storage-viz-etc/dashboard.env")" == "640" ]] || fail "dashboard env mode is not 0640"
-[[ "$(stat -f %Lp "$RENDER_PREFIX/srv/storage-viz-etc/known_hosts" 2>/dev/null || stat -c %a "$RENDER_PREFIX/srv/storage-viz-etc/known_hosts")" == "644" ]] || fail "known_hosts mode is not 0644"
+[[ "$(file_mode "$RENDER_PREFIX/srv/storage-viz-etc/keys")" == "750" ]] || fail "key directory mode is not 0750"
+[[ "$(file_mode "$RENDER_PREFIX/srv/storage-viz-etc/servers.json")" == "640" ]] || fail "inventory mode is not 0640"
+[[ "$(file_mode "$RENDER_PREFIX/srv/storage-viz-etc/dashboard.env")" == "640" ]] || fail "dashboard env mode is not 0640"
+[[ "$(file_mode "$RENDER_PREFIX/srv/storage-viz-etc/known_hosts")" == "644" ]] || fail "known_hosts mode is not 0644"
 ! grep -q "^systemctl" "$RENDER_LOG" 2>/dev/null || fail "dry-run override rendering called systemctl"
 
 BAD_RENDER_PREFIX="$TMP/bad-render-prefix"
