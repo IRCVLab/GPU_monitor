@@ -30,14 +30,130 @@ done
 pass "all Task 5 deploy assets exist"
 
 assert_grep "$VERIFY_LINUX" 'mktemp -d /tmp/storage-viz-verify\.XXXXXX' "unique temporary Linux verification directory"
-assert_grep "$VERIFY_LINUX" 'git ls-files' "tracked-files-only transfer contract"
+assert_grep "$VERIFY_LINUX" 'git ls-files -z' "NUL-safe tracked-files-only transfer contract"
+assert_grep "$VERIFY_LINUX" 'validate_tar_members' "tar member validation before extraction"
 assert_grep "$VERIFY_LINUX" 'trap.*rm -rf --' "temporary verification cleanup trap"
 assert_grep "$VERIFY_LINUX" 'make -C scanner clean all test' "scanner build/test verification command"
 assert_grep "$VERIFY_LINUX" 'deploy/install-agent\.sh --dry-run' "agent installer dry-run verification command"
 assert_grep "$VERIFY_LINUX" 'linux-verification\.txt' "repository-owned Linux verification artifact"
 assert_grep "$VERIFY_LINUX" '/home/ircv/workspace/monitoring\*' "forbidden GPU Monitor workspace guard"
+assert_grep "$VERIFY_LINUX" 'validate_linux_host' "remote host validation"
 assert_not_grep "$VERIFY_LINUX" 'sudo|sshpass|expect|(^|[^A-Z])password|/home/ircv/workspace/monitoring[^*]' "sudo, password helpers, or concrete private snapshot paths"
 pass "Linux verification wrapper has tracked-files-only temp execution contract"
+
+VERIFY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/storage-viz-verify-test.XXXXXX")"
+trap 'rm -rf "$VERIFY_TMP"' EXIT
+VERIFY_FAKEBIN="$VERIFY_TMP/bin"
+mkdir -p "$VERIFY_FAKEBIN"
+cat > "$VERIFY_FAKEBIN/ssh" <<'FAKE'
+#!/usr/bin/env bash
+printf 'ssh' >> "${VERIFY_FAKE_LOG:?}"
+for arg in "$@"; do printf ' <%s>' "$arg" >> "$VERIFY_FAKE_LOG"; done
+printf '\n' >> "$VERIFY_FAKE_LOG"
+args=" $* "
+case "${VERIFY_SCENARIO:-success}" in
+  forbidden_workdir)
+    if [[ "$args" == *"mktemp -d /tmp/storage-viz-verify.XXXXXX"* ]]; then
+      printf 'remote_workdir_guard=rejected\n'
+      exit 63
+    fi
+    ;;
+  scp_cleanup_fail)
+    if [[ "$args" == *"mktemp -d /tmp/storage-viz-verify.XXXXXX"* ]]; then
+      printf '/tmp/storage-viz-verify.FAKE01\n'
+      exit 0
+    fi
+    if [[ "$args" == *"rm -rf --"* ]]; then
+      exit 44
+    fi
+    ;;
+  scp_fail|remote_fail|cleanup_fail|success)
+    if [[ "$args" == *"mktemp -d /tmp/storage-viz-verify.XXXXXX"* ]]; then
+      printf '/tmp/storage-viz-verify.FAKE01\n'
+      exit 0
+    fi
+    if [[ "$args" == *"rm -rf --"* ]]; then
+      printf 'cleanup-call\n' >> "${VERIFY_CLEANUP_LOG:?}"
+      exit 0
+    fi
+    if [[ "$args" == *"VERIFY_TMP="*"bash -s"* ]]; then
+      case "${VERIFY_SCENARIO:-success}" in
+        remote_fail)
+          printf 'command=fake-remote\nexit_code=7\nremote_cleanup=removed\n'
+          exit 7
+          ;;
+        cleanup_fail)
+          printf 'command=fake-remote\nexit_code=0\nremote_cleanup=failed\n'
+          exit 0
+          ;;
+        *)
+          printf 'command=fake-remote\nexit_code=0\nremote_cleanup=removed\n'
+          exit 0
+          ;;
+      esac
+    fi
+    ;;
+esac
+exit 0
+FAKE
+cat > "$VERIFY_FAKEBIN/scp" <<'FAKE'
+#!/usr/bin/env bash
+printf 'scp' >> "${VERIFY_FAKE_LOG:?}"
+for arg in "$@"; do printf ' <%s>' "$arg" >> "$VERIFY_FAKE_LOG"; done
+printf '\n' >> "$VERIFY_FAKE_LOG"
+if [[ "${VERIFY_SCENARIO:-success}" == scp_fail || "${VERIFY_SCENARIO:-success}" == scp_cleanup_fail ]]; then
+  exit 55
+fi
+exit 0
+FAKE
+chmod +x "$VERIFY_FAKEBIN/ssh" "$VERIFY_FAKEBIN/scp"
+
+run_verify_fake() {
+  local scenario="$1" host="${2:-good.example}" rc
+  rm -f "$VERIFY_TMP/fake.log" "$VERIFY_TMP/cleanup.log" "$ROOT/output/verification/linux-verification.txt"
+  set +e
+  VERIFY_SCENARIO="$scenario" VERIFY_FAKE_LOG="$VERIFY_TMP/fake.log" VERIFY_CLEANUP_LOG="$VERIFY_TMP/cleanup.log" \
+    PATH="$VERIFY_FAKEBIN:$PATH" STORAGE_VIZ_LINUX_HOST="$host" STORAGE_VIZ_LINUX_PORT=2222 \
+    "$VERIFY_LINUX" --remote >"$VERIFY_TMP/$scenario.out" 2>"$VERIFY_TMP/$scenario.err"
+  rc=$?
+  set -e
+  printf '%s' "$rc" > "$VERIFY_TMP/$scenario.rc"
+}
+
+run_verify_fake success '-oProxyCommand=bad'
+[[ "$(cat "$VERIFY_TMP/success.rc")" != "0" ]] || fail "verify-linux accepted option-injection host"
+[[ ! -s "$VERIFY_TMP/fake.log" ]] || fail "verify-linux contacted ssh/scp before rejecting unsafe host"
+pass "verify-linux rejects unsafe remote host before transport"
+
+run_verify_fake scp_fail
+[[ "$(cat "$VERIFY_TMP/scp_fail.rc")" != "0" ]] || fail "verify-linux succeeded after scp failure"
+grep -Fq 'remote_cleanup=removed' "$ROOT/output/verification/linux-verification.txt" || fail "scp failure did not record truthful remote cleanup result"
+grep -Fq 'overall_exit_code=2' "$ROOT/output/verification/linux-verification.txt" || fail "scp failure did not record nonzero overall result"
+pass "verify-linux records cleanup after scp failure"
+
+run_verify_fake scp_cleanup_fail
+[[ "$(cat "$VERIFY_TMP/scp_cleanup_fail.rc")" != "0" ]] || fail "verify-linux succeeded after scp cleanup failure"
+grep -Fq 'remote_cleanup=failed' "$ROOT/output/verification/linux-verification.txt" || fail "scp cleanup failure was not recorded"
+! grep -Fq 'overall_exit_code=0' "$ROOT/output/verification/linux-verification.txt" || fail "scp cleanup failure produced zero overall result"
+pass "verify-linux records scp cleanup failure"
+
+run_verify_fake remote_fail
+[[ "$(cat "$VERIFY_TMP/remote_fail.rc")" != "0" ]] || fail "verify-linux succeeded after remote command failure"
+grep -Fq 'remote_cleanup=removed' "$ROOT/output/verification/linux-verification.txt" || fail "remote command failure did not preserve cleanup result"
+grep -Fq 'overall_exit_code=7' "$ROOT/output/verification/linux-verification.txt" || fail "remote command failure did not record nonzero overall result"
+pass "verify-linux records cleanup after remote command failure"
+
+run_verify_fake forbidden_workdir
+[[ "$(cat "$VERIFY_TMP/forbidden_workdir.rc")" != "0" ]] || fail "verify-linux succeeded from forbidden remote workdir"
+grep -Fq 'remote_workdir_guard=rejected' "$ROOT/output/verification/linux-verification.txt" || fail "forbidden workdir rejection was not recorded"
+grep -Fq 'overall_exit_code=63' "$ROOT/output/verification/linux-verification.txt" || fail "forbidden workdir did not record guard exit code"
+pass "verify-linux records forbidden remote workdir rejection"
+
+run_verify_fake cleanup_fail
+[[ "$(cat "$VERIFY_TMP/cleanup_fail.rc")" != "0" ]] || fail "verify-linux succeeded when remote cleanup failed"
+grep -Fq 'remote_cleanup=failed' "$ROOT/output/verification/linux-verification.txt" || fail "cleanup failure was not recorded"
+! grep -Fq 'overall_exit_code=0' "$ROOT/output/verification/linux-verification.txt" || fail "cleanup failure produced zero overall result"
+pass "verify-linux fails when remote cleanup fails"
 
 assert_contains "$TIMER" "OnUnitActiveSec=6h"
 assert_contains "$TIMER" "Persistent=true"
