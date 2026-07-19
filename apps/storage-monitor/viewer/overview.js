@@ -1,6 +1,10 @@
 "use strict";
 
 const SAFE_SERVER_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+function isSafeServerId(value) {
+  return typeof value === "string" && SAFE_SERVER_ID_RE.test(value) && value !== "." && value !== "..";
+}
 const KNOWN_DETAIL_TABS = new Set(["treemap", "users", "topfiles", "stale"]);
 const DEFAULT_CAPACITY_THRESHOLDS = Object.freeze({
   warning_used_pct: 80,
@@ -161,14 +165,14 @@ function parseRoute(locationLike) {
   const hash = String((locationLike && locationLike.hash) || "").replace(/^#/, "");
   const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
   const rawServerId = params.get("server") || "";
-  const serverId = SAFE_SERVER_ID_RE.test(rawServerId) ? rawServerId : null;
+  const serverId = isSafeServerId(rawServerId) ? rawServerId : null;
   const tab = KNOWN_DETAIL_TABS.has(hash) ? hash : "treemap";
   return { serverId, tab };
 }
 
 function buildRouteHref(pathname, route) {
   const safePath = pathname || "/";
-  if (!route || !route.serverId || !SAFE_SERVER_ID_RE.test(route.serverId)) return safePath;
+  if (!route || !route.serverId || !isSafeServerId(route.serverId)) return safePath;
   const tab = KNOWN_DETAIL_TABS.has(route.tab) ? route.tab : "treemap";
   return safePath + "?server=" + encodeURIComponent(route.serverId) + "#" + tab;
 }
@@ -262,6 +266,7 @@ function renderOverviewList(container, rows, handlers = {}) {
 
 const overviewExports = {
   SAFE_SERVER_ID_RE,
+  isSafeServerId,
   KNOWN_DETAIL_TABS,
   DEFAULT_CAPACITY_THRESHOLDS,
   compactBytes,

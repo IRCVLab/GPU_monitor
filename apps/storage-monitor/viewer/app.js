@@ -13,6 +13,7 @@ let resizeTimer = null;
 let rescanTimer = null;
 let rescanSawActive = false;
 let detailLoadGeneration = 0;
+let detailRequestVersions = new Map();
 
 /* =========================================================================
    Wiring
@@ -263,8 +264,19 @@ function isCurrentDetailGeneration(serverId, generation) {
   return currentServerId === serverId && detailLoadGeneration === generation;
 }
 
-async function ensureDetailLoaded(serverId, forceReload, generationOverride) {
+function beginDetailRequestVersion(serverId) {
+  const next = (detailRequestVersions.get(serverId) || 0) + 1;
+  detailRequestVersions.set(serverId, next);
+  return next;
+}
+
+function isCurrentDetailRequestVersion(serverId, version) {
+  return detailRequestVersions.get(serverId) === version;
+}
+
+async function ensureDetailLoaded(serverId, forceReload, generationOverride, requestVersionOverride) {
   const generation = generationOverride == null ? detailLoadGeneration : generationOverride;
+  const requestVersion = requestVersionOverride == null ? beginDetailRequestVersion(serverId) : requestVersionOverride;
   const summary = currentOverviewSummaries.find(item => item.id === serverId);
   currentServerSummary = summary || null;
   if (!summary) {
@@ -275,10 +287,12 @@ async function ensureDetailLoaded(serverId, forceReload, generationOverride) {
   if (!snapshot) {
     try {
       snapshot = await currentDetailLoader()(serverId);
+      if (!isCurrentDetailRequestVersion(serverId, requestVersion)) return;
       snapshotCache.set(serverId, snapshot);
       updateSnapshotEntry(serverId, snapshot, null);
       renderOverview();
     } catch (error) {
+      if (!isCurrentDetailRequestVersion(serverId, requestVersion)) return;
       console.error("[storage-viz] failed to load snapshot", serverId, error);
       updateSnapshotEntry(serverId, null, error);
       renderOverview();
@@ -297,7 +311,7 @@ async function ensureDetailLoaded(serverId, forceReload, generationOverride) {
 function applyRouteState(route, options) {
   const opts = options || {};
   const safeRoute = {
-    serverId: route && route.serverId && SAFE_SERVER_ID_RE.test(route.serverId) ? route.serverId : null,
+    serverId: route && route.serverId && isSafeServerId(route.serverId) ? route.serverId : null,
     tab: route && route.tab ? route.tab : "treemap",
   };
   if (!opts.skipHistory) syncHistory(safeRoute, !!opts.replaceHistory);
@@ -309,7 +323,10 @@ function applyRouteState(route, options) {
   setShellMode(!!safeRoute.serverId);
   if (!safeRoute.serverId) return safeRoute;
   showTab(safeRoute.tab, { updateRoute: false });
-  if (!opts.skipDataLoad) void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload, detailLoadGeneration);
+  if (!opts.skipDataLoad) {
+    const requestVersion = beginDetailRequestVersion(safeRoute.serverId);
+    void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload, detailLoadGeneration, requestVersion);
+  }
   return safeRoute;
 }
 
@@ -529,7 +546,13 @@ async function init() {
 if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", init);
 
 function getCurrentDetailDebugState() {
-  return { currentServerId, currentServerSummary, data: DATA, detailLoadGeneration };
+  return {
+    currentServerId,
+    currentServerSummary,
+    data: DATA,
+    detailLoadGeneration,
+    detailRequestVersions: new Map(detailRequestVersions),
+  };
 }
 
 if (typeof globalThis !== "undefined") Object.assign(globalThis, {

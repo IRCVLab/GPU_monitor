@@ -159,6 +159,19 @@ function textTree(node) {
 }
 
 function numericPx(value) { return Number(String(value || '0').replace(/px$/, '')); }
+async function withMutedConsole(run) {
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
+  try {
+    return await run();
+  } finally {
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+}
+
 function deferred() {
   let resolve;
   let reject;
@@ -308,6 +321,7 @@ async function testBootstrapDetectionIsExplicitAndSequential() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.loadBootstrapDataWith, 'function', 'bootstrap detection helper must be exposed for explicit mode tests');
 
+  return withMutedConsole(async () => {
   let staticCalls = 0;
   let summariesCalls = 0;
   const staticBootstrap = { mode: 'static', session: {}, summaries: [{ id: 'sample' }], snapshots: [] };
@@ -341,6 +355,7 @@ async function testBootstrapDetectionIsExplicitAndSequential() {
     loadServerSnapshot: async () => ({})
   }), /servers unavailable/, 'after /api/session succeeds, later API failures must remain API failures');
   assert.strictEqual(apiStaticCalls, 0, 'post-session API failures must never fall back to static samples');
+  });
 }
 
 async function testDetailNavigationGuardsAgainstStaleAsyncCompletion() {
@@ -349,6 +364,7 @@ async function testDetailNavigationGuardsAgainstStaleAsyncCompletion() {
   assert.strictEqual(typeof viewer.ensureDetailLoaded, 'function', 'detail loader must be exposed for race regressions');
   assert.strictEqual(typeof viewer.getCurrentDetailDebugState, 'function', 'detail debug getter must be exposed for race regressions');
 
+  return withMutedConsole(async () => {
   const alpha = deferred();
   const beta = deferred();
   viewer.loadSnapshotForCurrentSource = (serverId) => {
@@ -393,6 +409,91 @@ async function testDetailNavigationGuardsAgainstStaleAsyncCompletion() {
   slowBeta.resolve({ server_id: 'beta-2', hostname: 'beta-host-2', mounts: [], users: [], top_files: [], stale: [] });
   await flushPromises();
   assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'beta-host-2');
+  });
+}
+
+
+function overviewRowText(viewer, serverId) {
+  const list = viewer.document.getElementById('overviewList');
+  const item = (list.children || []).find(child => child.children && child.children[0] && child.children[0].dataset.serverId === serverId);
+  return item ? textTree(item) : '';
+}
+
+async function testOlderSameServerSuccessCannotOverrideNewerSuccess() {
+  const viewer = loadViewer();
+  const older = deferred();
+  const newer = deferred();
+  let callCount = 0;
+  viewer.loadSnapshotForCurrentSource = (serverId) => {
+    assert.strictEqual(serverId, 'alpha-1');
+    callCount += 1;
+    return callCount === 1 ? older.promise : newer.promise;
+  };
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+  });
+  viewer.renderOverview();
+
+  await withMutedConsole(async () => {
+    viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
+    viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
+    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-new', mounts: [{ path: '/data', df_use_pct: 91, df_avail: 700 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    await flushPromises();
+    assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-new', 'newer alpha request should win the detail data');
+    assert(overviewRowText(viewer, 'alpha-1').includes('91%'), 'overview should reflect the newer alpha snapshot');
+
+    older.resolve({ server_id: 'alpha-1', hostname: 'alpha-old', mounts: [{ path: '/data', df_use_pct: 11, df_avail: 900 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    await flushPromises();
+  });
+
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-new', 'obsolete older alpha success must not replace newer detail data');
+  assert(overviewRowText(viewer, 'alpha-1').includes('91%'), 'obsolete older alpha success must not rewrite overview status or mount metrics');
+  viewer.navigateToOverview({ skipHistory: true });
+  viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-new', 'obsolete older alpha success must not replace cached snapshot data');
+}
+
+async function testOlderSameServerFailureCannotOverrideNewerSuccess() {
+  const viewer = loadViewer();
+  const older = deferred();
+  const newer = deferred();
+  let callCount = 0;
+  viewer.loadSnapshotForCurrentSource = (serverId) => {
+    assert.strictEqual(serverId, 'alpha-1');
+    callCount += 1;
+    return callCount === 1 ? older.promise : newer.promise;
+  };
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+  });
+  viewer.renderOverview();
+
+  await withMutedConsole(async () => {
+    viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
+    viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
+    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-fresh', mounts: [{ path: '/data', df_use_pct: 77, df_avail: 800 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    await flushPromises();
+    assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-fresh');
+    older.reject(new Error('stale alpha failed'));
+    await flushPromises();
+  });
+
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-fresh', 'obsolete older alpha failure must not clear newer detail data');
+  assert.strictEqual(viewer.document.getElementById('detailError').hidden, true, 'obsolete older alpha failure must not surface an error');
+  assert(!overviewRowText(viewer, 'alpha-1').includes('불러오기 실패'), 'obsolete older alpha failure must not rewrite overview status to load failure');
+  viewer.navigateToOverview({ skipHistory: true });
+  viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-fresh', 'obsolete older alpha failure must not replace cached snapshot data');
 }
 
 function testDeleteCommandQuoting() {
@@ -559,6 +660,8 @@ async function main() {
   testRouteNavigationAndBackShellContract();
   await testBootstrapDetectionIsExplicitAndSequential();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
+  await testOlderSameServerSuccessCannotOverrideNewerSuccess();
+  await testOlderSameServerFailureCannotOverrideNewerSuccess();
   testDeleteCommandQuoting();
   testTreemapHidesMicroTilesInsteadOfInflatingThem();
   testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes();
