@@ -9,7 +9,7 @@ from typing import Any, Mapping, Protocol
 from collector.inventory import Server
 from collector import snapshot
 from collector.store import CentralStore
-from collector.transport import TransportError, status_tuple, validate_status_envelope
+from collector.transport import ACTIVE_SCAN_STATES, TransportError, status_tuple, validate_status_envelope
 
 DEFAULT_POLL_INTERVAL_SECONDS = 900
 LOCAL_SCAN_CADENCE_SECONDS = 6 * 60 * 60
@@ -25,6 +25,7 @@ class Clock(Protocol):
 class Transport(Protocol):
     def fetch_status(self, server: Server) -> Mapping[str, Any]: ...
     def fetch_snapshot(self, server: Server, expected_status: Mapping[str, Any] | None = None) -> tuple[Mapping[str, Any], bytes]: ...
+    def scan_active_state(self, server: Server) -> str: ...
     def start_rescan(self, server: Server) -> None: ...
 
 
@@ -109,8 +110,18 @@ class PollService:
         finally:
             lock.release()
 
+    def scan_active_state(self, server_id: str) -> str:
+        server = self._require_server(server_id)
+        return self.transport.scan_active_state(server)
+
+    def remote_scan_is_active(self, server_id: str) -> bool:
+        return self.scan_active_state(server_id) in ACTIVE_SCAN_STATES
+
     def _manual_rescan_locked(self, server: Server) -> dict[str, Any]:
         try:
+            state = self.transport.scan_active_state(server)
+            if state in ACTIVE_SCAN_STATES:
+                return self._mark_rescan_failed(server.id, TransportError("ACTIVE_JOB", "remote scan already active"))
             self.transport.start_rescan(server)
         except TransportError as exc:
             if exc.code == "RESCAN_FAILED":

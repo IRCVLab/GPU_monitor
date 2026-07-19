@@ -330,4 +330,3 @@ def _normalize_mountpoint(path: str) -> str:
 def _choice_key(entry: MountEntry, scan_root: str) -> Tuple[int, int, str]:
     normalized = _normalize_mountpoint(scan_root)
     return (entry.mount_id, len(normalized), normalized)
-

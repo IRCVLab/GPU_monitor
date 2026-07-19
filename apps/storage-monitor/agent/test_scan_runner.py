@@ -12,12 +12,12 @@ def mi(mid, parent, dev, root, mountpoint, options, fstype, source, super_option
     return f"{mid} {parent} {dev} {root} {mountpoint} {options} - {fstype} {source} {super_options}"
 
 
-def raw_payload(path="/home", errors=0):
+def raw_payload(path="/home", errors=0, started=100):
     return {
         "schema_version": 1,
         "hostname": "host-a",
         "scanner_version": "0.1.0",
-        "scan_started_unix": 100,
+        "scan_started_unix": started,
         "scan_duration_sec": 5.2,
         "run_as_root": False,
         "mounts": [{
@@ -205,8 +205,9 @@ class ScanRunnerTests(unittest.TestCase):
             tmp = pathlib.Path(td)
             config_path, _ = self.write_config(tmp)
             mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            starts = iter((100, 101, 102))
             def fake(argv, **kwargs):
-                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home", started=next(starts))), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
 
             results = [scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(t)) for t in (200, 201, 202)]
@@ -222,6 +223,27 @@ class ScanRunnerTests(unittest.TestCase):
             self.assertEqual(status["config_digest"], scan_runner.load_config(config_path).config_digest)
             self.assertEqual(sorted(p.name for p in (tmp / "data" / "snapshots").glob("*.json")), [results[-2].snapshot_path.name, results[-1].snapshot_path.name])
 
+
+    def test_run_once_snapshot_and_status_validate_with_collector_without_hand_editing(self):
+        from collector import snapshot
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            def fake(argv, **kwargs):
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                return scan_runner.CompletedScan(0, "", "")
+
+            result = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(200))
+            status = json.loads(result.status_path.read_text(encoding="utf-8"))
+            data = result.snapshot_path.read_bytes()
+            desired = snapshot.DesiredServer("host-a", scan_runner.load_config(config_path).config_digest)
+
+            validated = snapshot.validate_download(status, data, desired)
+
+            self.assertEqual(validated.generation, "host-a-100-v1.json")
+            self.assertEqual(validated.payload["scan_generation"], "host-a-100-v1")
+            self.assertEqual(validated.payload["config_digest"], desired.config_digest)
 
     def test_scan_finished_unix_is_captured_after_scanner_and_enrichment(self):
         with tempfile.TemporaryDirectory() as td:
@@ -243,7 +265,7 @@ class ScanRunnerTests(unittest.TestCase):
             status = json.loads((tmp / "data" / "scan-status.json").read_text(encoding="utf-8"))
 
             self.assertEqual(events, ["scanner-ran", "clock-read"])
-            self.assertEqual(result.generation, "host-a-222-v1")
+            self.assertEqual(result.generation, "host-a-100-v1")
             self.assertEqual(payload["scan_finished_unix"], 222)
             self.assertEqual(status["scan_finished_unix"], 222)
 
@@ -274,15 +296,16 @@ class ScanRunnerTests(unittest.TestCase):
             tmp = pathlib.Path(td)
             config_path, _ = self.write_config(tmp)
             mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            starts = iter((100, 200, 300))
             def fake(argv, **kwargs):
-                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home", started=next(starts))), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
 
-            first = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(100, 101))
-            second = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(200, 201))
+            first = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(101))
+            second = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(201))
             os.utime(first.snapshot_path, (999999999, 999999999))
             os.utime(second.snapshot_path, (1, 1))
-            third = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(300, 301))
+            third = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(301))
             status = json.loads((tmp / "data" / "scan-status.json").read_text(encoding="utf-8"))
 
             retained = sorted(p.name for p in (tmp / "data" / "snapshots").glob("*.json"))
@@ -856,12 +879,13 @@ class ScanRunnerTests(unittest.TestCase):
             tmp = pathlib.Path(td)
             config_path, _ = self.write_config(tmp)
             mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            starts = iter((2000, 2001, 2002))
             def fake(argv, **kwargs):
-                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home", started=next(starts))), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
 
-            first = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2000))
-            second = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2001))
+            first = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2005))
+            second = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2006))
             status_path = tmp / "data" / "scan-status.json"
             previous_status_text = status_path.read_text(encoding="utf-8")
             previous_status = json.loads(previous_status_text)
@@ -894,12 +918,13 @@ class ScanRunnerTests(unittest.TestCase):
             tmp = pathlib.Path(td)
             config_path, _ = self.write_config(tmp)
             mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            starts = iter((2100, 2101, 2102))
             def fake(argv, **kwargs):
-                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home", started=next(starts))), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
 
-            first = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2100))
-            second = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2101))
+            first = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2105))
+            second = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2106))
             status_path = tmp / "data" / "scan-status.json"
             snapshots_dir = tmp / "data" / "snapshots"
             previous_status_text = status_path.read_text(encoding="utf-8")
@@ -915,7 +940,7 @@ class ScanRunnerTests(unittest.TestCase):
                 return original_fsync_dir(path)
             scan_runner._fsync_dir = fail_status_dir_once
             try:
-                result = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2102))
+                result = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2107))
             finally:
                 scan_runner._fsync_dir = original_fsync_dir
 

@@ -211,12 +211,13 @@ def run_once(
             scan_duration_sec = finished_unix - started_unix
             if scan_duration_sec < 0:
                 raise ValueError("scan_finished_unix precedes scan_started_unix")
-            generation = _unique_generation(snapshots_dir, cfg.server_id, finished_unix)
+            generation = _generation_name(cfg.server_id, started_unix)
             payload["server_id"] = cfg.server_id
             payload["scan_started_unix"] = started_unix
             payload["scan_finished_unix"] = finished_unix
             payload["scan_duration_sec"] = scan_duration_sec
             payload["scan_generation"] = generation
+            payload["config_digest"] = cfg.config_digest
         except Exception as exc:
             _unlink_quiet(raw_path)
             return RunResult("failed", error=f"invalid scanner output: {exc}")
@@ -630,14 +631,8 @@ def _nonnegative_int(value: Any, name: str) -> int:
     return value
 
 
-def _unique_generation(snapshots_dir: pathlib.Path, server_id: str, finished_unix: int) -> str:
-    base = f"{server_id}-{finished_unix}-v1"
-    candidate = base
-    counter = 2
-    while (snapshots_dir / f"{candidate}.json").exists():
-        candidate = f"{base}-{counter}"
-        counter += 1
-    return candidate
+def _generation_name(server_id: str, started_unix: int) -> str:
+    return f"{server_id}-{started_unix}-v1"
 
 
 def _ensure_managed_dir(path: pathlib.Path) -> None:

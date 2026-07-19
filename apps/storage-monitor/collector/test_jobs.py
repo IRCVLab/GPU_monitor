@@ -37,6 +37,14 @@ class BlockingService:
         self.entered = threading.Event()
         self.release = threading.Event()
         self.calls = []
+        self.active_state = "inactive"
+        self.active_state_calls = []
+        self.active_state_error = None
+    def scan_active_state(self, server_id):
+        self.active_state_calls.append(server_id)
+        if self.active_state_error:
+            raise self.active_state_error
+        return self.active_state
     def manual_rescan(self, server_id):
         self.calls.append(server_id)
         self.entered.set()
@@ -67,6 +75,40 @@ class JobsTest(unittest.TestCase):
         svc.release.set()
         jobs.wait_for_idle(timeout=2)
 
+
+    def test_remote_active_scan_rejects_without_consuming_cooldown_or_starting_job(self):
+        a = make_server("alpha-1")
+        svc = BlockingService([a], self.store); svc.release.set(); svc.active_state = "active"
+        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=900)
+
+        active = jobs.request_rescan("alpha-1", "operator-1")
+
+        self.assertEqual(active[0], 409)
+        self.assertEqual(active[1]["error"], "ACTIVE_JOB")
+        self.assertEqual(svc.active_state_calls, ["alpha-1"])
+        self.assertEqual(svc.calls, [])
+        self.assertIsNone(self.store.load_state("alpha-1").get("active_job"))
+        self.assertEqual(jobs.audit_events()[-1]["result_code"], "ACTIVE_JOB")
+        svc.active_state = "inactive"
+        accepted = jobs.request_rescan("alpha-1", "operator-1")
+        self.assertEqual(accepted[0], 202)
+        jobs.wait_for_idle(timeout=2)
+
+    def test_remote_active_scan_guard_allows_inactive_and_blocks_unknown_query_result(self):
+        from collector.transport import TransportError
+        a = make_server("alpha-1")
+        svc = BlockingService([a], self.store); svc.release.set(); svc.active_state = "inactive"
+        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0)
+        accepted = jobs.request_rescan("alpha-1", "operator-1")
+        self.assertEqual(accepted[0], 202)
+        jobs.wait_for_idle(timeout=2)
+        self.assertEqual(svc.calls, ["alpha-1"])
+
+        svc.active_state_error = TransportError("BAD_ACTIVE_STATE", "bad state")
+        failed = jobs.request_rescan("alpha-1", "operator-1")
+        self.assertEqual(failed[0], 503)
+        self.assertEqual(failed[1]["error"], "ACTIVE_STATE_FAILED")
+        self.assertEqual(svc.calls, ["alpha-1"])
 
     def test_restart_reconciles_persisted_running_job_to_failed_and_restores_cooldown(self):
         a = make_server("alpha-1")
