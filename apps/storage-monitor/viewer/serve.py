@@ -2,6 +2,7 @@
 """No-cache HTTP server and bounded API for the storage-viz dashboard."""
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
 import hmac
@@ -15,6 +16,7 @@ import shutil
 import socket
 import socketserver
 import sys
+import time
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from typing import Any, Mapping
@@ -39,6 +41,7 @@ DEV_SAMPLE_DIR = os.environ.get("STORAGE_VIZ_DEV_SAMPLE_DIR", "").strip()
 STATE_DIR = Path(os.environ.get("STORAGE_VIZ_STATE_DIR", PROJECT_ROOT / ".storage-viz-state")).resolve()
 INVENTORY_PATH = os.environ.get("STORAGE_VIZ_INVENTORY", "").strip()
 CSRF_SECRET = os.environ.get("STORAGE_VIZ_CSRF_SECRET", secrets.token_hex(32))
+SESSION_TTL_SECONDS = int(os.environ.get("STORAGE_VIZ_SESSION_TTL_SECONDS", "3600"))
 COOLDOWN_SECONDS = int(os.environ.get("STORAGE_VIZ_RESCAN_COOLDOWN_SECONDS", "900"))
 MAX_CONCURRENT_RESCANS = int(os.environ.get("STORAGE_VIZ_RESCAN_MAX_CONCURRENT", "2"))
 
@@ -51,6 +54,8 @@ if TRUSTED_PROXY and not _is_loopback(BIND):
     raise SystemExit("trusted-proxy mode requires a loopback bind")
 if TRUSTED_PROXY and DEV_SAMPLE_DIR:
     raise SystemExit("dev sample mode is rejected in trusted-proxy production mode")
+if TRUSTED_PROXY and OPERATORS and not ALLOWED_ORIGINS:
+    raise SystemExit("trusted-proxy operator mode requires at least one exact allowed origin")
 
 
 class _DevSampleService:
@@ -108,8 +113,67 @@ else:
     service = None
 
 
-def _csrf_token(actor: str) -> str:
-    return hmac.new(CSRF_SECRET.encode("utf-8"), actor.encode("utf-8"), hashlib.sha256).hexdigest()
+def _sign(text: str) -> str:
+    return hmac.new(CSRF_SECRET.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _make_session_cookie(actor: str, now: int | None = None) -> str:
+    ts = int(time.time()) if now is None else now
+    payload = {"actor": actor, "iat": ts, "exp": ts + SESSION_TTL_SECONDS, "nonce": secrets.token_hex(16)}
+    encoded = _b64(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    return encoded + "." + _sign(encoded)
+
+
+def _parse_cookies(header: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for part in header.split(";"):
+        if "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if name and name not in out:
+            out[name] = value
+    return out
+
+
+def _validate_session_cookie(value: str, actor: str, now: int | None = None) -> dict[str, Any] | None:
+    if not isinstance(value, str) or len(value) > 1024 or "." not in value:
+        return None
+    encoded, sig = value.rsplit(".", 1)
+    if not encoded or not hmac.compare_digest(_sign(encoded), sig):
+        return None
+    try:
+        payload = json.loads(_unb64(encoded).decode("utf-8"))
+    except Exception:
+        return None
+    ts = int(time.time()) if now is None else now
+    if not isinstance(payload, dict) or set(payload) != {"actor", "iat", "exp", "nonce"}:
+        return None
+    if payload.get("actor") != actor:
+        return None
+    exp = payload.get("exp")
+    iat = payload.get("iat")
+    nonce = payload.get("nonce")
+    if not isinstance(exp, int) or isinstance(exp, bool) or not isinstance(iat, int) or isinstance(iat, bool):
+        return None
+    if exp <= ts or iat > ts or exp - iat > max(SESSION_TTL_SECONDS, 1):
+        return None
+    if not isinstance(nonce, str) or len(nonce) != 32 or any(c not in "0123456789abcdef" for c in nonce):
+        return None
+    return payload
+
+
+def _csrf_token(session_cookie: str) -> str:
+    return hmac.new(CSRF_SECRET.encode("utf-8"), ("csrf:" + session_cookie).encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -144,22 +208,44 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         actor = self._actor()
         if actor is None:
             return 401, {"authenticated": False, "can_rescan": False}, None
-        can_rescan = RESCAN_API_ENABLED and actor in OPERATORS
-        token = _csrf_token(actor)
-        return 200, {"authenticated": TRUSTED_PROXY, "actor": actor, "can_rescan": can_rescan, "csrf_token": token}, f"storage_viz_csrf={token}; Path=/; SameSite=Lax; HttpOnly"
+        cookies = _parse_cookies(self.headers.get("Cookie", ""))
+        cookie_value = cookies.get("storage_viz_session")
+        if cookie_value and _validate_session_cookie(cookie_value, actor) is not None:
+            new_cookie = None
+        else:
+            cookie_value = _make_session_cookie(actor)
+            attrs = "Path=/; SameSite=Strict; HttpOnly; Secure" if TRUSTED_PROXY else "Path=/; SameSite=Lax; HttpOnly"
+            new_cookie = f"storage_viz_session={cookie_value}; {attrs}"
+        can_rescan = RESCAN_API_ENABLED and actor in OPERATORS and bool(ALLOWED_ORIGINS)
+        token = _csrf_token(cookie_value)
+        return 200, {"authenticated": TRUSTED_PROXY, "actor": actor, "can_rescan": can_rescan, "csrf_token": token}, new_cookie
+
+    def _require_read_auth(self) -> tuple[int, dict[str, Any]] | None:
+        if not TRUSTED_PROXY:
+            return None
+        actor = self._actor()
+        if actor is None:
+            return 401, {"authenticated": False, "error": "AUTH_REQUIRED"}
+        return None
 
     def _require_post_auth(self) -> tuple[int, dict[str, Any], str | None]:
-        code, sess, _cookie = self._session()
-        if code != 200:
-            return code, sess, None
-        if not sess.get("can_rescan"):
+        actor = self._actor()
+        if actor is None:
+            return 401, {"authenticated": False, "error": "AUTH_REQUIRED"}, None
+        if not (RESCAN_API_ENABLED and actor in OPERATORS and ALLOWED_ORIGINS):
             return 403, {"error": "FORBIDDEN"}, None
         origin = self.headers.get("Origin", "")
         if not origin or origin not in ALLOWED_ORIGINS:
             return 403, {"error": "BAD_ORIGIN"}, None
-        if self.headers.get("X-CSRF-Token", "") != sess.get("csrf_token"):
+        cookies = _parse_cookies(self.headers.get("Cookie", ""))
+        cookie_value = cookies.get("storage_viz_session", "")
+        if _validate_session_cookie(cookie_value, actor) is None:
+            return 403, {"error": "BAD_SESSION"}, None
+        expected = _csrf_token(cookie_value)
+        supplied = self.headers.get("X-CSRF-Token", "")
+        if not supplied or not hmac.compare_digest(supplied, expected):
             return 403, {"error": "BAD_CSRF"}, None
-        return 200, sess, str(sess["actor"])
+        return 200, {"actor": actor}, actor
 
     def _api_parts(self) -> list[str] | None:
         parsed = urlsplit(self.path)
@@ -181,6 +267,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"supported": False, "scanning": False, "message": "Legacy local rescan endpoint is disabled."})
         data_path = self._data_path()
         if data_path is not None:
+            auth_error = self._require_read_auth()
+            if auth_error is not None:
+                return self._json(auth_error[1], auth_error[0])
             return self._serve_data_file(data_path)
         super().do_GET()
 
@@ -200,6 +289,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if parts == ["api", "session"]:
             code, obj, cookie = self._session()
             return self._json(obj, code, cookie=cookie)
+        auth_error = self._require_read_auth()
+        if auth_error is not None:
+            return self._json(auth_error[1], auth_error[0])
         if service is None:
             return self._json({"error": "api not configured"}, 503)
         if parts == ["api", "servers"]:
@@ -231,8 +323,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"error": "BAD_LENGTH"}, 400)
         if length > 4096:
             return self._json({"error": "BODY_TOO_LARGE"}, 413)
-        if length:
-            self.rfile.read(length)
+        if length == 0:
+            return self._json({"error": "BAD_BODY"}, 400)
+        raw_body = self.rfile.read(length)
+        try:
+            text = raw_body.decode("utf-8")
+            decoder = json.JSONDecoder()
+            body_obj, idx = decoder.raw_decode(text)
+            if text[idx:].strip():
+                return self._json({"error": "BAD_JSON"}, 400)
+        except Exception:
+            return self._json({"error": "BAD_JSON"}, 400)
+        if not isinstance(body_obj, dict) or body_obj:
+            return self._json({"error": "BAD_BODY"}, 400)
         code, obj, actor = self._require_post_auth()
         if code != 200:
             return self._json(obj, code)

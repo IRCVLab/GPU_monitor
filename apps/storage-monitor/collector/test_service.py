@@ -3,6 +3,7 @@ import json
 import pathlib
 import tempfile
 import threading
+import time
 import unittest
 
 from collector.inventory import Server
@@ -299,6 +300,27 @@ class PollServiceTests(unittest.TestCase):
         self.assertFalse(t.is_alive())
         self.assertEqual(self.tx.max_active, 1)
         self.assertEqual(self.store.load_snapshot(s.id)["scan_generation"], "alpha-1-1719208000-v1")
+
+
+    def test_manual_rescan_waits_for_poll_lock_and_calls_fixed_rescan_once_before_success(self):
+        s = make_server(); self.seed(s)
+        payload = payload_for(s.id, started=1719208100, digest=s.scanner_digest)
+        st, data = status_data(payload)
+        self.tx.status[s.id] = st; self.tx.downloads[s.id] = (st, data)
+        self.tx.block_fetch = threading.Event(); self.tx.entered_fetch = threading.Event()
+        svc = self.service([s])
+        t = threading.Thread(target=lambda: svc.poll_server(s.id))
+        t.start()
+        self.assertTrue(self.tx.entered_fetch.wait(2))
+        result_box = {}
+        manual = threading.Thread(target=lambda: result_box.update(svc.manual_rescan(s.id)))
+        manual.start()
+        time.sleep(0.05)
+        self.assertEqual(self.tx.rescans, [], "rescan must wait rather than succeed from stale state")
+        self.tx.block_fetch.set(); t.join(2); manual.join(2)
+        self.assertFalse(manual.is_alive())
+        self.assertEqual(self.tx.rescans, [s.id])
+        self.assertEqual(result_box["latest_pull_status"], "succeeded")
 
     def test_api_helpers_preserve_inventory_order_and_unknown_server_boundary(self):
         a = make_server("alpha-1", order=20); b = make_server("beta-2", order=10)

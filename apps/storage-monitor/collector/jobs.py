@@ -50,6 +50,7 @@ class RescanJobManager:
         self._threads: list[threading.Thread] = []
         self._audit: list[dict[str, Any]] = []
         self._counter = 0
+        self._reconcile_persisted_jobs()
 
     def request_rescan(self, server_id: str, actor: str) -> tuple[int, dict[str, Any]]:
         now = int(self.clock.time())
@@ -59,6 +60,7 @@ class RescanJobManager:
             event = self._record(now, actor_id, sid or "unknown", "UNKNOWN_SERVER", None)
             return 404, {"error": "UNKNOWN_SERVER", "audit": event}
         with self._lock:
+            self._prune_threads_locked()
             current = self.store.load_state(sid).get("active_job")
             if isinstance(current, Mapping) and current.get("state") in {"requested", "running"}:
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", _safe_field(current.get("id", "job")))
@@ -97,6 +99,44 @@ class RescanJobManager:
         for thread in list(self._threads):
             remaining = None if deadline is None else max(0.0, deadline - time.time())
             thread.join(remaining)
+        with self._lock:
+            self._prune_threads_locked()
+
+    def active_thread_count(self) -> int:
+        with self._lock:
+            self._prune_threads_locked()
+            return len(self._threads)
+
+    def _reconcile_persisted_jobs(self) -> None:
+        now = int(self.clock.time())
+        for sid in self._servers:
+            state = self.store.load_state(sid)
+            active = state.get("active_job")
+            if not isinstance(active, Mapping):
+                continue
+            requested = active.get("requested_unix")
+            if isinstance(requested, int) and not isinstance(requested, bool) and now - requested < self.cooldown_seconds:
+                self._last_requested[sid] = requested
+            if active.get("state") not in {"requested", "running"}:
+                continue
+            started = active.get("started_unix")
+            if not isinstance(started, int) or isinstance(started, bool):
+                started = max(requested if isinstance(requested, int) and not isinstance(requested, bool) else now, now)
+            terminal = {
+                "id": _safe_field(active.get("id", f"rescan-{sid}-{now}")),
+                "server_id": sid,
+                "kind": "rescan",
+                "state": "failed",
+                "actor": _safe_field(active.get("actor", "unknown")),
+                "requested_unix": requested if isinstance(requested, int) and not isinstance(requested, bool) else now,
+                "started_unix": started,
+                "finished_unix": max(now, started),
+                "result_code": "INTERRUPTED",
+            }
+            self.store.update_state(sid, active_job=terminal)
+
+    def _prune_threads_locked(self) -> None:
+        self._threads = [thread for thread in self._threads if thread.is_alive()]
 
     def _run(self, sid: str, job: dict[str, Any]) -> None:
         result_code = "OK"
@@ -116,6 +156,7 @@ class RescanJobManager:
         finally:
             with self._lock:
                 self._active_global = max(0, self._active_global - 1)
+                self._prune_threads_locked()
 
     def _record(self, ts: int, actor: str, server_id: str, result_code: str, job_id: str | None) -> dict[str, Any]:
         event = {"timestamp_unix": ts, "actor": _safe_field(actor), "server_id": _safe_field(server_id), "result_code": _safe_field(result_code), "job_id": _safe_field(job_id or "none")}
