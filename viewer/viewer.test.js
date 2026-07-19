@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const here = __dirname;
+const GiB = 1024 ** 3;
 
 function testHostManifest() {
   const manifestPath = path.join(here, "..", "data", "hosts.json");
@@ -32,6 +33,130 @@ function testHostManifestHelpers() {
   assert.deepStrictEqual(normalizeHosts([]), [{ id: "hinton", label: "hinton", file: "hinton", default: true }]);
 }
 
+async function testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures() {
+  const { loadOrderedSnapshotsForOverview } = require("./data-client.js");
+  const summaries = [
+    { id: "beta-2", display_name: "beta", order: 20 },
+    { id: "alpha-1", display_name: "alpha", order: 10 },
+    { id: "gamma-3", display_name: "gamma", order: 30 },
+  ];
+  const events = [];
+  const result = await loadOrderedSnapshotsForOverview(summaries, async (serverId) => {
+    if (serverId === "beta-2") {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      events.push(serverId);
+      return { server_id: serverId, mounts: [{ path: "/data", df_use_pct: 81, df_avail: 700 * GiB }] };
+    }
+    if (serverId === "alpha-1") {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      events.push(serverId);
+      const err = new Error("404");
+      err.status = 404;
+      throw err;
+    }
+    events.push(serverId);
+    return { server_id: serverId, mounts: [{ path: "/archive", df_use_pct: 32, df_avail: 2 * GiB }] };
+  });
+
+  assert.notDeepStrictEqual(events, result.map(item => item.id), "responses may resolve out of order in the fetch layer");
+  assert.deepStrictEqual(result.map(item => item.id), ["beta-2", "alpha-1", "gamma-3"], "returned rows must preserve inventory order");
+  assert.strictEqual(result[0].snapshot.server_id, "beta-2");
+  assert.strictEqual(result[1].snapshot, null, "snapshot failures must be isolated into the row result");
+  assert(result[1].error instanceof Error, "snapshot failures must be surfaced for rendering decisions");
+  assert.strictEqual(result[2].snapshot.server_id, "gamma-3");
+}
+
+function makeSummary(overrides = {}) {
+  return Object.assign({
+    id: "alpha-1",
+    display_name: "alpha",
+    order: 1,
+    mount_count: 1,
+    snapshot_availability: "available",
+    freshness: "fresh",
+    latest_pull_status: "succeeded",
+    latest_scan_result: "complete",
+    configuration_sync: "in_sync",
+    active_job: null,
+  }, overrides);
+}
+
+function makeSnapshot(mountOverrides = []) {
+  return {
+    server_id: "alpha-1",
+    mounts: mountOverrides.length ? mountOverrides : [
+      { path: "/data", df_use_pct: 81, df_avail: 900 * GiB },
+      { path: "/archive", df_use_pct: 93, df_avail: 600 * GiB },
+    ],
+  };
+}
+
+function testOverviewCapacityThresholdsAndPrecedence() {
+  const {
+    DEFAULT_CAPACITY_THRESHOLDS,
+    pressureLevel,
+    derivePrimaryStatus,
+    statusPresentation,
+    buildOverviewServer,
+  } = require("./overview.js");
+
+  assert.deepStrictEqual(DEFAULT_CAPACITY_THRESHOLDS, {
+    warning_used_pct: 80,
+    critical_used_pct: 92,
+    warning_free_bytes: 549755813888,
+    critical_free_bytes: 137438953472,
+  }, "overview thresholds must match the centralized inventory defaults");
+
+  assert.strictEqual(pressureLevel(79, DEFAULT_CAPACITY_THRESHOLDS.warning_free_bytes + 1), "normal");
+  assert.strictEqual(pressureLevel(80, 10 ** 12), "warning");
+  assert.strictEqual(pressureLevel(1, DEFAULT_CAPACITY_THRESHOLDS.warning_free_bytes), "warning");
+  assert.strictEqual(pressureLevel(92, 10 ** 12), "critical");
+  assert.strictEqual(pressureLevel(1, DEFAULT_CAPACITY_THRESHOLDS.critical_free_bytes), "critical");
+
+  const precedenceCases = [
+    [makeSummary({ snapshot_availability: "absent", latest_pull_status: "not_installed" }), null, "agent_missing"],
+    [makeSummary({ snapshot_availability: "absent", latest_pull_status: "succeeded" }), null, "snapshot_absent"],
+    [makeSummary({ latest_pull_status: "unreachable" }), makeSnapshot(), "pull_unreachable"],
+    [makeSummary({ latest_pull_status: "invalid_snapshot" }), makeSnapshot(), "pull_invalid"],
+    [makeSummary({ latest_scan_result: "failed" }), makeSnapshot(), "scan_failed"],
+    [makeSummary({ configuration_sync: "drifted" }), makeSnapshot(), "config_drift"],
+    [makeSummary({ latest_scan_result: "partial" }), makeSnapshot(), "partial_scan"],
+    [makeSummary({ freshness: "stale" }), makeSnapshot(), "stale_snapshot"],
+    [makeSummary({ active_job: { id: "job-1", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), makeSnapshot([{ path: "/data", df_use_pct: 95, df_avail: 900 * GiB }]), "active_scan"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 95, df_avail: 900 * GiB }]), "pressure_critical"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 10, df_avail: 20 * GiB }]), "pressure_critical"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 81, df_avail: 900 * GiB }]), "pressure_warning"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 55, df_avail: 900 * GiB }]), "normal"],
+  ];
+  for (const [summary, snapshot, expectedCode] of precedenceCases) {
+    const status = derivePrimaryStatus(summary, snapshot, DEFAULT_CAPACITY_THRESHOLDS);
+    assert.strictEqual(status.code, expectedCode, `expected ${expectedCode} for ${JSON.stringify(summary)}`);
+  }
+
+  const severe = statusPresentation("scan_failed");
+  assert.strictEqual(typeof severe.shape, "string");
+  assert.ok(severe.shape.length > 0, "exceptional states must expose a visible shape cue");
+  assert.ok(/[가-힣]/.test(severe.label), "exceptional states must use concise Korean copy");
+
+  const model = buildOverviewServer(
+    makeSummary({ latest_scan_result: "failed", active_job: { id: "job-2", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }),
+    makeSnapshot([{ path: "/data", df_use_pct: 93, df_avail: 1024 * GiB }]),
+    DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  assert.strictEqual(model.primaryStatus.code, "scan_failed", "higher-priority operational state must win over capacity pressure");
+  assert.strictEqual(model.secondaryStatus.code, "active_scan", "active scan must remain available as a secondary cue");
+  assert.strictEqual(model.mounts.length, 1, "capacity bars must remain present when an operational status wins");
+  assert.strictEqual(model.mounts[0].pressure, "critical");
+}
+
+function testOverviewRouteHelpers() {
+  const { parseRoute, buildRouteHref } = require("./overview.js");
+  assert.deepStrictEqual(parseRoute({ pathname: "/", search: "", hash: "" }), { serverId: null, tab: "treemap" });
+  assert.deepStrictEqual(parseRoute({ pathname: "/viewer/", search: "?server=beta-2", hash: "#users" }), { serverId: "beta-2", tab: "users" });
+  assert.deepStrictEqual(parseRoute({ pathname: "/viewer/", search: "?server=../bad", hash: "#nope" }), { serverId: null, tab: "treemap" }, "unsafe ids and unknown tabs must collapse to overview defaults");
+  assert.strictEqual(buildRouteHref("/viewer/index.html", { serverId: null, tab: "treemap" }), "/viewer/index.html");
+  assert.strictEqual(buildRouteHref("/viewer/index.html", { serverId: "beta-2", tab: "topfiles" }), "/viewer/index.html?server=beta-2#topfiles");
+}
 
 function testRemovedAnalysisSurfaceIsAbsentFromViewerFiles() {
   const removedName = "ad" + "vis" + "or";
@@ -42,7 +167,7 @@ function testRemovedAnalysisSurfaceIsAbsentFromViewerFiles() {
     "fetch" + "Ad" + "vis" + "orStatus",
     "append" + "Ad" + "vis" + "orBadges",
   ];
-  const checked = ["index.html", "app.js", "treemap.js", "tables.js", "styles.css"];
+  const checked = ["index.html", "app.js", "overview.js", "treemap.js", "tables.js", "styles.css"];
   for (const file of checked) {
     const content = fs.readFileSync(path.join(here, file), "utf8");
     const lower = content.toLowerCase();
@@ -60,7 +185,6 @@ function testRemovedAnalysisSurfaceIsAbsentFromViewerFiles() {
   assert(!html.toLowerCase().includes('id="panel-' + removedName + '"'), "removed analysis panel must not exist");
 }
 
-
 function testTreemapFidelity() {
   const { squarify, rectArea } = require("./treemap.js");
   const gib = 1024 ** 3;
@@ -74,7 +198,6 @@ function testTreemapFidelity() {
   const ratio = rectArea(large) / rectArea(small);
   assert(ratio > 900 && ratio < 1100, `600GB/600MB area ratio should remain ~1024, got ${ratio}`);
 }
-
 
 function testDeleteCommandGeneration() {
   const { shellQuote, buildDeleteCommands } = require("./selection.js");
@@ -96,6 +219,9 @@ function testDeleteCommandGeneration() {
 async function main() {
   testHostManifest();
   testHostManifestHelpers();
+  await testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures();
+  testOverviewCapacityThresholdsAndPrecedence();
+  testOverviewRouteHelpers();
   testRemovedAnalysisSurfaceIsAbsentFromViewerFiles();
   testTreemapFidelity();
   testDeleteCommandGeneration();

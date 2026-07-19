@@ -152,6 +152,58 @@ async function loadHostManifest() {
   if (typeof globalThis !== "undefined") globalThis.HOSTS = HOSTS;
   return HOSTS;
 }
+
+function makeFetchError(url, status, body) {
+  const err = new Error(url + " -> " + status);
+  err.url = url;
+  err.status = status;
+  err.body = body;
+  return err;
+}
+async function fetchJson(url, options) {
+  const response = await fetch(url, Object.assign({ cache: "no-store" }, options || {}));
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw makeFetchError(url, response.status, body);
+  return body;
+}
+async function loadSession() {
+  return fetchJson("/api/session");
+}
+async function loadServerSummaries() {
+  const body = await fetchJson("/api/servers");
+  return Array.isArray(body && body.servers) ? body.servers : [];
+}
+function safeServerId(serverId) {
+  if (!isSafeHostToken(serverId)) throw new Error("invalid server id");
+  return serverId;
+}
+async function loadServerSnapshot(serverId) {
+  return fetchJson("/api/servers/" + encodeURIComponent(safeServerId(serverId)) + "/snapshot");
+}
+async function loadServerJob(serverId) {
+  return fetchJson("/api/servers/" + encodeURIComponent(safeServerId(serverId)) + "/job");
+}
+async function postServerRescan(serverId, csrfToken) {
+  const headers = { "Content-Type": "application/json" };
+  if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+  return fetchJson("/api/servers/" + encodeURIComponent(safeServerId(serverId)) + "/rescan", {
+    method: "POST",
+    headers,
+    body: "{}",
+  });
+}
+async function loadOrderedSnapshotsForOverview(summaries, snapshotLoader) {
+  const loader = snapshotLoader || loadServerSnapshot;
+  const rows = Array.isArray(summaries) ? summaries : [];
+  return Promise.all(rows.map(async (summary) => {
+    const id = summary && summary.id ? String(summary.id) : "";
+    try {
+      return { id, snapshot: await loader(id), error: null };
+    } catch (error) {
+      return { id, snapshot: null, error };
+    }
+  }));
+}
 async function loadHost(host) {
   const candidates = ["data/" + host.file + ".json", "data/" + host.file + ".sample.json"];
   let lastErr = null;
@@ -163,10 +215,10 @@ async function loadHost(host) {
 }
 
 if (typeof globalThis !== "undefined") {
-  Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost });
+  Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview });
 }
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DEFAULT_HOSTS, normalizeHosts };
+  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview };
 }
 
 /* =========================================================================
