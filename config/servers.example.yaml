@@ -1,0 +1,54 @@
+{
+  "capacity_thresholds": {
+    "warning_used_pct": 80,
+    "critical_used_pct": 92,
+    "warning_free_bytes": 549755813888,
+    "critical_free_bytes": 137438953472
+  },
+  "servers": [
+    {
+      "id": "lab-alpha",
+      "display_name": "Lab Alpha",
+      "order": 10,
+      "host": "alpha.example.test",
+      "port": 22,
+      "enabled": true,
+      "username": "monitoring",
+      "identity_file": "/etc/storage-viz/keys/lab-alpha_ed25519",
+      "known_hosts_file": "/etc/storage-viz/known_hosts",
+      "scanner": {
+        "server_id": "lab-alpha",
+        "scanner_path": "/opt/storage-viz/scanner/hstscan",
+        "data_dir": "/var/lib/storage-viz",
+        "run_dir": "/run/storage-viz",
+        "threads": 4,
+        "prune_home_mb": 50,
+        "prune_data_mb": 100,
+        "top": 200,
+        "stale_days": 180
+      }
+    },
+    {
+      "id": "lab-beta",
+      "display_name": "Lab Beta",
+      "order": 20,
+      "host": "beta.example.test",
+      "port": 2222,
+      "enabled": false,
+      "username": "monitoring",
+      "identity_file": "/etc/storage-viz/keys/lab-beta_ed25519",
+      "known_hosts_file": "/etc/storage-viz/known_hosts",
+      "scanner": {
+        "server_id": "lab-beta",
+        "scanner_path": "/opt/storage-viz/scanner/hstscan",
+        "data_dir": "/var/lib/storage-viz",
+        "run_dir": "/run/storage-viz",
+        "threads": 2,
+        "prune_home_mb": 50,
+        "prune_data_mb": 100,
+        "top": 200,
+        "stale_days": 180
+      }
+    }
+  ]
+}
