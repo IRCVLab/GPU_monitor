@@ -159,6 +159,14 @@ function treemapCleanupItem(c, path, owner) {
     source: "treemap",
   };
 }
+function treemapTileAriaLabel(path, hasKids, selectable) {
+  if (hasKids && selectable) {
+    return "Click or Enter drills into " + path + "; Ctrl/Command click or selection mode inspects " + path;
+  }
+  if (hasKids) return "Click or Enter drills into " + path;
+  if (selectable) return "Inspect snapshot path " + path;
+  return "";
+}
 function syncTreemapTileSelection(tile) {
   if (!tile || !tile.dataset || !tile.dataset.cleanupPath) return;
   const selected = typeof isCleanupSelectedPath === "function" && isCleanupSelectedPath(tile.dataset.cleanupPath);
@@ -178,7 +186,6 @@ function addTreemapCleanupMetadata(tile, c, path, owner) {
   tile.dataset.cleanupSource = "treemap";
   tile.setAttribute("role", "button");
   tile.setAttribute("tabindex", "0");
-  tile.setAttribute("aria-label", "Inspect snapshot path " + path);
   const badge = document.createElement("div");
   badge.className = "tm-cleanup-badge";
   badge.textContent = "✓";
@@ -292,6 +299,8 @@ function tmTile(el, c, k, crumbPath, isGroup, level) {
       t.setAttribute("role", "button");
       t.setAttribute("tabindex", "0");
     }
+    const ariaLabel = treemapTileAriaLabel(path, hasKids, selectable);
+    if (ariaLabel) t.setAttribute("aria-label", ariaLabel);
     t.onclick = (e) => activateTreemapTile(t, c, path, owner, e);
     t.onkeydown = (e) => {
       if (!e || (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar")) return;
