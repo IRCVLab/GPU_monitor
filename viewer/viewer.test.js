@@ -20,7 +20,7 @@ function testHostManifest() {
 }
 
 function testHostManifestHelpers() {
-  const { normalizeHosts } = require("./data-client.js");
+  const { normalizeHosts, safeServerId } = require("./data-client.js");
   const hosts = normalizeHosts([
     { id: "hinton", label: "Hinton", file: "hinton", default: true },
     { id: "../bad", label: "bad", file: "../bad" },
@@ -39,6 +39,9 @@ function testHostManifestHelpers() {
   ]);
   assert.deepStrictEqual(ordered.map(h => h.id), ["atlas", "beta", "cedar"], "manifest order must remain exact even when default:true appears in the middle");
   assert.strictEqual(ordered[1].default, true, "default metadata must remain attached to the original row");
+  assert.strictEqual(safeServerId("alpha-1"), "alpha-1", "safe server ids should pass unchanged");
+  assert.throws(() => safeServerId("."), /invalid server id/, "single-dot server ids must be rejected to match the backend");
+  assert.throws(() => safeServerId(".."), /invalid server id/, "double-dot server ids must be rejected to match the backend");
 }
 
 async function testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures() {
@@ -179,8 +182,12 @@ function testOverviewRouteHelpers() {
   assert.deepStrictEqual(parseRoute({ pathname: "/", search: "", hash: "" }), { serverId: null, tab: "treemap" });
   assert.deepStrictEqual(parseRoute({ pathname: "/viewer/", search: "?server=beta-2", hash: "#users" }), { serverId: "beta-2", tab: "users" });
   assert.deepStrictEqual(parseRoute({ pathname: "/viewer/", search: "?server=../bad", hash: "#nope" }), { serverId: null, tab: "treemap" }, "unsafe ids and unknown tabs must collapse to overview defaults");
+  assert.deepStrictEqual(parseRoute({ pathname: "/viewer/", search: "?server=.", hash: "#users" }), { serverId: null, tab: "users" }, "single-dot server ids must be rejected in routes");
+  assert.deepStrictEqual(parseRoute({ pathname: "/viewer/", search: "?server=..", hash: "#users" }), { serverId: null, tab: "users" }, "double-dot server ids must be rejected in routes");
   assert.strictEqual(buildRouteHref("/viewer/index.html", { serverId: null, tab: "treemap" }), "/viewer/index.html");
   assert.strictEqual(buildRouteHref("/viewer/index.html", { serverId: "beta-2", tab: "topfiles" }), "/viewer/index.html?server=beta-2#topfiles");
+  assert.strictEqual(buildRouteHref("/viewer/index.html", { serverId: ".", tab: "treemap" }), "/viewer/index.html", "single-dot server ids must not produce navigable hrefs");
+  assert.strictEqual(buildRouteHref("/viewer/index.html", { serverId: "..", tab: "treemap" }), "/viewer/index.html", "double-dot server ids must not produce navigable hrefs");
 }
 
 function testRemovedAnalysisSurfaceIsAbsentFromViewerFiles() {

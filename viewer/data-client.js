@@ -120,7 +120,7 @@ async function tryFetch(url) {
   return r.json();
 }
 function isSafeHostToken(value) {
-  return typeof value === "string" && /^[A-Za-z0-9._-]+$/.test(value);
+  return typeof value === "string" && /^[A-Za-z0-9._-]+$/.test(value) && value !== "." && value !== "..";
 }
 function normalizeHosts(input) {
   const rows = Array.isArray(input) ? input : [];
@@ -213,10 +213,10 @@ async function loadHost(host) {
 }
 
 if (typeof globalThis !== "undefined") {
-  Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview });
+  Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken });
 }
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview };
+  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken };
 }
 
 /* =========================================================================
