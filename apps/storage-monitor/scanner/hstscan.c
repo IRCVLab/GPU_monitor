@@ -961,6 +961,7 @@ static void emit_node(FILE *f, struct node *n, int indent) {
     (void)indent;
     fputc('{', f);
     fputs("\"name\":", f); json_escape(f, n->name);
+    fputs(",\"kind\":\"directory\"", f);
     fprintf(f, ",\"bytes\":%llu", (unsigned long long)n->bytes);
     fprintf(f, ",\"files\":%llu", (unsigned long long)n->files);
     fprintf(f, ",\"uid\":%u", (unsigned)n->uid);
@@ -1213,6 +1214,7 @@ int main(int argc, char **argv) {
         if (i) fputc(',', f);
         fputs("\n{", f);
         fputs("\"path\":", f); json_escape(f, r->path);
+        fputs(",\"kind\":\"file\"", f);
         fprintf(f, ",\"bytes\":%llu", (unsigned long long)r->bytes);
         fprintf(f, ",\"uid\":%u", (unsigned)r->uid);
         fputs(",\"owner\":", f); json_escape(f, uid_to_name(r->uid));
@@ -1229,6 +1231,7 @@ int main(int argc, char **argv) {
         if (i) fputc(',', f);
         fputs("\n{", f);
         fputs("\"path\":", f); json_escape(f, r->path);
+        fputs(",\"kind\":\"file\"", f);
         fprintf(f, ",\"bytes\":%llu", (unsigned long long)r->bytes);
         fprintf(f, ",\"uid\":%u", (unsigned)r->uid);
         fputs(",\"owner\":", f); json_escape(f, uid_to_name(r->uid));
