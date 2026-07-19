@@ -89,6 +89,15 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 PYEOF
 pass "output JSON parses with explicit UTF-8 despite non-UTF8 filename bytes"
 
+$PY - "$OUT" <<'PYEOF' || fail "kind fields missing or invalid"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["mounts"][0]["tree"]["kind"] == "directory"
+assert all(row["kind"] == "file" for row in d.get("top_files", []))
+assert all(row["kind"] == "file" for row in d.get("stale", []))
+PYEOF
+pass "kind fields identify directory tree nodes and file rows"
+
 # Pull figures out with python for robust assertions.
 read -r SCAN_BYTES BLOCKED_HAS_NOACCESS NODE_NAMES <<EOF
 $($PY - "$OUT" "$TREE" <<'PYEOF'
@@ -97,6 +106,17 @@ out, tree = sys.argv[1], sys.argv[2]
 d = json.load(open(out))
 m = d["mounts"][0]
 t = m["tree"]
+if t.get("kind") != "directory":
+    raise SystemExit(f"tree root kind is {t.get('kind')!r}, expected directory")
+for child in t.get("children", []):
+    if child.get("kind") != "directory":
+        raise SystemExit(f"tree child {child.get('name')!r} kind is {child.get('kind')!r}, expected directory")
+for row in d.get("top_files", []):
+    if row.get("kind") != "file":
+        raise SystemExit(f"top_files row kind is {row.get('kind')!r}, expected file")
+for row in d.get("stale", []):
+    if row.get("kind") != "file":
+        raise SystemExit(f"stale row kind is {row.get('kind')!r}, expected file")
 # top-level tree node corresponds to the scanned target (the tree dir)
 scan_bytes = t["bytes"]
 # names of immediate children (to confirm symlinks are not present as dirs)
