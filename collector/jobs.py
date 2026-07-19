@@ -9,6 +9,7 @@ from typing import Any, Mapping, Protocol
 
 SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 SAFE_FIELD_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
+ACTIVE_SCAN_STATES = frozenset({"active", "activating", "reloading"})
 DEFAULT_COOLDOWN_SECONDS = 15 * 60
 DEFAULT_MAX_CONCURRENT_JOBS = 2
 MAX_AUDIT_EVENTS = 100
@@ -26,6 +27,7 @@ class Store(Protocol):
 class Service(Protocol):
     servers: tuple[Any, ...]
     store: Store
+    def scan_active_state(self, server_id: str) -> str: ...
     def manual_rescan(self, server_id: str) -> dict[str, Any]: ...
 
 
@@ -65,6 +67,15 @@ class RescanJobManager:
             if isinstance(current, Mapping) and current.get("state") in {"requested", "running"}:
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", _safe_field(current.get("id", "job")))
                 return 409, {"error": "ACTIVE_JOB", "job": dict(current), "audit": event}
+            try:
+                remote_state = self.service.scan_active_state(sid)
+            except Exception as exc:
+                code = _safe_code(getattr(exc, "code", "ACTIVE_STATE_FAILED"))
+                event = self._record(now, actor_id, sid, "ACTIVE_STATE_FAILED", None)
+                return 503, {"error": "ACTIVE_STATE_FAILED", "code": code, "audit": event}
+            if remote_state in ACTIVE_SCAN_STATES:
+                event = self._record(now, actor_id, sid, "ACTIVE_JOB", None)
+                return 409, {"error": "ACTIVE_JOB", "remote_active_state": _safe_field(remote_state), "audit": event}
             last = self._last_requested.get(sid)
             if last is not None and now - last < self.cooldown_seconds:
                 event = self._record(now, actor_id, sid, "COOLDOWN", None)

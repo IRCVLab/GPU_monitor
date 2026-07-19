@@ -68,6 +68,9 @@ class FakeTransport:
         self.status_errors = {}
         self.download_errors = {}
         self.rescans = []
+        self.active_state = "inactive"
+        self.active_state_errors = {}
+        self.active_state_calls = []
         self.fetch_status_calls = []
         self.fetch_snapshot_calls = []
         self.block_fetch = None
@@ -97,6 +100,12 @@ class FakeTransport:
                 self.active -= 1
         st, data = self.downloads[server.id]
         return copy.deepcopy(st), data
+
+    def scan_active_state(self, server):
+        self.active_state_calls.append(server.id)
+        err = self.active_state_errors.get(server.id)
+        if err: raise err
+        return self.active_state
 
     def start_rescan(self, server):
         self.rescans.append(server.id)

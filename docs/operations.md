@@ -124,7 +124,7 @@ Do not grant shell, restart, stop, daemon-reload, edit, or wildcard sudo privile
 
 Each agent writes snapshots under `/var/lib/storage-viz` and status under `/var/lib/storage-viz/scan-status.json`. The agent timer runs every six hours using `storage-viz-scan.timer` with `OnUnitActiveSec=6h`, `Persistent=true`, and randomized delay.
 
-Central manual rescans are bounded: the dashboard can request only the fixed remote command `sudo -n /usr/bin/systemctl start storage-viz-scan.service` for a configured server id. Operators cannot submit paths or commands. Rescan transport has a bounded timeout and central job concurrency/cooldown limits.
+Central manual rescans are bounded: the dashboard first queries only the fixed unprivileged remote command `/usr/bin/systemctl show --property=ActiveState --value storage-viz-scan.service`; if the unit is active, activating, or reloading, the request is rejected as an active job before any start/cooldown is consumed. When inactive, the dashboard can request only the fixed remote command `sudo -n /usr/bin/systemctl start storage-viz-scan.service` for a configured server id. Operators cannot submit paths or commands. Rescan transport has bounded timeouts and central job concurrency/cooldown limits.
 
 ## Cleanup workflow
 

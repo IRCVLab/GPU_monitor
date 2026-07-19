@@ -22,12 +22,16 @@ from collector.inventory import Server
 STATUS_PATH = "/var/lib/storage-viz/scan-status.json"
 SNAPSHOT_DIR = "/var/lib/storage-viz/snapshots"
 RESCAN_COMMAND = ("sudo", "-n", "/usr/bin/systemctl", "start", "storage-viz-scan.service")
+ACTIVE_STATE_COMMAND = ("/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service")
+ACTIVE_SCAN_STATES = frozenset({"active", "activating", "reloading"})
+KNOWN_ACTIVE_STATES = frozenset({"active", "reloading", "inactive", "failed", "activating", "deactivating", "maintenance"})
 MAX_STATUS_BYTES = 64 * 1024
 MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 10
 DEFAULT_STATUS_TIMEOUT_SECONDS = 30
 DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 3600
 DEFAULT_RESCAN_TIMEOUT_SECONDS = 6 * 60 * 60
+DEFAULT_ACTIVE_STATE_TIMEOUT_SECONDS = 10
 MAX_RESCAN_TIMEOUT_SECONDS = 24 * 60 * 60
 GENERATION_RE = re.compile(r"^(?P<server_id>[A-Za-z0-9_.-]+)-(?P<started>[0-9]+)-v1\.json$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -62,6 +66,7 @@ class OpenSshTransport:
         status_timeout_seconds: int | None = None,
         snapshot_timeout_seconds: int | None = None,
         rescan_timeout_seconds: int | None = None,
+        active_state_timeout_seconds: int | None = None,
         max_status_bytes: int = MAX_STATUS_BYTES,
         max_snapshot_bytes: int = MAX_SNAPSHOT_BYTES,
     ) -> None:
@@ -72,6 +77,7 @@ class OpenSshTransport:
         self._status_timeout = _bounded_positive(status_timeout_seconds if status_timeout_seconds is not None else (legacy or DEFAULT_STATUS_TIMEOUT_SECONDS), "status timeout", 1, 3600)
         self._snapshot_timeout = _bounded_positive(snapshot_timeout_seconds if snapshot_timeout_seconds is not None else (legacy or DEFAULT_SNAPSHOT_TIMEOUT_SECONDS), "snapshot timeout", 1, 24 * 60 * 60)
         self._rescan_timeout = _bounded_positive(rescan_timeout_seconds if rescan_timeout_seconds is not None else (legacy or DEFAULT_RESCAN_TIMEOUT_SECONDS), "rescan timeout", 1, MAX_RESCAN_TIMEOUT_SECONDS)
+        self._active_state_timeout = _bounded_positive(active_state_timeout_seconds if active_state_timeout_seconds is not None else (legacy or DEFAULT_ACTIVE_STATE_TIMEOUT_SECONDS), "active-state timeout", 1, 300)
         self._max_status_bytes = _bounded_positive(max_status_bytes, "max status bytes", 1, MAX_STATUS_BYTES)
         self._max_snapshot_bytes = _bounded_positive(max_snapshot_bytes, "max snapshot bytes", 1, MAX_SNAPSHOT_BYTES)
 
@@ -107,6 +113,24 @@ class OpenSshTransport:
             return second, data
         finally:
             _unlink_quiet(tmp_name)
+
+    def scan_active_state(self, server: Server) -> str:
+        self._validate_server(server)
+        result = self._run_ssh(server, list(ACTIVE_STATE_COMMAND), timeout=self._active_state_timeout)
+        _check_returncode(result, "ACTIVE_STATE_FAILED")
+        raw = getattr(result, "stdout", b"")
+        if isinstance(raw, str):
+            text = raw
+        elif isinstance(raw, (bytes, bytearray)):
+            text = bytes(raw).decode("utf-8", errors="replace")
+        else:
+            raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
+        if len(text) > 64 or text.count("\n") > 1:
+            raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
+        state = text.strip()
+        if state not in KNOWN_ACTIVE_STATES:
+            raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
+        return state
 
     def start_rescan(self, server: Server) -> None:
         self._validate_server(server)
