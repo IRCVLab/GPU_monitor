@@ -377,9 +377,13 @@
   .vhead .vc-path { flex: 1 1 auto; }
   .vhead .arrow { color: var(--accent); font-size: 9px; margin-left: 4px; }
 
-  .cleanup-panel { position: fixed; right: 24px; bottom: 24px; z-index: 40; width: min(560px, calc(100vw - 32px));
+  .cleanup-panel { position: fixed; right: calc(24px + env(safe-area-inset-right)); bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 40;
+    width: min(560px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right)));
     background: var(--surface); color: var(--text); border: 1px solid var(--separator); border-radius: 16px;
     box-shadow: var(--shadow-lg); padding: 14px; display: none; }
+  #cleanupPanel { max-height: calc(100vh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
   .cleanup-panel.show { display: block; }
   .cleanup-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
   .cleanup-title { font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
@@ -398,6 +402,7 @@
   .cleanup-section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
   .cleanup-section-title { margin: 0; font-size: 13px; font-weight: 700; }
   .cleanup-command-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  #cleanupDangerCommand { list-style: none; margin: 0; padding: 0; }
   .cleanup-command { border: 1px solid var(--separator); border-radius: 12px; background: var(--surface2); padding: 10px; }
   .cleanup-command-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
   .cleanup-command-title { font-size: 12px; font-weight: 700; color: var(--text2); }
@@ -415,7 +420,7 @@
     #staleViewport { max-height: calc(100vh - 380px); }
     td.pathcell { width: 42%; }
     .vrow .vc-own, .vhead .vc-own { width: 130px; } .vrow .vc-size, .vhead .vc-size { width: 140px; }
-    .cleanup-panel { right: 16px; bottom: 16px; }
+    .cleanup-panel { right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); }
   }
   @media (max-width: 760px) {
     .overview-row { grid-template-columns: 1fr; gap: 12px; }

@@ -269,11 +269,15 @@ function makeCleanupSnapshot() {
 function testCleanupCommandSafetyContracts() {
   const {
     shellQuote,
+    cleanupPathWithinRoot,
+    cleanupLongestMatchingRoot,
     validateCleanupSelection,
     buildCleanupCommandPlan,
   } = require("./selection.js");
 
   assert.strictEqual(shellQuote("/data/a b/it's.txt"), "'/data/a b/it'\"'\"'s.txt'");
+  assert.strictEqual(typeof cleanupPathWithinRoot, "function", "root containment helper must be exposed for boundary tests");
+  assert.strictEqual(typeof cleanupLongestMatchingRoot, "function", "longest-root matching helper must be exposed for boundary tests");
   assert.strictEqual(typeof validateCleanupSelection, "function", "selection validation must be centralized as a pure function");
   assert.strictEqual(typeof buildCleanupCommandPlan, "function", "fixed command template generation must be centralized as a pure function");
 
@@ -332,6 +336,60 @@ function testCleanupCommandSafetyContracts() {
     assert.strictEqual(rejected.accepted, false, `${input.path || input.kind} must be rejected`);
     assert.strictEqual(rejected.reason.code, code, `${input.path || input.kind} must expose a bounded rejection code`);
   }
+
+  const rootScopedSnapshot = {
+    server_id: "root-scan",
+    selected_roots: [
+      { mount_id: "rootfs", mount_root: "/", mountpoint: "/", scan_root: "/", status: "complete" },
+    ],
+    mounts: [
+      { mount_id: "rootfs", path: "/", scan_root: "/" },
+    ],
+  };
+  assert.strictEqual(cleanupPathWithinRoot("/home/user/file.bin", "/"), true, 'scan_root "/" must contain deeper descendants');
+  assert.strictEqual(cleanupPathWithinRoot("/data2/file.bin", "/data"), false, "prefix collisions must not count as root containment");
+  assert.strictEqual(validateCleanupSelection(rootScopedSnapshot, { path: "/", kind: "directory" }).reason.code, "root_path", '"/" itself must stay rejected even when scan_root is "/"');
+  assert.strictEqual(validateCleanupSelection(rootScopedSnapshot, { path: "/home", kind: "directory" }).reason.code, "top_level_root", "one-segment targets must stay rejected under scan_root '/'");
+  const rootAccepted = validateCleanupSelection(rootScopedSnapshot, { path: "/home/user/file.bin", kind: "file" });
+  assert.strictEqual(rootAccepted.accepted, true, "deep descendants must be accepted under complete scan_root '/'");
+  assert.strictEqual(rootAccepted.scanRoot, "/", "root-scoped acceptance must stay anchored to '/'");
+
+  const rootFailedSnapshot = {
+    server_id: "root-failed",
+    selected_roots: [
+      { mount_id: "rootfs", mount_root: "/", mountpoint: "/", scan_root: "/", status: "failed" },
+    ],
+    mounts: [
+      { mount_id: "rootfs", path: "/", scan_root: "/" },
+    ],
+  };
+  assert.strictEqual(validateCleanupSelection(rootFailedSnapshot, { path: "/home/user/file.bin", kind: "file" }).reason.code, "selected_root_status", "deep descendants under failed '/' root must be rejected");
+
+  const collisionSnapshot = {
+    server_id: "prefix-collision",
+    selected_roots: [
+      { mount_id: "data", mount_root: "/", mountpoint: "/data", scan_root: "/data", status: "complete" },
+    ],
+    mounts: [
+      { mount_id: "data", path: "/data", scan_root: "/data" },
+    ],
+  };
+  assert.strictEqual(validateCleanupSelection(collisionSnapshot, { path: "/data2/file.bin", kind: "file" }).reason.code, "outside_selected_roots", "/data vs /data2 prefix collisions must remain rejected");
+
+  const nestedFailedSnapshot = {
+    server_id: "nested-failed",
+    selected_roots: [
+      { mount_id: "rootfs", mount_root: "/", mountpoint: "/", scan_root: "/", status: "complete" },
+      { mount_id: "home-user", mount_root: "/", mountpoint: "/home/user", scan_root: "/home/user", status: "failed" },
+    ],
+    mounts: [
+      { mount_id: "rootfs", path: "/", scan_root: "/" },
+      { mount_id: "home-user", path: "/home/user", scan_root: "/home/user" },
+    ],
+  };
+  const longest = cleanupLongestMatchingRoot(nestedFailedSnapshot.selected_roots, "/home/user/file.bin");
+  assert.strictEqual(longest && longest.scan_root, "/home/user", "nested root matching must prefer the longest scan_root");
+  assert.strictEqual(validateCleanupSelection(nestedFailedSnapshot, { path: "/home/user/file.bin", kind: "file" }).reason.code, "selected_root_status", "a nested failed root must win over an outer complete '/' root");
 }
 
 async function main() {
