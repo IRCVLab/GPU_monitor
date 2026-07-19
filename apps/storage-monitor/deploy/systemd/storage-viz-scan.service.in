@@ -1,0 +1,31 @@
+[Unit]
+Description=storage-viz local filesystem scan
+After=local-fs.target
+RequiresMountsFor=/var/lib/storage-viz /run/storage-viz
+
+[Service]
+Type=oneshot
+User=root
+Group=storage-viz-collector
+UMask=0027
+WorkingDirectory=/opt/storage-viz
+ExecStart=/usr/bin/python3 -m agent.scan_runner --config /etc/storage-viz/scanner.yaml
+RuntimeDirectory=storage-viz
+RuntimeDirectoryMode=0750
+Nice=19
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/storage-viz /run/storage-viz
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native

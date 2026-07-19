@@ -1,0 +1,12 @@
+[Unit]
+Description=Run storage-viz local filesystem scan every six hours
+
+[Timer]
+OnBootSec=15m
+OnUnitActiveSec=6h
+Persistent=true
+RandomizedDelaySec=30m
+Unit=storage-viz-scan.service
+
+[Install]
+WantedBy=timers.target
