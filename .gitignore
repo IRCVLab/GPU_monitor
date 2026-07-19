@@ -7,3 +7,5 @@ scanner/*.o
 
 __pycache__/
 *.pyc
+.storage-viz-state/
+storage-viz-dashboard-install.*/

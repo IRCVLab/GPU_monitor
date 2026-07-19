@@ -1,0 +1,35 @@
+[Unit]
+Description=storage-viz central dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=storage-viz
+Group=storage-viz
+WorkingDirectory=/opt/storage-viz-dashboard
+Environment=STORAGE_VIZ_BIND=127.0.0.1
+Environment=STORAGE_VIZ_PORT=8088
+Environment=STORAGE_VIZ_INVENTORY=/etc/storage-viz/servers.json
+Environment=STORAGE_VIZ_DATA_DIR=/var/lib/storage-viz-dashboard/data
+Environment=STORAGE_VIZ_STATE_DIR=/var/lib/storage-viz-dashboard/state
+Environment=STORAGE_VIZ_TRUSTED_PROXY=1
+EnvironmentFile=-/etc/storage-viz/dashboard.env
+ExecStart=/usr/bin/python3 /opt/storage-viz-dashboard/viewer/serve.py
+Restart=on-failure
+RestartSec=3
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/storage-viz-dashboard /run/storage-viz-dashboard
+RuntimeDirectory=storage-viz-dashboard
+RuntimeDirectoryMode=0750
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
