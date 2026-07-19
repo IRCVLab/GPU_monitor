@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -35,6 +36,36 @@ def sample_snapshot(server_id="hinton") -> dict:
         "mounts": [{"mount_id":"root","path":"/","scan_root":"/","df_use_pct":50,"df_avail":100*GiB,"tree":{"name":"/","bytes":1,"children":[]}}],
         "top_files": [], "stale": [], "blocked": [],
     }
+
+
+class CentralPollingLifecycleTest(unittest.TestCase):
+    class FakePollService:
+        poll_interval_seconds = 3600
+        def __init__(self):
+            self.calls = 0
+            self.first = threading.Event()
+        def poll_once(self):
+            self.calls += 1
+            self.first.set()
+            return {}
+
+    def test_central_polling_starts_once_and_stops_cleanly(self):
+        sys.path.insert(0, str(ROOT))
+        sys.path.insert(0, str(ROOT))
+        from viewer import serve
+        svc = self.FakePollService()
+        poller = serve.CentralPoller(svc, interval_seconds=3600)
+        self.assertTrue(poller.start())
+        self.assertTrue(svc.first.wait(2), "production inventory mode must poll immediately after startup")
+        first_thread = poller.thread_ident
+        self.assertFalse(poller.start(), "second start must not create duplicate polling thread")
+        self.assertEqual(poller.thread_ident, first_thread)
+        poller.stop(timeout=2)
+        self.assertFalse(poller.is_running)
+
+    def test_dev_sample_mode_does_not_create_poller(self):
+        from viewer import serve
+        self.assertIsNone(serve.build_central_poller(serve._DevSampleService(str(Path(__file__).resolve().parent))))
 
 
 class ApiServerTest(unittest.TestCase):
