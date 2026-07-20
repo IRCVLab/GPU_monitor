@@ -213,7 +213,7 @@ struct node {
     uint64_t        files;        /* subtree file count  */
     uid_t           uid;          /* owner of this directory */
     int64_t         mtime;        /* directory mtime */
-    uint64_t        other_bytes;  /* sum of pruned children */
+    uint64_t        other_bytes;  /* bytes not represented by retained children */
     struct node    *parent;
     struct node   **children;
     size_t          nchildren;
@@ -279,21 +279,24 @@ static void node_rollup(struct node *n, uint64_t *out_bytes, uint64_t *out_files
 
 static void node_free(struct node *n);
 
-/* Prune children below threshold; pruned bytes fold into other_bytes and the
- * dropped subtrees are freed. Must run after node_rollup (final n->bytes). */
+/* Prune children below threshold; bytes not represented by retained children
+ * (direct entries plus pruned subtrees) fold into other_bytes. Must run after
+ * node_rollup (final n->bytes). */
 static void node_prune(struct node *n, uint64_t threshold) {
     size_t keep = 0;
+    uint64_t retained_bytes = 0;
     for (size_t i = 0; i < n->nchildren; i++) {
         struct node *c = n->children[i];
         if (c->bytes >= threshold) {
             node_prune(c, threshold);
             n->children[keep++] = c;     /* retained: compact toward front */
+            retained_bytes += c->bytes;
         } else {
-            n->other_bytes += c->bytes;  /* dropped: fold bytes, free subtree */
             node_free(c);
         }
     }
     n->nchildren = keep;
+    n->other_bytes = keep ? n->bytes - retained_bytes : 0;
 }
 
 static void node_free(struct node *n) {
@@ -1121,7 +1124,7 @@ int main(int argc, char **argv) {
         /* Prune threshold: "/" target uses prune-home, others prune-data. */
         int prune_mb = (strcmp(tg, "/") == 0) ? prune_home_mb : prune_data_mb;
         uint64_t threshold = (uint64_t)prune_mb * 1024 * 1024;
-        if (threshold > 0) node_prune(tree, threshold);
+        node_prune(tree, threshold);
 
         struct mount_result *mr = &results[nresults++];
         mr->path = xstrdup(tg);

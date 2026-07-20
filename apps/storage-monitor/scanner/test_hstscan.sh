@@ -98,6 +98,30 @@ assert all(row["kind"] == "file" for row in d.get("stale", []))
 PYEOF
 pass "kind fields identify directory tree nodes and file rows"
 
+$PY - "$OUT" <<'PYEOF' || fail "tree byte accounting invariant is invalid"
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+def validate(node):
+    children = node.get("children", [])
+    for child in children:
+        validate(child)
+    other = node.get("other_bytes", 0)
+    if children and node["bytes"] != sum(child["bytes"] for child in children) + other:
+        raise SystemExit(
+            f"{node['name']}: bytes={node['bytes']} "
+            f"children={sum(child['bytes'] for child in children)} other={other}"
+        )
+    if not children and other != 0:
+        raise SystemExit(f"{node['name']}: leaf other_bytes={other}")
+
+for mount in payload["mounts"]:
+    validate(mount["tree"])
+PYEOF
+pass "tree bytes equal retained child bytes plus other_bytes"
+
 # Pull figures out with python for robust assertions.
 read -r SCAN_BYTES BLOCKED_HAS_NOACCESS NODE_NAMES <<EOF
 $($PY - "$OUT" "$TREE" <<'PYEOF'
