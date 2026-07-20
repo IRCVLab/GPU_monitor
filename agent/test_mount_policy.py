@@ -68,6 +68,21 @@ class MountPolicyTests(unittest.TestCase):
         self.assertEqual([r.mountpoint for r in selected], ["/srv/ext", "/srv/xfs", "/srv/lvm", "/srv/md"])
         self.assertTrue(all(classify_mount(r.entry).status == "selected" for r in selected))
 
+    def test_boot_filesystems_are_skipped_while_non_boot_vfat_is_selected(self):
+        text = "\n".join([
+            mi(14, 1, "8:14", "/", "/boot", "rw", "ext4", "/dev/sda14"),
+            mi(15, 14, "8:15", "/", "/boot/efi", "rw", "vfat", "/dev/sda15"),
+            mi(16, 1, "8:16", "/", "/data/transfer", "rw", "vfat", "/dev/sdb16"),
+        ])
+
+        result = select_scan_roots(parse_mountinfo(text))
+
+        self.assertEqual([r.mountpoint for r in result.selected], ["/data/transfer"])
+        self.assertEqual(
+            [("/boot", "boot-filesystem"), ("/boot/efi", "boot-filesystem")],
+            [(s.mountpoint, s.reason) for s in result.skipped],
+        )
+
     def test_btrfs_subvolumes_with_distinct_roots_remain_distinct(self):
         text = "\n".join([
             mi(20, 1, "0:45", "/@data", "/data", "rw", "btrfs", "/dev/sda3"),
