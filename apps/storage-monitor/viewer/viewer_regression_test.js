@@ -476,9 +476,9 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert.strictEqual(findByClass(hintonButton, 'overview-quiet').length, 0, 'normal server rows must not render a normal label');
   const accessibleRowText = textTree(hintonButton);
   assert(accessibleRowText.includes('hinton'), 'row descendant text must include the visible server label');
-  const cells = findByClass(hintonButton, 'overview-mount-cell');
-  assert.strictEqual(cells.length, 2, 'mount-centric overview must render one cell per mount');
-  assert.deepStrictEqual(cells.map(cell => findByClass(cell, 'overview-mount-path')[0].textContent), ['/home', '/data'], 'mount cells must preserve snapshot mount order exactly');
+  const cells = findByClass(hintonButton, 'overview-mount');
+  assert.strictEqual(cells.length, 2, 'mount-centric overview must render one connected segment per mount');
+  assert.deepStrictEqual(cells.map(cell => findByClass(cell, 'overview-mount-path')[0].textContent), ['/home', '/data'], 'mount strip segments must preserve snapshot mount order exactly');
   const first = cells[0];
   const fieldClasses = first.children.map(child => child.className);
   assert.deepStrictEqual(fieldClasses, [
@@ -521,7 +521,7 @@ function testMountStatusTextAppearsOnlyForExceptionalPressure() {
   );
   const list = viewer.document.getElementById('overviewList');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
-  const cells = findByClass(list.children[0].children[0], 'overview-mount-cell');
+  const cells = findByClass(list.children[0].children[0], 'overview-mount');
   const freeTexts = cells.map(cell => textTree(findByClass(cell, 'overview-mount-free')[0]));
   assert.strictEqual(freeTexts[0], '600 GB free', 'healthy mount free text must not append redundant normal text');
   assert(/[가-힣]/.test(freeTexts[1]) && freeTexts[1].includes('주의'), 'warning mount free text must include non-color status text');
@@ -765,12 +765,56 @@ function testDetailCapacityResponsiveCssContract() {
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.cap-fill\b[\s\S]*transition:\s*none\s*!important/.test(css), 'detail capacity fill animation must be explicitly disabled for reduced motion');
 }
 
+
+function testOverviewConnectedStripHierarchyContract() {
+  const viewer = loadViewer();
+  const list = viewer.document.getElementById('overviewList');
+  const row = viewer.buildOverviewServer(
+    { id: 'dense-1', display_name: 'dense', mount_count: 3, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    {
+      server_id: 'dense-1',
+      selected_roots: [
+        { mount_id: 'alpha', capacity_id: 'dev-8-1', storage_media: 'ssd' },
+        { mount_id: 'beta', capacity_id: 'dev-8-2', storage_media: 'hdd' },
+        { mount_id: 'gamma', capacity_id: 'dev-8-3', storage_media: 'mixed' },
+      ],
+      mounts: [
+        { mount_id: 'alpha', path: '/alpha', df_total: 1000 * 1024 ** 3, df_used: 200 * 1024 ** 3, df_avail: 800 * 1024 ** 3, df_use_pct: 20 },
+        { mount_id: 'beta', path: '/beta', df_total: 1000 * 1024 ** 3, df_used: 850 * 1024 ** 3, df_avail: 150 * 1024 ** 3, df_use_pct: 85 },
+        { mount_id: 'gamma', path: '/gamma', df_total: 1000 * 1024 ** 3, df_used: 940 * 1024 ** 3, df_avail: 60 * 1024 ** 3, df_use_pct: 94 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  viewer.renderOverviewList(list, [row], { onOpenServer() {} });
+  const button = list.children[0].children[0];
+  const text = textTree(button);
+  assert.strictEqual(findByClass(button, 'overview-badge').length, 1, 'overview must use one server-level warning/status channel');
+  assert(!text.includes('정상'), 'overview must not render healthy status copy in server or mount text');
+  assert(!text.includes('전체') && !text.includes('집계'), 'overview rows must not include page-level or aggregate capacity copy');
+  assert.strictEqual(findByClass(button, 'overview-mounts').length, 1, 'overview mounts must be one continuous strip container');
+  assert.strictEqual(findByClass(button, 'overview-mount').length, 3, 'overview must keep every actionable mount');
+  assert.strictEqual(findByClass(button, 'overview-mount-cell').length, 0, 'connected strip must not use nested independent mount-card cells');
+  const fields = findByClass(button, 'overview-mount').map(cell => cell.children.map(child => child.className));
+  assert.deepStrictEqual(fields, [
+    ['overview-mount-path', 'overview-media-label', 'overview-mount-pct', 'overview-pressure-bar', 'overview-mount-free'],
+    ['overview-mount-path', 'overview-media-label', 'overview-mount-pct', 'overview-pressure-bar', 'overview-mount-free'],
+    ['overview-mount-path', 'overview-media-label', 'overview-mount-pct', 'overview-pressure-bar', 'overview-mount-free'],
+  ], 'each connected strip segment must emit path, media, percent, bar, free in stable snapshot order');
+  assert.deepStrictEqual(findByClass(button, 'overview-mount').map(cell => textTree(findByClass(cell, 'overview-mount-path')[0])), ['/alpha', '/beta', '/gamma'], 'connected strip must preserve snapshot mount order');
+}
+
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
-  assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*minmax\([^)]*140px[^)]*\)\s+minmax\(0,\s*1fr\)/.test(css), 'compact overview must use a narrow server column');
+  assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*(?:132px|13[2-9]px|14[0-8]px)\s+minmax\(0,\s*1fr\)/.test(css), 'overview must use a fixed 132-148px compact server column');
   assert(/\.overview-row\b[\s\S]*padding:\s*(?:[0-9]+px\s+)*([0-9]+)px/.test(css) && Number(css.match(/\.overview-row\b[\s\S]*padding:\s*(?:[0-9]+px\s+)*([0-9]+)px/)[1]) <= 10, 'compact overview row outer padding must be 10px or smaller');
-  assert(/\.overview-mounts\b[\s\S]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*280px\),\s*1fr\)\)/.test(css), 'desktop overview mounts must use a responsive two/three-column auto-fit grid');
+  assert(/\.overview-mounts\b[\s\S]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*240px\),\s*1fr\)\)/.test(css), 'desktop overview mounts must use a responsive two/three-column auto-fit grid');
   assert(/\.overview-mounts\b[\s\S]*gap:\s*[0-6]px/.test(css), 'compact overview mount grid gaps must be 6px or smaller');
+  assert(/\.overview-mounts\b[\s\S]*background:\s*var\(--surface2\)/.test(css), 'connected overview strip must put the shared surface on the mount container');
+  assert(/\.overview-mounts\b[\s\S]*gap:\s*[4-6]px/.test(css), 'connected overview strip must keep 4-6px internal gaps');
+  assert(/\.overview-mount\b[\s\S]*box-shadow:\s*none/.test(css), 'connected mount segments must not have independent card shadow depth');
+  assert(/\.overview-mount\b[\s\S]*border-right:\s*1px solid var\(--separator\)/.test(css), 'connected mount segments must use separators instead of nested-card borders');
+  assert(/\.overview-mount-pct\b[\s\S]*data-pressure/.test(css) || /\.overview-mount\[data-pressure=\"warning\"\]\s+\.overview-mount-pct[\s\S]*color:\s*var\(--warn\)/.test(css), 'warning/critical color must be scoped to percentage fields');
   assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), 'row grid children must keep min-width:0 in the collapsed layout to prevent clipping');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-mounts\b[\s\S]*grid-template-columns:\s*1fr/.test(css), 'mobile overview must collapse mount cells to one column');
@@ -778,6 +822,7 @@ function testMountCentricResponsiveCssContract() {
   assert(/\.overview-mount-path\b[\s\S]*text-overflow:\s*ellipsis/.test(css), 'compact mount paths must truncate visually');
   assert(/font-variant-numeric:\s*tabular-nums/.test(css), 'compact numeric fields must use tabular numbers');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*main\b[\s\S]*padding:\s*10px/.test(css), '390px mobile layouts must reduce main padding to avoid horizontal overflow');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-row\b[\s\S]*overflow:\s*hidden/.test(css), 'mobile overview rows must explicitly hide horizontal overflow');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css), 'overview styling must continue to respect reduced motion');
 }
 
@@ -1251,6 +1296,7 @@ async function main() {
   await testDetailCapacityUnknownNumbersRenderNeutralDashes();
   await testZeroActionableMountsUseExactKoreanEmptyCopy();
   testDetailCapacityResponsiveCssContract();
+  testOverviewConnectedStripHierarchyContract();
   testMountCentricResponsiveCssContract();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
