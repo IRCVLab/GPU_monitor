@@ -541,6 +541,10 @@
 					로그
 				</a>
 
+				<a href="http://127.0.0.1:8088/" class="btn-ghost text-xs px-3 py-1.5 rounded-lg">
+					Storage
+				</a>
+
 				<div class="relative" bind:this={viewMenuEl}>
 					<button
 						class={`btn-ghost text-xs ${viewMenuOpen ? 'bg-white/10' : ''}`}
