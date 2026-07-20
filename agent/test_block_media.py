@@ -102,6 +102,27 @@ class BlockMediaResolverTests(unittest.TestCase):
 
             self.assertEqual(self.result(fs, "8:1"), MediaResult("dev-8-1", "hdd", "resolved"))
 
+    def test_resolves_nvme_devices_without_a_block_path_component(self):
+        with self.with_sysfs() as td:
+            fs = FakeSysfs(Path(td))
+            disk = fs.root / "devices" / "pci0000:00" / "0000:03:00.0" / "nvme" / "nvme0" / "nvme0n1"
+            partition = disk / "nvme0n1p1"
+            partition.mkdir(parents=True)
+            (disk / "queue").mkdir()
+            (disk / "queue" / "rotational").write_text("0\n", encoding="utf-8")
+            (fs.root / "class" / "block" / "nvme0n1").symlink_to(
+                Path("../../devices/pci0000:00/0000:03:00.0/nvme/nvme0/nvme0n1")
+            )
+            (fs.root / "class" / "block" / "nvme0n1p1").symlink_to(
+                Path("../../devices/pci0000:00/0000:03:00.0/nvme/nvme0/nvme0n1/nvme0n1p1")
+            )
+            fs.devlink(
+                "259:1",
+                Path("../../devices/pci0000:00/0000:03:00.0/nvme/nvme0/nvme0n1/nvme0n1p1"),
+            )
+
+            self.assertEqual(self.result(fs, "259:1"), MediaResult("dev-259-1", "ssd", "resolved"))
+
     def test_resolves_ssd_and_hdd_from_whole_disk_rotational(self):
         with self.with_sysfs() as td:
             fs = FakeSysfs(Path(td))

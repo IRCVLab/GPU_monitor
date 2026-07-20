@@ -211,6 +211,14 @@ class BlockMediaResolver:
             for index, part in enumerate(parts[:-1]):
                 if part == "block":
                     return parts[index + 1]
+        if self._within(target, root / "devices"):
+            candidate = target.name
+            for entry in (self.sysfs_root / "class" / "block" / candidate, self.sysfs_root / "block" / candidate):
+                try:
+                    if entry.resolve(strict=True) == target:
+                        return candidate
+                except (OSError, RuntimeError):
+                    continue
         return None
 
     def _specific_block_anchors(self, name: str, root: Path) -> Tuple[Path, ...]:
