@@ -103,7 +103,7 @@ function loadViewer() {
   const h1Count = (html.match(/<h1\b/gi) || []).length;
   assert.strictEqual(h1Count, 1, 'viewer must keep exactly one logical h1');
   assert(html.includes('<p id="sampleDataMarker" class="sample-data-marker" hidden>샘플 데이터</p>'), 'overview must include the initially hidden explicit sample-data marker');
-  assert(html.includes('<section id="overviewAggregate" class="overview-aggregate" aria-label="전체 로컬 스토리지"></section>'), 'overview must include the semantic page aggregate container');
+  assert(!html.includes('id="overviewAggregate"'), 'compact overview must remove the page aggregate container');
   assert(/<ul\s+id="overviewList"/.test(html), 'overview list must be a real ul');
   assert(!/id="overviewList"[^>]*role="list"/.test(html), 'overview list should rely on native list semantics instead of role=list');
   assert(html.includes('id="overviewView"'), 'overview shell must be present');
@@ -412,11 +412,10 @@ async function testBootstrapDetectionIsExplicitAndSequential() {
   });
 }
 
-function testSampleMarkerAndOverviewAggregateAreDataModeDriven() {
+function testSampleMarkerAndCompactOverviewOmitsAggregateSurface() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.rememberBootstrap, 'function', 'bootstrap state setter must be exposed');
   assert.strictEqual(typeof viewer.getOverviewModeDebugState, 'function', 'overview mode debug getter must be exposed');
-  assert.strictEqual(typeof viewer.renderOverviewAggregate, 'function', 'aggregate renderer must be exposed for DOM regression tests');
 
   const marker = viewer.document.getElementById('sampleDataMarker');
   viewer.rememberBootstrap({ mode: 'static', dataMode: 'sample', session: {}, summaries: [], snapshots: [] });
@@ -426,23 +425,10 @@ function testSampleMarkerAndOverviewAggregateAreDataModeDriven() {
   assert.strictEqual(marker.hidden, true, 'sample marker must be hidden in inventory/live mode');
   assert.strictEqual(viewer.getOverviewModeDebugState().dataMode, 'inventory', 'rememberBootstrap must retain inventory dataMode metadata');
 
-  const row = viewer.buildOverviewServer(
-    { id: 'alpha-1', display_name: 'alpha', mount_count: 1 },
-    {
-      server_id: 'alpha-1',
-      selected_roots: [{ mount_id: 'data', capacity_id: 'dev-8-16', storage_media: 'ssd' }],
-      mounts: [{ mount_id: 'data', path: '/data', df_total: 2000, df_used: 500, df_avail: 1500, df_use_pct: 25 }],
-    },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
-  );
-  const aggregate = viewer.buildOverviewAggregate([row]);
-  const aggregateEl = viewer.document.getElementById('overviewAggregate');
-  viewer.renderOverviewAggregate(aggregateEl, aggregate);
-  const aggregateText = textTree(aggregateEl);
-  assert.strictEqual(aggregateEl.hidden, false, 'known aggregate capacity must render visibly');
-  assert(aggregateText.includes('전체 로컬 스토리지'), 'aggregate must identify the managed local storage surface');
-  assert(aggregateText.includes('25%'), 'aggregate must render utilization from the Task 4 semantic model');
-  assert(aggregateText.includes('500 B') && aggregateText.includes('1.95 KB'), 'aggregate must render used and total capacity labels adjacently');
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  assert(!html.includes('id="overviewAggregate"'), 'compact overview must not render a page aggregate container');
+  assert(!/renderOverviewAggregate\s*\(/.test(app), 'compact overview render path must not invoke renderOverviewAggregate');
 }
 
 function testMountCentricOverviewDomFieldsAndStableNavigation() {
@@ -478,10 +464,10 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert.deepStrictEqual(list.children.map(item => item.children[0].dataset.serverId), ['hinton', 'atlas'], 'rendering must not sort by order, name, capacity, or status');
   const hintonButton = list.children[0].children[0];
   assert.strictEqual(hintonButton.getAttribute('aria-label'), undefined, 'row button must not mask descendant subtotal and mount text with a short aria-label');
-  assert(findByClass(hintonButton, 'overview-server-subtotal').length === 1, 'each server header must expose one compact subtotal');
+  assert.strictEqual(findByClass(hintonButton, 'overview-server-subtotal').length, 0, 'compact server rows must not render subtotal labels');
+  assert.strictEqual(findByClass(hintonButton, 'overview-quiet').length, 0, 'normal server rows must not render a normal label');
   const accessibleRowText = textTree(hintonButton);
   assert(accessibleRowText.includes('hinton'), 'row descendant text must include the visible server label');
-  assert(accessibleRowText.includes('73%') && accessibleRowText.includes('2.15 KB / 2.93 KB'), 'row descendant text must include the server subtotal for assistive technologies');
   const cells = findByClass(hintonButton, 'overview-mount-cell');
   assert.strictEqual(cells.length, 2, 'mount-centric overview must render one cell per mount');
   assert.deepStrictEqual(cells.map(cell => findByClass(cell, 'overview-mount-path')[0].textContent), ['/home', '/data'], 'mount cells must preserve snapshot mount order exactly');
@@ -490,16 +476,17 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert.deepStrictEqual(fieldClasses, [
     'overview-mount-path',
     'overview-media-label',
-    'overview-mount-usage',
+    'overview-mount-pct',
     'overview-pressure-bar',
     'overview-mount-free',
-  ], 'each mount cell must render path, neutral media, adjacent used/total+percent, pressure bar, then free capacity');
+  ], 'each mount strip must render path, media, percent, pressure bar, then free capacity');
   assert.strictEqual(findByClass(first, 'overview-media-label')[0].textContent, 'SSD', 'media labels must use neutral storage-class text');
-  assert(textTree(findByClass(first, 'overview-mount-usage')[0]).includes('400 B / 1000 B'), 'used/total capacity text must be present');
-  assert(textTree(findByClass(first, 'overview-mount-usage')[0]).includes('40%'), 'utilization percent must be DOM-adjacent to used/total text');
+  assert.strictEqual(findByClass(first, 'overview-mount-used-total').length, 0, 'compact mount strip must not render used/total capacity text');
+  assert.strictEqual(findByClass(first, 'overview-mount-pct')[0].textContent, '40%', 'utilization percent must be rendered as its own compact field');
   assert(textTree(findByClass(first, 'overview-mount-free')[0]).includes('600 B free'), 'free capacity text must be present after the bar');
   assert(/[가-힣]/.test(textTree(findByClass(first, 'overview-mount-free')[0])), 'pressure/health must include text, not color alone');
-  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('400 B / 1000 B') && accessibleRowText.includes('600 B free'), 'mount path, media, usage, and free information must remain accessible as descendant text');
+  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('40%') && accessibleRowText.includes('600 B free'), 'mount path, media, percent, and free information must remain accessible as descendant text');
+  assert(!accessibleRowText.includes('400 B / 1000 B'), 'compact mount strip must omit used/total text');
 
   hintonButton.onclick();
   assert.deepStrictEqual(opened, ['hinton'], 'click navigation to server detail must be preserved');
@@ -527,11 +514,9 @@ function testServerHeaderCapacityMetaUsesAggregateSemantics() {
   viewer.renderOverviewList(list, [exact], { onOpenServer() {} });
   let button = list.children[0].children[0];
   let metaText = textTree(findByClass(button, 'overview-meta')[0]);
-  let subtotalText = textTree(findByClass(button, 'overview-server-subtotal')[0]);
+  assert.strictEqual(findByClass(button, 'overview-server-subtotal').length, 0, 'compact server rows must not render subtotal labels');
   assert(metaText.includes('500 B free'), 'server header meta must show the deduped aggregate available value once');
   assert(!metaText.includes('1000 B'), 'server header meta must not sum duplicate mount free bytes');
-  assert(subtotalText.includes('500 B free'), 'server subtotal must show the deduped aggregate available value once');
-  assert(!subtotalText.includes('1000 B'), 'server subtotal must not sum duplicate mount free bytes');
 
   const partial = viewer.buildOverviewServer(
     { id: 'partial-1', display_name: 'partial', mount_count: 2 },
@@ -605,20 +590,23 @@ function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
   const text = textTree(button);
   assert(text.includes('/missing-free') && text.includes('Unknown'), 'unknown media/path must remain visible and accessible');
   assert(text.includes('여유 미확인'), 'unknown free capacity must render honest Korean copy');
-  assert(text.includes('— / —'), 'invalid used/total capacity must render unknown dashes');
+  assert(!text.includes('— / —'), 'compact mount strip must omit used/total capacity text');
   assert(!text.includes('0 B free'), 'unknown free capacity must never render as 0 B free');
   assert.strictEqual(button.getAttribute('aria-label'), undefined, 'unknown mount details must not be hidden behind a row aria-label');
 }
 
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
-  assert(/\.overview-mounts\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), 'desktop overview must cap server mount cells at three columns');
+  assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*minmax\([^)]*140px[^)]*\)\s+minmax\(0,\s*1fr\)/.test(css), 'compact overview must use a narrow server column');
+  assert(/\.overview-row\b[\s\S]*padding:\s*(?:[0-9]+px\s+)*([0-9]+)px/.test(css) && Number(css.match(/\.overview-row\b[\s\S]*padding:\s*(?:[0-9]+px\s+)*([0-9]+)px/)[1]) <= 10, 'compact overview row outer padding must be 10px or smaller');
+  assert(/\.overview-mounts\b[\s\S]*gap:\s*[0-6]px/.test(css), 'compact overview mount grid gaps must be 6px or smaller');
   assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');
-  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-server-subtotal\b[\s\S]*white-space:\s*normal/.test(css), 'medium-width layout must allow the server subtotal to wrap at or before row collapse');
-  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-server-subtotal\b[\s\S]*overflow-wrap:\s*(anywhere|break-word)/.test(css), 'medium-width subtotal wrapping must be explicit and maintainable');
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), 'row grid children must keep min-width:0 in the collapsed layout to prevent clipping');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-mounts\b[\s\S]*grid-template-columns:\s*1fr/.test(css), 'mobile overview must collapse mount cells to one column');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*main\b[\s\S]*padding:\s*16px/.test(css), '390px mobile layouts must reduce main padding to avoid horizontal overflow');
+  assert(/\.overview-pressure-bar\b[\s\S]*height:\s*4px/.test(css), 'compact overview pressure bars must be 4px tall');
+  assert(/\.overview-mount-path\b[\s\S]*text-overflow:\s*ellipsis/.test(css), 'compact mount paths must truncate visually');
+  assert(/font-variant-numeric:\s*tabular-nums/.test(css), 'compact numeric fields must use tabular numbers');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*main\b[\s\S]*padding:\s*10px/.test(css), '390px mobile layouts must reduce main padding to avoid horizontal overflow');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css), 'overview styling must continue to respect reduced motion');
 }
 
@@ -1058,7 +1046,7 @@ async function main() {
   testSnapshotLoadFailureRendersAsVisibleException();
   testRouteNavigationAndBackShellContract();
   await testBootstrapDetectionIsExplicitAndSequential();
-  testSampleMarkerAndOverviewAggregateAreDataModeDriven();
+  testSampleMarkerAndCompactOverviewOmitsAggregateSurface();
   testMountCentricOverviewDomFieldsAndStableNavigation();
   testServerHeaderCapacityMetaUsesAggregateSemantics();
   testUnknownMountCapacityDomStaysNeutralAndAccessible();

@@ -162,7 +162,6 @@ function setSampleDataMarker(dataMode) {
 function renderOverview() {
   clearOverviewError();
   currentOverviewRows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries, DEFAULT_CAPACITY_THRESHOLDS);
-  renderOverviewAggregate(document.getElementById("overviewAggregate"), buildOverviewAggregate(currentOverviewRows));
   const list = document.getElementById("overviewList");
   renderOverviewList(list, currentOverviewRows, { onOpenServer: (serverId) => navigateToServer(serverId) });
   setSampleDataMarker(currentDataMode);

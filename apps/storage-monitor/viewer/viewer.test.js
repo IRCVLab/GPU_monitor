@@ -244,6 +244,35 @@ function makeCapacitySnapshot(overrides = {}) {
   }, overrides);
 }
 
+function testActionableMountFilteringPreservesNonBootOrder() {
+  const { isActionableMountPath, summarizeMounts, buildOverviewServer } = require("./overview.js");
+  assert.strictEqual(typeof isActionableMountPath, "function", "actionable mount path helper must be exported");
+  assert.strictEqual(isActionableMountPath("/boot"), false, "plain /boot must be omitted from compact overview");
+  assert.strictEqual(isActionableMountPath("/boot/"), false, "trailing slash /boot must be normalized before filtering");
+  assert.strictEqual(isActionableMountPath("/boot/efi"), false, "nested /boot/efi must be omitted from compact overview");
+  assert.strictEqual(isActionableMountPath("/bootloader"), true, "non-/boot prefix collisions must remain actionable");
+
+  const snapshot = makeCapacitySnapshot({
+    selected_roots: [
+      { mount_id: "boot", capacity_id: "dev-8-1", storage_media: "ssd" },
+      { mount_id: "home", capacity_id: "dev-8-2", storage_media: "ssd" },
+      { mount_id: "efi", capacity_id: "dev-8-3", storage_media: "ssd" },
+      { mount_id: "data", capacity_id: "dev-8-4", storage_media: "hdd" },
+      { mount_id: "bootloader", capacity_id: "dev-8-5", storage_media: "mixed" },
+    ],
+    mounts: [
+      { mount_id: "boot", path: "/boot", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
+      { mount_id: "home", path: "/home", df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
+      { mount_id: "efi", path: "/boot/efi", df_total: 200, df_used: 50, df_avail: 150, df_use_pct: 25 },
+      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      { mount_id: "bootloader", path: "/bootloader", df_total: 300, df_used: 120, df_avail: 180, df_use_pct: 40 },
+    ],
+  });
+  assert.deepStrictEqual(summarizeMounts(snapshot).map(m => m.path), ["/home", "/data", "/bootloader"], "summaries must omit /boot mounts while preserving non-boot input order");
+  const row = buildOverviewServer(makeSummary({ mount_count: 5 }), snapshot);
+  assert.strictEqual(row.mountCount, 3, "server row mount count must use actionable mount count after boot filtering");
+}
+
 function testOverviewIdentityAwareMountModelAndAggregate() {
   const {
     selectedRootByMountId,
@@ -818,6 +847,7 @@ async function main() {
   await testLoadServerSummariesReturnsNormalizedEnvelope();
   await testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures();
   testOverviewCapacityThresholdsAndPrecedence();
+  testActionableMountFilteringPreservesNonBootOrder();
   testOverviewIdentityAwareMountModelAndAggregate();
   testOverviewUnknownCapacityLabelsDoNotImplyZero();
   testUnknownMountCapacityRemainsNeutralAndHonest();
