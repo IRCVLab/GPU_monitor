@@ -16,6 +16,19 @@ from typing import Dict, Optional, Set, Tuple
 _MAJOR_MINOR_RE = re.compile(r"^(\d{1,10}):(\d{1,10})$")
 
 
+def _parse_major_minor(major_minor: str) -> Optional[Tuple[str, str]]:
+    if not isinstance(major_minor, str):
+        return None
+    match = _MAJOR_MINOR_RE.match(major_minor)
+    if not match:
+        return None
+    major = int(match.group(1))
+    minor = int(match.group(2))
+    if major <= 0:
+        return None
+    return f"dev-{major}-{minor}", f"{major}:{minor}"
+
+
 @dataclass(frozen=True)
 class MediaResult:
     capacity_id: Optional[str]
@@ -26,16 +39,10 @@ class MediaResult:
 def capacity_id(major_minor: str) -> Optional[str]:
     """Return canonical ``dev-<major>-<minor>`` for a valid block major:minor."""
 
-    if not isinstance(major_minor, str):
+    parsed = _parse_major_minor(major_minor)
+    if parsed is None:
         return None
-    match = _MAJOR_MINOR_RE.match(major_minor)
-    if not match:
-        return None
-    major = int(match.group(1))
-    minor = int(match.group(2))
-    if major <= 0:
-        return None
-    return f"dev-{major}-{minor}"
+    return parsed[0]
 
 
 class BlockMediaResolver:
@@ -54,27 +61,30 @@ class BlockMediaResolver:
         ``unknown/unresolved``.
         """
 
-        cid = capacity_id(major_minor)
-        if cid is None:
+        parsed = _parse_major_minor(major_minor)
+        if parsed is None:
             return MediaResult(None, "unknown", "unresolved")
-        if major_minor in self._cache:
-            return self._cache[major_minor]
+        cid, canonical_major_minor = parsed
+        if canonical_major_minor in self._cache:
+            return self._cache[canonical_major_minor]
 
-        result = self._resolve_uncached(major_minor, cid)
-        self._cache[major_minor] = result
+        result = self._resolve_uncached(canonical_major_minor, cid)
+        self._cache[canonical_major_minor] = result
         return result
 
     def _resolve_uncached(self, major_minor: str, cid: str) -> MediaResult:
+        anchors = self._block_anchors()
+        if not anchors:
+            return MediaResult(cid, "unknown", "unresolved")
         try:
-            block_root = (self.sysfs_root / "block").resolve(strict=True)
             start = (self.sysfs_root / "dev" / "block" / major_minor).resolve(strict=True)
-        except OSError:
+        except (OSError, RuntimeError):
             return MediaResult(cid, "unknown", "unresolved")
 
-        if not self._within(start, block_root):
+        if not self._within_block_device(start, anchors):
             return MediaResult(cid, "unknown", "unresolved")
 
-        leaves, failed = self._walk(start, block_root, depth=0, visited=set(), node_count=[0])
+        leaves, failed = self._walk(start, anchors, depth=0, visited=set(), node_count=[0])
         if failed or not leaves:
             return MediaResult(cid, "unknown", "unresolved")
         if leaves == {0}:
@@ -88,7 +98,7 @@ class BlockMediaResolver:
     def _walk(
         self,
         path: Path,
-        block_root: Path,
+        anchors: Tuple[Path, ...],
         *,
         depth: int,
         visited: Set[Path],
@@ -98,9 +108,9 @@ class BlockMediaResolver:
             return set(), True
         try:
             real = path.resolve(strict=True)
-        except OSError:
+        except (OSError, RuntimeError):
             return set(), True
-        if not self._within(real, block_root):
+        if not self._within_block_device(real, anchors):
             return set(), True
         if real in visited:
             return set(), True
@@ -111,17 +121,17 @@ class BlockMediaResolver:
 
         rotational = self._read_rotational(real)
 
-        parent = self._partition_parent(real, block_root)
+        parent = self._partition_parent(real, anchors)
         if parent is not None and rotational is None:
-            return self._walk(parent, block_root, depth=depth + 1, visited=visited, node_count=node_count)
+            return self._walk(parent, anchors, depth=depth + 1, visited=visited, node_count=node_count)
 
-        slaves = self._slave_paths(real, block_root)
+        slaves = self._slave_paths(real, anchors)
         if slaves is None:
             return set(), True
         if slaves:
             leaves: Set[int] = set()
             for slave in slaves:
-                child_leaves, failed = self._walk(slave, block_root, depth=depth + 1, visited=visited, node_count=node_count)
+                child_leaves, failed = self._walk(slave, anchors, depth=depth + 1, visited=visited, node_count=node_count)
                 if failed:
                     return set(), True
                 leaves.update(child_leaves)
@@ -142,16 +152,16 @@ class BlockMediaResolver:
             return 1
         return None
 
-    def _partition_parent(self, path: Path, block_root: Path) -> Optional[Path]:
+    def _partition_parent(self, path: Path, anchors: Tuple[Path, ...]) -> Optional[Path]:
         try:
             parent = path.parent.resolve(strict=True)
-        except OSError:
+        except (OSError, RuntimeError):
             return None
-        if parent == block_root or not self._within(parent, block_root):
+        if not self._within_block_device(parent, anchors):
             return None
         return parent
 
-    def _slave_paths(self, path: Path, block_root: Path) -> Optional[Tuple[Path, ...]]:
+    def _slave_paths(self, path: Path, anchors: Tuple[Path, ...]) -> Optional[Tuple[Path, ...]]:
         slaves_dir = path / "slaves"
         try:
             entries = tuple(sorted(slaves_dir.iterdir(), key=lambda entry: entry.name))
@@ -164,12 +174,50 @@ class BlockMediaResolver:
         for entry in entries:
             try:
                 target = entry.resolve(strict=True)
-            except OSError:
+            except (OSError, RuntimeError):
                 return None
-            if not self._within(target, block_root):
+            if not self._within_block_device(target, anchors):
                 return None
             resolved.append(target)
         return tuple(resolved)
+
+    def _block_anchors(self) -> Tuple[Path, ...]:
+        try:
+            root = self.sysfs_root.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return tuple()
+
+        anchors = []
+        seen = set()
+        for directory in (self.sysfs_root / "class" / "block", self.sysfs_root / "block"):
+            try:
+                entries = tuple(directory.iterdir())
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    target = entry.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    continue
+                if target in seen or not self._is_sysfs_block_target(target, root):
+                    continue
+                seen.add(target)
+                anchors.append(target)
+        return tuple(anchors)
+
+    def _is_sysfs_block_target(self, target: Path, root: Path) -> bool:
+        try:
+            relative = target.relative_to(root)
+        except ValueError:
+            return False
+        parts = relative.parts
+        return (
+            len(parts) >= 2
+            and (
+                parts[0] == "block"
+                or (parts[0] == "devices" and "block" in parts[1:])
+            )
+        )
 
     @staticmethod
     def _within(path: Path, root: Path) -> bool:
@@ -178,3 +226,6 @@ class BlockMediaResolver:
             return True
         except ValueError:
             return False
+
+    def _within_block_device(self, path: Path, anchors: Tuple[Path, ...]) -> bool:
+        return any(self._within(path, anchor) for anchor in anchors)
