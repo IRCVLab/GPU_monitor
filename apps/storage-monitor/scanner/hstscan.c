@@ -546,7 +546,7 @@ struct mount_info {
 struct scan_ctx {
     struct queue queue;
     dev_t        root_dev;        /* st_dev of the target root; stay within it */
-    const char  *mount_path;      /* mount this target belongs to (for user_add) */
+    const char  *scan_root;       /* requested target path (for user_add) */
     int          stale_days;
     int          nthreads;
 
@@ -650,7 +650,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
 
                 w->dirs++;
                 w->bytes += dbytes;
-                user_add(st.st_uid, c->mount_path, dbytes, 0);
+                user_add(st.st_uid, c->scan_root, dbytes, 0);
 
                 struct work_item *ni = xmalloc(sizeof *ni);
                 ni->path = path_join(it->path, name);
@@ -678,7 +678,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                     node_add_file(it->node, fbytes);
                     w->files++;
                     w->bytes += fbytes;
-                    user_add(st.st_uid, c->mount_path, fbytes, 1);
+                    user_add(st.st_uid, c->scan_root, fbytes, 1);
 
                     /* top-N */
                     char *fpath = path_join(it->path, name);
@@ -729,7 +729,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                     if (sbytes) {
                         node_add_self_bytes(it->node, sbytes);
                         w->bytes += sbytes;
-                        user_add(st.st_uid, c->mount_path, sbytes, 0);
+                        user_add(st.st_uid, c->scan_root, sbytes, 0);
                     }
                 }
             }
@@ -762,8 +762,7 @@ static void *worker_main(void *argp) {
  * ----------------------------------------------------------------------- */
 
 /* Returns root node of the scanned tree, or NULL on failure to open root. */
-static struct node *scan_target(const char *target, const char *mount_path,
-                                int nthreads, int stale_days,
+static struct node *scan_target(const char *target, int nthreads, int stale_days,
                                 uint64_t *out_bytes, uint64_t *out_files,
                                 uint64_t *out_dirs, uint64_t *out_errors) {
     struct stat rst;
@@ -774,7 +773,7 @@ static struct node *scan_target(const char *target, const char *mount_path,
     struct scan_ctx ctx;
     queue_init(&ctx.queue);
     ctx.root_dev = rst.st_dev;
-    ctx.mount_path = mount_path;
+    ctx.scan_root = target;
     ctx.stale_days = stale_days;
     ctx.nthreads = nthreads;
     pthread_mutex_init(&ctx.stat_lock, NULL);
@@ -788,7 +787,7 @@ static struct node *scan_target(const char *target, const char *mount_path,
 
     ctx.scanned_dirs = 1;
     ctx.scanned_bytes = root_blocks;
-    user_add(rst.st_uid, mount_path, root_blocks, 0);
+    user_add(rst.st_uid, target, root_blocks, 0);
 
     struct work_item *first = xmalloc(sizeof *first);
     first->path = xstrdup(target);
@@ -1110,10 +1109,10 @@ int main(int argc, char **argv) {
             continue;  /* target absent (e.g. /data not present): skip silently */
         }
         const char *fstype = NULL;
-        const char *mount_path = mount_for_path(tg, &fstype);
+        (void)mount_for_path(tg, &fstype);
 
         uint64_t b=0,fl=0,d=0,e=0;
-        struct node *tree = scan_target(tg, mount_path, nthreads, stale_days,
+        struct node *tree = scan_target(tg, nthreads, stale_days,
                                         &b, &fl, &d, &e);
         if (!tree) continue;
 
