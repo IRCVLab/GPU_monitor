@@ -882,6 +882,16 @@ function testCleanupCommandSafetyContracts() {
   assert.strictEqual(validateCleanupSelection(nestedFailedSnapshot, { path: "/home/user/file.bin", kind: "file" }).reason.code, "selected_root_status", "a nested failed root must win over an outer complete '/' root");
 }
 
+
+function testOverviewConnectedStripCssContract() {
+  const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
+  assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*140px\s+minmax\(0,\s*1fr\)/.test(css), "overview rows must preserve a compact fixed server column");
+  assert(/\.overview-mounts\b[\s\S]*background:\s*var\(--surface2\)/.test(css), "overview mounts must share one connected strip surface");
+  assert(/\.overview-mount\b[\s\S]*box-shadow:\s*none/.test(css), "overview mount segments must not have independent card shadows");
+  assert(/\.overview-mount\b[\s\S]*border-right:\s*1px solid var\(--separator\)/.test(css), "overview mount segments must use separators inside the shared strip");
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-row\b[\s\S]*overflow:\s*hidden/.test(css), "mobile overview rows must explicitly guard against horizontal overflow");
+}
+
 async function main() {
   testCleanShellThemeBootstrapContract();
   testHostManifest();
@@ -897,6 +907,7 @@ async function main() {
   testOverviewCapacityIdExactSchemaValidation();
   testOverviewCapacityBytesRequireStrictJsonNumbers();
   testOverviewRouteHelpers();
+  testOverviewConnectedStripCssContract();
   testRemovedAnalysisSurfaceIsAbsentFromViewerFiles();
   testTreemapFidelity();
   testCleanupCommandSafetyContracts();

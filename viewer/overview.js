@@ -492,9 +492,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
 
   const statusWrap = makeEl(doc, "div", "overview-row-status");
   const primary = createStatusBadge(doc, row.primaryStatus, "overview-badge-primary");
-  const secondary = createStatusBadge(doc, row.secondaryStatus, "overview-badge-secondary");
   if (primary) statusWrap.appendChild(primary);
-  if (secondary) statusWrap.appendChild(secondary);
 
   main.appendChild(titleWrap);
   if (statusWrap.children.length) main.appendChild(statusWrap);
@@ -505,7 +503,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
     mountsWrap.appendChild(makeEl(doc, "div", "overview-mount overview-mount-empty", "표시할 데이터 마운트 없음"));
   } else {
     for (const mount of row.mounts) {
-      const mountEl = makeEl(doc, "div", "overview-mount overview-mount-cell");
+      const mountEl = makeEl(doc, "div", "overview-mount");
       mountEl.setAttribute("data-pressure", mount.pressure);
       const pathEl = makeEl(doc, "div", "overview-mount-path", mount.path);
       pathEl.title = mount.path;
