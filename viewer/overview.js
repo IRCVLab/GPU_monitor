@@ -81,19 +81,24 @@ function hasOwn(obj, key) {
 }
 
 function normalizeBytes(value) {
-  const num = Number(value);
-  return Number.isFinite(num) && num >= 0 ? Math.round(num) : null;
+  if (typeof value !== "number") return null;
+  if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) return null;
+  return value;
+}
+
+function isCanonicalDecimal(raw, allowZero) {
+  if (!/^\d{1,10}$/.test(raw)) return false;
+  if (raw.length > 1 && raw[0] === "0") return false;
+  if (!allowZero && raw === "0") return false;
+  return true;
 }
 
 function canonicalCapacityId(value) {
   if (typeof value !== "string") return null;
-  const match = value.trim().match(/^dev-(\d+)-(\d+)$/);
+  const match = value.match(/^dev-(\d+)-(\d+)$/);
   if (!match) return null;
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return null;
-  if (major === 0 && minor === 0) return null;
-  return "dev-" + major + "-" + minor;
+  if (!isCanonicalDecimal(match[1], false) || !isCanonicalDecimal(match[2], true)) return null;
+  return value;
 }
 
 function canonicalMajorMinor(value) {
@@ -159,7 +164,15 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
   });
 }
 
-function aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial) {
+function aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial, hasKnownCapacity) {
+  if (!hasKnownCapacity) {
+    return {
+      totalLabel: "—",
+      usedLabel: "—",
+      availableLabel: "—",
+      utilizationLabel: "—",
+    };
+  }
   const utilization = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) + "%" : "—";
   if (!isPartial) {
     return {
@@ -186,10 +199,11 @@ function capacityNumbersKnown(mount) {
 }
 
 function aggregateMountCapacity(mounts) {
+  const inputMounts = Array.isArray(mounts) ? mounts : [];
   const groups = new Map();
   const partialReasons = [];
   let excludedMountCount = 0;
-  for (const mount of Array.isArray(mounts) ? mounts : []) {
+  for (const mount of inputMounts) {
     if (!mount || !mount.identity || !mount.identity.key) {
       excludedMountCount += 1;
       partialReasons.push(String((mount && mount.path) || "unknown mount") + ": unresolved capacity identity, 1개 마운트 제외");
@@ -207,10 +221,12 @@ function aggregateMountCapacity(mounts) {
   for (const [identityKey, group] of groups) {
     const first = group[0];
     const identityLabel = first.identity.value || identityKey;
-    const consistent = capacityNumbersKnown(first) && group.every(mount => capacityNumbersKnown(mount) && sameCapacityNumbers(first, mount));
+    const allNumbersKnown = group.every(capacityNumbersKnown);
+    const consistent = allNumbersKnown && group.every(mount => sameCapacityNumbers(first, mount));
     if (!consistent) {
       excludedMountCount += group.length;
-      partialReasons.push(identityLabel + ": inconsistent capacity data, " + group.length + "개 마운트 제외");
+      const reason = allNumbersKnown ? "inconsistent capacity data" : "invalid capacity numbers";
+      partialReasons.push(identityLabel + ": " + reason + ", " + group.length + "개 마운트 제외");
       continue;
     }
     totalBytes += first.totalBytes;
@@ -224,7 +240,9 @@ function aggregateMountCapacity(mounts) {
       availableBytes: first.availableBytes,
     });
   }
-  const isPartial = excludedMountCount > 0 || partialReasons.length > 0;
+  if (!inputMounts.length) partialReasons.push("no known capacity identities");
+  const hasKnownCapacity = capacityEntries.length > 0;
+  const isPartial = excludedMountCount > 0 || partialReasons.length > 0 || !hasKnownCapacity;
   return Object.assign({
     isPartial,
     excludedMountCount,
@@ -233,7 +251,7 @@ function aggregateMountCapacity(mounts) {
     usedBytes,
     availableBytes,
     capacityEntries,
-  }, aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial));
+  }, aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial, hasKnownCapacity));
 }
 
 function buildOverviewAggregate(rows) {
@@ -257,7 +275,8 @@ function buildOverviewAggregate(rows) {
     usedBytes += entry.usedBytes;
     availableBytes += entry.availableBytes;
   }
-  const isPartial = excludedMountCount > 0 || partialReasons.length > 0;
+  const hasKnownCapacity = pageEntries.size > 0;
+  const isPartial = excludedMountCount > 0 || partialReasons.length > 0 || !hasKnownCapacity;
   return Object.assign({
     isPartial,
     excludedMountCount,
@@ -265,7 +284,7 @@ function buildOverviewAggregate(rows) {
     totalBytes,
     usedBytes,
     availableBytes,
-  }, aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial));
+  }, aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial, hasKnownCapacity));
 }
 
 function strongestPressure(mounts) {
