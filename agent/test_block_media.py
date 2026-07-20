@@ -55,6 +55,15 @@ class FakeSysfs:
         self.devlink(major_minor, Path("../../devices/pci0000:00/0000:00:17.0/block") / name)
         return target
 
+    def real_linux_partition(self, disk_name: str, part_name: str, major_minor: str) -> Path:
+        part = self.root / "devices" / "pci0000:00" / "0000:00:17.0" / "block" / disk_name / part_name
+        part.mkdir()
+        (self.root / "class" / "block" / part_name).symlink_to(
+            Path("../../devices/pci0000:00/0000:00:17.0/block") / disk_name / part_name
+        )
+        self.devlink(major_minor, Path("../../devices/pci0000:00/0000:00:17.0/block") / disk_name / part_name)
+        return part
+
 
 class CapacityIdTests(unittest.TestCase):
     def test_capacity_id_canonicalizes_valid_major_minor(self):
@@ -131,6 +140,21 @@ class BlockMediaResolverTests(unittest.TestCase):
             fs.slave("md0", "sdd")
             fs.slave("md0", "sde")
             self.assertEqual(self.result(fs, "9:0"), MediaResult("dev-9-0", "hdd", "resolved"))
+
+    def test_partition_slave_dag_reuses_shared_parent_disk_without_cycle(self):
+        with self.with_sysfs() as td:
+            fs = FakeSysfs(Path(td))
+            fs.disk("dm-0")
+            fs.devlink("253:0", "../../block/dm-0")
+            fs.real_linux_disk("sda", "8:0", "1\n")
+            fs.real_linux_partition("sda", "sda1", "8:1")
+            fs.real_linux_partition("sda", "sda2", "8:2")
+            slaves = fs.root / "block" / "dm-0" / "slaves"
+            slaves.mkdir()
+            (slaves / "sda1").symlink_to(Path("../../../devices/pci0000:00/0000:00:17.0/block/sda/sda1"))
+            (slaves / "sda2").symlink_to(Path("../../../devices/pci0000:00/0000:00:17.0/block/sda/sda2"))
+
+            self.assertEqual(self.result(fs, "253:0"), MediaResult("dev-253-0", "hdd", "resolved"))
 
     def test_mixed_slave_media_is_resolved_as_mixed(self):
         with self.with_sysfs() as td:
@@ -219,6 +243,24 @@ class BlockMediaResolverTests(unittest.TestCase):
             (fs.root / "class" / "block" / "fakeblock").symlink_to(Path("../../outside/fakeblock"))
             fs.devlink("8:65", "../../outside/fakeblock")
             self.assertEqual(self.result(fs, "8:65"), MediaResult("dev-8-65", "unknown", "unresolved"))
+
+    def test_resolution_does_not_scan_unrelated_block_entries(self):
+        with self.with_sysfs() as td:
+            fs = FakeSysfs(Path(td))
+            for idx in range(100):
+                fs.disk(f"unrelated{idx}", "1\n")
+            fs.disk("sda", "0\n")
+            fs.devlink("8:0", "../../block/sda")
+            resolver = BlockMediaResolver(fs.root, max_nodes=2)
+            original_iterdir = Path.iterdir
+
+            def bounded_iterdir(path):
+                if path in (fs.root / "class" / "block", fs.root / "block"):
+                    raise AssertionError("resolver must not globally scan block entries")
+                return original_iterdir(path)
+
+            with mock.patch.object(Path, "iterdir", bounded_iterdir):
+                self.assertEqual(resolver.resolve("8:0"), MediaResult("dev-8-0", "ssd", "resolved"))
 
     def test_results_are_cached_by_canonical_major_minor(self):
         with self.with_sysfs() as td:
