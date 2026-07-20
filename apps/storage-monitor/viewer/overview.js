@@ -366,6 +366,7 @@ function deriveSecondaryStatus(summaryInput, primaryCode) {
 function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS, error = null) {
   const summary = normalizeSummary(summaryInput);
   const mounts = summarizeMounts(snapshot, thresholds);
+  const snapshotHasMountList = Array.isArray(snapshot && snapshot.mounts);
   const primaryStatus = derivePrimaryStatus(summary, snapshot, thresholds, error);
   const secondaryStatus = deriveSecondaryStatus(summary, primaryStatus.code);
   const aggregate = aggregateMountCapacity(mounts);
@@ -374,7 +375,7 @@ function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
     id: summary.id,
     displayName: summary.display_name || summary.id,
     order: summary.order,
-    mountCount: mounts.length || summary.mount_count,
+    mountCount: snapshotHasMountList ? mounts.length : summary.mount_count,
     totalAvailableBytes: hasKnownCapacity ? aggregate.availableBytes : null,
     totalAvailableLabel: hasKnownCapacity ? aggregate.availableLabel : "여유 미확인",
     mounts,
