@@ -43,3 +43,8 @@ Implemented and deployed the final review-fix wave for Storage Viz. Current comm
   - `#overviewStatus` = empty, hidden, `aria-live="polite"`
   - click Storage `GPU Monitor` link → `http://127.0.0.1:15173/`
   - console errors: `[]`; page errors: `[]`
+
+## Generated-output cleanup — 2026-07-21 03:31 KST
+
+- Removed the tracked generated Playwright screenshot and JSON evidence files because generated output must not remain in the repository and the screenshot may expose operational data.
+- Preserved the textual verification evidence above; no replacement screenshot or browser artifact was generated.
