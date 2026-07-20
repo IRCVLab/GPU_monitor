@@ -12,6 +12,9 @@
     {
       "mount_id": "rootfs",
       "major_minor": "8:1",
+      "capacity_id": "dev-8-1",
+      "storage_media": "ssd",
+      "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/rootfs",
       "mount_root": "/",
       "mountpoint": "/",
@@ -22,12 +25,15 @@
       "scanned_files": 174870,
       "scanned_dirs": 36921,
       "blocked_count": 1,
-      "error_count": 6,
+      "error_count": 0,
       "error_code": "EACCES"
     },
     {
       "mount_id": "data",
       "major_minor": "8:16",
+      "capacity_id": "dev-8-16",
+      "storage_media": "mixed",
+      "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/data",
       "mount_root": "/",
       "mountpoint": "/data",
@@ -36,14 +42,17 @@
       "status": "partial",
       "scanned_bytes": 7532298895360,
       "scanned_files": 3211400,
-      "scanned_dirs": 21598,
+      "scanned_dirs": 26902,
       "blocked_count": 1,
-      "error_count": 12,
+      "error_count": 1,
       "error_code": "EACCES"
     },
     {
       "mount_id": "data1",
       "major_minor": "8:32",
+      "capacity_id": "dev-8-32",
+      "storage_media": "ssd",
+      "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/data1",
       "mount_root": "/",
       "mountpoint": "/data1",
@@ -52,7 +61,7 @@
       "status": "complete",
       "scanned_bytes": 1149977493504,
       "scanned_files": 376400,
-      "scanned_dirs": 11041,
+      "scanned_dirs": 21598,
       "blocked_count": 0,
       "error_count": 0,
       "error_code": null
@@ -60,6 +69,9 @@
     {
       "mount_id": "data3",
       "major_minor": "8:48",
+      "capacity_id": "dev-8-48",
+      "storage_media": "hdd",
+      "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/data3",
       "mount_root": "/",
       "mountpoint": "/data3",
@@ -68,7 +80,7 @@
       "status": "partial",
       "scanned_bytes": 5194762944512,
       "scanned_files": 1031290,
-      "scanned_dirs": 53808,
+      "scanned_dirs": 51322,
       "blocked_count": 0,
       "error_count": 2,
       "error_code": "EIO"
@@ -80,14 +92,17 @@
       "mount_id": "rootfs",
       "scan_root": "/home",
       "fstype": "ext4",
-      "df_total": 83426059561,
+      "capacity_id": "dev-8-1",
+      "storage_media": "ssd",
+      "storage_media_confidence": "resolved",
+      "df_total": 84051755007,
       "df_used": 53793123205,
-      "df_avail": 29632936356,
+      "df_avail": 30258631802,
       "df_use_pct": 64,
       "scanned_bytes": 51724156928,
       "scanned_files": 174870,
       "scanned_dirs": 36921,
-      "errors": 6,
+      "errors": 0,
       "tree": {
         "name": "/home",
         "kind": "directory",
@@ -152,14 +167,17 @@
       "mount_id": "data",
       "scan_root": "/data",
       "fstype": "xfs",
-      "df_total": 8758487087627,
+      "capacity_id": "dev-8-16",
+      "storage_media": "mixed",
+      "storage_media_confidence": "resolved",
+      "df_total": 8801787473229,
       "df_used": 7833590851174,
-      "df_avail": 924896236453,
+      "df_avail": 968196622055,
       "df_use_pct": 89,
       "scanned_bytes": 7532298895360,
       "scanned_files": 3211400,
-      "scanned_dirs": 21598,
-      "errors": 12,
+      "scanned_dirs": 26902,
+      "errors": 1,
       "tree": {
         "name": "/data",
         "kind": "directory",
@@ -347,7 +365,7 @@
                 "bytes": 1610612736000,
                 "files": 410000,
                 "uid": 0,
-                "mtime": 80,
+                "mtime": 1712288000,
                 "other_bytes": 0
               },
               {
@@ -356,7 +374,7 @@
                 "bytes": 42949672960,
                 "files": 980000,
                 "uid": 0,
-                "mtime": 22,
+                "mtime": 1717299200,
                 "other_bytes": 0
               }
             ]
@@ -369,13 +387,16 @@
       "mount_id": "data1",
       "scan_root": "/data1",
       "fstype": "ext4",
-      "df_total": 1554023639870,
+      "capacity_id": "dev-8-32",
+      "storage_media": "ssd",
+      "storage_media_confidence": "resolved",
+      "df_total": 1553216354862,
       "df_used": 1195976593244,
-      "df_avail": 358047046626,
+      "df_avail": 357239761618,
       "df_use_pct": 77,
       "scanned_bytes": 1149977493504,
       "scanned_files": 376400,
-      "scanned_dirs": 11041,
+      "scanned_dirs": 21598,
       "errors": 0,
       "tree": {
         "name": "/data1",
@@ -401,7 +422,7 @@
                 "bytes": 558345748480,
                 "files": 78000,
                 "uid": 1007,
-                "mtime": 2,
+                "mtime": 1719027200,
                 "other_bytes": 0
               },
               {
@@ -410,7 +431,7 @@
                 "bytes": 139586437120,
                 "files": 240000,
                 "uid": 1007,
-                "mtime": 0,
+                "mtime": 1719200000,
                 "other_bytes": 0
               }
             ]
@@ -430,7 +451,7 @@
                 "bytes": 322122547200,
                 "files": 1200,
                 "uid": 1008,
-                "mtime": 20,
+                "mtime": 1717472000,
                 "other_bytes": 0
               },
               {
@@ -439,7 +460,7 @@
                 "bytes": 102005473280,
                 "files": 56000,
                 "uid": 1008,
-                "mtime": 1,
+                "mtime": 1719113600,
                 "other_bytes": 0
               }
             ]
@@ -452,13 +473,16 @@
       "mount_id": "data3",
       "scan_root": "/data3",
       "fstype": "xfs",
-      "df_total": 5771958827235,
+      "capacity_id": "dev-8-48",
+      "storage_media": "hdd",
+      "storage_media_confidence": "resolved",
+      "df_total": 5747397300310,
       "df_used": 5402553462292,
-      "df_avail": 369405364943,
+      "df_avail": 344843838018,
       "df_use_pct": 94,
       "scanned_bytes": 5194762944512,
       "scanned_files": 1031290,
-      "scanned_dirs": 53808,
+      "scanned_dirs": 51322,
       "errors": 2,
       "tree": {
         "name": "/data3",
@@ -484,7 +508,7 @@
                 "bytes": 2254857830400,
                 "files": 520000,
                 "uid": 0,
-                "mtime": 400,
+                "mtime": 1684640000,
                 "other_bytes": 0
               },
               {
@@ -493,7 +517,7 @@
                 "bytes": 1825361100800,
                 "files": 480000,
                 "uid": 0,
-                "mtime": 200,
+                "mtime": 1701920000,
                 "other_bytes": 0
               },
               {
@@ -502,7 +526,7 @@
                 "bytes": 644245094400,
                 "files": 8000,
                 "uid": 1002,
-                "mtime": 300,
+                "mtime": 1693280000,
                 "other_bytes": 0
               }
             ]
@@ -513,7 +537,7 @@
             "bytes": 408021893120,
             "files": 22000,
             "uid": 1004,
-            "mtime": 150,
+            "mtime": 1706240000,
             "other_bytes": 0
           }
         ]
@@ -525,7 +549,7 @@
       "uid": 0,
       "name": "root",
       "bytes": 5868313640960,
-      "files": 1870323,
+      "files": 1868501,
       "by_mount": {
         "/data": 1712618209280,
         "/data1": 12884901888,
@@ -537,7 +561,7 @@
       "uid": 1002,
       "name": "sungjin",
       "bytes": 2866890670080,
-      "files": 912027,
+      "files": 914775,
       "by_mount": {
         "/data": 2222645575680,
         "/data3": 644245094400
@@ -547,7 +571,7 @@
       "uid": 1004,
       "name": "donguk",
       "bytes": 1579474223104,
-      "files": 504925,
+      "files": 503654,
       "by_mount": {
         "/data": 1171452329984,
         "/data3": 408021893120
@@ -557,7 +581,7 @@
       "uid": 1003,
       "name": "sungoh",
       "bytes": 970662608896,
-      "files": 312658,
+      "files": 311630,
       "by_mount": {
         "/data": 970662608896
       }
@@ -566,7 +590,7 @@
       "uid": 1006,
       "name": "jaehyeon",
       "bytes": 845034815488,
-      "files": 272044,
+      "files": 272041,
       "by_mount": {
         "/data": 845034815488
       }
@@ -575,7 +599,7 @@
       "uid": 1007,
       "name": "geonyeong",
       "bytes": 707595862016,
-      "files": 228003,
+      "files": 226721,
       "by_mount": {
         "/data1": 707595862016
       }
@@ -584,7 +608,7 @@
       "uid": 1005,
       "name": "dohyun",
       "bytes": 609885356032,
-      "files": 196892,
+      "files": 195306,
       "by_mount": {
         "/data": 609885356032
       }
@@ -592,18 +616,18 @@
     {
       "uid": 1008,
       "name": "shchoi",
-      "bytes": 518487277568,
-      "files": 166375,
+      "bytes": 474463862784,
+      "files": 153026,
       "by_mount": {
         "/data1": 429496729600,
-        "/home": 88990547968
+        "/home": 44967133184
       }
     },
     {
       "uid": 1010,
       "name": "minseo",
       "bytes": 6442450944,
-      "files": 3477,
+      "files": 2776,
       "by_mount": {
         "/home": 6442450944
       }
@@ -613,7 +637,7 @@
     {
       "path": "/data3/archive/2023_projects/backup_full.img",
       "kind": "file",
-      "bytes": 408242094080,
+      "bytes": 408940445696,
       "uid": 0,
       "owner": "root",
       "mtime": 1683776000
@@ -621,31 +645,15 @@
     {
       "path": "/data/shared/public_datasets/laion_subset.tar",
       "kind": "file",
-      "bytes": 343679172608,
+      "bytes": 343736844288,
       "uid": 0,
       "owner": "root",
       "mtime": 1712115200
     },
     {
-      "path": "/data/sungjin/datasets/pile_dedup.bin",
-      "kind": "file",
-      "bytes": 279464378368,
-      "uid": 1002,
-      "owner": "sungjin",
-      "mtime": 1716521600
-    },
-    {
-      "path": "/data3/archive/2024_projects/dataset_v3.tar",
-      "kind": "file",
-      "bytes": 258450915328,
-      "uid": 0,
-      "owner": "root",
-      "mtime": 1701488000
-    },
-    {
       "path": "/data/sungoh/imagenet/imagenet_full.tar",
       "kind": "file",
-      "bytes": 225919893504,
+      "bytes": 225633632256,
       "uid": 1003,
       "owner": "sungoh",
       "mtime": 1698464000
@@ -653,199 +661,31 @@
     {
       "path": "/data/jaehyeon/llm_corpus/c4_en.jsonl",
       "kind": "file",
-      "bytes": 202800889856,
+      "bytes": 202711760896,
       "uid": 1006,
       "owner": "jaehyeon",
       "mtime": 1715225600
     },
     {
-      "path": "/data3/donguk_archive/raw_capture_2023.tar",
-      "kind": "file",
-      "bytes": 139671371776,
-      "uid": 1004,
-      "owner": "donguk",
-      "mtime": 1706153600
-    },
-    {
-      "path": "/data1/shchoi/backups/home_snapshot_0601.tar.zst",
-      "kind": "file",
-      "bytes": 128967507968,
-      "uid": 1008,
-      "owner": "shchoi",
-      "mtime": 1717385600
-    },
-    {
-      "path": "/data/sungjin/datasets/audio_set.tar",
-      "kind": "file",
-      "bytes": 102941851648,
-      "uid": 1002,
-      "owner": "sungjin",
-      "mtime": 1716348800
-    },
-    {
       "path": "/data/donguk/video_raw/session_4k_master.mov",
       "kind": "file",
-      "bytes": 102280200192,
+      "bytes": 102043222016,
       "uid": 1004,
       "owner": "donguk",
       "mtime": 1713929600
     },
     {
-      "path": "/data/donguk/video_raw/drone_flight_8k.mov",
-      "kind": "file",
-      "bytes": 82284904448,
-      "uid": 1004,
-      "owner": "donguk",
-      "mtime": 1713670400
-    },
-    {
-      "path": "/data/sungoh/imagenet/val_high_res.tar",
-      "kind": "file",
-      "bytes": 69081235456,
-      "uid": 1003,
-      "owner": "sungoh",
-      "mtime": 1701833600
-    },
-    {
-      "path": "/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt",
-      "kind": "file",
-      "bytes": 56743690240,
-      "uid": 1002,
-      "owner": "sungjin",
-      "mtime": 1692848000
-    },
-    {
-      "path": "/data/sungjin/checkpoints/run0421_final.pt",
-      "kind": "file",
-      "bytes": 51344572416,
-      "uid": 1002,
-      "owner": "sungjin",
-      "mtime": 1718854400
-    },
-    {
-      "path": "/data/dohyun/nerf_scenes/city_block_raw.zip",
-      "kind": "file",
-      "bytes": 44492128256,
-      "uid": 1005,
-      "owner": "dohyun",
-      "mtime": 1718422400
-    },
-    {
-      "path": "/data/sungoh/tmp/scratch_blob.bin",
-      "kind": "file",
-      "bytes": 43020976128,
-      "uid": 1003,
-      "owner": "sungoh",
-      "mtime": 1719200000
-    },
-    {
-      "path": "/data/donguk/features/clip_feats.npy",
-      "kind": "file",
-      "bytes": 36579573760,
-      "uid": 1004,
-      "owner": "donguk",
-      "mtime": 1718076800
-    },
-    {
-      "path": "/data3/archive/2023_projects/logs_archive.tar.gz",
-      "kind": "file",
-      "bytes": 29602349056,
-      "uid": 0,
-      "owner": "root",
-      "mtime": 1684467200
-    },
-    {
-      "path": "/data/shared/public_datasets/coco2017.zip",
-      "kind": "file",
-      "bytes": 27506245632,
-      "uid": 0,
-      "owner": "root",
-      "mtime": 1712201600
-    },
-    {
-      "path": "/data/jaehyeon/llm_corpus/wiki_dump.xml.bz2",
-      "kind": "file",
-      "bytes": 23657971712,
-      "uid": 1006,
-      "owner": "jaehyeon",
-      "mtime": 1714880000
-    },
-    {
-      "path": "/data1/shchoi/scratch/core.dump",
-      "kind": "file",
-      "bytes": 20182990848,
-      "uid": 1008,
-      "owner": "shchoi",
-      "mtime": 1719113600
-    },
-    {
       "path": "/data1/geonyeong/diffusion/sd_xl_weights.safetensors",
       "kind": "file",
-      "bytes": 14669578240,
+      "bytes": 14579400704,
       "uid": 1007,
       "owner": "geonyeong",
       "mtime": 1718940800
     },
     {
-      "path": "/data/sungoh/models/vit_huge.bin",
-      "kind": "file",
-      "bytes": 12178161664,
-      "uid": 1003,
-      "owner": "sungoh",
-      "mtime": 1718249600
-    },
-    {
-      "path": "/data/dohyun/ckpt/nerf_big_080000.pth",
-      "kind": "file",
-      "bytes": 10331619328,
-      "uid": 1005,
-      "owner": "dohyun",
-      "mtime": 1718854400
-    },
-    {
-      "path": "/home/shchoi/docker/overlay2_blob.img",
-      "kind": "file",
-      "bytes": 9708765184,
-      "uid": 1008,
-      "owner": "shchoi",
-      "mtime": 1718768000
-    },
-    {
-      "path": "/data1/geonyeong/samples/grid_render.mp4",
-      "kind": "file",
-      "bytes": 8930721792,
-      "uid": 1007,
-      "owner": "geonyeong",
-      "mtime": 1719113600
-    },
-    {
-      "path": "/data/sungjin/runs/tensorboard_events.bin",
-      "kind": "file",
-      "bytes": 8442085376,
-      "uid": 1002,
-      "owner": "sungjin",
-      "mtime": 1719113600
-    },
-    {
-      "path": "/data/shared/conda_envs/env_torch.tar.gz",
-      "kind": "file",
-      "bytes": 6515851264,
-      "uid": 0,
-      "owner": "root",
-      "mtime": 1717299200
-    },
-    {
-      "path": "/data/jaehyeon/eval/results_dump.parquet",
-      "kind": "file",
-      "bytes": 6014631936,
-      "uid": 1006,
-      "owner": "jaehyeon",
-      "mtime": 1719027200
-    },
-    {
       "path": "/home/shchoi/miniconda3/pkgs/cuda_toolkit.tar",
       "kind": "file",
-      "bytes": 4798283776,
+      "bytes": 4368367616,
       "uid": 1008,
       "owner": "shchoi",
       "mtime": 1715657600
@@ -855,137 +695,38 @@
     {
       "path": "/data3/archive/2023_projects/backup_full.img",
       "kind": "file",
-      "bytes": 408699273216,
+      "bytes": 408769527808,
       "uid": 0,
       "owner": "root",
       "mtime": 1683776000,
       "age_days": 410
     },
     {
-      "path": "/data3/archive/2024_projects/dataset_v3.tar",
-      "kind": "file",
-      "bytes": 257915092992,
-      "uid": 0,
-      "owner": "root",
-      "mtime": 1701488000,
-      "age_days": 205
-    },
-    {
       "path": "/data/sungoh/imagenet/imagenet_full.tar",
       "kind": "file",
-      "bytes": 226209300480,
+      "bytes": 225842298880,
       "uid": 1003,
       "owner": "sungoh",
       "mtime": 1698464000,
       "age_days": 240
     },
     {
-      "path": "/data3/donguk_archive/raw_capture_2023.tar",
-      "kind": "file",
-      "bytes": 140325683200,
-      "uid": 1004,
-      "owner": "donguk",
-      "mtime": 1656992000,
-      "age_days": 720
-    },
-    {
-      "path": "/data/donguk/video_raw/drone_flight_8k.mov",
-      "kind": "file",
-      "bytes": 81777393664,
-      "uid": 1004,
-      "owner": "donguk",
-      "mtime": 1686368000,
-      "age_days": 380
-    },
-    {
       "path": "/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt",
       "kind": "file",
-      "bytes": 55928946688,
+      "bytes": 56357814272,
       "uid": 1002,
       "owner": "sungjin",
       "mtime": 1692848000,
       "age_days": 305
     },
     {
-      "path": "/data/sungjin/checkpoints/run0119_obsolete.pt",
-      "kind": "file",
-      "bytes": 51032096768,
-      "uid": 1002,
-      "owner": "sungjin",
-      "mtime": 1702956800,
-      "age_days": 188
-    },
-    {
-      "path": "/data/dohyun/nerf_scenes/abandoned_scene.zip",
-      "kind": "file",
-      "bytes": 44042289152,
-      "uid": 1005,
-      "owner": "dohyun",
-      "mtime": 1706240000,
-      "age_days": 150
-    },
-    {
-      "path": "/data/sungoh/tmp/scratch_blob.bin",
-      "kind": "file",
-      "bytes": 43058724864,
-      "uid": 1003,
-      "owner": "sungoh",
-      "mtime": 1704080000,
-      "age_days": 175
-    },
-    {
-      "path": "/data3/archive/2023_projects/logs_archive.tar.gz",
-      "kind": "file",
-      "bytes": 29089595392,
-      "uid": 0,
-      "owner": "root",
-      "mtime": 1684467200,
-      "age_days": 402
-    },
-    {
       "path": "/data1/shchoi/scratch/core.dump",
       "kind": "file",
-      "bytes": 19876806656,
+      "bytes": 20142096384,
       "uid": 1008,
       "owner": "shchoi",
       "mtime": 1696736000,
       "age_days": 260
-    },
-    {
-      "path": "/data1/geonyeong/samples/grid_render.mp4",
-      "kind": "file",
-      "bytes": 8849981440,
-      "uid": 1007,
-      "owner": "geonyeong",
-      "mtime": 1707104000,
-      "age_days": 140
-    },
-    {
-      "path": "/home/minseo/old_env.tar.gz",
-      "kind": "file",
-      "bytes": 6835666944,
-      "uid": 1010,
-      "owner": "minseo",
-      "mtime": 1710992000,
-      "age_days": 95
-    },
-    {
-      "path": "/data/jaehyeon/eval/old_results.parquet",
-      "kind": "file",
-      "bytes": 6121586688,
-      "uid": 1006,
-      "owner": "jaehyeon",
-      "mtime": 1700192000,
-      "age_days": 220
-    },
-    {
-      "path": "/home/minseo/journal_archive.gz",
-      "kind": "file",
-      "bytes": 3673161728,
-      "uid": 1010,
-      "owner": "minseo",
-      "mtime": 1707968000,
-      "age_days": 130
     }
   ],
   "blocked": [

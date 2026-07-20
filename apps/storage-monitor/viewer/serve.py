@@ -23,7 +23,9 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
 from typing import Any, Mapping
 from urllib.parse import unquote, urlsplit
 
-from collector.inventory import SERVER_ID_RE, Server, load_inventory
+from collector.inventory import SERVER_ID_RE, Server as InventoryServer, load_inventory
+
+SAMPLE_FILE_TOKEN_RE = SERVER_ID_RE
 from collector.jobs import RescanJobManager
 from collector.service import PollService
 from collector.store import CentralStore
@@ -60,30 +62,94 @@ if TRUSTED_PROXY and OPERATORS and not ALLOWED_ORIGINS:
 
 
 class _DevSampleService:
+    data_mode = "sample"
+
     def __init__(self, sample_dir: str | os.PathLike[str]) -> None:
         root = Path(sample_dir).resolve()
         if root.is_symlink() or not root.is_dir():
             raise ValueError("STORAGE_VIZ_DEV_SAMPLE_DIR must be a real directory")
         self.root = root
-        self.servers: tuple[Server, ...] = tuple(self._load_servers())
+        self._paths: dict[str, Path] = {}
+        self.servers: tuple[InventoryServer, ...] = tuple(self._load_servers())
 
-    def _load_servers(self) -> list[Server]:
-        servers = []
-        for order, path in enumerate(sorted(self.root.glob("*.sample.json"))):
-            if path.is_symlink() or path.name.startswith("."):
-                continue
-            sid = path.name[:-len(".sample.json")]
-            if not sid or not SERVER_ID_RE.fullmatch(sid) or sid in {".", ".."}:
-                continue
-            servers.append(Server(sid, sid, order, "localhost", 22, True, "monitoring", Path("/dev/null"), Path("/dev/null"), {"server_id": sid}, "a" * 64))
+    def _safe_manifest_path(self, file_token: str) -> Path:
+        if not isinstance(file_token, str) or not SAMPLE_FILE_TOKEN_RE.fullmatch(file_token) or file_token in {".", ".."}:
+            raise ValueError("sample manifest file token is unsafe")
+        candidate = self.root / f"{file_token}.sample.json"
+        if candidate.is_symlink():
+            raise ValueError("sample manifest file is missing or unsafe")
+        path = candidate.resolve(strict=False)
+        path.relative_to(self.root)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("sample manifest file is missing or unsafe")
+        return path
+
+    def _load_manifest(self) -> list[dict[str, Any]]:
+        manifest_candidate = self.root / "hosts.json"
+        if manifest_candidate.is_symlink():
+            raise ValueError("DEV_SAMPLE_DIR requires hosts.json manifest")
+        manifest_path = manifest_candidate.resolve(strict=False)
+        manifest_path.relative_to(self.root)
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError("DEV_SAMPLE_DIR requires hosts.json manifest")
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("sample manifest must be a non-empty array")
+        return raw
+
+    def _load_servers(self) -> list[InventoryServer]:
+        rows = self._load_manifest()
+        servers: list[InventoryServer] = []
+        seen_ids: set[str] = set()
+        seen_files: set[str] = set()
+        default_count = 0
+        listed_files: set[str] = set()
+        for order, row in enumerate(rows):
+            if not isinstance(row, Mapping):
+                raise ValueError("sample manifest rows must be objects")
+            unknown_keys = set(row) - {"id", "label", "file", "default", "sample_data", "description"}
+            if unknown_keys:
+                raise ValueError("sample manifest row has unknown keys")
+            sid = row.get("id")
+            file_token = row.get("file")
+            label = row.get("label", sid)
+            if not isinstance(sid, str) or not SERVER_ID_RE.fullmatch(sid) or sid in {".", ".."}:
+                raise ValueError("sample manifest id is unsafe")
+            if sid in seen_ids:
+                raise ValueError("duplicate sample server id")
+            if not isinstance(file_token, str) or not SAMPLE_FILE_TOKEN_RE.fullmatch(file_token) or file_token in {".", ".."}:
+                raise ValueError("sample manifest file token is unsafe")
+            if file_token in seen_files:
+                raise ValueError("duplicate sample file")
+            if row.get("default") is True:
+                default_count += 1
+            if row.get("sample_data") is not True:
+                raise ValueError("sample manifest rows require sample_data true")
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError("sample manifest label is required")
+            path = self._safe_manifest_path(file_token)
+            seen_ids.add(sid)
+            seen_files.add(file_token)
+            listed_files.add(path.name)
+            self._paths[sid] = path
+            servers.append(InventoryServer(sid, label, order, "localhost", 22, True, "monitoring", Path("/dev/null"), Path("/dev/null"), {"server_id": sid}, "a" * 64))
+        if default_count != 1:
+            raise ValueError("sample manifest requires exactly one default")
+        present_files = {p.name for p in self.root.glob("*.sample.json") if not p.name.startswith(".")}
+        if present_files != listed_files:
+            raise ValueError("sample files must exactly match hosts.json")
         return servers
 
     def _path(self, server_id: str) -> Path:
-        if server_id not in {s.id for s in self.servers}:
-            raise ValueError("unknown server")
-        path = (self.root / f"{server_id}.sample.json").resolve()
-        path.relative_to(self.root)
-        return path
+        try:
+            path = self._paths[server_id]
+        except KeyError as exc:
+            raise ValueError("unknown server") from exc
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(self.root)
+        if resolved.is_symlink() or not resolved.is_file():
+            raise ValueError("sample file is missing or unsafe")
+        return resolved
 
     def server_summaries(self) -> list[dict[str, Any]]:
         out = []
@@ -108,6 +174,7 @@ if DEV_SAMPLE_DIR:
 elif INVENTORY_PATH:
     inventory = load_inventory(INVENTORY_PATH)
     service = PollService(list(inventory.servers), CentralStore(STATE_DIR), OpenSshTransport())
+    service.data_mode = "inventory"
     jobs = RescanJobManager(service, cooldown_seconds=COOLDOWN_SECONDS, max_concurrent=MAX_CONCURRENT_RESCANS)
     RESCAN_API_ENABLED = TRUSTED_PROXY and bool(OPERATORS)
 else:
@@ -351,7 +418,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if service is None:
             return self._json({"error": "api not configured"}, 503)
         if parts == ["api", "servers"]:
-            return self._json({"servers": service.server_summaries()})
+            return self._json({"data_mode": getattr(service, "data_mode", "inventory"), "servers": service.server_summaries()})
         if len(parts) == 4 and parts[1] == "servers" and parts[3] == "snapshot":
             try:
                 snap = service.load_snapshot_for_api(parts[2])

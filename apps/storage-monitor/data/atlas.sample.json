@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "hostname": "atlas",
+  "server_id": "atlas",
+  "scanner_version": "0.1.0",
+  "scan_started_unix": 1719200100,
+  "scan_finished_unix": 1719200142,
+  "scan_duration_sec": 42,
+  "scan_generation": "atlas-1719200100-v1",
+  "run_as_root": true,
+  "selected_roots": [
+    {
+      "mount_id": "vol1",
+      "major_minor": "9:101",
+      "capacity_id": "dev-9-101",
+      "storage_media": "ssd",
+      "storage_media_confidence": "resolved",
+      "mount_source": "/dev/storage-viz/atlas-vol1",
+      "mount_root": "/",
+      "mountpoint": "/srv/atlas/vol1",
+      "scan_root": "/srv/atlas/vol1",
+      "fstype": "xfs",
+      "status": "complete",
+      "scanned_bytes": 507879882752,
+      "scanned_files": 10230,
+      "scanned_dirs": 32154,
+      "blocked_count": 0,
+      "error_count": 0,
+      "error_code": null
+    },
+    {
+      "mount_id": "vol2",
+      "major_minor": "9:102",
+      "capacity_id": "dev-9-102",
+      "storage_media": "ssd",
+      "storage_media_confidence": "resolved",
+      "mount_source": "/dev/storage-viz/atlas-vol2",
+      "mount_root": "/",
+      "mountpoint": "/srv/atlas/vol2",
+      "scan_root": "/srv/atlas/vol2",
+      "fstype": "xfs",
+      "status": "complete",
+      "scanned_bytes": 693637218304,
+      "scanned_files": 20460,
+      "scanned_dirs": 56185,
+      "blocked_count": 0,
+      "error_count": 0,
+      "error_code": null
+    }
+  ],
+  "mounts": [
+    {
+      "path": "/srv/atlas/vol1",
+      "mount_id": "vol1",
+      "scan_root": "/srv/atlas/vol1",
+      "fstype": "xfs",
+      "capacity_id": "dev-9-101",
+      "storage_media": "ssd",
+      "storage_media_confidence": "resolved",
+      "df_total": 5281950780620,
+      "df_used": 528195078062,
+      "df_avail": 4753755702558,
+      "df_use_pct": 10,
+      "scanned_bytes": 507879882752,
+      "scanned_files": 10230,
+      "scanned_dirs": 32154,
+      "errors": 0,
+      "tree": {
+        "name": "/srv/atlas/vol1",
+        "kind": "directory",
+        "bytes": 507879882752,
+        "files": 10230,
+        "uid": 0,
+        "mtime": 1719200100,
+        "other_bytes": 1073741824,
+        "children": [
+          {
+            "name": "projects",
+            "kind": "directory",
+            "bytes": 383325831168,
+            "files": 8990,
+            "uid": 1101,
+            "mtime": 1719113700,
+            "other_bytes": 2147483648,
+            "children": [
+              {
+                "name": "dataset",
+                "kind": "directory",
+                "bytes": 236223201280,
+                "files": 8000,
+                "uid": 1101,
+                "mtime": 1717904100,
+                "other_bytes": 0
+              },
+              {
+                "name": "models",
+                "kind": "directory",
+                "bytes": 144955146240,
+                "files": 900,
+                "uid": 1102,
+                "mtime": 1718768100,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "scratch",
+            "kind": "directory",
+            "bytes": 123480309760,
+            "files": 1200,
+            "uid": 1103,
+            "mtime": 1719027300,
+            "other_bytes": 0
+          }
+        ]
+      }
+    },
+    {
+      "path": "/srv/atlas/vol2",
+      "mount_id": "vol2",
+      "scan_root": "/srv/atlas/vol2",
+      "fstype": "xfs",
+      "capacity_id": "dev-9-102",
+      "storage_media": "ssd",
+      "storage_media_confidence": "resolved",
+      "df_total": 879735008580,
+      "df_used": 721382707036,
+      "df_avail": 158352301544,
+      "df_use_pct": 82,
+      "scanned_bytes": 693637218304,
+      "scanned_files": 20460,
+      "scanned_dirs": 56185,
+      "errors": 0,
+      "tree": {
+        "name": "/srv/atlas/vol2",
+        "kind": "directory",
+        "bytes": 693637218304,
+        "files": 20460,
+        "uid": 0,
+        "mtime": 1719200100,
+        "other_bytes": 2147483648,
+        "children": [
+          {
+            "name": "projects",
+            "kind": "directory",
+            "bytes": 551903297536,
+            "files": 17980,
+            "uid": 1101,
+            "mtime": 1719113700,
+            "other_bytes": 4294967296,
+            "children": [
+              {
+                "name": "dataset",
+                "kind": "directory",
+                "bytes": 365072220160,
+                "files": 16000,
+                "uid": 1101,
+                "mtime": 1717817700,
+                "other_bytes": 0
+              },
+              {
+                "name": "models",
+                "kind": "directory",
+                "bytes": 182536110080,
+                "files": 1800,
+                "uid": 1102,
+                "mtime": 1718681700,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "scratch",
+            "kind": "directory",
+            "bytes": 139586437120,
+            "files": 2400,
+            "uid": 1103,
+            "mtime": 1719027300,
+            "other_bytes": 0
+          }
+        ]
+      }
+    }
+  ],
+  "users": [
+    {
+      "uid": 1101,
+      "name": "avery",
+      "bytes": 607737872384,
+      "files": 196871,
+      "by_mount": {
+        "/srv/atlas/vol1": 238370684928,
+        "/srv/atlas/vol2": 369367187456
+      }
+    },
+    {
+      "uid": 1102,
+      "name": "blake",
+      "bytes": 327491256320,
+      "files": 105733,
+      "by_mount": {
+        "/srv/atlas/vol1": 144955146240,
+        "/srv/atlas/vol2": 182536110080
+      }
+    },
+    {
+      "uid": 1103,
+      "name": "casey",
+      "bytes": 263066746880,
+      "files": 87506,
+      "by_mount": {
+        "/srv/atlas/vol1": 123480309760,
+        "/srv/atlas/vol2": 139586437120
+      }
+    },
+    {
+      "uid": 0,
+      "name": "root",
+      "bytes": 3221225472,
+      "files": 4213,
+      "by_mount": {
+        "/srv/atlas/vol1": 1073741824,
+        "/srv/atlas/vol2": 2147483648
+      }
+    }
+  ],
+  "top_files": [
+    {
+      "path": "/srv/atlas/vol1/projects/dataset/atlas.tar",
+      "kind": "file",
+      "bytes": 150918397952,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1708832100
+    },
+    {
+      "path": "/srv/atlas/vol1/projects/models/checkpoint.pt",
+      "kind": "file",
+      "bytes": 120282152960,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1716608100
+    }
+  ],
+  "stale": [
+    {
+      "path": "/srv/atlas/vol1/projects/dataset/old-atlas.tar",
+      "kind": "file",
+      "bytes": 145668177920,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1700192100,
+      "age_days": 220
+    }
+  ],
+  "blocked": []
+}

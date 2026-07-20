@@ -1,0 +1,276 @@
+{
+  "schema_version": 1,
+  "hostname": "zeus",
+  "server_id": "zeus",
+  "scanner_version": "0.1.0",
+  "scan_started_unix": 1719200300,
+  "scan_finished_unix": 1719200342,
+  "scan_duration_sec": 42,
+  "scan_generation": "zeus-1719200300-v1",
+  "run_as_root": true,
+  "selected_roots": [
+    {
+      "mount_id": "vol1",
+      "major_minor": "9:301",
+      "capacity_id": "dev-9-301",
+      "storage_media": "mixed",
+      "storage_media_confidence": "resolved",
+      "mount_source": "/dev/storage-viz/zeus-vol1",
+      "mount_root": "/",
+      "mountpoint": "/srv/zeus/vol1",
+      "scan_root": "/srv/zeus/vol1",
+      "fstype": "xfs",
+      "status": "complete",
+      "scanned_bytes": 1152124977152,
+      "scanned_files": 10230,
+      "scanned_dirs": 3000,
+      "blocked_count": 0,
+      "error_count": 0,
+      "error_code": null
+    },
+    {
+      "mount_id": "vol2",
+      "major_minor": "9:302",
+      "capacity_id": "dev-9-302",
+      "storage_media": "unknown",
+      "storage_media_confidence": "unresolved",
+      "mount_source": "/dev/storage-viz/zeus-vol2",
+      "mount_root": "/",
+      "mountpoint": "/srv/zeus/vol2",
+      "scan_root": "/srv/zeus/vol2",
+      "fstype": "xfs",
+      "status": "partial",
+      "scanned_bytes": 1337882312704,
+      "scanned_files": 20460,
+      "scanned_dirs": 55701,
+      "blocked_count": 0,
+      "error_count": 1,
+      "error_code": "EIO"
+    },
+    {
+      "mount_id": "unresolved",
+      "major_minor": "9:399",
+      "capacity_id": "dev-9-399",
+      "storage_media": "unknown",
+      "storage_media_confidence": "unresolved",
+      "mount_source": "/dev/storage-viz/zeus-unresolved",
+      "mount_root": "/",
+      "mountpoint": "/srv/zeus/lost",
+      "scan_root": "/srv/zeus/lost",
+      "fstype": "xfs",
+      "status": "failed",
+      "scanned_bytes": 0,
+      "scanned_files": 0,
+      "scanned_dirs": 0,
+      "blocked_count": 0,
+      "error_count": 1,
+      "error_code": "ENODEV"
+    }
+  ],
+  "mounts": [
+    {
+      "path": "/srv/zeus/vol1",
+      "mount_id": "vol1",
+      "scan_root": "/srv/zeus/vol1",
+      "fstype": "xfs",
+      "capacity_id": "dev-9-301",
+      "storage_media": "mixed",
+      "storage_media_confidence": "resolved",
+      "df_total": 1361602245725,
+      "df_used": 1198209976238,
+      "df_avail": 163392269487,
+      "df_use_pct": 88,
+      "scanned_bytes": 1152124977152,
+      "scanned_files": 10230,
+      "scanned_dirs": 3000,
+      "errors": 0,
+      "tree": {
+        "name": "/srv/zeus/vol1",
+        "kind": "directory",
+        "bytes": 1152124977152,
+        "files": 10230,
+        "uid": 0,
+        "mtime": 1719200300,
+        "other_bytes": 1073741824,
+        "children": [
+          {
+            "name": "projects",
+            "kind": "directory",
+            "bytes": 812822560768,
+            "files": 8990,
+            "uid": 1101,
+            "mtime": 1719113900,
+            "other_bytes": 2147483648,
+            "children": [
+              {
+                "name": "dataset",
+                "kind": "directory",
+                "bytes": 450971566080,
+                "files": 8000,
+                "uid": 1101,
+                "mtime": 1717904300,
+                "other_bytes": 0
+              },
+              {
+                "name": "models",
+                "kind": "directory",
+                "bytes": 359703511040,
+                "files": 900,
+                "uid": 1102,
+                "mtime": 1718768300,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "scratch",
+            "kind": "directory",
+            "bytes": 338228674560,
+            "files": 1200,
+            "uid": 1103,
+            "mtime": 1719027500,
+            "other_bytes": 0
+          }
+        ]
+      }
+    },
+    {
+      "path": "/srv/zeus/vol2",
+      "mount_id": "vol2",
+      "scan_root": "/srv/zeus/vol2",
+      "fstype": "xfs",
+      "capacity_id": "dev-9-302",
+      "storage_media": "unknown",
+      "storage_media_confidence": "unresolved",
+      "df_total": 1449372505429,
+      "df_used": 1391397605212,
+      "df_avail": 57974900217,
+      "df_use_pct": 96,
+      "scanned_bytes": 1337882312704,
+      "scanned_files": 20460,
+      "scanned_dirs": 55701,
+      "errors": 1,
+      "tree": {
+        "name": "/srv/zeus/vol2",
+        "kind": "directory",
+        "bytes": 1337882312704,
+        "files": 20460,
+        "uid": 0,
+        "mtime": 1719200300,
+        "other_bytes": 2147483648,
+        "children": [
+          {
+            "name": "projects",
+            "kind": "directory",
+            "bytes": 981400027136,
+            "files": 17980,
+            "uid": 1101,
+            "mtime": 1719113900,
+            "other_bytes": 4294967296,
+            "children": [
+              {
+                "name": "dataset",
+                "kind": "directory",
+                "bytes": 579820584960,
+                "files": 16000,
+                "uid": 1101,
+                "mtime": 1717817900,
+                "other_bytes": 0
+              },
+              {
+                "name": "models",
+                "kind": "directory",
+                "bytes": 397284474880,
+                "files": 1800,
+                "uid": 1102,
+                "mtime": 1718681900,
+                "other_bytes": 0
+              }
+            ]
+          },
+          {
+            "name": "scratch",
+            "kind": "directory",
+            "bytes": 354334801920,
+            "files": 2400,
+            "uid": 1103,
+            "mtime": 1719027500,
+            "other_bytes": 0
+          }
+        ]
+      }
+    }
+  ],
+  "users": [
+    {
+      "uid": 1101,
+      "name": "avery",
+      "bytes": 1037234601984,
+      "files": 334404,
+      "by_mount": {
+        "/srv/zeus/vol1": 453119049728,
+        "/srv/zeus/vol2": 584115552256
+      }
+    },
+    {
+      "uid": 1102,
+      "name": "blake",
+      "bytes": 756987985920,
+      "files": 245398,
+      "by_mount": {
+        "/srv/zeus/vol1": 359703511040,
+        "/srv/zeus/vol2": 397284474880
+      }
+    },
+    {
+      "uid": 1103,
+      "name": "casey",
+      "bytes": 692563476480,
+      "files": 220728,
+      "by_mount": {
+        "/srv/zeus/vol1": 338228674560,
+        "/srv/zeus/vol2": 354334801920
+      }
+    },
+    {
+      "uid": 0,
+      "name": "root",
+      "bytes": 3221225472,
+      "files": 2313,
+      "by_mount": {
+        "/srv/zeus/vol1": 1073741824,
+        "/srv/zeus/vol2": 2147483648
+      }
+    }
+  ],
+  "top_files": [
+    {
+      "path": "/srv/zeus/vol1/projects/dataset/zeus.tar",
+      "kind": "file",
+      "bytes": 365781057536,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1708832300
+    },
+    {
+      "path": "/srv/zeus/vol1/projects/models/checkpoint.pt",
+      "kind": "file",
+      "bytes": 335593603072,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1716608300
+    }
+  ],
+  "stale": [
+    {
+      "path": "/srv/zeus/vol1/projects/dataset/old-zeus.tar",
+      "kind": "file",
+      "bytes": 360380891136,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1700192300,
+      "age_days": 220
+    }
+  ],
+  "blocked": []
+}
