@@ -128,6 +128,7 @@ function loadViewer() {
   const docListeners = new Map();
   doc = {
     createElement: (tag) => new FakeElement(tag, doc),
+    createDocumentFragment: () => new FakeElement('fragment', doc),
     getElementById: getEl,
     querySelector: () => new FakeElement('div', doc),
     querySelectorAll: () => [],
@@ -640,6 +641,111 @@ async function testDetailCapacityUsesCompactRowsAndFiltersBootMounts() {
 }
 
 
+async function testDetailNormalizationFiltersBootEverywhereAndRecomputesUsers() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 4, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+    dataMode: 'inventory',
+  });
+  viewer.loadSnapshotForCurrentSource = async () => ({
+    server_id: 'alpha-1',
+    hostname: 'alpha-host',
+    scanner_version: '1.0',
+    run_as_root: true,
+    mounts: [
+      { mount_id: 'boot', path: '/boot', fstype: 'vfat', df_total: 1000, df_used: 900, df_avail: 100, df_use_pct: 90 },
+      { mount_id: 'efi', path: '/boot/efi', fstype: 'vfat', df_total: 1000, df_used: 800, df_avail: 200, df_use_pct: 80 },
+      { mount_id: 'data', path: '/data', fstype: 'xfs', df_total: 5000, df_used: 1200, df_avail: 3800, df_use_pct: 24 },
+      { mount_id: 'bootloader', path: '/bootloader', fstype: 'xfs', df_total: 2000, df_used: 300, df_avail: 1700, df_use_pct: 15 },
+    ],
+    users: [
+      { uid: 1000, name: 'alice', bytes: 9999, files: 4, by_mount: { '/boot': 4000, '/boot/efi': 3000, '/data': 1200, '/bootloader': 300 } },
+      { uid: 1001, name: 'boot-only', bytes: 7000, files: 2, by_mount: { '/boot': 7000 } },
+    ],
+    top_files: [
+      { path: '/boot/initrd.img', bytes: 4000, uid: 1000, owner: 'alice', mtime: 1710000000, kind: 'file' },
+      { path: '/boot/efi/EFI/BOOTX64.EFI', bytes: 3000, uid: 1000, owner: 'alice', mtime: 1710000000, kind: 'file' },
+      { path: '/data/model.bin', bytes: 1200, uid: 1000, owner: 'alice', mtime: 1710000000, kind: 'file' },
+      { path: '/bootloader/readme.txt', bytes: 300, uid: 1000, owner: 'alice', mtime: 1710000000, kind: 'file' },
+    ],
+    stale: [
+      { path: '/boot/old-kernel', bytes: 5000, uid: 1001, owner: 'boot-only', mtime: 1600000000, age_days: 1000, kind: 'file' },
+      { path: '/data/old.bin', bytes: 600, uid: 1000, owner: 'alice', mtime: 1600000000, age_days: 1000, kind: 'file' },
+    ],
+  });
+  viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('alpha-1');
+  await flushPromises();
+
+  const state = viewer.getCurrentDetailDebugState().data;
+  assert.deepStrictEqual(state.mounts.map(m => m.path), ['/data', '/bootloader'], 'central detail normalization must remove /boot mounts while preserving non-boot prefix paths');
+  assert.deepStrictEqual(state.top_files.map(f => f.path), ['/data/model.bin', '/bootloader/readme.txt'], 'top files must not leak /boot or /boot descendants');
+  assert.deepStrictEqual(state.stale.map(f => f.path), ['/data/old.bin'], 'stale files must not leak /boot or /boot descendants');
+  const alice = state.users.find(u => u.uid === 1000);
+  assert.deepStrictEqual(Object.keys(alice.by_mount).sort(), ['/bootloader', '/data'], 'user by_mount maps must remove /boot keys but keep non-boot prefix paths');
+  assert.strictEqual(alice.bytes, 1500, 'All-user bytes must be recomputed from actionable mount paths rather than stale user bytes');
+  assert.strictEqual(state.users.some(u => u.uid === 1001), false, 'boot-only users must disappear after actionable-byte normalization');
+}
+
+async function testDetailCapacityUnknownNumbersRenderNeutralDashes() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+    dataMode: 'inventory',
+  });
+  viewer.loadSnapshotForCurrentSource = async () => ({
+    server_id: 'alpha-1', hostname: 'alpha-host', scanner_version: '1.0', run_as_root: true,
+    users: [], top_files: [], stale: [],
+    mounts: [{ mount_id: 'mystery', path: '/mystery', fstype: 'xfs', storage_media: 'unknown' }],
+  });
+  viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('alpha-1');
+  await flushPromises();
+
+  const row = viewer.document.getElementById('caps').children[0];
+  const html = row.innerHTML;
+  assert.strictEqual(row.getAttribute('data-pressure'), 'unknown', 'missing detail capacity metrics must use neutral unknown styling');
+  assert(html.includes('<span class="figure">—</span> used / <span class="figure">—</span>'), 'missing used/total must render em dashes');
+  assert(html.includes('<div class="cap-pct">—</div>'), 'missing percentage must render an em dash instead of invented 0%');
+  assert(html.includes('<span class="figure">—</span> free'), 'missing available bytes must render an em dash');
+  assert(!html.includes('0<span>%</span>') && !html.includes('var(--ok)'), 'unknown detail capacity must not invent healthy 0% styling');
+}
+
+async function testZeroActionableMountsUseExactKoreanEmptyCopy() {
+  const viewer = loadViewer();
+  const snapshot = {
+    server_id: 'boot-only',
+    selected_roots: [{ mount_id: 'boot', capacity_id: 'dev-8-1', storage_media: 'ssd' }],
+    mounts: [{ mount_id: 'boot', path: '/boot', df_total: 1000, df_used: 500, df_avail: 500, df_use_pct: 50 }],
+  };
+  const row = viewer.buildOverviewServer({ id: 'boot-only', display_name: 'boot-only', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null }, snapshot, viewer.DEFAULT_CAPACITY_THRESHOLDS);
+  const list = viewer.document.getElementById('overviewList');
+  viewer.renderOverviewList(list, [row], { onOpenServer() {} });
+  assert.strictEqual(textTree(list), 'boot-only0개 마운트표시할 데이터 마운트 없음', 'overview must use the exact Korean empty-mount copy');
+
+  viewer.rememberBootstrap({
+    mode: 'api', session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [{ id: 'boot-only', display_name: 'boot-only', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null }],
+    snapshots: [], dataMode: 'inventory',
+  });
+  viewer.loadSnapshotForCurrentSource = async () => Object.assign({ hostname: 'boot-only', scanner_version: '1.0', run_as_root: true, users: [], top_files: [], stale: [] }, snapshot);
+  viewer.navigateToServer('boot-only', { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('boot-only');
+  await flushPromises();
+  assert.strictEqual(textTree(viewer.document.getElementById('caps')), '표시할 데이터 마운트 없음', 'detail must use the exact Korean empty-mount copy');
+}
+
+
 function testDetailCapacityResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(/\.detail-capacity-row\b[\s\S]*min-width:\s*0/.test(css), 'detail capacity rows must allow grid children to shrink without forcing horizontal overflow');
@@ -658,6 +764,7 @@ function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*minmax\([^)]*140px[^)]*\)\s+minmax\(0,\s*1fr\)/.test(css), 'compact overview must use a narrow server column');
   assert(/\.overview-row\b[\s\S]*padding:\s*(?:[0-9]+px\s+)*([0-9]+)px/.test(css) && Number(css.match(/\.overview-row\b[\s\S]*padding:\s*(?:[0-9]+px\s+)*([0-9]+)px/)[1]) <= 10, 'compact overview row outer padding must be 10px or smaller');
+  assert(/\.overview-mounts\b[\s\S]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*280px\),\s*1fr\)\)/.test(css), 'desktop overview mounts must use a responsive two/three-column auto-fit grid');
   assert(/\.overview-mounts\b[\s\S]*gap:\s*[0-6]px/.test(css), 'compact overview mount grid gaps must be 6px or smaller');
   assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), 'row grid children must keep min-width:0 in the collapsed layout to prevent clipping');
@@ -1111,6 +1218,9 @@ async function main() {
   testServerHeaderMetaIsActionableMountCountOnly();
   testUnknownMountCapacityDomStaysNeutralAndAccessible();
   await testDetailCapacityUsesCompactRowsAndFiltersBootMounts();
+  await testDetailNormalizationFiltersBootEverywhereAndRecomputesUsers();
+  await testDetailCapacityUnknownNumbersRenderNeutralDashes();
+  await testZeroActionableMountsUseExactKoreanEmptyCopy();
   testDetailCapacityResponsiveCssContract();
   testMountCentricResponsiveCssContract();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();

@@ -502,7 +502,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
 
   const mountsWrap = makeEl(doc, "div", "overview-mounts");
   if (!row.mounts.length) {
-    mountsWrap.appendChild(makeEl(doc, "div", "overview-mount overview-mount-empty", "용량 막대 없음"));
+    mountsWrap.appendChild(makeEl(doc, "div", "overview-mount overview-mount-empty", "표시할 데이터 마운트 없음"));
   } else {
     for (const mount of row.mounts) {
       const mountEl = makeEl(doc, "div", "overview-mount overview-mount-cell");

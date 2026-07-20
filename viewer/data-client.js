@@ -230,20 +230,61 @@ if (typeof module !== "undefined" && module.exports) {
    Header + capacity hero (rendered immediately for fast first paint)
    ========================================================================= */
 function capColor(p) { return p >= 90 ? "var(--crit)" : p >= 75 ? "var(--warn)" : "var(--ok)"; }
-function isDetailActionableMount(mount) {
-  const rawPath = mount && (mount.path || mount.mountpoint);
-  if (typeof isActionableMountPath === "function") return isActionableMountPath(rawPath);
-  const value = String(rawPath || "").replace(/\/+$/, "") || "/";
+function normalizedDetailPath(path) {
+  return String(path || "").replace(/\/+$/, "") || "/";
+}
+function isDetailActionablePath(path) {
+  if (typeof isActionableMountPath === "function") return isActionableMountPath(path);
+  const value = normalizedDetailPath(path);
   return value !== "/boot" && !value.startsWith("/boot/");
 }
-function normalizeDetailMounts() {
-  const actionableMounts = (DATA && Array.isArray(DATA.mounts) ? DATA.mounts : []).filter(isDetailActionableMount);
-  if (DATA) DATA.mounts = actionableMounts;
+function isDetailActionableMount(mount) {
+  return isDetailActionablePath(mount && (mount.path || mount.mountpoint));
+}
+function normalizeDetailFiles(files) {
+  return (Array.isArray(files) ? files : []).filter(file => isDetailActionablePath(file && file.path));
+}
+function normalizeDetailUsers(users) {
+  const rows = [];
+  for (const user of Array.isArray(users) ? users : []) {
+    const byMount = {};
+    let bytes = 0;
+    const sourceByMount = user && user.by_mount && typeof user.by_mount === "object" ? user.by_mount : {};
+    for (const [mount, value] of Object.entries(sourceByMount)) {
+      if (!isDetailActionablePath(mount)) continue;
+      const n = Number(value) || 0;
+      if (n <= 0) continue;
+      byMount[mount] = n;
+      bytes += n;
+    }
+    if (bytes <= 0) continue;
+    rows.push(Object.assign({}, user, { by_mount: byMount, bytes }));
+  }
+  return rows;
+}
+function normalizeDetailSnapshot() {
+  if (!DATA) return [];
+  const actionableMounts = (Array.isArray(DATA.mounts) ? DATA.mounts : []).filter(isDetailActionableMount);
+  DATA.mounts = actionableMounts;
+  DATA.top_files = normalizeDetailFiles(DATA.top_files);
+  DATA.stale = normalizeDetailFiles(DATA.stale);
+  DATA.users = normalizeDetailUsers(DATA.users);
   mountPaths = actionableMounts.map(m => m.path);
   mountColor = {};
   mountPaths.forEach((p, i) => mountColor[p] = MOUNT_PALETTE[i % MOUNT_PALETTE.length]);
   if (currentMountIdx >= mountPaths.length) currentMountIdx = 0;
   return actionableMounts;
+}
+function normalizeDetailMounts() {
+  return normalizeDetailSnapshot();
+}
+function detailCapacityNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+function detailCapacityPercent(mount, usedBytes, totalBytes) {
+  if (typeof (mount && mount.df_use_pct) === "number" && Number.isFinite(mount.df_use_pct)) return Math.max(0, Math.min(100, Math.round(mount.df_use_pct)));
+  if (usedBytes != null && totalBytes > 0) return Math.max(0, Math.min(100, Math.round(usedBytes / totalBytes * 100)));
+  return null;
 }
 function renderHeader() {
   document.getElementById("h-host").textContent = DATA.hostname || "—";
@@ -267,22 +308,34 @@ function renderHeader() {
   const actionableMounts = normalizeDetailMounts();
   caps.innerHTML = ""; totalCapacityUsed = 0; capUsedByMount = {};
   caps.className = "caps detail-capacity-rail";
+  if (!actionableMounts.length) {
+    const empty = document.createElement("div");
+    empty.className = "detail-capacity-empty";
+    empty.textContent = "표시할 데이터 마운트 없음";
+    caps.appendChild(empty);
+  }
   for (const m of actionableMounts) {
-    capUsedByMount[m.path] = m.df_used || 0; totalCapacityUsed += (m.df_used || 0);
-    const pct = (m.df_use_pct != null) ? m.df_use_pct : (m.df_total ? Math.round(m.df_used / m.df_total * 100) : 0);
-    const color = capColor(pct);
+    const usedBytes = detailCapacityNumber(m.df_used);
+    const totalBytes = detailCapacityNumber(m.df_total);
+    const availableBytes = detailCapacityNumber(m.df_avail);
+    const pct = detailCapacityPercent(m, usedBytes, totalBytes);
+    const pressure = pct == null || availableBytes == null ? "unknown" : (pct >= 90 ? "critical" : (pct >= 75 ? "warning" : "normal"));
+    const color = pressure === "unknown" ? null : capColor(pct);
+    const fillStyle = pct == null ? "width:0%" : "width:" + Math.min(100, pct) + "%;background:" + color;
+    capUsedByMount[m.path] = usedBytes || 0; totalCapacityUsed += (usedBytes || 0);
     const media = m.storage_media || m.block_media || "unknown";
     const div = document.createElement("div");
     div.className = "detail-capacity-row";
+    div.setAttribute("data-pressure", pressure);
     div.innerHTML =
       '<div class="cap-main"><span class="cap-path">' + escapeHtml(m.path) + '</span>' +
         '<span class="cap-fs">' + escapeHtml(m.fstype || "") + '</span>' +
         '<span class="cap-media">' + escapeHtml(media) + '</span></div>' +
-      '<div class="cap-sub"><span class="figure">' + humanBytes(m.df_used) + '</span> used / <span class="figure">' +
-        humanBytes(m.df_total) + '</span></div>' +
-      '<div class="cap-pct" style="color:' + color + '">' + pct + '<span>%</span></div>' +
-      '<div class="cap-free"><span class="figure">' + humanBytes(m.df_avail) + '</span> free</div>' +
-      '<div class="cap-bar"><div class="cap-fill" style="width:' + Math.min(100, pct) + '%;background:' + color + '"></div></div>';
+      '<div class="cap-sub"><span class="figure">' + humanBytes(usedBytes) + '</span> used / <span class="figure">' +
+        humanBytes(totalBytes) + '</span></div>' +
+      '<div class="cap-pct"' + (color ? ' style="color:' + color + '"' : '') + '>' + (pct == null ? "—" : pct + '<span>%</span>') + '</div>' +
+      '<div class="cap-free"><span class="figure">' + humanBytes(availableBytes) + '</span> free</div>' +
+      '<div class="cap-bar"><div class="cap-fill" style="' + fillStyle + '"></div></div>';
     caps.appendChild(div);
   }
   if (totalCapacityUsed <= 0) totalCapacityUsed = 1;
