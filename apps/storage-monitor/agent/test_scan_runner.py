@@ -342,6 +342,28 @@ class ScanRunnerTests(unittest.TestCase):
             self.assertEqual([m["scan_root"] for m in payload["mounts"]], ["/home"])
 
 
+    def test_duplicate_skipped_mountpoints_are_reported_once(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            mountinfo = "\n".join([
+                mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+                mi(10, 1, "0:10", "/", "/run/user/1000", "rw", "tmpfs", "tmpfs"),
+                mi(20, 1, "0:20", "/", "/run/user/1000", "rw", "tmpfs", "tmpfs"),
+            ])
+
+            def fake(argv, **kwargs):
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                return scan_runner.CompletedScan(0, "", "")
+
+            result = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(550))
+            payload = json.loads(result.snapshot_path.read_text(encoding="utf-8"))
+            scan_roots = [root["scan_root"] for root in payload["selected_roots"]]
+
+            self.assertEqual(scan_roots.count("/run/user/1000"), 1)
+            self.assertEqual(len(scan_roots), len(set(scan_roots)))
+
+
     def test_blocked_count_is_attributed_to_longest_matching_selected_root_only(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = pathlib.Path(td)
