@@ -65,14 +65,21 @@ class CentralPollingLifecycleTest(unittest.TestCase):
 
     def test_dev_sample_mode_does_not_create_poller(self):
         from viewer import serve
-        self.assertIsNone(serve.build_central_poller(serve._DevSampleService(str(Path(__file__).resolve().parent))))
+        with tempfile.TemporaryDirectory(prefix="storage-viz-dev-service.") as tmp:
+            sample_dir = Path(tmp)
+            rows = [{"id":"hinton", "label":"hinton", "file":"hinton", "default":True, "sample_data":True}]
+            (sample_dir / "hosts.json").write_text(json.dumps(rows) + "\n", encoding="utf-8")
+            (sample_dir / "hinton.sample.json").write_text(json.dumps(sample_snapshot("hinton")) + "\n", encoding="utf-8")
+            self.assertIsNone(serve.build_central_poller(serve._DevSampleService(str(sample_dir))))
 
 
 class ApiServerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="storage-viz-api-test."); self.addCleanup(self.tmp.cleanup)
         self.sample_dir = Path(self.tmp.name) / "samples"; self.sample_dir.mkdir()
+        self.write_manifest(["atlas", "hinton"])
         (self.sample_dir / "hinton.sample.json").write_text(json.dumps(sample_snapshot("hinton")) + "\n", encoding="utf-8")
+        (self.sample_dir / "atlas.sample.json").write_text(json.dumps(sample_snapshot("atlas")) + "\n", encoding="utf-8")
         self.proc = None; self.addCleanup(self._stop)
 
     def start_server(self, extra_env=None, expect_exit=False):
@@ -110,6 +117,12 @@ class ApiServerTest(unittest.TestCase):
                     stream.close()
 
 
+    def write_manifest(self, ids):
+        rows = []
+        for i, sid in enumerate(ids):
+            rows.append({"id": sid, "label": sid.title(), "file": sid, "default": i == 0, "sample_data": True})
+        (self.sample_dir / "hosts.json").write_text(json.dumps(rows) + "\n", encoding="utf-8")
+
     def write_inventory(self):
         inv = Path(self.tmp.name) / "servers.json"
         inv.write_text(json.dumps({"servers":[{"id":"hinton","display_name":"hinton","order":1,"host":"hinton.example.test","port":22,"enabled":True,"username":"monitoring","identity_file":"/etc/storage-viz/hinton.key","known_hosts_file":"/etc/storage-viz/known_hosts","scanner":{"server_id":"hinton"}}]}) + "\n", encoding="utf-8")
@@ -140,7 +153,9 @@ class ApiServerTest(unittest.TestCase):
         self.assertFalse(session["can_rescan"])
         self.assertIn("SameSite=Lax", headers.get("Set-Cookie", ""))
         code, _, servers = self.request("GET", "/api/servers")
-        self.assertEqual(code, 200); self.assertEqual(servers["servers"][0]["id"], "hinton")
+        self.assertEqual(code, 200)
+        self.assertEqual(servers["data_mode"], "sample")
+        self.assertEqual([s["id"] for s in servers["servers"]], ["atlas", "hinton"])
         self.assertEqual(self.request("GET", "/api/servers/hinton/snapshot")[2]["server_id"], "hinton")
         self.assertEqual(self.request("GET", "/api/servers/unknown/snapshot")[0], 404)
         self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {})[0], 403)
@@ -154,6 +169,8 @@ class ApiServerTest(unittest.TestCase):
         self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state")})
         code, _, sess = self.request("GET", "/api/session")
         self.assertEqual(code, 200); self.assertFalse(sess["can_rescan"])
+        code, _, servers = self.request("GET", "/api/servers")
+        self.assertEqual(code, 200); self.assertEqual(servers["data_mode"], "inventory")
         self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
 
     def test_trusted_proxy_requires_loopback_exact_origin_operator_and_csrf(self):
@@ -167,7 +184,8 @@ class ApiServerTest(unittest.TestCase):
         viewer_cookie = self.cookie_value(headers)
         self.assertIn("SameSite=Strict", headers.get("Set-Cookie", ""))
         self.assertIn("Secure", headers.get("Set-Cookie", ""))
-        self.assertEqual(self.request("GET", "/api/servers", headers={"X-Forwarded-User":"viewer-1"})[0], 200)
+        code, _, servers = self.request("GET", "/api/servers", headers={"X-Forwarded-User":"viewer-1"})
+        self.assertEqual(code, 200); self.assertEqual(servers["data_mode"], "inventory")
         self.assertEqual(self.request("GET", "/data/hinton.sample.json", headers={"X-Forwarded-User":"viewer-1"})[0], 200)
         self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"Cookie":viewer_cookie, "X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
         code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"operator-1"})
@@ -187,6 +205,36 @@ class ApiServerTest(unittest.TestCase):
         for raw in (b"[]", b"not-json", b"{}{}", b"{\"command\":\"scan\"}", b"{\"path\":\"/tmp\"}"):
             self.assertEqual(self.request_raw("POST", "/api/servers/hinton/rescan", raw, headers={"Content-Type":"application/json", "Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 400)
 
+
+    def test_dev_sample_requires_valid_manifest_and_files(self):
+        for rows in (
+            [],
+            [{"id":"bad/slash", "label":"bad", "file":"bad", "default":True, "sample_data":True}],
+            [{"id":"dup", "label":"dup", "file":"dup", "default":True, "sample_data":True}, {"id":"dup", "label":"dup2", "file":"dup2", "sample_data":True}],
+            [{"id":"a", "label":"a", "file":"hinton", "default":True, "sample_data":True}, {"id":"b", "label":"b", "file":"hinton", "sample_data":True}],
+            [{"id":"a", "label":"a", "file":"atlas", "default":True, "sample_data":True}, {"id":"b", "label":"b", "file":"hinton", "default":True, "sample_data":True}],
+            [{"id":"missing", "label":"missing", "file":"missing", "default":True, "sample_data":True}],
+        ):
+            with self.subTest(rows=rows):
+                self.write_manifest([])
+                (self.sample_dir / "hosts.json").write_text(json.dumps(rows) + "\n", encoding="utf-8")
+                self.start_server(expect_exit=True)
+                self._stop(); self.proc = None
+
+    def test_dev_sample_rejects_unlisted_sample_and_path_or_symlink_escape(self):
+        (self.sample_dir / "orphan.sample.json").write_text(json.dumps(sample_snapshot("orphan")) + "\n", encoding="utf-8")
+        self.start_server(expect_exit=True)
+        self._stop(); self.proc = None
+        (self.sample_dir / "orphan.sample.json").unlink()
+        (self.sample_dir / "atlas.sample.json").unlink()
+        (self.sample_dir / "outside.sample.json").write_text(json.dumps(sample_snapshot("outside")) + "\n", encoding="utf-8")
+        os.symlink(self.sample_dir / "outside.sample.json", self.sample_dir / "atlas.sample.json")
+        self.start_server(expect_exit=True)
+        self._stop(); self.proc = None
+        (self.sample_dir / "atlas.sample.json").unlink()
+        self.write_manifest(["escape"])
+        (self.sample_dir / "hosts.json").write_text(json.dumps([{"id":"escape", "label":"escape", "file":"../escape", "default":True, "sample_data":True}]) + "\n", encoding="utf-8")
+        self.start_server(expect_exit=True)
 
     def test_expired_session_cookie_is_rejected_on_post(self):
         inv = self.write_inventory()

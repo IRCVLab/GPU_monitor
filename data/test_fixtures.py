@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Regression checks for tracked storage-viz data fixtures."""
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -9,6 +10,10 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 GENERATOR = DATA_DIR / "gen_sample.py"
+EXPECTED_SAMPLE_IDS = ["hinton", "atlas", "orion", "zeus"]
+MEDIA_VALUES = {"ssd", "hdd", "mixed", "unknown"}
+CONFIDENCE_VALUES = {"resolved", "unresolved"}
+
 
 
 STATUSES_WITH_TREES = {"complete", "partial"}
@@ -83,6 +88,10 @@ def assert_schema_v1_snapshot_contract(testcase, payload):
             testcase.assertEqual(mount["tree"]["bytes"], mount["scanned_bytes"])
             testcase.assertEqual(mount["tree"]["files"], mount["scanned_files"])
             assert_tree_byte_invariants(testcase, mount["tree"])
+            root = roots_by_id[mount["mount_id"]]
+            testcase.assertEqual(mount.get("storage_media"), root.get("storage_media"))
+            testcase.assertEqual(mount.get("storage_media_confidence"), root.get("storage_media_confidence"))
+            testcase.assertEqual(mount.get("capacity_id"), root.get("capacity_id"))
             for tree_node in walk_tree(mount["tree"]):
                 testcase.assertIn(tree_node["kind"], NODE_KINDS)
 
@@ -95,6 +104,15 @@ def assert_schema_v1_snapshot_contract(testcase, payload):
             testcase.assertTrue(root["mountpoint"].startswith("/"))
             testcase.assertTrue(root["scan_root"].startswith("/"))
             testcase.assertTrue(root["fstype"])
+            media = root.get("storage_media")
+            confidence = root.get("storage_media_confidence")
+            testcase.assertIn(media, MEDIA_VALUES)
+            testcase.assertIn(confidence, CONFIDENCE_VALUES)
+            if media == "unknown":
+                testcase.assertEqual(confidence, "unresolved")
+            else:
+                testcase.assertEqual(confidence, "resolved")
+                testcase.assertEqual(root.get("capacity_id"), "dev-" + root["major_minor"].replace(":", "-"))
             testcase.assertIn(root["status"], ALL_STATUSES)
             assert_bounded_count(testcase, root["scanned_bytes"], "selected root scanned_bytes")
             assert_bounded_count(testcase, root["scanned_files"], "selected root scanned_files")
@@ -125,7 +143,7 @@ class DataFixtureTests(unittest.TestCase):
         hosts_path = DATA_DIR / "hosts.json"
         hosts = json.loads(hosts_path.read_text(encoding="utf-8"))
         self.assertIsInstance(hosts, list)
-        self.assertGreaterEqual(len(hosts), 1)
+        self.assertEqual([host["id"] for host in hosts], EXPECTED_SAMPLE_IDS)
         defaults = [host for host in hosts if host.get("default") is True]
         self.assertEqual(len(defaults), 1)
         for host in hosts:
@@ -135,14 +153,11 @@ class DataFixtureTests(unittest.TestCase):
                 self.assertTrue(host["file"])
                 self.assertNotIn("/", host["file"])
                 self.assertFalse(host["file"].endswith(".json"))
+                self.assertEqual(host["file"], host["id"])
+                self.assertIs(host.get("sample_data"), True)
 
-    def test_sample_generator_writes_valid_schema_v1_fixture(self):
-        text = GENERATOR.read_text(encoding="utf-8")
-        if "/home/shchoi/storage-viz" in text:
-            self.skipTest("generator still uses hardcoded output path")
-        sample = DATA_DIR / "hinton.sample.json"
-        if sample.exists():
-            sample.unlink()
+    def test_sample_generator_writes_all_ordered_fixtures_byte_for_byte(self):
+        before = {sid: (DATA_DIR / f"{sid}.sample.json").read_bytes() for sid in EXPECTED_SAMPLE_IDS}
         result = subprocess.run(
             [sys.executable, str(GENERATOR)],
             cwd=ROOT,
@@ -151,16 +166,54 @@ class DataFixtureTests(unittest.TestCase):
             text=True,
         )
         self.assertIn("tree byte-consistency: OK", result.stdout)
-        payload = json.loads(sample.read_text(encoding="utf-8"))
-        self.assertEqual(payload["hostname"], "hinton")
-        self.assertEqual(payload["server_id"], "hinton")
-        self.assertEqual(payload["scan_finished_unix"], 1719200042)
-        self.assertEqual(payload["scan_duration_sec"], 42)
-        self.assertEqual(payload["scan_generation"], "hinton-1719200000-v1")
-        self.assertGreaterEqual(len(payload["mounts"]), 1)
-        self.assertGreaterEqual(len(payload["users"]), 1)
-        assert_schema_v1_snapshot_contract(self, payload)
+        after = {sid: (DATA_DIR / f"{sid}.sample.json").read_bytes() for sid in EXPECTED_SAMPLE_IDS}
+        self.assertEqual(
+            {sid: hashlib.sha256(data).hexdigest() for sid, data in after.items()},
+            {sid: hashlib.sha256(data).hexdigest() for sid, data in before.items()},
+        )
 
+    def test_generated_fixtures_have_unique_ids_metadata_and_coverage(self):
+        payloads = []
+        statuses = set()
+        media_sets = {sid: set() for sid in EXPECTED_SAMPLE_IDS}
+        generations = set()
+        for sid in EXPECTED_SAMPLE_IDS:
+            payload = json.loads((DATA_DIR / f"{sid}.sample.json").read_text(encoding="utf-8"))
+            payloads.append(payload)
+            self.assertEqual(payload["hostname"], sid)
+            self.assertEqual(payload["server_id"], sid)
+            self.assertNotIn("example.com", json.dumps(payload))
+            self.assertNotIn("/Users/", json.dumps(payload))
+            self.assertRegex(payload["scan_generation"], rf"^{sid}-1719200\d{{3}}-v1$")
+            generations.add(payload["scan_generation"])
+            self.assertGreaterEqual(len(payload["mounts"]), 1)
+            self.assertGreaterEqual(len(payload["users"]), 1)
+            assert_schema_v1_snapshot_contract(self, payload)
+            roots_by_id = {root["mount_id"]: root for root in payload["selected_roots"]}
+            for mount in payload["mounts"]:
+                root = roots_by_id[mount["mount_id"]]
+                media_sets[sid].add(mount["storage_media"] if mount["storage_media"] != "unknown" else "unknown")
+                pct = mount["df_use_pct"]
+                if pct >= 92 or mount["df_avail"] <= 137438953472:
+                    statuses.add("critical")
+                elif pct >= 80 or mount["df_avail"] <= 549755813888:
+                    statuses.add("warning")
+                else:
+                    statuses.add("healthy")
+                self.assertEqual(mount["scan_root"], root["scan_root"])
+            mount_paths = {mount["path"] for mount in payload["mounts"]}
+            for user in payload["users"]:
+                self.assertLessEqual(set(user["by_mount"]), mount_paths)
+        self.assertEqual([payload["server_id"] for payload in payloads], EXPECTED_SAMPLE_IDS)
+        self.assertEqual(len(generations), len(EXPECTED_SAMPLE_IDS))
+        self.assertTrue(any(media == {"ssd"} for media in media_sets.values()))
+        self.assertTrue(any(media == {"hdd"} for media in media_sets.values()))
+        self.assertIn("mixed", set().union(*media_sets.values()))
+        self.assertIn("unknown", set().union(*media_sets.values()))
+        self.assertEqual(statuses, {"healthy", "warning", "critical"})
+
+    def test_hinton_preserves_rich_tree_semantics(self):
+        payload = json.loads((DATA_DIR / "hinton.sample.json").read_text(encoding="utf-8"))
         roots_by_id = {root["mount_id"]: root for root in payload["selected_roots"]}
         self.assertEqual(roots_by_id["rootfs"]["mountpoint"], "/")
         self.assertEqual(roots_by_id["rootfs"]["scan_root"], "/home")
@@ -168,9 +221,6 @@ class DataFixtureTests(unittest.TestCase):
         self.assertEqual(rootfs_mount["path"], "/home")
         self.assertEqual(rootfs_mount["scan_root"], "/home")
         self.assertEqual(rootfs_mount["tree"]["name"], "/home")
-        mount_paths = {mount["path"] for mount in payload["mounts"]}
-        for user in payload["users"]:
-            self.assertLessEqual(set(user["by_mount"]), mount_paths)
         self.assertEqual({root["status"] for root in payload["selected_roots"]}, {"complete", "partial"})
 
     def test_schema_contract_allows_failed_and_skipped_roots_without_mounts(self):
@@ -206,6 +256,9 @@ class DataFixtureTests(unittest.TestCase):
                 {
                     "mount_id": "home",
                     "major_minor": "8:1",
+                    "capacity_id": "dev-8-1",
+                    "storage_media": "ssd",
+                    "storage_media_confidence": "resolved",
                     "mount_source": "/dev/storage-viz/home",
                     "mount_root": "/",
                     "mountpoint": "/",
@@ -222,6 +275,9 @@ class DataFixtureTests(unittest.TestCase):
                 {
                     "mount_id": "data",
                     "major_minor": "8:16",
+                    "capacity_id": "dev-8-16",
+                    "storage_media": "mixed",
+                    "storage_media_confidence": "resolved",
                     "mount_source": "/dev/storage-viz/data",
                     "mount_root": "/",
                     "mountpoint": "/data",
@@ -238,6 +294,9 @@ class DataFixtureTests(unittest.TestCase):
                 {
                     "mount_id": "archive",
                     "major_minor": "8:32",
+                    "capacity_id": "dev-8-32",
+                    "storage_media": "hdd",
+                    "storage_media_confidence": "resolved",
                     "mount_source": "/dev/storage-viz/archive",
                     "mount_root": "/",
                     "mountpoint": "/archive",
@@ -254,6 +313,9 @@ class DataFixtureTests(unittest.TestCase):
                 {
                     "mount_id": "scratch",
                     "major_minor": "8:48",
+                    "capacity_id": "dev-8-48",
+                    "storage_media": "unknown",
+                    "storage_media_confidence": "unresolved",
                     "mount_source": "/dev/storage-viz/scratch",
                     "mount_root": "/",
                     "mountpoint": "/scratch",
@@ -272,6 +334,9 @@ class DataFixtureTests(unittest.TestCase):
                 {
                     "path": "/home",
                     "mount_id": "home",
+                    "capacity_id": "dev-8-1",
+                    "storage_media": "ssd",
+                    "storage_media_confidence": "resolved",
                     "scan_root": "/home",
                     "fstype": "ext4",
                     "df_total": 100,
@@ -287,6 +352,9 @@ class DataFixtureTests(unittest.TestCase):
                 {
                     "path": "/data",
                     "mount_id": "data",
+                    "capacity_id": "dev-8-16",
+                    "storage_media": "mixed",
+                    "storage_media_confidence": "resolved",
                     "scan_root": "/data",
                     "fstype": "xfs",
                     "df_total": 100,

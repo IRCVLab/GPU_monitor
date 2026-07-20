@@ -4,6 +4,28 @@
     "label": "hinton",
     "file": "hinton",
     "default": true,
-    "description": "Sample single-server fixture; generated snapshots use data/<hostname>.json and are intentionally ignored."
+    "sample_data": true,
+    "description": "Generated privacy-safe sample fixture."
+  },
+  {
+    "id": "atlas",
+    "label": "atlas",
+    "file": "atlas",
+    "sample_data": true,
+    "description": "Generated privacy-safe SSD-only sample fixture."
+  },
+  {
+    "id": "orion",
+    "label": "orion",
+    "file": "orion",
+    "sample_data": true,
+    "description": "Generated privacy-safe HDD-only sample fixture."
+  },
+  {
+    "id": "zeus",
+    "label": "zeus",
+    "file": "zeus",
+    "sample_data": true,
+    "description": "Generated privacy-safe mixed and unresolved sample fixture."
   }
 ]
