@@ -1056,12 +1056,75 @@ class ScanRunnerTests(unittest.TestCase):
             mount = payload["mounts"][0]
 
             self.assertEqual(result.status, "complete")
-            self.assertNotIn("capacity_id", root)
+            self.assertEqual(root["capacity_id"], "dev-8-1")
             self.assertEqual(root["storage_media"], "unknown")
             self.assertEqual(root["storage_media_confidence"], "unresolved")
-            self.assertNotIn("capacity_id", mount)
+            self.assertEqual(mount["capacity_id"], "dev-8-1")
             self.assertEqual(mount["storage_media"], "unknown")
             self.assertEqual(mount["storage_media_confidence"], "unresolved")
+
+    def test_malformed_media_resolver_results_publish_unknown_with_safe_capacity_id(self):
+        class MissingAttrs:
+            pass
+
+        class RaisingAttrs:
+            @property
+            def capacity_id(self):
+                raise RuntimeError("bad capacity")
+
+            @property
+            def media(self):
+                raise RuntimeError("bad media")
+
+            @property
+            def confidence(self):
+                raise RuntimeError("bad confidence")
+
+        cases = [
+            scan_runner.MediaResult(object(), "ssd", "resolved"),
+            scan_runner.MediaResult(["dev-8-1"], "ssd", "resolved"),
+            scan_runner.MediaResult("dev-8-1", [], "resolved"),
+            scan_runner.MediaResult("dev-8-1", "ssd", {}),
+            MissingAttrs(),
+            RaisingAttrs(),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            starts = iter(range(2400, 2400 + len(cases)))
+
+            for index, resolver_result in enumerate(cases):
+                with self.subTest(index=index, result_type=type(resolver_result).__name__):
+                    mountinfo = mi(1, 0, f"8:{index + 1}", "/", "/", "rw", "ext4", "/dev/sda1")
+                    class Resolver:
+                        def resolve(self, major_minor):
+                            return resolver_result
+
+                    def fake(argv, **kwargs):
+                        started = next(starts)
+                        pathlib.Path(argv[argv.index("--out") + 1]).write_text(
+                            json.dumps(raw_payload("/home", started=started)), encoding="utf-8"
+                        )
+                        return scan_runner.CompletedScan(0, "", "")
+
+                    result = scan_runner.run_once(
+                        config_path,
+                        mountinfo_reader=lambda text=mountinfo: text,
+                        scanner_runner=fake,
+                        media_resolver=Resolver(),
+                        clock=Clock(2500 + index),
+                    )
+                    payload = json.loads(result.snapshot_path.read_text(encoding="utf-8"))
+                    root = payload["selected_roots"][0]
+                    mount = payload["mounts"][0]
+
+                    self.assertEqual(result.status, "complete")
+                    self.assertEqual(root["capacity_id"], f"dev-8-{index + 1}")
+                    self.assertEqual(root["storage_media"], "unknown")
+                    self.assertEqual(root["storage_media_confidence"], "unresolved")
+                    self.assertEqual(mount["capacity_id"], root["capacity_id"])
+                    self.assertEqual(mount["storage_media"], "unknown")
+                    self.assertEqual(mount["storage_media_confidence"], "unresolved")
 
 
 if __name__ == "__main__":
