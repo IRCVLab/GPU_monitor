@@ -1031,6 +1031,39 @@ class ScanRunnerTests(unittest.TestCase):
             self.assertEqual(mount["storage_media"], home["storage_media"])
             self.assertEqual(mount["storage_media_confidence"], home["storage_media_confidence"])
 
+    def test_resolver_cannot_override_capacity_identity_from_requested_major_minor(self):
+        calls = []
+        class MismatchedResolver:
+            def resolve(self, major_minor):
+                calls.append(major_minor)
+                return scan_runner.MediaResult("dev-8-2", "ssd", "resolved")
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            def fake(argv, **kwargs):
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                return scan_runner.CompletedScan(0, "", "")
+
+            result = scan_runner.run_once(
+                config_path,
+                mountinfo_reader=lambda: mountinfo,
+                scanner_runner=fake,
+                media_resolver=MismatchedResolver(),
+                clock=Clock(2250),
+            )
+            payload = json.loads(result.snapshot_path.read_text(encoding="utf-8"))
+            root = payload["selected_roots"][0]
+            mount = payload["mounts"][0]
+
+            self.assertEqual(result.status, "complete")
+            self.assertEqual(calls, ["8:1"])
+            for record in (root, mount):
+                self.assertEqual(record["capacity_id"], "dev-8-1")
+                self.assertEqual(record["storage_media"], "unknown")
+                self.assertEqual(record["storage_media_confidence"], "unresolved")
+
     def test_media_resolution_failure_collapses_to_unknown_without_failing_snapshot(self):
         class FailingResolver:
             def resolve(self, major_minor):
