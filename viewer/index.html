@@ -1,11 +1,22 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark" data-material="liquid">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>storage-viz</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3.5' fill='%230071e3'/><rect x='2.5' y='2.5' width='6' height='6' rx='1' fill='%23fff'/><rect x='9.5' y='2.5' width='4' height='4' rx='1' fill='%23fff' opacity='.7'/><rect x='9.5' y='9.5' width='4' height='4' rx='1' fill='%23fff' opacity='.5'/><rect x='2.5' y='9.5' width='6' height='4' rx='1' fill='%23fff' opacity='.85'/></svg>">
+<script>
+(() => {
+  const saved = document.cookie.split('; ').find((part) => part.startsWith('themeMode='))?.split('=')[1];
+  const mode = saved === 'light' || saved === 'dark'
+    ? saved
+    : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.documentElement.classList.remove('light', 'dark');
+  document.documentElement.classList.add(mode);
+  document.documentElement.dataset.material = 'liquid';
+})();
+</script>
 <script src="echarts.min.js"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -19,11 +30,20 @@
           <span class="logo" aria-hidden="true"></span>
           <div>
             <h1 class="brand-title">storage<span class="brand-dot">·</span>viz</h1>
-            <p class="brand-subtitle" id="brandSubtitle">고정 순서 서버 저장소 개요</p>
           </div>
         </div>
       </div>
       <div class="head-spacer"></div>
+      <nav class="suite-nav" aria-label="Tool suite">
+        <a class="suite-nav-link" href="http://127.0.0.1:5173/">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 11.5h10M4.5 4.5l2.2 3 2.1-2 2.7 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="12" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          GPU Monitor
+        </a>
+        <button type="button" id="themeModeButton" class="theme-mode-button" aria-label="Toggle light and dark theme" aria-pressed="true">
+          <svg class="theme-icon theme-icon-sun" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          <svg class="theme-icon theme-icon-moon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M12.8 10.1A5.4 5.4 0 0 1 5.9 3.2a5.4 5.4 0 1 0 6.9 6.9Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        </button>
+      </nav>
       <div class="head-actions detail-only" id="detailActions" hidden>
         <span class="head-meta" id="lastUpd" title="last scan time"></span>
         <button id="rescanBtn" class="rescan-btn" title="Run a fresh scan now">↻ Rescan</button>

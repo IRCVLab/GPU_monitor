@@ -8,6 +8,27 @@ const path = require("path");
 const here = __dirname;
 const GiB = 1024 ** 3;
 
+function testCleanShellThemeBootstrapContract() {
+  const html = fs.readFileSync(path.join(here, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
+  const app = fs.readFileSync(path.join(here, "app.js"), "utf8");
+
+  const themeScript = html.match(/<script>\s*\(\(\) => \{[\s\S]*?themeMode=[\s\S]*?document\.documentElement\.classList\.add\(mode\);[\s\S]*?dataset\.material = 'liquid';[\s\S]*?\}\)\(\);\s*<\/script>/);
+  assert(themeScript, "index must include an early inline themeMode bootstrap that applies html.light/html.dark and data-material=liquid");
+  assert(html.indexOf(themeScript[0]) < html.indexOf('<link rel="stylesheet" href="styles.css">'), "theme bootstrap must run before styles.css can paint");
+  assert(/<a\b(?=[^>]*class="suite-nav-link")(?=[^>]*href="http:\/\/127\.0\.0\.1:5173\/")(?![^>]*target=)[^>]*>\s*(?:<svg[\s\S]*?<\/svg>\s*)?GPU Monitor\s*<\/a>/.test(html), "header must include a same-tab GPU Monitor suite link");
+  assert(/<button\b(?=[^>]*id="themeModeButton")(?=[^>]*class="theme-mode-button")(?=[^>]*aria-label="Toggle light and dark theme")(?=[^>]*aria-pressed=)[^>]*>[\s\S]*<svg[\s\S]*<\/button>/.test(html), "header must include an accessible circular theme mode button with inline SVG icons");
+  assert(!html.includes("고정 순서 서버 저장소 개요"), "old Storage Viz subtitle copy must be absent from the redesigned shell");
+  assert(/html\.light\s*\{[\s\S]*--bg:\s*#f4f5f7;[\s\S]*--surface:\s*#ffffff;[\s\S]*--accent:\s*#297cef;/.test(css), "light mode must map Clean semantic tokens to Storage variables");
+  assert(/html\.dark\s*\{[\s\S]*--bg:\s*#090b0f;[\s\S]*--surface:\s*#13161b;[\s\S]*--accent:\s*#3a8cff;/.test(css), "dark mode must map Clean semantic tokens to Storage variables");
+  assert(/html\[data-material='liquid'\]\s*\{[\s\S]*--material-surface-alpha:\s*0\.94;[\s\S]*--material-blur:\s*6px;[\s\S]*--material-control-radius:\s*0\.7rem;/.test(css), "liquid material values must be copied into Storage CSS");
+  assert(/transition:[^;]*(?:background|background-color|color|border-color|box-shadow)[^;]*(?:\.16s|160ms|\.18s|180ms|\.2s|200ms|\.22s|220ms)/.test(css), "themeable surfaces must use 160-220ms color/surface transitions");
+  assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition:\s*none\s*!important/.test(css), "reduced motion must disable color/surface transitions");
+  assert(/function\s+applyStoredThemeMode\s*\(/.test(app), "app.js must produce applyStoredThemeMode()");
+  assert(/function\s+toggleThemeMode\s*\(/.test(app), "app.js must produce toggleThemeMode()");
+}
+
+
 function testHostManifest() {
   const manifestPath = path.join(here, "..", "data", "hosts.json");
   const hosts = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -862,6 +883,7 @@ function testCleanupCommandSafetyContracts() {
 }
 
 async function main() {
+  testCleanShellThemeBootstrapContract();
   testHostManifest();
   testHostManifestHelpers();
   await testLoadServerSummariesReturnsNormalizedEnvelope();
