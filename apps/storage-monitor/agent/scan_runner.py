@@ -466,6 +466,8 @@ def _safe_media_result(result: Any, fallback_capacity_id: Optional[str]) -> Medi
         or capacity_id == "dev-0-0"
     ):
         return _unknown_media(fallback_capacity_id)
+    if capacity_id is not None and fallback_capacity_id is not None and capacity_id != fallback_capacity_id:
+        return _unknown_media(fallback_capacity_id)
     if not isinstance(media, str) or not isinstance(confidence, str):
         return _unknown_media(fallback_capacity_id)
     if media not in _MEDIA_VALUES or confidence not in _MEDIA_CONFIDENCE_VALUES:
