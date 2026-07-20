@@ -12,7 +12,6 @@
     {
       "mount_id": "vol1",
       "major_minor": "9:101",
-      "capacity_id": "dev-9-101",
       "storage_media": "ssd",
       "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/atlas-vol1",
@@ -26,12 +25,12 @@
       "scanned_dirs": 32154,
       "blocked_count": 0,
       "error_count": 0,
-      "error_code": null
+      "error_code": null,
+      "capacity_id": "dev-9-101"
     },
     {
       "mount_id": "vol2",
       "major_minor": "9:102",
-      "capacity_id": "dev-9-102",
       "storage_media": "ssd",
       "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/atlas-vol2",
@@ -45,7 +44,8 @@
       "scanned_dirs": 56185,
       "blocked_count": 0,
       "error_count": 0,
-      "error_code": null
+      "error_code": null,
+      "capacity_id": "dev-9-102"
     }
   ],
   "mounts": [
@@ -54,7 +54,6 @@
       "mount_id": "vol1",
       "scan_root": "/srv/atlas/vol1",
       "fstype": "xfs",
-      "capacity_id": "dev-9-101",
       "storage_media": "ssd",
       "storage_media_confidence": "resolved",
       "df_total": 5281950780620,
@@ -113,14 +112,14 @@
             "other_bytes": 0
           }
         ]
-      }
+      },
+      "capacity_id": "dev-9-101"
     },
     {
       "path": "/srv/atlas/vol2",
       "mount_id": "vol2",
       "scan_root": "/srv/atlas/vol2",
       "fstype": "xfs",
-      "capacity_id": "dev-9-102",
       "storage_media": "ssd",
       "storage_media_confidence": "resolved",
       "df_total": 879735008580,
@@ -179,7 +178,8 @@
             "other_bytes": 0
           }
         ]
-      }
+      },
+      "capacity_id": "dev-9-102"
     }
   ],
   "users": [
@@ -187,7 +187,7 @@
       "uid": 1101,
       "name": "avery",
       "bytes": 607737872384,
-      "files": 196871,
+      "files": 196050,
       "by_mount": {
         "/srv/atlas/vol1": 238370684928,
         "/srv/atlas/vol2": 369367187456
@@ -197,7 +197,7 @@
       "uid": 1102,
       "name": "blake",
       "bytes": 327491256320,
-      "files": 105733,
+      "files": 105792,
       "by_mount": {
         "/srv/atlas/vol1": 144955146240,
         "/srv/atlas/vol2": 182536110080
@@ -207,7 +207,7 @@
       "uid": 1103,
       "name": "casey",
       "bytes": 263066746880,
-      "files": 87506,
+      "files": 86781,
       "by_mount": {
         "/srv/atlas/vol1": 123480309760,
         "/srv/atlas/vol2": 139586437120
@@ -217,7 +217,7 @@
       "uid": 0,
       "name": "root",
       "bytes": 3221225472,
-      "files": 4213,
+      "files": 3941,
       "by_mount": {
         "/srv/atlas/vol1": 1073741824,
         "/srv/atlas/vol2": 2147483648
@@ -226,31 +226,131 @@
   ],
   "top_files": [
     {
-      "path": "/srv/atlas/vol1/projects/dataset/atlas.tar",
+      "path": "/srv/atlas/vol1/projects/dataset/atlas-00.bin",
       "kind": "file",
-      "bytes": 150918397952,
+      "bytes": 156287107072,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1708832100
+      "mtime": 1717472100
     },
     {
-      "path": "/srv/atlas/vol1/projects/models/checkpoint.pt",
+      "path": "/srv/atlas/vol2/projects/models/atlas-01.bin",
       "kind": "file",
-      "bytes": 120282152960,
+      "bytes": 152494407680,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1716608100
+      "mtime": 1716521700
+    },
+    {
+      "path": "/srv/atlas/vol1/projects/scratch/atlas-02.bin",
+      "kind": "file",
+      "bytes": 149963145216,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1715571300
+    },
+    {
+      "path": "/srv/atlas/vol2/projects/reports/atlas-03.bin",
+      "kind": "file",
+      "bytes": 146433638400,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1714620900
+    },
+    {
+      "path": "/srv/atlas/vol1/projects/dataset/atlas-04.bin",
+      "kind": "file",
+      "bytes": 143276376064,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1713670500
+    },
+    {
+      "path": "/srv/atlas/vol2/projects/models/atlas-05.bin",
+      "kind": "file",
+      "bytes": 139785666560,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1712720100
+    },
+    {
+      "path": "/srv/atlas/vol1/projects/scratch/atlas-06.bin",
+      "kind": "file",
+      "bytes": 137166323712,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1711769700
+    },
+    {
+      "path": "/srv/atlas/vol2/projects/reports/atlas-07.bin",
+      "kind": "file",
+      "bytes": 133638914048,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1710819300
+    },
+    {
+      "path": "/srv/atlas/vol1/projects/dataset/atlas-08.bin",
+      "kind": "file",
+      "bytes": 130161836032,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1709868900
+    },
+    {
+      "path": "/srv/atlas/vol2/projects/models/atlas-09.bin",
+      "kind": "file",
+      "bytes": 127543541760,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1708918500
     }
   ],
   "stale": [
     {
-      "path": "/srv/atlas/vol1/projects/dataset/old-atlas.tar",
+      "path": "/srv/atlas/vol1/projects/archive/old-atlas-00.tar",
       "kind": "file",
-      "bytes": 145668177920,
+      "bytes": 146627624960,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1700192100,
-      "age_days": 220
+      "mtime": 1703648100,
+      "age_days": 180
+    },
+    {
+      "path": "/srv/atlas/vol2/projects/archive/old-atlas-01.tar",
+      "kind": "file",
+      "bytes": 142062125056,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1700624100,
+      "age_days": 215
+    },
+    {
+      "path": "/srv/atlas/vol1/projects/archive/old-atlas-02.tar",
+      "kind": "file",
+      "bytes": 137464119296,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1697600100,
+      "age_days": 250
+    },
+    {
+      "path": "/srv/atlas/vol2/projects/archive/old-atlas-03.tar",
+      "kind": "file",
+      "bytes": 133372575744,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1694576100,
+      "age_days": 285
+    },
+    {
+      "path": "/srv/atlas/vol1/projects/archive/old-atlas-04.tar",
+      "kind": "file",
+      "bytes": 129514864640,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1691552100,
+      "age_days": 320
     }
   ],
   "blocked": []

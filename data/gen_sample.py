@@ -40,9 +40,31 @@ def mtime(days_ago: int, *, start: int = SCAN_START) -> int:
     return start - days_ago * 86400
 
 
-def capacity_id(major_minor: str) -> str:
-    major, minor = major_minor.split(":", 1)
-    return f"dev-{int(major)}-{int(minor)}"
+def capacity_id(major_minor: str) -> str | None:
+    """Return canonical dev-major-minor identity or None for invalid input."""
+    if not isinstance(major_minor, str) or major_minor.count(":") != 1:
+        return None
+    major_raw, minor_raw = major_minor.split(":", 1)
+    if (
+        not major_raw
+        or not minor_raw
+        or len(major_raw) > 10
+        or len(minor_raw) > 10
+        or not major_raw.isdigit()
+        or not minor_raw.isdigit()
+    ):
+        return None
+    major = int(major_raw)
+    minor = int(minor_raw)
+    if major <= 0 or (major == 0 and minor == 0):
+        return None
+    return f"dev-{major}-{minor}"
+
+
+def add_capacity_identity(record: dict[str, Any], major_minor: str) -> None:
+    cid = capacity_id(major_minor)
+    if cid is not None:
+        record["capacity_id"] = cid
 
 
 class SnapshotBuilder:
@@ -85,7 +107,6 @@ class SnapshotBuilder:
     def selected_root(self, meta: dict[str, Any], mount: dict[str, Any] | None, *, status: str | None = None, error_code: str | None = None) -> dict[str, Any]:
         media = meta["storage_media"]
         confidence = "unresolved" if media == "unknown" else "resolved"
-        cid = capacity_id(meta["major_minor"])
         if mount is None:
             scanned_bytes = scanned_files = scanned_dirs = errors = 0
             status = status or "failed"
@@ -96,10 +117,9 @@ class SnapshotBuilder:
             errors = mount["errors"]
             status = status or ("complete" if errors == 0 and self.count_blocked(meta["scan_root"]) == 0 else "partial")
         blocked_count = self.count_blocked(meta["scan_root"])
-        return {
+        record = {
             "mount_id": meta["mount_id"],
             "major_minor": meta["major_minor"],
-            "capacity_id": cid,
             "storage_media": media,
             "storage_media_confidence": confidence,
             "mount_source": meta["mount_source"],
@@ -115,6 +135,8 @@ class SnapshotBuilder:
             "error_count": errors if mount is not None else (1 if status == "failed" else 0),
             "error_code": error_code if error_code is not None else ("EACCES" if blocked_count else ("EIO" if errors else None)),
         }
+        add_capacity_identity(record, meta["major_minor"])
+        return record
 
     def count_blocked(self, scan_root: str) -> int:
         prefix = scan_root.rstrip("/") + "/"
@@ -126,14 +148,12 @@ class SnapshotBuilder:
         used = max(scanned, int(scanned * 1.04))
         total = max(used + 1, int(used * 100 / use_pct))
         avail = total - used
-        cid = capacity_id(meta["major_minor"])
         confidence = "unresolved" if meta["storage_media"] == "unknown" else "resolved"
-        return {
+        record = {
             "path": meta["scan_root"],
             "mount_id": meta["mount_id"],
             "scan_root": meta["scan_root"],
             "fstype": meta["fstype"],
-            "capacity_id": cid,
             "storage_media": meta["storage_media"],
             "storage_media_confidence": confidence,
             "df_total": total,
@@ -146,6 +166,8 @@ class SnapshotBuilder:
             "errors": errors,
             "tree": tree,
         }
+        add_capacity_identity(record, meta["major_minor"])
+        return record
 
     def users(self) -> list[dict[str, Any]]:
         rows = []
@@ -234,8 +256,54 @@ def hinton_snapshot() -> dict[str, Any]:
     ], other=18*GiB, extra_files=90, days=0)
     mounts = [b.make_mount(metas[0], home, use_pct=64, errors=0), b.make_mount(metas[1], data, use_pct=89, errors=1), b.make_mount(metas[2], data1, use_pct=77, errors=0), b.make_mount(metas[3], data3, use_pct=94, errors=2)]
     roots = [b.selected_root(meta, mount) for meta, mount in zip(metas, mounts)]
-    top = b.file_rows([("/data/sungoh/imagenet/imagenet_full.tar",1003,210,240),("/data3/archive/2023_projects/backup_full.img",0,380,410),("/data/donguk/video_raw/session_4k_master.mov",1004,95,61),("/data/jaehyeon/llm_corpus/c4_en.jsonl",1006,188,46),("/data/shared/public_datasets/laion_subset.tar",0,320,82),("/data1/geonyeong/diffusion/sd_xl_weights.safetensors",1007,13,3),("/home/shchoi/miniconda3/pkgs/cuda_toolkit.tar",1008,4,41)])
-    stale = b.file_rows([("/data3/archive/2023_projects/backup_full.img",0,380,410),("/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt",1002,52,305),("/data/sungoh/imagenet/imagenet_full.tar",1003,210,240),("/data1/shchoi/scratch/core.dump",1008,18,260)], stale=True)
+    top = b.file_rows([
+        ("/data3/archive/2023_projects/backup_full.img", 0, 380, 410),
+        ("/data/shared/public_datasets/laion_subset.tar", 0, 320, 82),
+        ("/data/sungjin/datasets/pile_dedup.bin", 1002, 260, 31),
+        ("/data3/archive/2024_projects/dataset_v3.tar", 0, 240, 205),
+        ("/data/sungoh/imagenet/imagenet_full.tar", 1003, 210, 240),
+        ("/data/jaehyeon/llm_corpus/c4_en.jsonl", 1006, 188, 46),
+        ("/data3/donguk_archive/raw_capture_2023.tar", 1004, 130, 151),
+        ("/data1/shchoi/backups/home_snapshot_0601.tar.zst", 1008, 120, 21),
+        ("/data/sungjin/datasets/audio_set.tar", 1002, 95, 33),
+        ("/data/donguk/video_raw/session_4k_master.mov", 1004, 95, 61),
+        ("/data/donguk/video_raw/drone_flight_8k.mov", 1004, 76, 64),
+        ("/data/sungoh/imagenet/val_high_res.tar", 1003, 64, 201),
+        ("/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt", 1002, 52, 305),
+        ("/data/sungjin/checkpoints/run0421_final.pt", 1002, 47, 4),
+        ("/data/dohyun/nerf_scenes/city_block_raw.zip", 1005, 41, 9),
+        ("/data/sungoh/tmp/scratch_blob.bin", 1003, 40, 0),
+        ("/data/donguk/features/clip_feats.npy", 1004, 34, 13),
+        ("/data3/archive/2023_projects/logs_archive.tar.gz", 0, 27, 402),
+        ("/data/shared/public_datasets/coco2017.zip", 0, 25, 81),
+        ("/data/jaehyeon/llm_corpus/wiki_dump.xml.bz2", 1006, 22, 50),
+        ("/data1/shchoi/scratch/core.dump", 1008, 18, 1),
+        ("/data1/geonyeong/diffusion/sd_xl_weights.safetensors", 1007, 13, 3),
+        ("/data/sungoh/models/vit_huge.bin", 1003, 11, 11),
+        ("/data/dohyun/ckpt/nerf_big_080000.pth", 1005, 9, 4),
+        ("/data1/geonyeong/samples/grid_render.mp4", 1007, 8, 1),
+        ("/data/sungjin/runs/tensorboard_events.bin", 1002, 7, 1),
+        ("/data/shared/conda_envs/env_torch.tar.gz", 0, 6, 22),
+        ("/data/jaehyeon/eval/results_dump.parquet", 1006, 5, 2),
+        ("/home/shchoi/miniconda3/pkgs/cuda_toolkit.tar", 1008, 4, 41),
+    ])
+    stale = b.file_rows([
+        ("/data3/archive/2023_projects/backup_full.img", 0, 380, 410),
+        ("/data3/archive/2024_projects/dataset_v3.tar", 0, 240, 205),
+        ("/data/sungoh/imagenet/imagenet_full.tar", 1003, 210, 240),
+        ("/data3/donguk_archive/raw_capture_2023.tar", 1004, 130, 720),
+        ("/data/donguk/video_raw/drone_flight_8k.mov", 1004, 76, 380),
+        ("/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt", 1002, 52, 305),
+        ("/data/sungjin/checkpoints/run0119_obsolete.pt", 1002, 47, 188),
+        ("/data/dohyun/nerf_scenes/abandoned_scene.zip", 1005, 41, 150),
+        ("/data/sungoh/tmp/scratch_blob.bin", 1003, 40, 175),
+        ("/data3/archive/2023_projects/logs_archive.tar.gz", 0, 27, 402),
+        ("/data1/shchoi/scratch/core.dump", 1008, 18, 260),
+        ("/data1/geonyeong/samples/grid_render.mp4", 1007, 8, 140),
+        ("/home/minseo/old_env.tar.gz", 1010, 6, 95),
+        ("/data/jaehyeon/eval/old_results.parquet", 1006, 5, 220),
+        ("/home/minseo/journal_archive.gz", 1010, 3, 130),
+    ], stale=True)
     return b.doc(mounts, roots, top, stale)
 
 
@@ -256,8 +324,29 @@ def simple_snapshot(server_id: str, *, offset: int, medias: list[str], use_pcts:
     if failed_unknown:
         failed = {"mount_id":"unresolved","major_minor":f"9:{offset+99}","mount_source":f"/dev/storage-viz/{server_id}-unresolved","mountpoint":f"/srv/{server_id}/lost","scan_root":f"/srv/{server_id}/lost","fstype":"xfs","storage_media":"unknown"}
         roots.append(b.selected_root(failed, None, status="failed", error_code="ENODEV"))
-    top = b.file_rows([(f"/srv/{server_id}/vol1/projects/dataset/{server_id}.tar",1101,40+offset,120),(f"/srv/{server_id}/vol1/projects/models/checkpoint.pt",1102,12+offset,30)])
-    stale = b.file_rows([(f"/srv/{server_id}/vol1/projects/dataset/old-{server_id}.tar",1101,35+offset,220)], stale=True)
+    top_templates = []
+    for idx in range(10):
+        volume = idx % len(mounts) + 1
+        owner = [1101, 1102, 1103, 1104][idx % 4]
+        subdir = ["dataset", "models", "scratch", "reports"][idx % 4]
+        top_templates.append((
+            f"/srv/{server_id}/vol{volume}/projects/{subdir}/{server_id}-{idx:02d}.bin",
+            owner,
+            offset + 45 - idx * 3,
+            20 + idx * 11,
+        ))
+    stale_templates = []
+    for idx in range(5):
+        volume = idx % len(mounts) + 1
+        owner = [1101, 1102, 1103, 1104][idx % 4]
+        stale_templates.append((
+            f"/srv/{server_id}/vol{volume}/projects/archive/old-{server_id}-{idx:02d}.tar",
+            owner,
+            offset + 36 - idx * 4,
+            180 + idx * 35,
+        ))
+    top = b.file_rows(top_templates)
+    stale = b.file_rows(stale_templates, stale=True)
     return b.doc(mounts, roots, top, stale)
 
 

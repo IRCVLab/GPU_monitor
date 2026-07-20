@@ -73,6 +73,25 @@ class CentralPollingLifecycleTest(unittest.TestCase):
             self.assertIsNone(serve.build_central_poller(serve._DevSampleService(str(sample_dir))))
 
 
+
+    def test_dev_sample_rejects_symlink_root_before_resolve(self):
+        from viewer import serve
+        with tempfile.TemporaryDirectory(prefix="storage-viz-dev-real.") as real, tempfile.TemporaryDirectory(prefix="storage-viz-dev-link-parent.") as parent:
+            real_dir = Path(real)
+            rows = [{"id":"hinton", "label":"hinton", "file":"hinton", "default":True, "sample_data":True}]
+            (real_dir / "hosts.json").write_text(json.dumps(rows) + "\n", encoding="utf-8")
+            (real_dir / "hinton.sample.json").write_text(json.dumps(sample_snapshot("hinton")) + "\n", encoding="utf-8")
+            link = Path(parent) / "samples-link"
+            os.symlink(real_dir, link)
+            with self.assertRaises(ValueError):
+                serve._DevSampleService(str(link))
+
+    def test_import_ignores_unittest_argv_port_but_script_positional_port_still_works(self):
+        code = "import sys; sys.argv=['unittest','viewer.test_serve']; import viewer.serve; print(viewer.serve.PORT)"
+        result = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "8088")
+
 class ApiServerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="storage-viz-api-test."); self.addCleanup(self.tmp.cleanup)
@@ -226,6 +245,10 @@ class ApiServerTest(unittest.TestCase):
         self.start_server(expect_exit=True)
         self._stop(); self.proc = None
         (self.sample_dir / "orphan.sample.json").unlink()
+        (self.sample_dir / ".hidden.sample.json").write_text(json.dumps(sample_snapshot("hidden")) + "\n", encoding="utf-8")
+        self.start_server(expect_exit=True)
+        self._stop(); self.proc = None
+        (self.sample_dir / ".hidden.sample.json").unlink()
         (self.sample_dir / "atlas.sample.json").unlink()
         (self.sample_dir / "outside.sample.json").write_text(json.dumps(sample_snapshot("outside")) + "\n", encoding="utf-8")
         os.symlink(self.sample_dir / "outside.sample.json", self.sample_dir / "atlas.sample.json")
@@ -235,6 +258,26 @@ class ApiServerTest(unittest.TestCase):
         self.write_manifest(["escape"])
         (self.sample_dir / "hosts.json").write_text(json.dumps([{"id":"escape", "label":"escape", "file":"../escape", "default":True, "sample_data":True}]) + "\n", encoding="utf-8")
         self.start_server(expect_exit=True)
+
+
+    def test_direct_script_positional_port_is_preserved(self):
+        self.port = free_port()
+        env = os.environ.copy()
+        env.update(STORAGE_VIZ_BIND="127.0.0.1", STORAGE_VIZ_DEV_SAMPLE_DIR=str(self.sample_dir))
+        env.pop("STORAGE_VIZ_PORT", None)
+        self.proc = subprocess.Popen([sys.executable, str(SERVE), str(self.port)], cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                code, _, _ = self.request("GET", "/api/session")
+                self.assertEqual(code, 200)
+                return
+            except Exception:
+                if self.proc.poll() is not None:
+                    out, err = self.proc.communicate(timeout=1)
+                    self.fail(f"serve.py exited early\nstdout={out}\nstderr={err}")
+                time.sleep(0.05)
+        self.fail("serve.py did not become ready on positional port")
 
     def test_expired_session_cookie_is_rejected_on_post(self):
         inv = self.write_inventory()
