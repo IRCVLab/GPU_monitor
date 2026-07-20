@@ -230,6 +230,21 @@ if (typeof module !== "undefined" && module.exports) {
    Header + capacity hero (rendered immediately for fast first paint)
    ========================================================================= */
 function capColor(p) { return p >= 90 ? "var(--crit)" : p >= 75 ? "var(--warn)" : "var(--ok)"; }
+function isDetailActionableMount(mount) {
+  const rawPath = mount && (mount.path || mount.mountpoint);
+  if (typeof isActionableMountPath === "function") return isActionableMountPath(rawPath);
+  const value = String(rawPath || "").replace(/\/+$/, "") || "/";
+  return value !== "/boot" && !value.startsWith("/boot/");
+}
+function normalizeDetailMounts() {
+  const actionableMounts = (DATA && Array.isArray(DATA.mounts) ? DATA.mounts : []).filter(isDetailActionableMount);
+  if (DATA) DATA.mounts = actionableMounts;
+  mountPaths = actionableMounts.map(m => m.path);
+  mountColor = {};
+  mountPaths.forEach((p, i) => mountColor[p] = MOUNT_PALETTE[i % MOUNT_PALETTE.length]);
+  if (currentMountIdx >= mountPaths.length) currentMountIdx = 0;
+  return actionableMounts;
+}
 function renderHeader() {
   document.getElementById("h-host").textContent = DATA.hostname || "—";
   document.getElementById("h-scan").textContent = fmtDate(DATA.scan_started_unix) +
@@ -249,20 +264,25 @@ function renderHeader() {
   warn.innerHTML = msgs.length ? "⚠ " + msgs.join("<br>⚠ ") : "";
 
   const caps = document.getElementById("caps");
+  const actionableMounts = normalizeDetailMounts();
   caps.innerHTML = ""; totalCapacityUsed = 0; capUsedByMount = {};
-  for (const m of DATA.mounts || []) {
+  caps.className = "caps detail-capacity-rail";
+  for (const m of actionableMounts) {
     capUsedByMount[m.path] = m.df_used || 0; totalCapacityUsed += (m.df_used || 0);
     const pct = (m.df_use_pct != null) ? m.df_use_pct : (m.df_total ? Math.round(m.df_used / m.df_total * 100) : 0);
     const color = capColor(pct);
+    const media = m.storage_media || m.block_media || "unknown";
     const div = document.createElement("div");
-    div.className = "cap";
+    div.className = "detail-capacity-row";
     div.innerHTML =
-      '<div class="cap-top"><span><span class="cap-path">' + escapeHtml(m.path) + '</span>' +
-        '<span class="cap-fs">' + escapeHtml(m.fstype || "") + '</span></span>' +
-        '<span class="cap-pct" style="color:' + color + '">' + pct + '<span style="font-size:15px">%</span></span></div>' +
-      '<div class="cap-bar"><div class="cap-fill" style="width:' + Math.min(100, pct) + '%;background:' + color + '"></div></div>' +
+      '<div class="cap-main"><span class="cap-path">' + escapeHtml(m.path) + '</span>' +
+        '<span class="cap-fs">' + escapeHtml(m.fstype || "") + '</span>' +
+        '<span class="cap-media">' + escapeHtml(media) + '</span></div>' +
       '<div class="cap-sub"><span class="figure">' + humanBytes(m.df_used) + '</span> used / <span class="figure">' +
-        humanBytes(m.df_total) + '</span> · <span class="figure">' + humanBytes(m.df_avail) + '</span> free</div>';
+        humanBytes(m.df_total) + '</span></div>' +
+      '<div class="cap-pct" style="color:' + color + '">' + pct + '<span>%</span></div>' +
+      '<div class="cap-free"><span class="figure">' + humanBytes(m.df_avail) + '</span> free</div>' +
+      '<div class="cap-bar"><div class="cap-fill" style="width:' + Math.min(100, pct) + '%;background:' + color + '"></div></div>';
     caps.appendChild(div);
   }
   if (totalCapacityUsed <= 0) totalCapacityUsed = 1;

@@ -595,6 +595,55 @@ function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
   assert.strictEqual(button.getAttribute('aria-label'), undefined, 'unknown mount details must not be hidden behind a row aria-label');
 }
 
+
+async function testDetailCapacityUsesCompactRowsAndFiltersBootMounts() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 3, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+    dataMode: 'inventory',
+  });
+  viewer.loadSnapshotForCurrentSource = async () => ({
+    server_id: 'alpha-1',
+    hostname: 'alpha-host',
+    scanner_version: '1.0',
+    run_as_root: true,
+    users: [],
+    top_files: [],
+    stale: [],
+    mounts: [
+      { mount_id: 'boot', path: '/boot', fstype: 'vfat', storage_media: 'ssd', df_total: 1024, df_used: 512, df_avail: 512, df_use_pct: 50 },
+      { mount_id: 'root', path: '/', fstype: 'ext4', storage_media: 'ssd', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
+      { mount_id: 'data', path: '/data', fstype: 'xfs', storage_media: 'hdd', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+    ],
+  });
+  viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('alpha-1');
+  await flushPromises();
+
+  const caps = viewer.document.getElementById('caps');
+  assert(caps.className.split(/\s+/).includes('detail-capacity-rail'), 'detail capacity must use compact rail class');
+  assert.strictEqual(caps.children.length, 2, 'boot mounts must be omitted from detail capacity rows');
+  assert(caps.children.every(child => child.className.split(/\s+/).includes('detail-capacity-row')), 'each detail mount must render as a compact capacity row');
+  const html = caps.children.map(child => child.innerHTML).join('\n');
+  assert(!html.includes('/boot'), 'boot mount must be absent from legacy detail capacity snapshots');
+  assert(html.includes('cap-path') && html.includes('/') && html.includes('/data'), 'mount paths and existing cap-path selector must be preserved');
+  assert(html.includes('cap-fs') && html.includes('ext4') && html.includes('xfs'), 'filesystem values must be preserved exactly');
+  assert(html.includes('cap-media') && html.includes('ssd') && html.includes('hdd'), 'media values must be exposed in the compact row');
+  assert(html.includes('400 B') && html.includes('1000 B') && html.includes('1.46 KB') && html.includes('1.95 KB'), 'used/total values must be preserved exactly through existing formatting');
+  assert(html.includes('40') && html.includes('75'), 'percentage values must be preserved');
+  assert(html.includes('600 B') && html.includes('500 B'), 'free capacity values must be preserved');
+  assert(html.includes('cap-bar') && html.includes('cap-fill'), 'thin utilization bar IDs/classes must remain available');
+  assert(!caps.children.some(child => child.className.split(/\s+/).includes('cap')), 'detail capacity must no longer use the large capacity-card grid contract');
+
+  const state = viewer.getCurrentDetailDebugState();
+  assert.deepStrictEqual(state.data.mounts.map(m => m.path), ['/', '/data'], 'detail DATA.mounts must be filtered before downstream mount selectors derive paths');
+}
+
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*minmax\([^)]*140px[^)]*\)\s+minmax\(0,\s*1fr\)/.test(css), 'compact overview must use a narrow server column');
@@ -1050,6 +1099,7 @@ async function main() {
   testMountCentricOverviewDomFieldsAndStableNavigation();
   testServerHeaderCapacityMetaUsesAggregateSemantics();
   testUnknownMountCapacityDomStaysNeutralAndAccessible();
+  await testDetailCapacityUsesCompactRowsAndFiltersBootMounts();
   testMountCentricResponsiveCssContract();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
