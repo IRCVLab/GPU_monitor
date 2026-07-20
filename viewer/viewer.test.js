@@ -142,8 +142,8 @@ function makeSnapshot(mountOverrides = []) {
   return {
     server_id: "alpha-1",
     mounts: mountOverrides.length ? mountOverrides : [
-      { path: "/data", df_use_pct: 81, df_avail: 900 * GiB },
-      { path: "/archive", df_use_pct: 93, df_avail: 600 * GiB },
+      { path: "/data", df_total: 5000 * GiB, df_used: 4050 * GiB, df_use_pct: 81, df_avail: 900 * GiB },
+      { path: "/archive", df_total: 8000 * GiB, df_used: 7440 * GiB, df_use_pct: 93, df_avail: 600 * GiB },
     ],
   };
 }
@@ -169,6 +169,8 @@ function testOverviewCapacityThresholdsAndPrecedence() {
   assert.strictEqual(pressureLevel(1, DEFAULT_CAPACITY_THRESHOLDS.warning_free_bytes), "warning");
   assert.strictEqual(pressureLevel(92, 10 ** 12), "critical");
   assert.strictEqual(pressureLevel(1, DEFAULT_CAPACITY_THRESHOLDS.critical_free_bytes), "critical");
+  assert.strictEqual(pressureLevel(null, 10 ** 12), "unknown", "missing utilization must not be promoted to a capacity-pressure warning");
+  assert.strictEqual(pressureLevel(10, null), "unknown", "missing free bytes must not be promoted to a false critical state");
 
   const precedenceCases = [
     [makeSummary({ snapshot_availability: "absent", latest_pull_status: "not_installed" }), null, null, "agent_missing"],
@@ -179,11 +181,11 @@ function testOverviewCapacityThresholdsAndPrecedence() {
     [makeSummary({ configuration_sync: "drifted" }), makeSnapshot(), null, "config_drift"],
     [makeSummary({ latest_scan_result: "partial" }), makeSnapshot(), null, "partial_scan"],
     [makeSummary({ freshness: "stale" }), makeSnapshot(), null, "stale_snapshot"],
-    [makeSummary({ active_job: { id: "job-1", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), makeSnapshot([{ path: "/data", df_use_pct: 95, df_avail: 900 * GiB }]), null, "active_scan"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 95, df_avail: 900 * GiB }]), null, "pressure_critical"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 10, df_avail: 20 * GiB }]), null, "pressure_critical"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 81, df_avail: 900 * GiB }]), null, "pressure_warning"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_use_pct: 55, df_avail: 900 * GiB }]), null, "normal"],
+    [makeSummary({ active_job: { id: "job-1", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 950 * GiB, df_use_pct: 95, df_avail: 900 * GiB }]), null, "active_scan"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 950 * GiB, df_use_pct: 95, df_avail: 900 * GiB }]), null, "pressure_critical"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 100 * GiB, df_use_pct: 10, df_avail: 20 * GiB }]), null, "pressure_critical"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 810 * GiB, df_use_pct: 81, df_avail: 900 * GiB }]), null, "pressure_warning"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 550 * GiB, df_use_pct: 55, df_avail: 900 * GiB }]), null, "normal"],
     [makeSummary(), null, new Error("snapshot load failed"), "snapshot_load_failed"],
     [makeSummary({ active_job: { id: "job-9", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), null, new Error("snapshot load failed"), "snapshot_load_failed"],
     [makeSummary({ freshness: "stale" }), null, new Error("snapshot load failed"), "stale_snapshot"],
@@ -205,7 +207,7 @@ function testOverviewCapacityThresholdsAndPrecedence() {
 
   const model = buildOverviewServer(
     makeSummary({ latest_scan_result: "failed", active_job: { id: "job-2", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }),
-    makeSnapshot([{ path: "/data", df_use_pct: 93, df_avail: 1024 * GiB }]),
+    makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 930 * GiB, df_use_pct: 93, df_avail: 1024 * GiB }]),
     DEFAULT_CAPACITY_THRESHOLDS,
   );
   assert.strictEqual(model.primaryStatus.code, "scan_failed", "higher-priority operational state must win over capacity pressure");
@@ -445,6 +447,80 @@ function testOverviewUnknownCapacityLabelsDoNotImplyZero() {
   assert.strictEqual(page.isPartial, true, "page aggregate containing an unavailable server must be partial");
   assert.strictEqual(page.totalLabel, "확인된 용량 ≥ 2.00 KB", "page aggregate with unavailable server must show known-only lower-bound capacity");
   assert.strictEqual(page.utilizationLabel, "확인된 범위 50%", "page aggregate with unavailable server must not imply unavailable capacity is included");
+}
+
+function testUnknownMountCapacityRemainsNeutralAndHonest() {
+  const { buildOverviewServer, summarizeMounts, pressureLevel } = require("./overview.js");
+
+  const missingAvailable = summarizeMounts(makeCapacitySnapshot({
+    selected_roots: [{ mount_id: "unknown-free", capacity_id: "dev-8-16", storage_media: "ssd" }],
+    mounts: [{ mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 50 }],
+  }))[0];
+  assert.deepStrictEqual({
+    availableBytes: missingAvailable.availableBytes,
+    freeBytes: missingAvailable.freeBytes,
+    pressure: missingAvailable.pressure,
+    pressureLabel: missingAvailable.pressureLabel,
+    freeText: missingAvailable.freeText,
+  }, {
+    availableBytes: null,
+    freeBytes: null,
+    pressure: "unknown",
+    pressureLabel: "미확인",
+    freeText: "여유 미확인",
+  }, "missing df_avail must stay unknown instead of becoming 0 B critical");
+
+  const invalidNumbers = summarizeMounts(makeCapacitySnapshot({
+    selected_roots: [{ mount_id: "invalid-cap", capacity_id: "dev-8-16", storage_media: "hdd" }],
+    mounts: [{ mount_id: "invalid-cap", path: "/invalid-cap", df_total: "2048", df_used: -1, df_avail: Infinity, df_use_pct: 75 }],
+  }))[0];
+  assert.deepStrictEqual({
+    totalBytes: invalidNumbers.totalBytes,
+    usedBytes: invalidNumbers.usedBytes,
+    availableBytes: invalidNumbers.availableBytes,
+    freeBytes: invalidNumbers.freeBytes,
+    usedPct: invalidNumbers.usedPct,
+    usedTotalText: invalidNumbers.usedTotalText,
+    freeText: invalidNumbers.freeText,
+    pressure: invalidNumbers.pressure,
+  }, {
+    totalBytes: null,
+    usedBytes: null,
+    availableBytes: null,
+    freeBytes: null,
+    usedPct: null,
+    usedTotalText: "— / —",
+    freeText: "여유 미확인",
+    pressure: "unknown",
+  }, "invalid capacity numbers must render as unknown labels and neutral pressure");
+
+  assert.strictEqual(pressureLevel(95, null), "unknown", "even a high percent must not promote when required free capacity is unavailable");
+  const unknownOnlyRow = buildOverviewServer(
+    makeSummary({ id: "unknown-only", display_name: "unknown-only" }),
+    makeCapacitySnapshot({
+      server_id: "unknown-only",
+      selected_roots: [{ mount_id: "unknown-free", capacity_id: "dev-8-16", storage_media: "ssd" }],
+      mounts: [{ mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 95 }],
+    }),
+  );
+  assert.strictEqual(unknownOnlyRow.primaryStatus.code, "normal", "unknown capacity pressure must be ignored for warning/critical primary status promotion");
+  assert.strictEqual(unknownOnlyRow.totalAvailableLabel, "여유 미확인", "server subtotal metadata must not imply 0 B free when all mount free capacity is unknown");
+
+  const mixedRow = buildOverviewServer(
+    makeSummary({ id: "mixed", display_name: "mixed" }),
+    makeCapacitySnapshot({
+      server_id: "mixed",
+      selected_roots: [
+        { mount_id: "unknown-free", capacity_id: "dev-8-16", storage_media: "ssd" },
+        { mount_id: "known-warning", capacity_id: "dev-8-32", storage_media: "hdd" },
+      ],
+      mounts: [
+        { mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 95 },
+        { mount_id: "known-warning", path: "/known-warning", df_total: 4096 * GiB, df_used: 3500 * GiB, df_avail: 596 * GiB, df_use_pct: 85 },
+      ],
+    }),
+  );
+  assert.strictEqual(mixedRow.primaryStatus.code, "pressure_warning", "known warning pressure must still promote while unknown mount pressure is ignored");
 }
 
 function testOverviewCapacityIdExactSchemaValidation() {
@@ -721,6 +797,7 @@ async function main() {
   testOverviewCapacityThresholdsAndPrecedence();
   testOverviewIdentityAwareMountModelAndAggregate();
   testOverviewUnknownCapacityLabelsDoNotImplyZero();
+  testUnknownMountCapacityRemainsNeutralAndHonest();
   testOverviewCapacityIdExactSchemaValidation();
   testOverviewCapacityBytesRequireStrictJsonNumbers();
   testOverviewRouteHelpers();

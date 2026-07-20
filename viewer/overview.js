@@ -64,8 +64,9 @@ function normalizeSummary(summary) {
 }
 
 function pressureLevel(usedPct, freeBytes, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
-  const used = asInt(usedPct, 0);
-  const free = asInt(freeBytes, 0);
+  if (typeof usedPct !== "number" || !Number.isFinite(usedPct) || typeof freeBytes !== "number" || !Number.isFinite(freeBytes)) return "unknown";
+  const used = Math.round(usedPct);
+  const free = Math.round(freeBytes);
   if (used >= thresholds.critical_used_pct || free <= thresholds.critical_free_bytes) return "critical";
   if (used >= thresholds.warning_used_pct || free <= thresholds.warning_free_bytes) return "warning";
   return "normal";
@@ -149,13 +150,14 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
     const availableBytes = normalizeBytes(mount && mount.df_avail);
     const explicitPct = normalizePercent(mount && mount.df_use_pct);
     const computedPct = totalBytes && usedBytes != null ? Math.round((usedBytes / totalBytes) * 100) : null;
-    const usedPct = explicitPct != null ? explicitPct : normalizePercent(computedPct);
-    const freeBytes = availableBytes == null ? 0 : availableBytes;
+    const usedPct = totalBytes != null && usedBytes != null ? (explicitPct != null ? explicitPct : normalizePercent(computedPct)) : null;
+    const freeBytes = availableBytes;
     const media = String((selectedRoot && (selectedRoot.storage_media || selectedRoot.block_media)) || (mount && (mount.storage_media || mount.block_media)) || "unknown");
     const mediaConfidence = String((selectedRoot && (selectedRoot.storage_media_confidence || selectedRoot.block_media_confidence)) || (mount && (mount.storage_media_confidence || mount.block_media_confidence)) || "unknown");
     const usedPctText = usedPct == null ? "—" : usedPct + "%";
     const usedTotalText = compactBytes(usedBytes) + " / " + compactBytes(totalBytes);
-    const freeText = compactBytes(availableBytes == null ? freeBytes : availableBytes) + " free";
+    const freeText = availableBytes == null ? "여유 미확인" : compactBytes(availableBytes) + " free";
+    const pressure = pressureLevel(usedPct, freeBytes, thresholds);
     return {
       key: String((mount && mount.mount_id) || (mount && mount.path) || index),
       mountId,
@@ -172,8 +174,8 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       usedPctText,
       freeText,
       identity: capacityIdentityFromRoot(selectedRoot),
-      pressure: pressureLevel(usedPct, freeBytes, thresholds),
-      pressureLabel: pressureText(pressureLevel(usedPct, freeBytes, thresholds)),
+      pressure,
+      pressureLabel: pressureText(pressure),
       metricText: usedPctText + " · " + freeText,
     };
   });
@@ -190,6 +192,7 @@ function formatMediaLabel(value) {
 function pressureText(value) {
   if (value === "critical") return "위험";
   if (value === "warning") return "주의";
+  if (value === "unknown") return "미확인";
   return "정상";
 }
 
@@ -359,14 +362,19 @@ function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
   const mounts = summarizeMounts(snapshot, thresholds);
   const primaryStatus = derivePrimaryStatus(summary, snapshot, thresholds, error);
   const secondaryStatus = deriveSecondaryStatus(summary, primaryStatus.code);
-  const totalAvailableBytes = mounts.reduce((sum, mount) => sum + mount.freeBytes, 0);
+  const knownFreeMounts = mounts.filter(mount => mount.freeBytes != null);
+  const hasUnknownFree = mounts.some(mount => mount.freeBytes == null);
+  const totalAvailableBytes = knownFreeMounts.reduce((sum, mount) => sum + mount.freeBytes, 0);
+  const totalAvailableLabel = !mounts.length
+    ? "—"
+    : (!knownFreeMounts.length ? "여유 미확인" : (hasUnknownFree ? "확인된 여유 " + compactBytes(totalAvailableBytes) : compactBytes(totalAvailableBytes)));
   return {
     id: summary.id,
     displayName: summary.display_name || summary.id,
     order: summary.order,
     mountCount: mounts.length || summary.mount_count,
     totalAvailableBytes,
-    totalAvailableLabel: mounts.length ? compactBytes(totalAvailableBytes) : "—",
+    totalAvailableLabel,
     mounts,
     aggregate: aggregateMountCapacity(mounts),
     primaryStatus,
@@ -426,6 +434,12 @@ function serverSubtotalText(aggregate) {
   return aggregate.utilizationLabel + " · " + aggregate.usedLabel + " / " + aggregate.totalLabel + " · " + aggregate.availableLabel + " free";
 }
 
+function totalAvailableMetaText(row) {
+  if (!row || row.totalAvailableLabel === "—") return "여유 미확인";
+  if (/미확인$/.test(row.totalAvailableLabel) || /^확인된 여유 /.test(row.totalAvailableLabel)) return row.totalAvailableLabel;
+  return row.totalAvailableLabel + " free";
+}
+
 function renderOverviewAggregate(container, aggregate) {
   if (!container) return;
   container.innerHTML = "";
@@ -470,12 +484,11 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   button.type = "button";
   button.dataset.serverId = row.id;
   button.setAttribute("data-primary-status", row.primaryStatus.code);
-  button.setAttribute("aria-label", row.displayName + (row.primaryStatus.label ? " · " + row.primaryStatus.label : ""));
 
   const main = makeEl(doc, "div", "overview-row-main");
   const titleWrap = makeEl(doc, "div", "overview-row-title");
   const name = makeEl(doc, "span", "overview-name", row.displayName);
-  const meta = makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트 · " + row.totalAvailableLabel + " free");
+  const meta = makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트 · " + totalAvailableMetaText(row));
   const subtotal = makeEl(doc, "span", "overview-server-subtotal", serverSubtotalText(row.aggregate));
   titleWrap.appendChild(name);
   titleWrap.appendChild(meta);
@@ -561,6 +574,7 @@ const overviewExports = {
   buildRouteHref,
   renderOverviewAggregate,
   renderOverviewList,
+  totalAvailableMetaText,
 };
 
 if (typeof globalThis !== "undefined") Object.assign(globalThis, overviewExports);
