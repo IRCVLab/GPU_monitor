@@ -273,6 +273,26 @@ function testActionableMountFilteringPreservesNonBootOrder() {
   assert.strictEqual(row.mountCount, 3, "server row mount count must use actionable mount count after boot filtering");
 }
 
+function testOnlyBootMountsProduceZeroActionableMountCount() {
+  const { buildOverviewServer } = require("./overview.js");
+  const row = buildOverviewServer(
+    makeSummary({ id: "boot-only", display_name: "boot-only", mount_count: 2 }),
+    {
+      server_id: "boot-only",
+      selected_roots: [
+        { mount_id: "boot", capacity_id: "dev-8-1", storage_media: "ssd" },
+        { mount_id: "efi", capacity_id: "dev-8-2", storage_media: "ssd" },
+      ],
+      mounts: [
+        { mount_id: "boot", path: "/boot", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
+        { mount_id: "efi", path: "/boot/efi", df_total: 200, df_used: 20, df_avail: 180, df_use_pct: 10 },
+      ],
+    },
+  );
+  assert.strictEqual(row.mounts.length, 0, "boot-only snapshots must summarize to zero actionable mounts");
+  assert.strictEqual(row.mountCount, 0, "boot-only snapshots must render zero actionable mounts instead of falling back to legacy summary count");
+}
+
 function testOverviewIdentityAwareMountModelAndAggregate() {
   const {
     selectedRootByMountId,
@@ -848,6 +868,7 @@ async function main() {
   await testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures();
   testOverviewCapacityThresholdsAndPrecedence();
   testActionableMountFilteringPreservesNonBootOrder();
+  testOnlyBootMountsProduceZeroActionableMountCount();
   testOverviewIdentityAwareMountModelAndAggregate();
   testOverviewUnknownCapacityLabelsDoNotImplyZero();
   testUnknownMountCapacityRemainsNeutralAndHonest();
