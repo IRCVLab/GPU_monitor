@@ -126,7 +126,11 @@ function loadViewer() {
   };
   const historyCalls = [];
   const docListeners = new Map();
+  const documentElement = new FakeElement('html', doc);
+  documentElement.dataset = {};
   doc = {
+    documentElement,
+    cookie: '',
     createElement: (tag) => new FakeElement(tag, doc),
     createDocumentFragment: () => new FakeElement('fragment', doc),
     getElementById: getEl,
@@ -144,6 +148,7 @@ function loadViewer() {
     body: new FakeElement('body', null),
     activeElement: null,
   };
+  doc.documentElement.ownerDocument = doc;
   doc.body.ownerDocument = doc;
   const context = {
     console,
@@ -1207,7 +1212,31 @@ function testCleanupPanelRevealScrollsFocusedControlsIntoView() {
   assert.ok(reveal.scrollIntoViewCalls.length > 0 || danger.scrollIntoViewCalls.length > 0, 'revealing the destructive command must scroll controls into view inside the cleanup panel');
 }
 
+
+function testThemeModeCookieContractPreservesHistory() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.applyStoredThemeMode, 'function', 'applyStoredThemeMode must be exposed for shell reuse');
+  assert.strictEqual(typeof viewer.toggleThemeMode, 'function', 'toggleThemeMode must be exposed for shell reuse');
+
+  viewer.document.cookie = 'themeMode=light; session=ignored';
+  const button = viewer.document.getElementById('themeModeButton');
+  viewer.applyStoredThemeMode();
+  assert.ok(viewer.document.documentElement.classList.contains('light'), 'stored light mode must apply html.light');
+  assert.ok(!viewer.document.documentElement.classList.contains('dark'), 'stored light mode must remove html.dark');
+  assert.strictEqual(viewer.document.documentElement.dataset.material, 'liquid', 'Storage shell must use Clean liquid material');
+  assert.strictEqual(button.getAttribute('aria-pressed'), 'false', 'aria-pressed reflects whether dark mode is active');
+
+  viewer.__historyCalls.length = 0;
+  viewer.toggleThemeMode();
+  assert.ok(viewer.document.documentElement.classList.contains('dark'), 'toggle from light must apply dark');
+  assert.ok(!viewer.document.documentElement.classList.contains('light'), 'toggle from light must remove light');
+  assert.strictEqual(button.getAttribute('aria-pressed'), 'true', 'theme button pressed state updates after toggle');
+  assert.match(viewer.document.cookie, /themeMode=dark; Path=\/; SameSite=Lax/, 'toggle must persist the GPU Monitor themeMode cookie contract');
+  assert.deepStrictEqual(viewer.__historyCalls, [], 'theme toggles must not touch route/history state');
+}
+
 async function main() {
+  testThemeModeCookieContractPreservesHistory();
   testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars();
   testSnapshotLoadFailureRendersAsVisibleException();
   testRouteNavigationAndBackShellContract();

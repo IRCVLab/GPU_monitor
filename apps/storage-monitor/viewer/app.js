@@ -16,6 +16,46 @@ let rescanSawActive = false;
 let detailLoadGeneration = 0;
 let detailRequestVersions = new Map();
 
+
+function readThemeModeCookie() {
+  const parts = (document.cookie || "").split("; ");
+  const found = parts.find((part) => part.startsWith("themeMode="));
+  return found ? found.split("=")[1] : "";
+}
+
+function preferredThemeMode() {
+  const saved = readThemeModeCookie();
+  if (saved === "light" || saved === "dark") return saved;
+  if (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+  return "light";
+}
+
+function updateThemeModeButton(mode) {
+  const btn = document.getElementById("themeModeButton");
+  if (!btn) return;
+  const isDark = mode === "dark";
+  btn.setAttribute("aria-pressed", isDark ? "true" : "false");
+  btn.setAttribute("title", isDark ? "Switch to light mode" : "Switch to dark mode");
+}
+
+function applyStoredThemeMode(mode) {
+  const next = mode === "light" || mode === "dark" ? mode : preferredThemeMode();
+  const root = document.documentElement;
+  root.classList.remove("light", "dark");
+  root.classList.add(next);
+  root.dataset.material = "liquid";
+  updateThemeModeButton(next);
+  return next;
+}
+
+function toggleThemeMode() {
+  const root = document.documentElement;
+  const next = root.classList.contains("dark") ? "light" : "dark";
+  applyStoredThemeMode(next);
+  document.cookie = "themeMode=" + next + "; Path=/; SameSite=Lax";
+  return next;
+}
+
 /* =========================================================================
    Wiring
    ========================================================================= */
@@ -467,6 +507,9 @@ async function triggerRescan() {
 }
 
 async function init() {
+  applyStoredThemeMode();
+  const themeButton = document.getElementById("themeModeButton");
+  if (themeButton) themeButton.onclick = toggleThemeMode;
   const initialRoute = currentRoute();
   let bootstrap;
   try {
@@ -592,6 +635,8 @@ if (typeof globalThis !== "undefined") Object.assign(globalThis, {
   loadSnapshotForCurrentSource,
   getCurrentDetailDebugState,
   getOverviewModeDebugState,
+  applyStoredThemeMode,
+  toggleThemeMode,
 });
 if (typeof module !== "undefined" && module.exports) module.exports = {
   loadBootstrapDataWith,
