@@ -78,7 +78,7 @@ Both tools expose a visible utility link in the primary header:
 - Storage Viz: `GPU Monitor`
 - GPU Monitor: `Storage`
 
-Navigation opens in the same tab. The default local targets are `http://127.0.0.1:5173/` and `http://127.0.0.1:8088/`, matching the SSH-forwarded operator workflow. Storage Viz keeps its current loopback-only service binding.
+Navigation opens in the same tab. The default local targets are `http://127.0.0.1:15173/` and `http://127.0.0.1:8088/`, matching the SSH-forwarded operator workflow. The GPU Monitor link uses dedicated local tunnel port 15173 so it does not collide with unrelated local services already bound to 127.0.0.1:5173. Storage Viz keeps its current loopback-only service binding.
 
 ### Storage overview
 

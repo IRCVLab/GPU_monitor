@@ -16,7 +16,7 @@ function testCleanShellThemeBootstrapContract() {
   const themeScript = html.match(/<script>\s*\(\(\) => \{[\s\S]*?themeMode=[\s\S]*?document\.documentElement\.classList\.add\(mode\);[\s\S]*?dataset\.material = 'liquid';[\s\S]*?\}\)\(\);\s*<\/script>/);
   assert(themeScript, "index must include an early inline themeMode bootstrap that applies html.light/html.dark and data-material=liquid");
   assert(html.indexOf(themeScript[0]) < html.indexOf('<link rel="stylesheet" href="styles.css">'), "theme bootstrap must run before styles.css can paint");
-  assert(/<a\b(?=[^>]*class="suite-nav-link")(?=[^>]*href="http:\/\/127\.0\.0\.1:5173\/")(?![^>]*target=)[^>]*>\s*(?:<svg[\s\S]*?<\/svg>\s*)?GPU Monitor\s*<\/a>/.test(html), "header must include a same-tab GPU Monitor suite link");
+  assert(/<a\b(?=[^>]*class="suite-nav-link")(?=[^>]*href="http:\/\/127\.0\.0\.1:15173\/")(?![^>]*target=)[^>]*>\s*(?:<svg[\s\S]*?<\/svg>\s*)?GPU Monitor\s*<\/a>/.test(html), "header must include a same-tab GPU Monitor suite link");
   assert(/<button\b(?=[^>]*id="themeModeButton")(?=[^>]*class="theme-mode-button")(?=[^>]*aria-label="Toggle light and dark theme")(?=[^>]*aria-pressed=)[^>]*>[\s\S]*<svg[\s\S]*<\/button>/.test(html), "header must include an accessible circular theme mode button with inline SVG icons");
   assert(!html.includes("고정 순서 서버 저장소 개요"), "old Storage Viz subtitle copy must be absent from the redesigned shell");
   assert(/html\.light\s*\{[\s\S]*--bg:\s*#f4f5f7;[\s\S]*--surface:\s*#ffffff;[\s\S]*--accent:\s*#297cef;/.test(css), "light mode must map Clean semantic tokens to Storage variables");

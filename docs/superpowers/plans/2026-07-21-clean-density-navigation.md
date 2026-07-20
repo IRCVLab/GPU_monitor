@@ -14,7 +14,7 @@
 - Preserve configured server order and snapshot mount order.
 - Storage Viz uses Clean material only; no material picker or new dependency.
 - Share light/dark preference through the `themeMode` cookie.
-- Same-tab navigation defaults to `http://127.0.0.1:5173/` and `http://127.0.0.1:8088/`.
+- Same-tab navigation defaults to `http://127.0.0.1:15173/` and `http://127.0.0.1:8088/`; GPU Monitor uses the dedicated 15173 local tunnel to avoid colliding with unrelated local services on 127.0.0.1:5173.
 - Storage deployment restarts only `storage-viz-dashboard.service`.
 - GPU Monitor deployment must not change backend processes or Storage Viz.
 - No horizontal overflow at desktop or mobile widths.
@@ -65,7 +65,7 @@ Add an early inline bootstrap equivalent to:
 })();
 ```
 
-Add `GPU Monitor` as a normal anchor to `http://127.0.0.1:5173/`, a circular mode button, and small inline SVG icons. In `app.js`, toggle `light`/`dark`, write `themeMode=<mode>; Path=/; SameSite=Lax`, update `aria-pressed`, and avoid touching route/history state.
+Add `GPU Monitor` as a normal anchor to `http://127.0.0.1:15173/`, a circular mode button, and small inline SVG icons. In `app.js`, toggle `light`/`dark`, write `themeMode=<mode>; Path=/; SameSite=Lax`, update `aria-pressed`, and avoid touching route/history state.
 
 - [ ] **Step 4: Replace Storage tokens with exact Clean semantic tokens**
 
@@ -213,7 +213,7 @@ git commit -m "feat: link gpu monitor to storage dashboard"
 **Files:**
 - Deployment target: `/opt/storage-viz-dashboard/viewer`
 - Service: `storage-viz-dashboard.service`
-- Runtime frontends: GPU Monitor live port 5173, dev port 5174
+- Runtime frontends: GPU Monitor local live tunnel port 15173 (forwarding to remote live port 5173), dev port 5174
 
 **Interfaces:**
 - Consumes: committed Tasks 1-3.
@@ -241,7 +241,7 @@ Back up `/opt/storage-viz-dashboard/viewer`, copy the committed viewer directory
 
 - [ ] **Step 4: Deploy GPU frontend builds without restarting backend services**
 
-Use the existing live/dev frontend process workflow. Confirm ports 5173 and 5174 serve the new link while backend PIDs on 8001 and 8101 remain unchanged.
+Use the existing live/dev frontend process workflow. Confirm local tunnel port 15173 and dev port 5174 serve the new link while backend PIDs on 8001 and 8101 remain unchanged; this avoids the known local 127.0.0.1:5173 collision.
 
 - [ ] **Step 5: Run Playwright desktop/mobile QA**
 
