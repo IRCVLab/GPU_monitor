@@ -76,20 +76,196 @@ function statusPresentation(code) {
   return Object.assign({ code }, meta, { text: meta.shape ? meta.shape + " " + meta.label : meta.label });
 }
 
+function hasOwn(obj, key) {
+  return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
+}
+
+function normalizeBytes(value) {
+  const num = Number(value);
+  return Number.isFinite(num) && num >= 0 ? Math.round(num) : null;
+}
+
+function canonicalCapacityId(value) {
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/^dev-(\d+)-(\d+)$/);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return null;
+  if (major === 0 && minor === 0) return null;
+  return "dev-" + major + "-" + minor;
+}
+
+function canonicalMajorMinor(value) {
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/^(\d+):(\d+)$/);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return null;
+  if (major === 0 && minor === 0) return null;
+  return String(major) + ":" + String(minor);
+}
+
+function capacityIdentityFromRoot(root) {
+  if (!root || typeof root !== "object") return null;
+  if (hasOwn(root, "capacity_id")) {
+    const capacityId = canonicalCapacityId(root.capacity_id);
+    return capacityId ? { kind: "capacity_id", value: capacityId, key: "capacity_id:" + capacityId } : null;
+  }
+  const majorMinor = canonicalMajorMinor(root.major_minor);
+  return majorMinor ? { kind: "major_minor", value: majorMinor, key: "major_minor:" + majorMinor } : null;
+}
+
+function selectedRootByMountId(snapshot) {
+  const byMountId = new Map();
+  const roots = Array.isArray(snapshot && snapshot.selected_roots) ? snapshot.selected_roots : [];
+  for (const root of roots) {
+    const mountId = root && root.mount_id != null ? String(root.mount_id) : "";
+    if (!mountId || byMountId.has(mountId)) continue;
+    byMountId.set(mountId, root);
+  }
+  return byMountId;
+}
+
 function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
   const mounts = Array.isArray(snapshot && snapshot.mounts) ? snapshot.mounts : [];
+  const rootsByMountId = selectedRootByMountId(snapshot);
   return mounts.map((mount, index) => {
-    const usedPct = asInt(mount && mount.df_use_pct, 0);
-    const freeBytes = asInt(mount && mount.df_avail, 0);
+    const mountId = mount && mount.mount_id != null ? String(mount.mount_id) : "";
+    const selectedRoot = mountId ? rootsByMountId.get(mountId) || null : null;
+    const usedBytes = normalizeBytes(mount && mount.df_used);
+    const totalBytes = normalizeBytes(mount && mount.df_total);
+    const availableBytes = normalizeBytes(mount && mount.df_avail);
+    const usedPct = asInt(mount && mount.df_use_pct, totalBytes && usedBytes != null ? Math.round((usedBytes / totalBytes) * 100) : 0);
+    const freeBytes = availableBytes == null ? 0 : availableBytes;
+    const media = String((selectedRoot && (selectedRoot.storage_media || selectedRoot.block_media)) || (mount && (mount.storage_media || mount.block_media)) || "unknown");
+    const mediaConfidence = String((selectedRoot && (selectedRoot.storage_media_confidence || selectedRoot.block_media_confidence)) || (mount && (mount.storage_media_confidence || mount.block_media_confidence)) || "unknown");
     return {
       key: String((mount && mount.mount_id) || (mount && mount.path) || index),
+      mountId,
       path: String((mount && mount.path) || (mount && mount.mountpoint) || "/"),
+      usedBytes,
+      totalBytes,
+      availableBytes,
       usedPct,
       freeBytes,
+      media,
+      mediaConfidence,
+      identity: capacityIdentityFromRoot(selectedRoot),
       pressure: pressureLevel(usedPct, freeBytes, thresholds),
       metricText: usedPct + "% · " + compactBytes(freeBytes) + " free",
     };
   });
+}
+
+function aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial) {
+  const utilization = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) + "%" : "—";
+  if (!isPartial) {
+    return {
+      totalLabel: compactBytes(totalBytes),
+      usedLabel: compactBytes(usedBytes),
+      availableLabel: compactBytes(availableBytes),
+      utilizationLabel: utilization,
+    };
+  }
+  return {
+    totalLabel: "확인된 용량 ≥ " + compactBytes(totalBytes),
+    usedLabel: "확인된 사용량 ≥ " + compactBytes(usedBytes),
+    availableLabel: "확인된 여유 ≥ " + compactBytes(availableBytes),
+    utilizationLabel: "확인된 범위 " + utilization,
+  };
+}
+
+function sameCapacityNumbers(left, right) {
+  return left.totalBytes === right.totalBytes && left.usedBytes === right.usedBytes && left.availableBytes === right.availableBytes;
+}
+
+function capacityNumbersKnown(mount) {
+  return mount && mount.totalBytes != null && mount.usedBytes != null && mount.availableBytes != null;
+}
+
+function aggregateMountCapacity(mounts) {
+  const groups = new Map();
+  const partialReasons = [];
+  let excludedMountCount = 0;
+  for (const mount of Array.isArray(mounts) ? mounts : []) {
+    if (!mount || !mount.identity || !mount.identity.key) {
+      excludedMountCount += 1;
+      partialReasons.push(String((mount && mount.path) || "unknown mount") + ": unresolved capacity identity, 1개 마운트 제외");
+      continue;
+    }
+    const list = groups.get(mount.identity.key) || [];
+    list.push(mount);
+    groups.set(mount.identity.key, list);
+  }
+
+  let totalBytes = 0;
+  let usedBytes = 0;
+  let availableBytes = 0;
+  const capacityEntries = [];
+  for (const [identityKey, group] of groups) {
+    const first = group[0];
+    const identityLabel = first.identity.value || identityKey;
+    const consistent = capacityNumbersKnown(first) && group.every(mount => capacityNumbersKnown(mount) && sameCapacityNumbers(first, mount));
+    if (!consistent) {
+      excludedMountCount += group.length;
+      partialReasons.push(identityLabel + ": inconsistent capacity data, " + group.length + "개 마운트 제외");
+      continue;
+    }
+    totalBytes += first.totalBytes;
+    usedBytes += first.usedBytes;
+    availableBytes += first.availableBytes;
+    capacityEntries.push({
+      key: identityKey,
+      identity: first.identity,
+      totalBytes: first.totalBytes,
+      usedBytes: first.usedBytes,
+      availableBytes: first.availableBytes,
+    });
+  }
+  const isPartial = excludedMountCount > 0 || partialReasons.length > 0;
+  return Object.assign({
+    isPartial,
+    excludedMountCount,
+    partialReasons,
+    totalBytes,
+    usedBytes,
+    availableBytes,
+    capacityEntries,
+  }, aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial));
+}
+
+function buildOverviewAggregate(rows) {
+  const pageEntries = new Map();
+  const partialReasons = [];
+  let excludedMountCount = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const aggregate = row && row.aggregate ? row.aggregate : aggregateMountCapacity(row && row.mounts);
+    excludedMountCount += aggregate.excludedMountCount || 0;
+    for (const reason of aggregate.partialReasons || []) partialReasons.push((row && row.id ? row.id + ": " : "") + reason);
+    for (const entry of aggregate.capacityEntries || []) {
+      const pageKey = String((row && row.id) || "") + "\u0000" + entry.key;
+      if (!pageEntries.has(pageKey)) pageEntries.set(pageKey, entry);
+    }
+  }
+  let totalBytes = 0;
+  let usedBytes = 0;
+  let availableBytes = 0;
+  for (const entry of pageEntries.values()) {
+    totalBytes += entry.totalBytes;
+    usedBytes += entry.usedBytes;
+    availableBytes += entry.availableBytes;
+  }
+  const isPartial = excludedMountCount > 0 || partialReasons.length > 0;
+  return Object.assign({
+    isPartial,
+    excludedMountCount,
+    partialReasons,
+    totalBytes,
+    usedBytes,
+    availableBytes,
+  }, aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial));
 }
 
 function strongestPressure(mounts) {
@@ -144,6 +320,7 @@ function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
     totalAvailableBytes,
     totalAvailableLabel: mounts.length ? compactBytes(totalAvailableBytes) : "—",
     mounts,
+    aggregate: aggregateMountCapacity(mounts),
     primaryStatus,
     secondaryStatus,
     snapshot,
@@ -271,6 +448,10 @@ const overviewExports = {
   DEFAULT_CAPACITY_THRESHOLDS,
   compactBytes,
   normalizeSummary,
+  selectedRootByMountId,
+  summarizeMounts,
+  aggregateMountCapacity,
+  buildOverviewAggregate,
   pressureLevel,
   statusPresentation,
   derivePrimaryStatus,

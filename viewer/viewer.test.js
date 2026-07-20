@@ -177,6 +177,147 @@ function testOverviewCapacityThresholdsAndPrecedence() {
   assert.strictEqual(loadFailureModel.secondaryStatus.code, "active_scan", "active scan may remain visible as a secondary cue beneath client load failure");
 }
 
+
+function makeCapacitySnapshot(overrides = {}) {
+  return Object.assign({
+    server_id: "alpha-1",
+    selected_roots: [
+      { mount_id: "rootfs", capacity_id: "dev-8-1", major_minor: "8:1", storage_media: "ssd", storage_media_confidence: "resolved" },
+      { mount_id: "data", capacity_id: "dev-8-16", major_minor: "8:16", block_media: "hdd", block_media_confidence: "resolved" },
+      { mount_id: "data", capacity_id: "dev-8-99", major_minor: "8:99", storage_media: "ssd", storage_media_confidence: "guessed" },
+      { mount_id: "legacy", major_minor: "9:42", storage_media: "mixed", storage_media_confidence: "inferred" },
+      { mount_id: "bad-zero", major_minor: "0:0", storage_media: "unknown", storage_media_confidence: "unresolved" },
+    ],
+    mounts: [
+      { mount_id: "rootfs", path: "/", df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
+      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      { mount_id: "legacy", path: "/legacy", df_total: 3000, df_used: 1200, df_avail: 1800, df_use_pct: 40 },
+    ],
+  }, overrides);
+}
+
+function testOverviewIdentityAwareMountModelAndAggregate() {
+  const {
+    selectedRootByMountId,
+    summarizeMounts,
+    aggregateMountCapacity,
+    buildOverviewAggregate,
+    buildOverviewRows,
+  } = require("./overview.js");
+
+  assert.strictEqual(typeof selectedRootByMountId, "function", "selected-root lookup helper must be exported");
+  assert.strictEqual(typeof summarizeMounts, "function", "mount summarizer must stay exported");
+  assert.strictEqual(typeof aggregateMountCapacity, "function", "server aggregate helper must be exported");
+  assert.strictEqual(typeof buildOverviewAggregate, "function", "page aggregate helper must be exported");
+
+  const snapshot = makeCapacitySnapshot();
+  const byMount = selectedRootByMountId(snapshot);
+  assert.strictEqual(byMount.get("data").capacity_id, "dev-8-16", "duplicate selected roots must link to the first matching mount_id");
+
+  const mounts = summarizeMounts(snapshot);
+  assert.deepStrictEqual(mounts.map(m => m.path), ["/", "/data", "/legacy"], "mount summaries must preserve snapshot mount order exactly");
+  assert.deepStrictEqual({
+    usedBytes: mounts[1].usedBytes,
+    totalBytes: mounts[1].totalBytes,
+    availableBytes: mounts[1].availableBytes,
+    usedPct: mounts[1].usedPct,
+    media: mounts[1].media,
+    mediaConfidence: mounts[1].mediaConfidence,
+    identity: mounts[1].identity,
+  }, {
+    usedBytes: 1500,
+    totalBytes: 2000,
+    availableBytes: 500,
+    usedPct: 75,
+    media: "hdd",
+    mediaConfidence: "resolved",
+    identity: { kind: "capacity_id", value: "dev-8-16", key: "capacity_id:dev-8-16" },
+  }, "mount summaries must expose linked capacity/media identity metadata");
+  assert.deepStrictEqual(mounts[2].identity, { kind: "major_minor", value: "9:42", key: "major_minor:9:42" }, "legacy nonzero major_minor must be used when capacity_id is absent");
+
+  const exactDuplicate = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
+    mounts: [
+      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      { mount_id: "data", path: "/data-bind", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+    ],
+  })));
+  assert.strictEqual(exactDuplicate.totalBytes, 2000, "exact duplicate capacity identities within a server must count once");
+  assert.strictEqual(exactDuplicate.isPartial, false, "consistent exact duplicates must not make the aggregate partial");
+
+  const inconsistentDuplicate = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
+    mounts: [
+      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      { mount_id: "data", path: "/data-stale", df_total: 3000, df_used: 1500, df_avail: 1500, df_use_pct: 50 },
+    ],
+  })));
+  assert.deepStrictEqual({
+    totalBytes: inconsistentDuplicate.totalBytes,
+    usedBytes: inconsistentDuplicate.usedBytes,
+    availableBytes: inconsistentDuplicate.availableBytes,
+    isPartial: inconsistentDuplicate.isPartial,
+    excludedMountCount: inconsistentDuplicate.excludedMountCount,
+  }, { totalBytes: 0, usedBytes: 0, availableBytes: 0, isPartial: true, excludedMountCount: 2 }, "any inconsistent duplicate must exclude that identity's entire contribution");
+  assert(inconsistentDuplicate.partialReasons.some(reason => reason.includes("dev-8-16") && reason.includes("2개 마운트 제외")), "inconsistent duplicate partial reason must identify the excluded identity and count");
+
+  const unresolved = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
+    selected_roots: [{ mount_id: "missing", storage_media: "unknown", storage_media_confidence: "unresolved" }],
+    mounts: [{ mount_id: "missing", path: "/missing", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10 }],
+  })));
+  assert.strictEqual(unresolved.excludedMountCount, 1, "unresolved identities must increment excludedMountCount");
+  assert.deepStrictEqual(unresolved.partialReasons, ["/missing: unresolved capacity identity, 1개 마운트 제외"], "unresolved identities must add a precise partial reason");
+  assert.strictEqual(unresolved.totalLabel, "확인된 용량 ≥ 0 B", "partial total labels must not imply unknown capacity is included");
+  assert.strictEqual(unresolved.utilizationLabel, "확인된 범위 —", "partial utilization labels must show an unknown range when no known capacity remains");
+
+  const invalidIds = summarizeMounts(makeCapacitySnapshot({
+    selected_roots: [
+      { mount_id: "zero", major_minor: "0:0", storage_media: "ssd", storage_media_confidence: "resolved" },
+      { mount_id: "invalid", major_minor: "8:x", storage_media: "ssd", storage_media_confidence: "resolved" },
+      { mount_id: "empty-capacity", capacity_id: "", major_minor: "8:88", storage_media: "ssd", storage_media_confidence: "resolved" },
+      { mount_id: "invalid-capacity", capacity_id: "not-canonical", major_minor: "8:89", storage_media: "ssd", storage_media_confidence: "resolved" },
+    ],
+    mounts: [
+      { mount_id: "zero", path: "/zero", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
+      { mount_id: "invalid", path: "/invalid", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
+      { mount_id: "empty-capacity", path: "/empty", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
+      { mount_id: "invalid-capacity", path: "/invalid-capacity", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
+    ],
+  }));
+  assert.deepStrictEqual(invalidIds.map(m => m.identity), [null, null, null, null], "zero, malformed, empty, and noncanonical identities must remain unresolved instead of falling back ambiguously");
+
+  const rows = buildOverviewRows([
+    { id: "beta-2", display_name: "beta", order: 20, mount_count: 1 },
+    { id: "alpha-1", display_name: "alpha", order: 10, mount_count: 2 },
+  ], [
+    { id: "beta-2", snapshot: makeCapacitySnapshot({ server_id: "beta-2", selected_roots: [{ mount_id: "same", capacity_id: "dev-8-1" }], mounts: [{ mount_id: "same", path: "/beta", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10 }] }) },
+    { id: "alpha-1", snapshot: makeCapacitySnapshot({ server_id: "alpha-1", selected_roots: [{ mount_id: "same", capacity_id: "dev-8-1" }], mounts: [{ mount_id: "same", path: "/alpha", df_total: 2000, df_used: 500, df_avail: 1500, df_use_pct: 25 }] }) },
+  ]);
+  assert.deepStrictEqual(rows.map(row => row.id), ["beta-2", "alpha-1"], "overview rows must preserve manifest/server order exactly");
+  assert.deepStrictEqual(rows.map(row => row.mounts.map(m => m.path)), [["/beta"], ["/alpha"]], "overview rows must preserve mount order exactly");
+
+  const pageAggregate = buildOverviewAggregate(rows);
+  assert.deepStrictEqual({
+    isPartial: pageAggregate.isPartial,
+    excludedMountCount: pageAggregate.excludedMountCount,
+    totalBytes: pageAggregate.totalBytes,
+    usedBytes: pageAggregate.usedBytes,
+    availableBytes: pageAggregate.availableBytes,
+    totalLabel: pageAggregate.totalLabel,
+    usedLabel: pageAggregate.usedLabel,
+    availableLabel: pageAggregate.availableLabel,
+    utilizationLabel: pageAggregate.utilizationLabel,
+  }, {
+    isPartial: false,
+    excludedMountCount: 0,
+    totalBytes: 3000,
+    usedBytes: 600,
+    availableBytes: 2400,
+    totalLabel: "2.93 KB",
+    usedLabel: "600 B",
+    availableLabel: "2.34 KB",
+    utilizationLabel: "20%",
+  }, "page-level identities must be namespaced by server id so identical device ids on different servers do not collide");
+}
+
 function testOverviewRouteHelpers() {
   const { parseRoute, buildRouteHref } = require("./overview.js");
   assert.deepStrictEqual(parseRoute({ pathname: "/", search: "", hash: "" }), { serverId: null, tab: "treemap" });
@@ -397,6 +538,7 @@ async function main() {
   testHostManifestHelpers();
   await testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures();
   testOverviewCapacityThresholdsAndPrecedence();
+  testOverviewIdentityAwareMountModelAndAggregate();
   testOverviewRouteHelpers();
   testRemovedAnalysisSurfaceIsAbsentFromViewerFiles();
   testTreemapFidelity();
