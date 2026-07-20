@@ -86,6 +86,11 @@ function normalizeBytes(value) {
   return value;
 }
 
+function normalizePercent(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function isCanonicalDecimal(raw, allowZero) {
   if (!/^\d{1,10}$/.test(raw)) return false;
   if (raw.length > 1 && raw[0] === "0") return false;
@@ -142,10 +147,15 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
     const usedBytes = normalizeBytes(mount && mount.df_used);
     const totalBytes = normalizeBytes(mount && mount.df_total);
     const availableBytes = normalizeBytes(mount && mount.df_avail);
-    const usedPct = asInt(mount && mount.df_use_pct, totalBytes && usedBytes != null ? Math.round((usedBytes / totalBytes) * 100) : 0);
+    const explicitPct = normalizePercent(mount && mount.df_use_pct);
+    const computedPct = totalBytes && usedBytes != null ? Math.round((usedBytes / totalBytes) * 100) : null;
+    const usedPct = explicitPct != null ? explicitPct : normalizePercent(computedPct);
     const freeBytes = availableBytes == null ? 0 : availableBytes;
     const media = String((selectedRoot && (selectedRoot.storage_media || selectedRoot.block_media)) || (mount && (mount.storage_media || mount.block_media)) || "unknown");
     const mediaConfidence = String((selectedRoot && (selectedRoot.storage_media_confidence || selectedRoot.block_media_confidence)) || (mount && (mount.storage_media_confidence || mount.block_media_confidence)) || "unknown");
+    const usedPctText = usedPct == null ? "—" : usedPct + "%";
+    const usedTotalText = compactBytes(usedBytes) + " / " + compactBytes(totalBytes);
+    const freeText = compactBytes(availableBytes == null ? freeBytes : availableBytes) + " free";
     return {
       key: String((mount && mount.mount_id) || (mount && mount.path) || index),
       mountId,
@@ -157,11 +167,30 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       freeBytes,
       media,
       mediaConfidence,
+      mediaLabel: formatMediaLabel(media),
+      usedTotalText,
+      usedPctText,
+      freeText,
       identity: capacityIdentityFromRoot(selectedRoot),
       pressure: pressureLevel(usedPct, freeBytes, thresholds),
-      metricText: usedPct + "% · " + compactBytes(freeBytes) + " free",
+      pressureLabel: pressureText(pressureLevel(usedPct, freeBytes, thresholds)),
+      metricText: usedPctText + " · " + freeText,
     };
   });
+}
+
+function formatMediaLabel(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "ssd") return "SSD";
+  if (raw === "hdd") return "HDD";
+  if (raw === "mixed") return "Mixed";
+  return "Unknown";
+}
+
+function pressureText(value) {
+  if (value === "critical") return "위험";
+  if (value === "warning") return "주의";
+  return "정상";
 }
 
 function aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial, hasKnownCapacity) {
@@ -392,6 +421,49 @@ function createStatusBadge(doc, status, extraClass) {
   return badge;
 }
 
+function serverSubtotalText(aggregate) {
+  if (!aggregate || aggregate.totalLabel === "—") return "용량 미확인";
+  return aggregate.utilizationLabel + " · " + aggregate.usedLabel + " / " + aggregate.totalLabel + " · " + aggregate.availableLabel + " free";
+}
+
+function renderOverviewAggregate(container, aggregate) {
+  if (!container) return;
+  container.innerHTML = "";
+  const doc = container.ownerDocument || document;
+  if (!aggregate) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  const head = makeEl(doc, "div", "overview-aggregate-head");
+  head.appendChild(makeEl(doc, "h2", "overview-aggregate-title", "전체 로컬 스토리지"));
+  const stateText = !aggregate.totalBytes && aggregate.totalLabel === "—"
+    ? "확인된 용량 없음"
+    : (aggregate.isPartial ? "부분 집계" : "정확 집계");
+  head.appendChild(makeEl(doc, "span", "overview-aggregate-state", stateText));
+  container.appendChild(head);
+
+  const metrics = makeEl(doc, "div", "overview-aggregate-metrics");
+  const usage = makeEl(doc, "div", "overview-aggregate-metric overview-aggregate-metric-primary");
+  usage.appendChild(makeEl(doc, "span", "overview-aggregate-label", "사용률"));
+  const usageLine = makeEl(doc, "span", "overview-aggregate-usage");
+  usageLine.appendChild(makeEl(doc, "span", "overview-aggregate-percent figure", aggregate.utilizationLabel));
+  usageLine.appendChild(makeEl(doc, "span", "overview-aggregate-capacity figure", aggregate.usedLabel + " / " + aggregate.totalLabel));
+  usage.appendChild(usageLine);
+  metrics.appendChild(usage);
+
+  const free = makeEl(doc, "div", "overview-aggregate-metric");
+  free.appendChild(makeEl(doc, "span", "overview-aggregate-label", "여유"));
+  free.appendChild(makeEl(doc, "span", "overview-aggregate-value figure", aggregate.availableLabel));
+  metrics.appendChild(free);
+  container.appendChild(metrics);
+
+  if (aggregate.isPartial && aggregate.partialReasons && aggregate.partialReasons.length) {
+    const note = makeEl(doc, "p", "overview-aggregate-note", aggregate.partialReasons.slice(0, 2).join(" · ") + (aggregate.partialReasons.length > 2 ? " …" : ""));
+    container.appendChild(note);
+  }
+}
+
 function createOverviewRowElement(doc, row, handlers = {}) {
   const item = makeEl(doc, "li", "overview-item");
   const button = makeEl(doc, "button", "overview-row");
@@ -404,8 +476,10 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   const titleWrap = makeEl(doc, "div", "overview-row-title");
   const name = makeEl(doc, "span", "overview-name", row.displayName);
   const meta = makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트 · " + row.totalAvailableLabel + " free");
+  const subtotal = makeEl(doc, "span", "overview-server-subtotal", serverSubtotalText(row.aggregate));
   titleWrap.appendChild(name);
   titleWrap.appendChild(meta);
+  titleWrap.appendChild(subtotal);
 
   const statusWrap = makeEl(doc, "div", "overview-row-status");
   const primary = createStatusBadge(doc, row.primaryStatus, "overview-badge-primary");
@@ -423,18 +497,22 @@ function createOverviewRowElement(doc, row, handlers = {}) {
     mountsWrap.appendChild(makeEl(doc, "div", "overview-mount overview-mount-empty", "용량 막대 없음"));
   } else {
     for (const mount of row.mounts) {
-      const mountEl = makeEl(doc, "div", "overview-mount");
+      const mountEl = makeEl(doc, "div", "overview-mount overview-mount-cell");
       mountEl.setAttribute("data-pressure", mount.pressure);
-      const mountTop = makeEl(doc, "div", "overview-mount-top");
-      mountTop.appendChild(makeEl(doc, "span", "overview-mount-path", mount.path));
-      mountTop.appendChild(makeEl(doc, "span", "overview-mount-metric", mount.metricText));
-      const meter = makeEl(doc, "div", "overview-meter");
-      const fill = makeEl(doc, "span", "overview-meter-fill");
+      mountEl.appendChild(makeEl(doc, "div", "overview-mount-path", mount.path));
+      mountEl.appendChild(makeEl(doc, "div", "overview-media-label", mount.mediaLabel));
+      const usage = makeEl(doc, "div", "overview-mount-usage");
+      usage.appendChild(makeEl(doc, "span", "overview-mount-used-total", mount.usedTotalText));
+      usage.appendChild(makeEl(doc, "span", "overview-mount-pct", mount.usedPctText));
+      const meter = makeEl(doc, "div", "overview-pressure-bar");
+      const fill = makeEl(doc, "span", "overview-pressure-fill");
       fill.setAttribute("data-pressure", mount.pressure);
-      fill.style.width = Math.max(4, Math.min(100, mount.usedPct || 0)) + "%";
+      fill.style.width = Math.max(4, Math.min(100, mount.usedPct == null ? 0 : mount.usedPct)) + "%";
       meter.appendChild(fill);
-      mountEl.appendChild(mountTop);
+      const free = makeEl(doc, "div", "overview-mount-free", mount.freeText + " · " + mount.pressureLabel);
+      mountEl.appendChild(usage);
       mountEl.appendChild(meter);
+      mountEl.appendChild(free);
       mountsWrap.appendChild(mountEl);
     }
   }
@@ -467,8 +545,11 @@ const overviewExports = {
   DEFAULT_CAPACITY_THRESHOLDS,
   compactBytes,
   normalizeSummary,
+  normalizePercent,
   selectedRootByMountId,
   summarizeMounts,
+  formatMediaLabel,
+  pressureText,
   aggregateMountCapacity,
   buildOverviewAggregate,
   pressureLevel,
@@ -478,6 +559,7 @@ const overviewExports = {
   buildOverviewRows,
   parseRoute,
   buildRouteHref,
+  renderOverviewAggregate,
   renderOverviewList,
 };
 

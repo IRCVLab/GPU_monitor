@@ -7,6 +7,7 @@ let currentOverviewSummaries = [];
 let currentOverviewSnapshotEntries = [];
 let currentOverviewRows = [];
 let currentDataSource = "static";
+let currentDataMode = "inventory";
 let staticHostById = new Map();
 let snapshotCache = new Map();
 let resizeTimer = null;
@@ -153,17 +154,25 @@ function updateOverviewStatus() {
   if (el) el.textContent = currentOverviewRows.length + " servers";
 }
 
+function setSampleDataMarker(dataMode) {
+  const marker = document.getElementById("sampleDataMarker");
+  if (marker) marker.hidden = dataMode !== "sample";
+}
+
 function renderOverview() {
   clearOverviewError();
   currentOverviewRows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries, DEFAULT_CAPACITY_THRESHOLDS);
+  renderOverviewAggregate(document.getElementById("overviewAggregate"), buildOverviewAggregate(currentOverviewRows));
   const list = document.getElementById("overviewList");
   renderOverviewList(list, currentOverviewRows, { onOpenServer: (serverId) => navigateToServer(serverId) });
+  setSampleDataMarker(currentDataMode);
   updateOverviewStatus();
 }
 
 async function loadStaticBootstrap() {
   await loadHostManifest();
   staticHostById = new Map(HOSTS.map(host => [host.id, host]));
+  const dataMode = HOSTS.length && HOSTS.every(host => host.sample_data === true) ? "sample" : "inventory";
   const summaries = HOSTS.map((host, index) => ({
     id: host.id,
     display_name: host.label,
@@ -187,6 +196,8 @@ async function loadStaticBootstrap() {
   }
   return {
     mode: "static",
+    dataMode,
+    data_mode: dataMode,
     session: { authenticated: false, can_rescan: false, csrf_token: "" },
     summaries,
     snapshots,
@@ -213,9 +224,15 @@ async function loadBootstrapDataWith(loaders) {
     return staticBootstrapLoader();
   }
   staticHostById = new Map();
-  const summaries = await summariesLoader();
+  const summaryBody = await summariesLoader();
+  const envelope = typeof normalizeServerSummariesEnvelope === "function"
+    ? normalizeServerSummariesEnvelope(summaryBody)
+    : (Array.isArray(summaryBody) ? { data_mode: "inventory", servers: summaryBody } : { data_mode: "inventory", servers: [] });
+  const summaries = envelope.servers || [];
   return {
     mode: "api",
+    dataMode: envelope.data_mode || "inventory",
+    data_mode: envelope.data_mode || "inventory",
     session,
     summaries,
     snapshots: await orderedSnapshotLoader(summaries, snapshotLoader),
@@ -228,6 +245,8 @@ async function loadBootstrapData() {
 
 function rememberBootstrap(bootstrap) {
   currentDataSource = bootstrap.mode;
+  currentDataMode = bootstrap.dataMode || bootstrap.data_mode || "inventory";
+  setSampleDataMarker(currentDataMode);
   currentSession = bootstrap.session || { authenticated: false, can_rescan: false, csrf_token: "" };
   currentOverviewSummaries = bootstrap.summaries || [];
   currentOverviewSnapshotEntries = bootstrap.snapshots || [];
@@ -557,6 +576,13 @@ function getCurrentDetailDebugState() {
   };
 }
 
+function getOverviewModeDebugState() {
+  return {
+    dataSource: currentDataSource,
+    dataMode: currentDataMode,
+  };
+}
+
 if (typeof globalThis !== "undefined") Object.assign(globalThis, {
   applyRouteState,
   navigateToOverview,
@@ -566,6 +592,7 @@ if (typeof globalThis !== "undefined") Object.assign(globalThis, {
   loadBootstrapDataWith,
   loadSnapshotForCurrentSource,
   getCurrentDetailDebugState,
+  getOverviewModeDebugState,
 });
 if (typeof module !== "undefined" && module.exports) module.exports = {
   loadBootstrapDataWith,

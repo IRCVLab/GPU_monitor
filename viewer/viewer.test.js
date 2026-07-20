@@ -13,6 +13,7 @@ function testHostManifest() {
   const hosts = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   assert(Array.isArray(hosts), "hosts manifest must be an array");
   assert(hosts.some(h => h.id === "hinton" && h.file === "hinton"), "hinton host entry must exist");
+  assert.deepStrictEqual(hosts.map(h => h.id), ["hinton", "atlas", "orion", "zeus"], "sample host order must stay authoritative and unsorted");
   for (const h of hosts) {
     assert(/^[A-Za-z0-9._-]+$/.test(h.id), `host id is safe: ${h.id}`);
     assert(h.label && h.file, `host has label and file: ${JSON.stringify(h)}`);
@@ -42,6 +43,51 @@ function testHostManifestHelpers() {
   assert.strictEqual(safeServerId("alpha-1"), "alpha-1", "safe server ids should pass unchanged");
   assert.throws(() => safeServerId("."), /invalid server id/, "single-dot server ids must be rejected to match the backend");
   assert.throws(() => safeServerId(".."), /invalid server id/, "double-dot server ids must be rejected to match the backend");
+
+  const sampleHosts = normalizeHosts([
+    { id: "hinton", label: "Hinton", file: "hinton", sample_data: true },
+    { id: "inventory", label: "Inventory", file: "inventory", sample_data: false },
+    { id: "missing-flag", label: "Missing", file: "missing" },
+  ]);
+  assert.strictEqual(sampleHosts[0].sample_data, true, "authoritative sample_data:true metadata must be preserved for static sample-mode decisions");
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(sampleHosts[1], "sample_data"), false, "non-true sample flags must not be promoted to sample metadata");
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(sampleHosts[2], "sample_data"), false, "missing sample flags must remain absent instead of inferred");
+}
+
+async function testLoadServerSummariesReturnsNormalizedEnvelope() {
+  const { loadServerSummaries } = require("./data-client.js");
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async (url) => {
+      assert.strictEqual(url, "/api/servers");
+      return {
+        ok: true,
+        json: async () => ({
+          data_mode: "sample",
+          servers: [
+            { id: "hinton", display_name: "hinton" },
+            { id: "atlas", display_name: "atlas" },
+          ],
+        }),
+      };
+    };
+    const envelope = await loadServerSummaries();
+    assert.deepStrictEqual(envelope, {
+      data_mode: "sample",
+      servers: [
+        { id: "hinton", display_name: "hinton" },
+        { id: "atlas", display_name: "atlas" },
+      ],
+    }, "loadServerSummaries must expose the server array and data_mode metadata together");
+
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => [{ id: "legacy" }],
+    });
+    assert.deepStrictEqual(await loadServerSummaries(), { data_mode: "inventory", servers: [{ id: "legacy" }] }, "legacy array responses must normalize to an inventory envelope");
+  } finally {
+    global.fetch = originalFetch;
+  }
 }
 
 async function testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures() {
@@ -670,6 +716,7 @@ function testCleanupCommandSafetyContracts() {
 async function main() {
   testHostManifest();
   testHostManifestHelpers();
+  await testLoadServerSummariesReturnsNormalizedEnvelope();
   await testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures();
   testOverviewCapacityThresholdsAndPrecedence();
   testOverviewIdentityAwareMountModelAndAggregate();
