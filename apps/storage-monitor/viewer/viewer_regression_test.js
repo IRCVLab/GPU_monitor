@@ -107,6 +107,8 @@ function loadViewer() {
   assert(/<ul\s+id="overviewList"/.test(html), 'overview list must be a real ul');
   assert(!/id="overviewList"[^>]*role="list"/.test(html), 'overview list should rely on native list semantics instead of role=list');
   assert(html.includes('id="overviewView"'), 'overview shell must be present');
+  assert(!html.includes('class="overview-lead"'), 'compact overview lead must be absent from markup');
+  assert(!html.includes('서버와 마운트 순서는 입력 순서를 그대로 따릅니다'), 'compact overview must not keep the explanatory lead copy in markup');
   assert(html.includes('id="overviewBack"'), 'detail back-to-overview control must be present');
   const removedName = 'ad' + 'visor';
   assert(!html.includes('data-tab="' + removedName + '"'), 'removed analysis tab must not exist');
@@ -442,8 +444,8 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
         { mount_id: 'data', capacity_id: 'dev-8-16', block_media: 'hdd' },
       ],
       mounts: [
-        { mount_id: 'home', path: '/home', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
-        { mount_id: 'data', path: '/data', df_total: 2000, df_used: 1800, df_avail: 200, df_use_pct: 90 },
+        { mount_id: 'home', path: '/home', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40 },
+        { mount_id: 'data', path: '/data', df_total: 2000 * 1024 ** 3, df_used: 1800 * 1024 ** 3, df_avail: 200 * 1024 ** 3, df_use_pct: 90 },
       ],
     },
     viewer.DEFAULT_CAPACITY_THRESHOLDS,
@@ -453,7 +455,7 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
     {
       server_id: 'atlas',
       selected_roots: [{ mount_id: 'archive', capacity_id: 'dev-9-1', storage_media: 'mixed' }],
-      mounts: [{ mount_id: 'archive', path: '/archive', df_total: 3000, df_used: 300, df_avail: 2700, df_use_pct: 10 }],
+      mounts: [{ mount_id: 'archive', path: '/archive', df_total: 3000 * 1024 ** 3, df_used: 300 * 1024 ** 3, df_avail: 2700 * 1024 ** 3, df_use_pct: 10 }],
     },
     viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
@@ -483,19 +485,47 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert.strictEqual(findByClass(first, 'overview-media-label')[0].textContent, 'SSD', 'media labels must use neutral storage-class text');
   assert.strictEqual(findByClass(first, 'overview-mount-used-total').length, 0, 'compact mount strip must not render used/total capacity text');
   assert.strictEqual(findByClass(first, 'overview-mount-pct')[0].textContent, '40%', 'utilization percent must be rendered as its own compact field');
-  assert(textTree(findByClass(first, 'overview-mount-free')[0]).includes('600 B free'), 'free capacity text must be present after the bar');
-  assert(/[가-힣]/.test(textTree(findByClass(first, 'overview-mount-free')[0])), 'pressure/health must include text, not color alone');
-  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('40%') && accessibleRowText.includes('600 B free'), 'mount path, media, percent, and free information must remain accessible as descendant text');
-  assert(!accessibleRowText.includes('400 B / 1000 B'), 'compact mount strip must omit used/total text');
+  assert.strictEqual(textTree(findByClass(first, 'overview-mount-free')[0]), '600 GB free', 'healthy mount free text must not append redundant normal status text');
+  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('40%') && accessibleRowText.includes('600 GB free'), 'mount path, media, percent, and free information must remain accessible as descendant text');
+  assert(!accessibleRowText.includes('400 GB / 1000 GB'), 'compact mount strip must omit used/total text');
 
   hintonButton.onclick();
   assert.deepStrictEqual(opened, ['hinton'], 'click navigation to server detail must be preserved');
 }
 
-function testServerHeaderCapacityMetaUsesAggregateSemantics() {
+
+function testMountStatusTextAppearsOnlyForExceptionalPressure() {
+  const viewer = loadViewer();
+  const row = viewer.buildOverviewServer(
+    { id: 'pressure-1', display_name: 'pressure', mount_count: 3, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    {
+      server_id: 'pressure-1',
+      selected_roots: [
+        { mount_id: 'healthy', capacity_id: 'dev-8-1', storage_media: 'ssd' },
+        { mount_id: 'warn', capacity_id: 'dev-8-2', storage_media: 'ssd' },
+        { mount_id: 'crit', capacity_id: 'dev-8-3', storage_media: 'hdd' },
+      ],
+      mounts: [
+        { mount_id: 'healthy', path: '/healthy', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40 },
+        { mount_id: 'warn', path: '/warn', df_total: 1000 * 1024 ** 3, df_used: 810 * 1024 ** 3, df_avail: 190 * 1024 ** 3, df_use_pct: 81 },
+        { mount_id: 'crit', path: '/crit', df_total: 1000 * 1024 ** 3, df_used: 930 * 1024 ** 3, df_avail: 70 * 1024 ** 3, df_use_pct: 93 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  const list = viewer.document.getElementById('overviewList');
+  viewer.renderOverviewList(list, [row], { onOpenServer() {} });
+  const cells = findByClass(list.children[0].children[0], 'overview-mount-cell');
+  const freeTexts = cells.map(cell => textTree(findByClass(cell, 'overview-mount-free')[0]));
+  assert.strictEqual(freeTexts[0], '600 GB free', 'healthy mount free text must not append redundant normal text');
+  assert(/[가-힣]/.test(freeTexts[1]) && freeTexts[1].includes('주의'), 'warning mount free text must include non-color status text');
+  assert(/[가-힣]/.test(freeTexts[2]) && freeTexts[2].includes('위험'), 'critical mount free text must include non-color status text');
+}
+
+function testServerHeaderMetaIsActionableMountCountOnly() {
   const viewer = loadViewer();
   const list = viewer.document.getElementById('overviewList');
-  const exact = viewer.buildOverviewServer(
+  const row = viewer.buildOverviewServer(
     { id: 'alpha-1', display_name: 'alpha', mount_count: 2 },
     {
       server_id: 'alpha-1',
@@ -510,49 +540,14 @@ function testServerHeaderCapacityMetaUsesAggregateSemantics() {
     },
     viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
-  assert.strictEqual(exact.aggregate.availableLabel, '500 B', 'aggregate must dedupe available capacity for duplicate canonical identities');
-  viewer.renderOverviewList(list, [exact], { onOpenServer() {} });
-  let button = list.children[0].children[0];
-  let metaText = textTree(findByClass(button, 'overview-meta')[0]);
+  assert.strictEqual(row.aggregate.availableLabel, '500 B', 'model may keep aggregate capacity for non-header calculations');
+  viewer.renderOverviewList(list, [row], { onOpenServer() {} });
+  const button = list.children[0].children[0];
+  const metaText = textTree(findByClass(button, 'overview-meta')[0]);
+  assert.strictEqual(metaText, '2개 마운트', 'server header metadata must be actionable mount count only');
+  assert(!metaText.includes('free'), 'server header metadata must not include total available/free aggregate text');
+  assert(!metaText.includes('500 B'), 'server header metadata must not expose aggregate capacity');
   assert.strictEqual(findByClass(button, 'overview-server-subtotal').length, 0, 'compact server rows must not render subtotal labels');
-  assert(metaText.includes('500 B free'), 'server header meta must show the deduped aggregate available value once');
-  assert(!metaText.includes('1000 B'), 'server header meta must not sum duplicate mount free bytes');
-
-  const partial = viewer.buildOverviewServer(
-    { id: 'partial-1', display_name: 'partial', mount_count: 2 },
-    {
-      server_id: 'partial-1',
-      selected_roots: [
-        { mount_id: 'known', capacity_id: 'dev-8-16', storage_media: 'ssd' },
-        { mount_id: 'unknown', storage_media: 'unknown' },
-      ],
-      mounts: [
-        { mount_id: 'known', path: '/known', df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50 },
-        { mount_id: 'unknown', path: '/unknown', df_total: 4096, df_used: 1024, df_avail: 3072, df_use_pct: 25 },
-      ],
-    },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
-  );
-  viewer.renderOverviewList(list, [partial], { onOpenServer() {} });
-  button = list.children[0].children[0];
-  metaText = textTree(findByClass(button, 'overview-meta')[0]);
-  assert(metaText.includes('확인된 여유 ≥ 1.00 KB'), 'partial server header meta must preserve aggregate lower-bound language');
-  assert(!metaText.includes('4.00 KB free'), 'partial server header meta must not imply full free capacity from excluded mounts');
-
-  const unknown = viewer.buildOverviewServer(
-    { id: 'unknown-1', display_name: 'unknown', mount_count: 1 },
-    {
-      server_id: 'unknown-1',
-      selected_roots: [{ mount_id: 'mystery', storage_media: 'unknown' }],
-      mounts: [{ mount_id: 'mystery', path: '/mystery', df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50 }],
-    },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
-  );
-  viewer.renderOverviewList(list, [unknown], { onOpenServer() {} });
-  button = list.children[0].children[0];
-  metaText = textTree(findByClass(button, 'overview-meta')[0]);
-  assert(metaText.includes('여유 미확인'), 'unknown server header meta must keep the unknown placeholder');
-  assert(!metaText.includes('0 B'), 'unknown server header meta must never render unavailable capacity as zero');
 }
 
 function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
@@ -1112,7 +1107,8 @@ async function main() {
   await testBootstrapDetectionIsExplicitAndSequential();
   testSampleMarkerAndCompactOverviewOmitsAggregateSurface();
   testMountCentricOverviewDomFieldsAndStableNavigation();
-  testServerHeaderCapacityMetaUsesAggregateSemantics();
+  testMountStatusTextAppearsOnlyForExceptionalPressure();
+  testServerHeaderMetaIsActionableMountCountOnly();
   testUnknownMountCapacityDomStaysNeutralAndAccessible();
   await testDetailCapacityUsesCompactRowsAndFiltersBootMounts();
   testDetailCapacityResponsiveCssContract();
