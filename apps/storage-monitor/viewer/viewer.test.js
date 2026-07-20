@@ -265,8 +265,8 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
   })));
   assert.strictEqual(unresolved.excludedMountCount, 1, "unresolved identities must increment excludedMountCount");
   assert.deepStrictEqual(unresolved.partialReasons, ["/missing: unresolved capacity identity, 1개 마운트 제외"], "unresolved identities must add a precise partial reason");
-  assert.strictEqual(unresolved.totalLabel, "확인된 용량 ≥ 0 B", "partial total labels must not imply unknown capacity is included");
-  assert.strictEqual(unresolved.utilizationLabel, "확인된 범위 —", "partial utilization labels must show an unknown range when no known capacity remains");
+  assert.strictEqual(unresolved.totalLabel, "—", "all-unresolved partial totals must not imply known zero capacity");
+  assert.strictEqual(unresolved.utilizationLabel, "—", "all-unresolved partial utilization must stay unknown when no known capacity remains");
 
   const invalidIds = summarizeMounts(makeCapacitySnapshot({
     selected_roots: [
@@ -316,6 +316,140 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
     availableLabel: "2.34 KB",
     utilizationLabel: "20%",
   }, "page-level identities must be namespaced by server id so identical device ids on different servers do not collide");
+}
+
+
+function testOverviewUnknownCapacityLabelsDoNotImplyZero() {
+  const { buildOverviewServer, buildOverviewAggregate, summarizeMounts, aggregateMountCapacity } = require("./overview.js");
+
+  const missingSnapshotRow = buildOverviewServer(makeSummary({ id: "missing-1", display_name: "missing" }), null);
+  assert.deepStrictEqual({
+    isPartial: missingSnapshotRow.aggregate.isPartial,
+    excludedMountCount: missingSnapshotRow.aggregate.excludedMountCount,
+    totalLabel: missingSnapshotRow.aggregate.totalLabel,
+    usedLabel: missingSnapshotRow.aggregate.usedLabel,
+    availableLabel: missingSnapshotRow.aggregate.availableLabel,
+    utilizationLabel: missingSnapshotRow.aggregate.utilizationLabel,
+  }, {
+    isPartial: true,
+    excludedMountCount: 0,
+    totalLabel: "—",
+    usedLabel: "—",
+    availableLabel: "—",
+    utilizationLabel: "—",
+  }, "missing snapshots must be partial/unknown and must never render exact 0 B labels");
+
+  const noMounts = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({ mounts: [] })));
+  assert.strictEqual(noMounts.isPartial, true, "empty mount lists have no known capacity identities and must be degraded/unknown");
+  assert.strictEqual(noMounts.totalLabel, "—", "empty mount lists must not imply exact zero capacity");
+
+  const allUnresolved = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
+    selected_roots: [{ mount_id: "mystery" }],
+    mounts: [{ mount_id: "mystery", path: "/mystery", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10 }],
+  })));
+  assert.deepStrictEqual({
+    isPartial: allUnresolved.isPartial,
+    excludedMountCount: allUnresolved.excludedMountCount,
+    totalLabel: allUnresolved.totalLabel,
+    usedLabel: allUnresolved.usedLabel,
+    availableLabel: allUnresolved.availableLabel,
+    utilizationLabel: allUnresolved.utilizationLabel,
+  }, {
+    isPartial: true,
+    excludedMountCount: 1,
+    totalLabel: "—",
+    usedLabel: "—",
+    availableLabel: "—",
+    utilizationLabel: "—",
+  }, "all-excluded aggregates must be unknown, not known-zero");
+
+  const knownPlusExcluded = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
+    selected_roots: [
+      { mount_id: "known", capacity_id: "dev-8-16" },
+      { mount_id: "unknown" },
+    ],
+    mounts: [
+      { mount_id: "known", path: "/known", df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50 },
+      { mount_id: "unknown", path: "/unknown", df_total: 4096, df_used: 1024, df_avail: 3072, df_use_pct: 25 },
+    ],
+  })));
+  assert.strictEqual(knownPlusExcluded.totalLabel, "확인된 용량 ≥ 2.00 KB", "known-plus-excluded partial aggregate must label only the known lower bound");
+  assert.strictEqual(knownPlusExcluded.utilizationLabel, "확인된 범위 50%", "known-plus-excluded utilization must remain known-only partial language");
+
+  const actualZero = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
+    selected_roots: [{ mount_id: "zero-cap", capacity_id: "dev-1-0" }],
+    mounts: [{ mount_id: "zero-cap", path: "/zero-cap", df_total: 0, df_used: 0, df_avail: 0, df_use_pct: 0 }],
+  })));
+  assert.deepStrictEqual({
+    isPartial: actualZero.isPartial,
+    totalLabel: actualZero.totalLabel,
+    usedLabel: actualZero.usedLabel,
+    availableLabel: actualZero.availableLabel,
+    utilizationLabel: actualZero.utilizationLabel,
+  }, { isPartial: false, totalLabel: "0 B", usedLabel: "0 B", availableLabel: "0 B", utilizationLabel: "—" }, "validated explicit zero-capacity records may remain exact zero when schema numbers truly say zero");
+
+  const page = buildOverviewAggregate([
+    buildOverviewServer(makeSummary({ id: "unavailable", display_name: "unavailable" }), null),
+    buildOverviewServer(makeSummary({ id: "known", display_name: "known" }), makeCapacitySnapshot({
+      server_id: "known",
+      selected_roots: [{ mount_id: "known", capacity_id: "dev-8-16" }],
+      mounts: [{ mount_id: "known", path: "/known", df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50 }],
+    })),
+  ]);
+  assert.strictEqual(page.isPartial, true, "page aggregate containing an unavailable server must be partial");
+  assert.strictEqual(page.totalLabel, "확인된 용량 ≥ 2.00 KB", "page aggregate with unavailable server must show known-only lower-bound capacity");
+  assert.strictEqual(page.utilizationLabel, "확인된 범위 50%", "page aggregate with unavailable server must not imply unavailable capacity is included");
+}
+
+function testOverviewCapacityIdExactSchemaValidation() {
+  const { summarizeMounts } = require("./overview.js");
+  const cases = [
+    ["dev-1-0", { kind: "capacity_id", value: "dev-1-0", key: "capacity_id:dev-1-0" }],
+    ["dev-9999999999-9999999999", { kind: "capacity_id", value: "dev-9999999999-9999999999", key: "capacity_id:dev-9999999999-9999999999" }],
+    [" dev-1-0", null],
+    ["dev-1-0 ", null],
+    ["dev-01-0", null],
+    ["dev-1-01", null],
+    ["dev-10000000000-0", null],
+    ["dev-1-10000000000", null],
+    ["dev-0-0", null],
+    ["dev-0-1", null],
+  ];
+  for (const [capacityId, expected] of cases) {
+    const [mount] = summarizeMounts(makeCapacitySnapshot({
+      selected_roots: [{ mount_id: "candidate", capacity_id: capacityId, major_minor: "8:88" }],
+      mounts: [{ mount_id: "candidate", path: "/candidate", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 }],
+    }));
+    assert.deepStrictEqual(mount.identity, expected, `${JSON.stringify(capacityId)} must follow exact capacity_id schema and must not fallback to major_minor when present-but-invalid`);
+  }
+}
+
+function testOverviewCapacityBytesRequireStrictJsonNumbers() {
+  const { summarizeMounts, aggregateMountCapacity } = require("./overview.js");
+  const invalidValues = [
+    ["null", null],
+    ["string", "100"],
+    ["boolean", true],
+    ["fraction", 1.5],
+    ["negative", -1],
+    ["NaN", NaN],
+    ["Infinity", Infinity],
+    ["unsafe", Number.MAX_SAFE_INTEGER + 1],
+  ];
+  for (const [name, value] of invalidValues) {
+    for (const field of ["df_total", "df_used", "df_avail"]) {
+      const mount = { mount_id: "bad", path: "/bad-" + name + "-" + field, df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 };
+      mount[field] = value;
+      const aggregate = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
+        selected_roots: [{ mount_id: "bad", capacity_id: "dev-8-16" }],
+        mounts: [mount],
+      })));
+      assert.strictEqual(aggregate.isPartial, true, `${name} ${field} must make aggregate partial`);
+      assert.strictEqual(aggregate.excludedMountCount, 1, `${name} ${field} must exclude the identity's mount`);
+      assert.strictEqual(aggregate.totalLabel, "—", `${name} ${field} must not render an unknown excluded identity as 0 B`);
+      assert(aggregate.partialReasons.some(reason => reason.includes("invalid capacity numbers") && reason.includes("dev-8-16")), `${name} ${field} must provide a precise invalid-number reason`);
+    }
+  }
 }
 
 function testOverviewRouteHelpers() {
@@ -539,6 +673,9 @@ async function main() {
   await testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailures();
   testOverviewCapacityThresholdsAndPrecedence();
   testOverviewIdentityAwareMountModelAndAggregate();
+  testOverviewUnknownCapacityLabelsDoNotImplyZero();
+  testOverviewCapacityIdExactSchemaValidation();
+  testOverviewCapacityBytesRequireStrictJsonNumbers();
   testOverviewRouteHelpers();
   testRemovedAnalysisSurfaceIsAbsentFromViewerFiles();
   testTreemapFidelity();
