@@ -82,6 +82,7 @@ class MountPolicyTests(unittest.TestCase):
         text = "\n".join([
             mi(22, 1, "8:1", "/var/lib/storage-viz", "/var/lib/storage-viz", "rw", "ext4", "/dev/sda1"),
             mi(23, 1, "8:1", "/tmp/systemd-private/service/tmp", "/tmp", "rw", "ext4", "/dev/sda1"),
+            mi(24, 1, "8:1", "/var/tmp/systemd-private/service/tmp", "/var/tmp", "rw", "ext4", "/dev/sda1"),
         ])
 
         result = select_scan_roots(parse_mountinfo(text))
@@ -90,6 +91,7 @@ class MountPolicyTests(unittest.TestCase):
         self.assertEqual([(row.mountpoint, row.reason) for row in result.skipped], [
             ("/var/lib/storage-viz", "bind-subtree"),
             ("/tmp", "bind-subtree"),
+            ("/var/tmp", "bind-subtree"),
         ])
 
     def test_zfs_datasets_with_distinct_sources_remain_distinct(self):
