@@ -207,6 +207,8 @@ def classify_mount(entry: MountEntry) -> MountDecision:
     source = entry.source
     opts = _split_options(entry.options) | _split_options(entry.super_options)
 
+    if is_boot_filesystem_path(entry.mountpoint):
+        return MountDecision("prohibited", "boot-filesystem")
     if fstype in REMOTE_FSTYPES:
         return MountDecision("prohibited", "remote-fs")
     if fstype in VIRTUAL_FSTYPES:
@@ -315,6 +317,11 @@ def _is_loop_or_image_source(source: str, major_minor: str) -> bool:
     if major == "7":
         return True
     return bool(_IMAGE_SOURCE_RE.search(source))
+
+
+def is_boot_filesystem_path(path: str) -> bool:
+    normalized = _normalize_mountpoint(path)
+    return normalized == "/boot" or normalized.startswith("/boot/")
 
 
 def _identity(entry: MountEntry) -> Tuple[str, str, str, str]:
