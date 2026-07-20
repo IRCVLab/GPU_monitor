@@ -362,21 +362,17 @@ function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
   const mounts = summarizeMounts(snapshot, thresholds);
   const primaryStatus = derivePrimaryStatus(summary, snapshot, thresholds, error);
   const secondaryStatus = deriveSecondaryStatus(summary, primaryStatus.code);
-  const knownFreeMounts = mounts.filter(mount => mount.freeBytes != null);
-  const hasUnknownFree = mounts.some(mount => mount.freeBytes == null);
-  const totalAvailableBytes = knownFreeMounts.reduce((sum, mount) => sum + mount.freeBytes, 0);
-  const totalAvailableLabel = !mounts.length
-    ? "—"
-    : (!knownFreeMounts.length ? "여유 미확인" : (hasUnknownFree ? "확인된 여유 " + compactBytes(totalAvailableBytes) : compactBytes(totalAvailableBytes)));
+  const aggregate = aggregateMountCapacity(mounts);
+  const hasKnownCapacity = aggregate.availableLabel !== "—";
   return {
     id: summary.id,
     displayName: summary.display_name || summary.id,
     order: summary.order,
     mountCount: mounts.length || summary.mount_count,
-    totalAvailableBytes,
-    totalAvailableLabel,
+    totalAvailableBytes: hasKnownCapacity ? aggregate.availableBytes : null,
+    totalAvailableLabel: hasKnownCapacity ? aggregate.availableLabel : "여유 미확인",
     mounts,
-    aggregate: aggregateMountCapacity(mounts),
+    aggregate,
     primaryStatus,
     secondaryStatus,
     snapshot,
