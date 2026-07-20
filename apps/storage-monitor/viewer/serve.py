@@ -34,7 +34,12 @@ from collector.transport import OpenSshTransport
 VIEWER_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.environ.get("STORAGE_VIZ_ROOT", VIEWER_DIR.parent)).resolve()
 DATA_DIR = Path(os.environ.get("STORAGE_VIZ_DATA_DIR", PROJECT_ROOT / "data")).resolve()
-PORT = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("STORAGE_VIZ_PORT", os.environ.get("PORT", "8088")))
+def _configured_port(*, include_argv: bool = False) -> int:
+    raw = sys.argv[1] if include_argv and len(sys.argv) > 1 else os.environ.get("STORAGE_VIZ_PORT", os.environ.get("PORT", "8088"))
+    return int(raw)
+
+
+PORT = _configured_port()
 BIND = os.environ.get("STORAGE_VIZ_BIND", os.environ.get("BIND", "127.0.0.1"))
 TRUSTED_PROXY = os.environ.get("STORAGE_VIZ_TRUSTED_PROXY", "").lower() in {"1", "true", "yes", "on"}
 IDENTITY_HEADER = os.environ.get("STORAGE_VIZ_IDENTITY_HEADER", "X-Forwarded-User")
@@ -65,8 +70,11 @@ class _DevSampleService:
     data_mode = "sample"
 
     def __init__(self, sample_dir: str | os.PathLike[str]) -> None:
-        root = Path(sample_dir).resolve()
-        if root.is_symlink() or not root.is_dir():
+        raw_root = Path(sample_dir)
+        if raw_root.is_symlink():
+            raise ValueError("STORAGE_VIZ_DEV_SAMPLE_DIR must be a real directory")
+        root = raw_root.resolve()
+        if not root.is_dir():
             raise ValueError("STORAGE_VIZ_DEV_SAMPLE_DIR must be a real directory")
         self.root = root
         self._paths: dict[str, Path] = {}
@@ -135,7 +143,7 @@ class _DevSampleService:
             servers.append(InventoryServer(sid, label, order, "localhost", 22, True, "monitoring", Path("/dev/null"), Path("/dev/null"), {"server_id": sid}, "a" * 64))
         if default_count != 1:
             raise ValueError("sample manifest requires exactly one default")
-        present_files = {p.name for p in self.root.glob("*.sample.json") if not p.name.startswith(".")}
+        present_files = {p.name for p in self.root.iterdir() if p.name.endswith(".sample.json")}
         if present_files != listed_files:
             raise ValueError("sample files must exactly match hosts.json")
         return servers
@@ -501,6 +509,7 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 if __name__ == "__main__":
+    PORT = _configured_port(include_argv=True)
     with Server((BIND, PORT), Handler) as httpd:
         host, port = httpd.server_address[:2]
         if central_poller is not None:

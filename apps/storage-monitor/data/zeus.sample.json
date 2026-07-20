@@ -12,7 +12,6 @@
     {
       "mount_id": "vol1",
       "major_minor": "9:301",
-      "capacity_id": "dev-9-301",
       "storage_media": "mixed",
       "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/zeus-vol1",
@@ -26,12 +25,12 @@
       "scanned_dirs": 3000,
       "blocked_count": 0,
       "error_count": 0,
-      "error_code": null
+      "error_code": null,
+      "capacity_id": "dev-9-301"
     },
     {
       "mount_id": "vol2",
       "major_minor": "9:302",
-      "capacity_id": "dev-9-302",
       "storage_media": "unknown",
       "storage_media_confidence": "unresolved",
       "mount_source": "/dev/storage-viz/zeus-vol2",
@@ -45,12 +44,12 @@
       "scanned_dirs": 55701,
       "blocked_count": 0,
       "error_count": 1,
-      "error_code": "EIO"
+      "error_code": "EIO",
+      "capacity_id": "dev-9-302"
     },
     {
       "mount_id": "unresolved",
       "major_minor": "9:399",
-      "capacity_id": "dev-9-399",
       "storage_media": "unknown",
       "storage_media_confidence": "unresolved",
       "mount_source": "/dev/storage-viz/zeus-unresolved",
@@ -64,7 +63,8 @@
       "scanned_dirs": 0,
       "blocked_count": 0,
       "error_count": 1,
-      "error_code": "ENODEV"
+      "error_code": "ENODEV",
+      "capacity_id": "dev-9-399"
     }
   ],
   "mounts": [
@@ -73,7 +73,6 @@
       "mount_id": "vol1",
       "scan_root": "/srv/zeus/vol1",
       "fstype": "xfs",
-      "capacity_id": "dev-9-301",
       "storage_media": "mixed",
       "storage_media_confidence": "resolved",
       "df_total": 1361602245725,
@@ -132,14 +131,14 @@
             "other_bytes": 0
           }
         ]
-      }
+      },
+      "capacity_id": "dev-9-301"
     },
     {
       "path": "/srv/zeus/vol2",
       "mount_id": "vol2",
       "scan_root": "/srv/zeus/vol2",
       "fstype": "xfs",
-      "capacity_id": "dev-9-302",
       "storage_media": "unknown",
       "storage_media_confidence": "unresolved",
       "df_total": 1449372505429,
@@ -198,7 +197,8 @@
             "other_bytes": 0
           }
         ]
-      }
+      },
+      "capacity_id": "dev-9-302"
     }
   ],
   "users": [
@@ -206,7 +206,7 @@
       "uid": 1101,
       "name": "avery",
       "bytes": 1037234601984,
-      "files": 334404,
+      "files": 334242,
       "by_mount": {
         "/srv/zeus/vol1": 453119049728,
         "/srv/zeus/vol2": 584115552256
@@ -216,7 +216,7 @@
       "uid": 1102,
       "name": "blake",
       "bytes": 756987985920,
-      "files": 245398,
+      "files": 243468,
       "by_mount": {
         "/srv/zeus/vol1": 359703511040,
         "/srv/zeus/vol2": 397284474880
@@ -226,7 +226,7 @@
       "uid": 1103,
       "name": "casey",
       "bytes": 692563476480,
-      "files": 220728,
+      "files": 223087,
       "by_mount": {
         "/srv/zeus/vol1": 338228674560,
         "/srv/zeus/vol2": 354334801920
@@ -236,7 +236,7 @@
       "uid": 0,
       "name": "root",
       "bytes": 3221225472,
-      "files": 2313,
+      "files": 4752,
       "by_mount": {
         "/srv/zeus/vol1": 1073741824,
         "/srv/zeus/vol2": 2147483648
@@ -245,31 +245,131 @@
   ],
   "top_files": [
     {
-      "path": "/srv/zeus/vol1/projects/dataset/zeus.tar",
+      "path": "/srv/zeus/vol1/projects/dataset/zeus-00.bin",
       "kind": "file",
-      "bytes": 365781057536,
+      "bytes": 371149766656,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1708832300
+      "mtime": 1717472300
     },
     {
-      "path": "/srv/zeus/vol1/projects/models/checkpoint.pt",
+      "path": "/srv/zeus/vol2/projects/models/zeus-01.bin",
       "kind": "file",
-      "bytes": 335593603072,
+      "bytes": 367805857792,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1716608300
+      "mtime": 1716521900
+    },
+    {
+      "path": "/srv/zeus/vol1/projects/scratch/zeus-02.bin",
+      "kind": "file",
+      "bytes": 364675858432,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1715571500
+    },
+    {
+      "path": "/srv/zeus/vol2/projects/reports/zeus-03.bin",
+      "kind": "file",
+      "bytes": 361530130432,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1714621100
+    },
+    {
+      "path": "/srv/zeus/vol1/projects/dataset/zeus-04.bin",
+      "kind": "file",
+      "bytes": 357711216640,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1713670700
+    },
+    {
+      "path": "/srv/zeus/vol2/projects/models/zeus-05.bin",
+      "kind": "file",
+      "bytes": 354934587392,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1712720300
+    },
+    {
+      "path": "/srv/zeus/vol1/projects/scratch/zeus-06.bin",
+      "kind": "file",
+      "bytes": 351723847680,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1711769900
+    },
+    {
+      "path": "/srv/zeus/vol2/projects/reports/zeus-07.bin",
+      "kind": "file",
+      "bytes": 348735406080,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1710819500
+    },
+    {
+      "path": "/srv/zeus/vol1/projects/dataset/zeus-08.bin",
+      "kind": "file",
+      "bytes": 345452314624,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1709869100
+    },
+    {
+      "path": "/srv/zeus/vol2/projects/models/zeus-09.bin",
+      "kind": "file",
+      "bytes": 342324412416,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1708918700
     }
   ],
   "stale": [
     {
-      "path": "/srv/zeus/vol1/projects/dataset/old-zeus.tar",
+      "path": "/srv/zeus/vol1/projects/archive/old-zeus-00.tar",
       "kind": "file",
-      "bytes": 360380891136,
+      "bytes": 360838070272,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1700192300,
-      "age_days": 220
+      "mtime": 1703648300,
+      "age_days": 180
+    },
+    {
+      "path": "/srv/zeus/vol2/projects/archive/old-zeus-01.tar",
+      "kind": "file",
+      "bytes": 357391400960,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1700624300,
+      "age_days": 215
+    },
+    {
+      "path": "/srv/zeus/vol1/projects/archive/old-zeus-02.tar",
+      "kind": "file",
+      "bytes": 352644497408,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1697600300,
+      "age_days": 250
+    },
+    {
+      "path": "/srv/zeus/vol2/projects/archive/old-zeus-03.tar",
+      "kind": "file",
+      "bytes": 348190146560,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1694576300,
+      "age_days": 285
+    },
+    {
+      "path": "/srv/zeus/vol1/projects/archive/old-zeus-04.tar",
+      "kind": "file",
+      "bytes": 343991648256,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1691552300,
+      "age_days": 320
     }
   ],
   "blocked": []

@@ -2,6 +2,7 @@
 """Regression checks for tracked storage-viz data fixtures."""
 import hashlib
 import json
+import importlib.util
 import pathlib
 import subprocess
 import sys
@@ -13,7 +14,22 @@ GENERATOR = DATA_DIR / "gen_sample.py"
 EXPECTED_SAMPLE_IDS = ["hinton", "atlas", "orion", "zeus"]
 MEDIA_VALUES = {"ssd", "hdd", "mixed", "unknown"}
 CONFIDENCE_VALUES = {"resolved", "unresolved"}
-
+USERS_IN_TEST_FIXTURES = {
+    0: "root",
+    1002: "sungjin",
+    1003: "sungoh",
+    1004: "donguk",
+    1005: "dohyun",
+    1006: "jaehyeon",
+    1007: "geonyeong",
+    1008: "shchoi",
+    1009: "jusung",
+    1010: "minseo",
+    1101: "avery",
+    1102: "blake",
+    1103: "casey",
+    1104: "devon",
+}
 
 
 STATUSES_WITH_TREES = {"complete", "partial"}
@@ -132,6 +148,10 @@ def assert_schema_v1_snapshot_contract(testcase, payload):
         for row in row_set:
             with testcase.subTest(row=row.get("path")):
                 testcase.assertIn(row["kind"], NODE_KINDS)
+                testcase.assertTrue(row["path"].startswith("/"))
+                testcase.assertIn(row["uid"], USERS_IN_TEST_FIXTURES)
+                testcase.assertEqual(row["owner"], USERS_IN_TEST_FIXTURES[row["uid"]])
+                testcase.assertIsInstance(row["mtime"], int)
 
 
 class DataFixtureTests(unittest.TestCase):
@@ -155,6 +175,33 @@ class DataFixtureTests(unittest.TestCase):
                 self.assertFalse(host["file"].endswith(".json"))
                 self.assertEqual(host["file"], host["id"])
                 self.assertIs(host.get("sample_data"), True)
+
+
+    def test_generator_capacity_id_contract_rejects_invalid_major_minor(self):
+        spec = importlib.util.spec_from_file_location("gen_sample_for_test", GENERATOR)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        valid = {"8:1": "dev-8-1", "0008:0001": "dev-8-1", "9999999999:0": "dev-9999999999-0"}
+        for raw, expected in valid.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(module.capacity_id(raw), expected)
+        for raw in ("", "8", "8:", ":1", "a:1", "8:a", "0:0", "0:1", "10000000000:1", "8:10000000000", "8:-1", "8:1:2"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(module.capacity_id(raw))
+
+
+    def test_generator_omits_capacity_id_for_invalid_major_minor(self):
+        spec = importlib.util.spec_from_file_location("gen_sample_for_test", GENERATOR)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        builder = module.SnapshotBuilder("invalid", offset=900)
+        meta = {"mount_id":"bad", "major_minor":"0:0", "mount_source":"/dev/storage-viz/bad", "mountpoint":"/bad", "scan_root":"/bad", "fstype":"xfs", "storage_media":"unknown"}
+        tree = builder.node("/bad", 0, 1, 1, 0)
+        mount = builder.make_mount(meta, tree, use_pct=50)
+        root = builder.selected_root(meta, mount)
+        self.assertNotIn("capacity_id", mount)
+        self.assertNotIn("capacity_id", root)
+        self.assertEqual(mount["storage_media_confidence"], "unresolved")
 
     def test_sample_generator_writes_all_ordered_fixtures_byte_for_byte(self):
         before = {sid: (DATA_DIR / f"{sid}.sample.json").read_bytes() for sid in EXPECTED_SAMPLE_IDS}
@@ -188,8 +235,15 @@ class DataFixtureTests(unittest.TestCase):
             generations.add(payload["scan_generation"])
             self.assertGreaterEqual(len(payload["mounts"]), 1)
             self.assertGreaterEqual(len(payload["users"]), 1)
+            min_top = 20 if sid == "hinton" else 10
+            min_stale = 10 if sid == "hinton" else 5
+            self.assertGreaterEqual(len(payload["top_files"]), min_top)
+            self.assertGreaterEqual(len(payload["stale"]), min_stale)
             assert_schema_v1_snapshot_contract(self, payload)
             roots_by_id = {root["mount_id"]: root for root in payload["selected_roots"]}
+            scan_roots = tuple(root["scan_root"].rstrip("/") + "/" for root in payload["selected_roots"])
+            for row in payload["top_files"] + payload["stale"]:
+                self.assertTrue(any(row["path"] == prefix[:-1] or row["path"].startswith(prefix) for prefix in scan_roots), row["path"])
             for mount in payload["mounts"]:
                 root = roots_by_id[mount["mount_id"]]
                 media_sets[sid].add(mount["storage_media"] if mount["storage_media"] != "unknown" else "unknown")

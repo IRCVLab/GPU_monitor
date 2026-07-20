@@ -12,7 +12,6 @@
     {
       "mount_id": "vol1",
       "major_minor": "9:201",
-      "capacity_id": "dev-9-201",
       "storage_media": "hdd",
       "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/orion-vol1",
@@ -26,12 +25,12 @@
       "scanned_dirs": 31844,
       "blocked_count": 0,
       "error_count": 0,
-      "error_code": null
+      "error_code": null,
+      "capacity_id": "dev-9-201"
     },
     {
       "mount_id": "vol2",
       "major_minor": "9:202",
-      "capacity_id": "dev-9-202",
       "storage_media": "hdd",
       "storage_media_confidence": "resolved",
       "mount_source": "/dev/storage-viz/orion-vol2",
@@ -45,7 +44,8 @@
       "scanned_dirs": 22831,
       "blocked_count": 0,
       "error_count": 0,
-      "error_code": null
+      "error_code": null,
+      "capacity_id": "dev-9-202"
     }
   ],
   "mounts": [
@@ -54,7 +54,6 @@
       "mount_id": "vol1",
       "scan_root": "/srv/orion/vol1",
       "fstype": "xfs",
-      "capacity_id": "dev-9-201",
       "storage_media": "hdd",
       "storage_media_confidence": "resolved",
       "df_total": 928174760376,
@@ -113,14 +112,14 @@
             "other_bytes": 0
           }
         ]
-      }
+      },
+      "capacity_id": "dev-9-201"
     },
     {
       "path": "/srv/orion/vol2",
       "mount_id": "vol2",
       "scan_root": "/srv/orion/vol2",
       "fstype": "xfs",
-      "capacity_id": "dev-9-202",
       "storage_media": "hdd",
       "storage_media_confidence": "resolved",
       "df_total": 1509128794462,
@@ -179,7 +178,8 @@
             "other_bytes": 0
           }
         ]
-      }
+      },
+      "capacity_id": "dev-9-202"
     }
   ],
   "users": [
@@ -187,7 +187,7 @@
       "uid": 1101,
       "name": "avery",
       "bytes": 822486237184,
-      "files": 265266,
+      "files": 266370,
       "by_mount": {
         "/srv/orion/vol1": 345744867328,
         "/srv/orion/vol2": 476741369856
@@ -197,7 +197,7 @@
       "uid": 1102,
       "name": "blake",
       "bytes": 542239621120,
-      "files": 176435,
+      "files": 175056,
       "by_mount": {
         "/srv/orion/vol1": 252329328640,
         "/srv/orion/vol2": 289910292480
@@ -207,7 +207,7 @@
       "uid": 1103,
       "name": "casey",
       "bytes": 477815111680,
-      "files": 152229,
+      "files": 155807,
       "by_mount": {
         "/srv/orion/vol1": 230854492160,
         "/srv/orion/vol2": 246960619520
@@ -217,7 +217,7 @@
       "uid": 0,
       "name": "root",
       "bytes": 3221225472,
-      "files": 1923,
+      "files": 1626,
       "by_mount": {
         "/srv/orion/vol1": 1073741824,
         "/srv/orion/vol2": 2147483648
@@ -226,31 +226,131 @@
   ],
   "top_files": [
     {
-      "path": "/srv/orion/vol1/projects/dataset/orion.tar",
+      "path": "/srv/orion/vol1/projects/dataset/orion-00.bin",
       "kind": "file",
-      "bytes": 258413166592,
+      "bytes": 263781875712,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1708832200
+      "mtime": 1717472200
     },
     {
-      "path": "/srv/orion/vol1/projects/models/checkpoint.pt",
+      "path": "/srv/orion/vol2/projects/models/orion-01.bin",
       "kind": "file",
-      "bytes": 227669966848,
+      "bytes": 259882221568,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1716608200
+      "mtime": 1716521800
+    },
+    {
+      "path": "/srv/orion/vol1/projects/scratch/orion-02.bin",
+      "kind": "file",
+      "bytes": 257051066368,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1715571400
+    },
+    {
+      "path": "/srv/orion/vol2/projects/reports/orion-03.bin",
+      "kind": "file",
+      "bytes": 253506879488,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1714621000
+    },
+    {
+      "path": "/srv/orion/vol1/projects/dataset/orion-04.bin",
+      "kind": "file",
+      "bytes": 250667335680,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1713670600
+    },
+    {
+      "path": "/srv/orion/vol2/projects/models/orion-05.bin",
+      "kind": "file",
+      "bytes": 247766974464,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1712720200
+    },
+    {
+      "path": "/srv/orion/vol1/projects/scratch/orion-06.bin",
+      "kind": "file",
+      "bytes": 244630683648,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1711769800
+    },
+    {
+      "path": "/srv/orion/vol2/projects/reports/orion-07.bin",
+      "kind": "file",
+      "bytes": 241037213696,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1710819400
+    },
+    {
+      "path": "/srv/orion/vol1/projects/dataset/orion-08.bin",
+      "kind": "file",
+      "bytes": 237327351808,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1709869000
+    },
+    {
+      "path": "/srv/orion/vol2/projects/models/orion-09.bin",
+      "kind": "file",
+      "bytes": 234692280320,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1708918600
     }
   ],
   "stale": [
     {
-      "path": "/srv/orion/vol1/projects/dataset/old-orion.tar",
+      "path": "/srv/orion/vol1/projects/archive/old-orion-00.tar",
       "kind": "file",
-      "bytes": 252756099072,
+      "bytes": 254144413696,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1700192200,
-      "age_days": 220
+      "mtime": 1703648200,
+      "age_days": 180
+    },
+    {
+      "path": "/srv/orion/vol2/projects/archive/old-orion-01.tar",
+      "kind": "file",
+      "bytes": 249295798272,
+      "uid": 1102,
+      "owner": "blake",
+      "mtime": 1700624200,
+      "age_days": 215
+    },
+    {
+      "path": "/srv/orion/vol1/projects/archive/old-orion-02.tar",
+      "kind": "file",
+      "bytes": 245276606464,
+      "uid": 1103,
+      "owner": "casey",
+      "mtime": 1697600200,
+      "age_days": 250
+    },
+    {
+      "path": "/srv/orion/vol2/projects/archive/old-orion-03.tar",
+      "kind": "file",
+      "bytes": 241007853568,
+      "uid": 1104,
+      "owner": "devon",
+      "mtime": 1694576200,
+      "age_days": 285
+    },
+    {
+      "path": "/srv/orion/vol1/projects/archive/old-orion-04.tar",
+      "kind": "file",
+      "bytes": 236444450816,
+      "uid": 1101,
+      "owner": "avery",
+      "mtime": 1691552200,
+      "age_days": 320
     }
   ],
   "blocked": []
