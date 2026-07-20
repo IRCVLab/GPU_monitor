@@ -420,33 +420,58 @@ def _resolve_media_by_major_minor(selection: mount_policy.SelectionResult, media
     for major_minor in ordered:
         if major_minor in resolved:
             continue
+        fallback_capacity_id = _capacity_id_from_major_minor(major_minor)
         try:
             result = media_resolver.resolve(major_minor)
         except Exception:
-            result = _unknown_media()
-        resolved[major_minor] = _safe_media_result(result)
+            result = _unknown_media(fallback_capacity_id)
+        resolved[major_minor] = _safe_media_result(result, fallback_capacity_id)
     return resolved
 
 
-def _unknown_media() -> MediaResult:
-    return MediaResult(None, "unknown", "unresolved")
+def _capacity_id_from_major_minor(major_minor: Any) -> Optional[str]:
+    if not isinstance(major_minor, str):
+        return None
+    match = re.match(r"^(\d+):(\d+)$", major_minor)
+    if not match:
+        return None
+    major_s, minor_s = match.groups()
+    if len(major_s) > 10 or len(minor_s) > 10:
+        return None
+    major = int(major_s)
+    minor = int(minor_s)
+    if major == 0 and minor == 0:
+        return None
+    capacity_id = f"dev-{major}-{minor}"
+    if len(capacity_id) > 31 or not _CAPACITY_ID_RE.match(capacity_id):
+        return None
+    return capacity_id
 
 
-def _safe_media_result(result: Any) -> MediaResult:
-    capacity_id = getattr(result, "capacity_id", None)
-    media = getattr(result, "media", "unknown")
-    confidence = getattr(result, "confidence", "unresolved")
+def _unknown_media(capacity_id: Optional[str] = None) -> MediaResult:
+    return MediaResult(capacity_id, "unknown", "unresolved")
+
+
+def _safe_media_result(result: Any, fallback_capacity_id: Optional[str]) -> MediaResult:
+    try:
+        capacity_id = getattr(result, "capacity_id")
+        media = getattr(result, "media")
+        confidence = getattr(result, "confidence")
+    except Exception:
+        return _unknown_media(fallback_capacity_id)
     if capacity_id is not None and (
         not isinstance(capacity_id, str)
         or len(capacity_id) > 31
         or not _CAPACITY_ID_RE.match(capacity_id)
         or capacity_id == "dev-0-0"
     ):
-        capacity_id = None
+        return _unknown_media(fallback_capacity_id)
+    if not isinstance(media, str) or not isinstance(confidence, str):
+        return _unknown_media(fallback_capacity_id)
     if media not in _MEDIA_VALUES or confidence not in _MEDIA_CONFIDENCE_VALUES:
-        return _unknown_media()
+        return _unknown_media(fallback_capacity_id)
     if (media == "unknown") != (confidence == "unresolved"):
-        return _unknown_media()
+        return _unknown_media(fallback_capacity_id)
     return MediaResult(capacity_id, media, confidence)
 
 

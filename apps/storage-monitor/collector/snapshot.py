@@ -196,9 +196,10 @@ def _validate_root(root: Any, budget: _Budget) -> None:
     if not isinstance(root, dict):
         raise ValueError("selected root must be an object")
     _safe_id(_string(root.get("mount_id"), "mount_id", budget), "mount_id")
-    _string(root.get("major_minor"), "major_minor", budget)
-    if not re.match(r"^\d+:\d+$", root["major_minor"]):
+    major_minor = _string(root.get("major_minor"), "major_minor", budget)
+    if not re.match(r"^\d+:\d+$", major_minor):
         raise ValueError("major_minor must be N:N")
+    canonical_capacity_id = _canonical_capacity_id(major_minor)
     for key in ("mount_source", "fstype"):
         _bounded_string(root.get(key), key, 512, budget)
     for key in ("mount_root", "mountpoint", "scan_root"):
@@ -211,7 +212,7 @@ def _validate_root(root: Any, budget: _Budget) -> None:
     error_code = root.get("error_code")
     if error_code is not None:
         _bounded_string(error_code, "error_code", 127, budget)
-    _validate_media_fields(root, "selected root", budget)
+    _validate_media_fields(root, "selected root", budget, canonical_capacity_id=canonical_capacity_id)
 
 
 def _validate_mount_shape(mount: Any, budget: _Budget) -> None:
@@ -252,7 +253,22 @@ def _validate_root_mount_link(root: Mapping[str, Any], mount: Mapping[str, Any])
             raise ValueError(f"root and linked mount {key} must match")
 
 
-def _validate_media_fields(record: Mapping[str, Any], label: str, budget: _Budget) -> None:
+def _canonical_capacity_id(major_minor: str) -> Optional[str]:
+    major_s, minor_s = major_minor.split(":", 1)
+    if len(major_s) > 10 or len(minor_s) > 10:
+        return None
+    major = int(major_s)
+    minor = int(minor_s)
+    return f"dev-{major}-{minor}"
+
+
+def _validate_media_fields(
+    record: Mapping[str, Any],
+    label: str,
+    budget: _Budget,
+    *,
+    canonical_capacity_id: Any = False,
+) -> None:
     present = {key for key in MEDIA_KEYS if key in record}
     if not present:
         return
@@ -262,6 +278,8 @@ def _validate_media_fields(record: Mapping[str, Any], label: str, budget: _Budge
         capacity_id = _bounded_string(record.get("capacity_id"), f"{label}.capacity_id", 31, budget)
         if not CAPACITY_ID_RE.match(capacity_id) or capacity_id == "dev-0-0":
             raise ValueError(f"{label}.capacity_id must match dev-major-minor")
+        if canonical_capacity_id is not False and capacity_id != canonical_capacity_id:
+            raise ValueError(f"{label}.capacity_id must match canonical major_minor")
     media = _bounded_string(record.get("storage_media"), f"{label}.storage_media", 7, budget)
     confidence = _bounded_string(record.get("storage_media_confidence"), f"{label}.storage_media_confidence", 10, budget)
     if media not in MEDIA_VALUES:

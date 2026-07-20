@@ -430,9 +430,10 @@ class SnapshotMediaFieldTests(unittest.TestCase):
         self.assertEqual(result.payload["mounts"][0]["storage_media"], "mixed")
 
     def test_capacity_id_exact_regex_length_and_empty_rules(self):
-        for value in ("dev-8-1", "dev-0-1", "dev-8-0", "dev-1234567890-1", "dev-1-1234567890"):
+        for major_minor, value in (("8:1", "dev-8-1"), ("0:1", "dev-0-1"), ("8:0", "dev-8-0"), ("1234567890:1", "dev-1234567890-1"), ("1:1234567890", "dev-1-1234567890")):
             with self.subTest(value=value):
                 p = self.valid_payload()
+                p["selected_roots"][0]["major_minor"] = major_minor
                 self.add_media(p["selected_roots"][0], capacity_id=value)
                 self.add_media(p["mounts"][0], capacity_id=value)
                 self.assert_valid(p)
@@ -444,6 +445,24 @@ class SnapshotMediaFieldTests(unittest.TestCase):
                 p["selected_roots"][0]["capacity_id"] = value
                 p["mounts"][0]["capacity_id"] = value
                 self.assert_invalid(p, "capacity_id")
+
+    def test_capacity_id_must_match_canonical_selected_root_major_minor(self):
+        p = self.valid_payload()
+        self.add_media(p["selected_roots"][0], capacity_id="dev-8-2")
+        self.add_media(p["mounts"][0], capacity_id="dev-8-2")
+        self.assert_invalid(p, "capacity_id.*major_minor")
+
+        p = self.valid_payload()
+        p["selected_roots"][0]["major_minor"] = "008:001"
+        self.add_media(p["selected_roots"][0], capacity_id="dev-8-1")
+        self.add_media(p["mounts"][0], capacity_id="dev-8-1")
+        self.assert_valid(p)
+
+        p = self.valid_payload()
+        p["selected_roots"][0]["major_minor"] = "008:001"
+        self.add_media(p["selected_roots"][0], capacity_id="dev-008-001")
+        self.add_media(p["mounts"][0], capacity_id="dev-008-001")
+        self.assert_invalid(p, "capacity_id")
 
     def test_media_and_confidence_enums_and_pairing_are_exact(self):
         for media in ("ssd", "hdd", "mixed"):
