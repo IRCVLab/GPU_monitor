@@ -990,6 +990,79 @@ class ScanRunnerTests(unittest.TestCase):
             self.assertEqual(result.status, "failed")
             self.assertEqual((tmp / "data" / "scan-status.json").read_text(encoding="utf-8"), before_status)
 
+    def test_media_metadata_is_resolved_once_per_selected_device_and_copied_to_linked_mount(self):
+        class FakeResolver:
+            def __init__(self):
+                self.calls = []
+
+            def resolve(self, major_minor):
+                self.calls.append(major_minor)
+                return scan_runner.MediaResult(f"dev-{major_minor.replace(':', '-')}", "ssd", "resolved")
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            mountinfo = "\n".join([
+                mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+                mi(2, 1, "8:1", "/", "/mnt/root-bind", "rw", "ext4", "/dev/sda1"),
+            ])
+            resolver = FakeResolver()
+            def fake(argv, **kwargs):
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                return scan_runner.CompletedScan(0, "", "")
+
+            result = scan_runner.run_once(
+                config_path,
+                mountinfo_reader=lambda: mountinfo,
+                scanner_runner=fake,
+                media_resolver=resolver,
+                clock=Clock(2200),
+            )
+            payload = json.loads(result.snapshot_path.read_text(encoding="utf-8"))
+            home = next(root for root in payload["selected_roots"] if root["scan_root"] == "/home")
+            mount = payload["mounts"][0]
+
+            self.assertEqual(resolver.calls, ["8:1"])
+            for record in (home, mount):
+                self.assertEqual(record["capacity_id"], "dev-8-1")
+                self.assertEqual(record["storage_media"], "ssd")
+                self.assertEqual(record["storage_media_confidence"], "resolved")
+            self.assertEqual(mount["capacity_id"], home["capacity_id"])
+            self.assertEqual(mount["storage_media"], home["storage_media"])
+            self.assertEqual(mount["storage_media_confidence"], home["storage_media_confidence"])
+
+    def test_media_resolution_failure_collapses_to_unknown_without_failing_snapshot(self):
+        class FailingResolver:
+            def resolve(self, major_minor):
+                raise OSError("sysfs disappeared")
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            def fake(argv, **kwargs):
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
+                return scan_runner.CompletedScan(0, "", "")
+
+            result = scan_runner.run_once(
+                config_path,
+                mountinfo_reader=lambda: mountinfo,
+                scanner_runner=fake,
+                media_resolver=FailingResolver(),
+                clock=Clock(2300),
+            )
+            payload = json.loads(result.snapshot_path.read_text(encoding="utf-8"))
+            root = payload["selected_roots"][0]
+            mount = payload["mounts"][0]
+
+            self.assertEqual(result.status, "complete")
+            self.assertNotIn("capacity_id", root)
+            self.assertEqual(root["storage_media"], "unknown")
+            self.assertEqual(root["storage_media_confidence"], "unresolved")
+            self.assertNotIn("capacity_id", mount)
+            self.assertEqual(mount["storage_media"], "unknown")
+            self.assertEqual(mount["storage_media_confidence"], "unresolved")
+
 
 if __name__ == "__main__":
     unittest.main()
