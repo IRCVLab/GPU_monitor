@@ -9,11 +9,22 @@ Fast local disk scanner plus a central loopback dashboard for lab storage visibi
 
 ## Quick local demo
 
+Run the local sample dashboard from the repository root:
+
 ```bash
-cd scanner && make && cd ..
-sudo ./scanner/hstscan --out data/$(hostname).json
+STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data" \
+STORAGE_VIZ_BIND=127.0.0.1 \
+STORAGE_VIZ_PORT=8088 \
 python3 viewer/serve.py
 ```
+
+Open `http://127.0.0.1:8088`. Development sample mode is explicit: `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and the four tracked sample servers appear in deterministic order: `hinton`, `atlas`, `orion`, `zeus`. Production inventory mode reads `/etc/storage-viz/servers.json` and is not sample data.
+
+## Capacity and media shown in the overview
+
+The overview reports **managed local storage**: unique filesystem capacity for scan-eligible local mounts on each server. It is not raw physical disk inventory, and it is not the sum of every mount row. Duplicate mounts with the same capacity identity count once per server. If identities are unresolved or capacity numbers conflict, the affected mounts stay visible but are excluded from exact totals, which are marked partial/unknown instead of guessed.
+
+Media labels come from the backing leaf block devices resolved through Linux sysfs. `Mixed` means both SSD and HDD leaves back that mount. `Unknown` means topology or rotational data could not be resolved safely. Both states are expected safe outcomes, not scanner failures. Existing policy still excludes network, distributed, virtual, and container mounts from collection.
 
 ## Central install
 
