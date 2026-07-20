@@ -536,8 +536,13 @@ def _enrich_payload(raw: Mapping[str, Any], selection: mount_policy.SelectionRes
             error_count=errors,
         ))
 
+    emitted_scan_roots = {record["scan_root"] for record in selected_roots}
     for skipped in selection.skipped:
-        selected_roots.append(_skipped_record(skipped, media_by_major_minor.get(skipped.entry.major_minor) if skipped.entry is not None else None))
+        record = _skipped_record(skipped, media_by_major_minor.get(skipped.entry.major_minor) if skipped.entry is not None else None)
+        if record["scan_root"] in emitted_scan_roots:
+            continue
+        selected_roots.append(record)
+        emitted_scan_roots.add(record["scan_root"])
 
     if complete_count < 1:
         raise ValueError("at least one selected root must complete")
