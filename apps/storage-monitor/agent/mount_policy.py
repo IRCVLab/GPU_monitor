@@ -221,6 +221,8 @@ def classify_mount(entry: MountEntry) -> MountDecision:
         return MountDecision("prohibited", "remote-source")
     if _is_loop_or_image_source(source, entry.major_minor):
         return MountDecision("prohibited", "loop-source")
+    if fstype in LOCAL_FSTYPES and entry.root != "/" and fstype != "btrfs":
+        return MountDecision("prohibited", "bind-subtree")
     if fstype in LOCAL_FSTYPES:
         return MountDecision("selected", "local-fs")
     return MountDecision("unsupported", "unsupported-fstype")

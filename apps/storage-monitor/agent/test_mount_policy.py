@@ -78,6 +78,20 @@ class MountPolicyTests(unittest.TestCase):
 
         self.assertEqual([(r.mountpoint, r.entry.root) for r in selected], [("/data", "/@data"), ("/archive", "/@archive")])
 
+    def test_non_subvolume_local_bind_subtrees_are_not_scanned_as_storage_roots(self):
+        text = "\n".join([
+            mi(22, 1, "8:1", "/var/lib/storage-viz", "/var/lib/storage-viz", "rw", "ext4", "/dev/sda1"),
+            mi(23, 1, "8:1", "/tmp/systemd-private/service/tmp", "/tmp", "rw", "ext4", "/dev/sda1"),
+        ])
+
+        result = select_scan_roots(parse_mountinfo(text))
+
+        self.assertEqual(result.selected, [])
+        self.assertEqual([(row.mountpoint, row.reason) for row in result.skipped], [
+            ("/var/lib/storage-viz", "bind-subtree"),
+            ("/tmp", "bind-subtree"),
+        ])
+
     def test_zfs_datasets_with_distinct_sources_remain_distinct(self):
         text = "\n".join([
             mi(30, 1, "0:50", "/", "/tank", "rw", "zfs", "tank"),
