@@ -186,5 +186,5 @@ if [[ "$DRY_RUN" == "1" ]]; then
 fi
 
 "$SYSTEMCTL" daemon-reload
-"$SYSTEMCTL" enable storage-viz-scan.timer
-echo "[✓] installed storage-viz scan agent; timer enabled, initial scan not started"
+"$SYSTEMCTL" enable --now storage-viz-scan.timer
+echo "[✓] installed storage-viz scan agent; timer enabled and started"
