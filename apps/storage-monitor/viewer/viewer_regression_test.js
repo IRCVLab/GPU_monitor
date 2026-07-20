@@ -102,6 +102,8 @@ function loadViewer() {
   assert(html.includes('<link rel="stylesheet" href="styles.css">'), 'index must link styles.css');
   const h1Count = (html.match(/<h1\b/gi) || []).length;
   assert.strictEqual(h1Count, 1, 'viewer must keep exactly one logical h1');
+  assert(html.includes('<p id="sampleDataMarker" class="sample-data-marker" hidden>샘플 데이터</p>'), 'overview must include the initially hidden explicit sample-data marker');
+  assert(html.includes('<section id="overviewAggregate" class="overview-aggregate" aria-label="전체 로컬 스토리지"></section>'), 'overview must include the semantic page aggregate container');
   assert(/<ul\s+id="overviewList"/.test(html), 'overview list must be a real ul');
   assert(!/id="overviewList"[^>]*role="list"/.test(html), 'overview list should rely on native list semantics instead of role=list');
   assert(html.includes('id="overviewView"'), 'overview shell must be present');
@@ -183,6 +185,16 @@ function textTree(node) {
   if (node.innerHTML) out += node.innerHTML;
   for (const child of node.children || []) out += textTree(child);
   return out;
+}
+
+function findAll(node, predicate, out = []) {
+  if (node && predicate(node)) out.push(node);
+  for (const child of (node && node.children) || []) findAll(child, predicate, out);
+  return out;
+}
+
+function findByClass(node, className) {
+  return findAll(node, el => (el.className || '').split(/\s+/).includes(className));
 }
 
 function numericPx(value) { return Number(String(value || '0').replace(/px$/, '')); }
@@ -382,7 +394,118 @@ async function testBootstrapDetectionIsExplicitAndSequential() {
     loadServerSnapshot: async () => ({})
   }), /servers unavailable/, 'after /api/session succeeds, later API failures must remain API failures');
   assert.strictEqual(apiStaticCalls, 0, 'post-session API failures must never fall back to static samples');
+
+  const orderedSeen = [];
+  const apiEnvelope = await viewer.loadBootstrapDataWith({
+    loadSession: async () => ({ authenticated: true, can_rescan: false, csrf_token: 'csrf' }),
+    loadStaticBootstrap: async () => { throw new Error('static must not be used after API session succeeds'); },
+    loadServerSummaries: async () => ({ data_mode: 'sample', servers: [{ id: 'hinton' }, { id: 'atlas' }] }),
+    loadOrderedSnapshotsForOverview: async (summaries) => {
+      orderedSeen.push(...summaries.map(row => row.id));
+      return summaries.map(row => ({ id: row.id, snapshot: { server_id: row.id, mounts: [] }, error: null }));
+    },
+    loadServerSnapshot: async () => ({})
   });
+  assert.strictEqual(apiEnvelope.dataMode, 'sample', 'API bootstrap must carry normalized dataMode from the /api/servers envelope');
+  assert.deepStrictEqual(apiEnvelope.summaries.map(row => row.id), ['hinton', 'atlas'], 'API bootstrap must pass only the ordered server rows downstream');
+  assert.deepStrictEqual(orderedSeen, ['hinton', 'atlas'], 'snapshot loading must receive the envelope servers in original order');
+  });
+}
+
+function testSampleMarkerAndOverviewAggregateAreDataModeDriven() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.rememberBootstrap, 'function', 'bootstrap state setter must be exposed');
+  assert.strictEqual(typeof viewer.getOverviewModeDebugState, 'function', 'overview mode debug getter must be exposed');
+  assert.strictEqual(typeof viewer.renderOverviewAggregate, 'function', 'aggregate renderer must be exposed for DOM regression tests');
+
+  const marker = viewer.document.getElementById('sampleDataMarker');
+  viewer.rememberBootstrap({ mode: 'static', dataMode: 'sample', session: {}, summaries: [], snapshots: [] });
+  assert.strictEqual(marker.hidden, false, 'sample marker must be visible only when explicit dataMode is sample');
+  assert.strictEqual(viewer.getOverviewModeDebugState().dataMode, 'sample', 'rememberBootstrap must retain sample dataMode metadata');
+  viewer.rememberBootstrap({ mode: 'api', dataMode: 'inventory', session: {}, summaries: [], snapshots: [] });
+  assert.strictEqual(marker.hidden, true, 'sample marker must be hidden in inventory/live mode');
+  assert.strictEqual(viewer.getOverviewModeDebugState().dataMode, 'inventory', 'rememberBootstrap must retain inventory dataMode metadata');
+
+  const row = viewer.buildOverviewServer(
+    { id: 'alpha-1', display_name: 'alpha', mount_count: 1 },
+    {
+      server_id: 'alpha-1',
+      selected_roots: [{ mount_id: 'data', capacity_id: 'dev-8-16', storage_media: 'ssd' }],
+      mounts: [{ mount_id: 'data', path: '/data', df_total: 2000, df_used: 500, df_avail: 1500, df_use_pct: 25 }],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  const aggregate = viewer.buildOverviewAggregate([row]);
+  const aggregateEl = viewer.document.getElementById('overviewAggregate');
+  viewer.renderOverviewAggregate(aggregateEl, aggregate);
+  const aggregateText = textTree(aggregateEl);
+  assert.strictEqual(aggregateEl.hidden, false, 'known aggregate capacity must render visibly');
+  assert(aggregateText.includes('전체 로컬 스토리지'), 'aggregate must identify the managed local storage surface');
+  assert(aggregateText.includes('25%'), 'aggregate must render utilization from the Task 4 semantic model');
+  assert(aggregateText.includes('500 B') && aggregateText.includes('1.95 KB'), 'aggregate must render used and total capacity labels adjacently');
+}
+
+function testMountCentricOverviewDomFieldsAndStableNavigation() {
+  const viewer = loadViewer();
+  const row = viewer.buildOverviewServer(
+    { id: 'hinton', display_name: 'hinton', order: 99, mount_count: 2 },
+    {
+      server_id: 'hinton',
+      selected_roots: [
+        { mount_id: 'home', capacity_id: 'dev-8-1', storage_media: 'ssd' },
+        { mount_id: 'data', capacity_id: 'dev-8-16', block_media: 'hdd' },
+      ],
+      mounts: [
+        { mount_id: 'home', path: '/home', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
+        { mount_id: 'data', path: '/data', df_total: 2000, df_used: 1800, df_avail: 200, df_use_pct: 90 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  const later = viewer.buildOverviewServer(
+    { id: 'atlas', display_name: 'atlas', order: 1, mount_count: 1 },
+    {
+      server_id: 'atlas',
+      selected_roots: [{ mount_id: 'archive', capacity_id: 'dev-9-1', storage_media: 'mixed' }],
+      mounts: [{ mount_id: 'archive', path: '/archive', df_total: 3000, df_used: 300, df_avail: 2700, df_use_pct: 10 }],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  const opened = [];
+  const list = viewer.document.getElementById('overviewList');
+  viewer.renderOverviewList(list, [row, later], { onOpenServer: serverId => opened.push(serverId) });
+
+  assert.deepStrictEqual(list.children.map(item => item.children[0].dataset.serverId), ['hinton', 'atlas'], 'rendering must not sort by order, name, capacity, or status');
+  const hintonButton = list.children[0].children[0];
+  assert(findByClass(hintonButton, 'overview-server-subtotal').length === 1, 'each server header must expose one compact subtotal');
+  const cells = findByClass(hintonButton, 'overview-mount-cell');
+  assert.strictEqual(cells.length, 2, 'mount-centric overview must render one cell per mount');
+  assert.deepStrictEqual(cells.map(cell => findByClass(cell, 'overview-mount-path')[0].textContent), ['/home', '/data'], 'mount cells must preserve snapshot mount order exactly');
+  const first = cells[0];
+  const fieldClasses = first.children.map(child => child.className);
+  assert.deepStrictEqual(fieldClasses, [
+    'overview-mount-path',
+    'overview-media-label',
+    'overview-mount-usage',
+    'overview-pressure-bar',
+    'overview-mount-free',
+  ], 'each mount cell must render path, neutral media, adjacent used/total+percent, pressure bar, then free capacity');
+  assert.strictEqual(findByClass(first, 'overview-media-label')[0].textContent, 'SSD', 'media labels must use neutral storage-class text');
+  assert(textTree(findByClass(first, 'overview-mount-usage')[0]).includes('400 B / 1000 B'), 'used/total capacity text must be present');
+  assert(textTree(findByClass(first, 'overview-mount-usage')[0]).includes('40%'), 'utilization percent must be DOM-adjacent to used/total text');
+  assert(textTree(findByClass(first, 'overview-mount-free')[0]).includes('600 B free'), 'free capacity text must be present after the bar');
+  assert(/[가-힣]/.test(textTree(findByClass(first, 'overview-mount-free')[0])), 'pressure/health must include text, not color alone');
+
+  hintonButton.onclick();
+  assert.deepStrictEqual(opened, ['hinton'], 'click navigation to server detail must be preserved');
+}
+
+function testMountCentricResponsiveCssContract() {
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  assert(/\.overview-mounts\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), 'desktop overview must cap server mount cells at three columns');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-mounts\b[\s\S]*grid-template-columns:\s*1fr/.test(css), 'mobile overview must collapse mount cells to one column');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*main\b[\s\S]*padding:\s*16px/.test(css), '390px mobile layouts must reduce main padding to avoid horizontal overflow');
+  assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css), 'overview styling must continue to respect reduced motion');
 }
 
 async function testDetailNavigationGuardsAgainstStaleAsyncCompletion() {
@@ -821,6 +944,9 @@ async function main() {
   testSnapshotLoadFailureRendersAsVisibleException();
   testRouteNavigationAndBackShellContract();
   await testBootstrapDetectionIsExplicitAndSequential();
+  testSampleMarkerAndOverviewAggregateAreDataModeDriven();
+  testMountCentricOverviewDomFieldsAndStableNavigation();
+  testMountCentricResponsiveCssContract();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();

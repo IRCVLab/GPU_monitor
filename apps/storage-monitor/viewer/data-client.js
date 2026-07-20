@@ -129,13 +129,15 @@ function normalizeHosts(input) {
     const id = row && String(row.id || "").trim();
     const file = row && String(row.file || id).trim();
     if (!isSafeHostToken(id) || !isSafeHostToken(file)) continue;
-    out.push({
+    const normalized = {
       id,
       label: String(row.label || id),
       file,
       default: row.default === true,
       description: row.description ? String(row.description) : "",
-    });
+    };
+    if (row.sample_data === true) normalized.sample_data = true;
+    out.push(normalized);
   }
   if (!out.length) return DEFAULT_HOSTS.slice();
   return out;
@@ -167,9 +169,14 @@ async function fetchJson(url, options) {
 async function loadSession() {
   return fetchJson("/api/session");
 }
+function normalizeServerSummariesEnvelope(body) {
+  const servers = Array.isArray(body) ? body : (Array.isArray(body && body.servers) ? body.servers : []);
+  const dataMode = body && body.data_mode === "sample" ? "sample" : "inventory";
+  return { data_mode: dataMode, servers };
+}
 async function loadServerSummaries() {
   const body = await fetchJson("/api/servers");
-  return Array.isArray(body && body.servers) ? body.servers : [];
+  return normalizeServerSummariesEnvelope(body);
 }
 function safeServerId(serverId) {
   if (!isSafeHostToken(serverId)) throw new Error("invalid server id");
@@ -213,10 +220,10 @@ async function loadHost(host) {
 }
 
 if (typeof globalThis !== "undefined") {
-  Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken });
+  Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken });
 }
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken };
+  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken };
 }
 
 /* =========================================================================
