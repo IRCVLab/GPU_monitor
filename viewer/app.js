@@ -189,9 +189,12 @@ function clearOverviewError() {
   }
 }
 
-function updateOverviewStatus() {
+function updateOverviewStatus(message) {
   const el = document.getElementById("overviewStatus");
-  if (el) el.textContent = currentOverviewRows.length + " servers";
+  if (!el) return;
+  const text = message == null ? "" : String(message);
+  el.textContent = text;
+  el.hidden = text === "";
 }
 
 function setSampleDataMarker(dataMode) {

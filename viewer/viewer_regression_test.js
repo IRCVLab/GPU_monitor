@@ -804,6 +804,90 @@ function testOverviewConnectedStripHierarchyContract() {
   assert.deepStrictEqual(findByClass(button, 'overview-mount').map(cell => textTree(findByClass(cell, 'overview-mount-path')[0])), ['/alpha', '/beta', '/gamma'], 'connected strip must preserve snapshot mount order');
 }
 
+function cssBlock(css, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = css.match(new RegExp(escaped + "\\s*\\{([\\s\\S]*?)\\}"));
+  assert(match, selector + ' token block must exist');
+  return match[1];
+}
+
+function cssVar(block, name) {
+  const match = block.match(new RegExp('--' + name + ':\\s*([^;]+);'));
+  assert(match, '--' + name + ' must be present');
+  return match[1].trim();
+}
+
+function testApprovedCleanThemeTokenContract() {
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  const dark = cssBlock(css, 'html.dark');
+  const light = cssBlock(css, 'html.light');
+  const expectedDark = {
+    bg: '#090b0f',
+    surface: '#13161b',
+    surface2: '#181b1f',
+    separator: '#26292e',
+    text: '#f0f2f4',
+    text2: '#8f9aa4',
+    accent: '#3a8cff',
+    ok: '#00b793',
+    warn: '#ff7527',
+    crit: '#ff515a',
+  };
+  const expectedLight = {
+    bg: '#f4f5f7',
+    surface: '#ffffff',
+    surface2: '#eceff1',
+    separator: '#dbdee2',
+    text: '#0c121a',
+    text2: '#565e69',
+    accent: '#297cef',
+    ok: '#00a381',
+    warn: '#f3680f',
+    crit: '#ee343b',
+  };
+  for (const [name, value] of Object.entries(expectedDark)) {
+    assert.strictEqual(cssVar(dark, name), value, 'dark Clean token --' + name + ' must match the approved contract exactly');
+  }
+  for (const [name, value] of Object.entries(expectedLight)) {
+    assert.strictEqual(cssVar(light, name), value, 'light Clean token --' + name + ' must match the approved contract exactly');
+  }
+}
+
+function testSuccessfulOverviewSuppressesServerCountLiveLead() {
+  const viewer = loadViewer();
+  const status = viewer.document.getElementById('overviewStatus');
+  status.textContent = 'Loading servers…';
+  status.hidden = false;
+  viewer.rememberBootstrap({
+    mode: 'api',
+    dataMode: 'inventory',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: Array.from({ length: 7 }, (_, index) => ({
+      id: 'server-' + index,
+      display_name: 'server-' + index,
+      order: index,
+      mount_count: 0,
+      snapshot_availability: 'available',
+      freshness: 'fresh',
+      latest_pull_status: 'succeeded',
+      latest_scan_result: 'complete',
+      configuration_sync: 'in_sync',
+      active_job: null,
+    })),
+    snapshots: Array.from({ length: 7 }, (_, index) => ({
+      id: 'server-' + index,
+      snapshot: { server_id: 'server-' + index, mounts: [] },
+      error: null,
+    })),
+  });
+  viewer.renderOverview();
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  assert(/id="overviewStatus"[^>]*aria-live="polite"/.test(html), 'overview status must preserve its aria-live loading/error announcement channel');
+  assert.strictEqual(status.textContent, '', 'successful overview must not announce or display a redundant server-count lead');
+  assert.strictEqual(status.hidden, true, 'successful overview status lead must be hidden after load');
+  assert(!textTree(viewer.document.getElementById('overviewView')).includes('7 servers'), 'successful overview view must not visibly contain the old server-count lead');
+}
+
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*(?:132px|13[2-9]px|14[0-8]px)\s+minmax\(0,\s*1fr\)/.test(css), 'overview must use a fixed 132-148px compact server column');
@@ -814,7 +898,8 @@ function testMountCentricResponsiveCssContract() {
   assert(/\.overview-mounts\b[\s\S]*gap:\s*[4-6]px/.test(css), 'connected overview strip must keep 4-6px internal gaps');
   assert(/\.overview-mount\b[\s\S]*box-shadow:\s*none/.test(css), 'connected mount segments must not have independent card shadow depth');
   assert(/\.overview-mount\b[\s\S]*border-right:\s*1px solid var\(--separator\)/.test(css), 'connected mount segments must use separators instead of nested-card borders');
-  assert(/\.overview-mount-pct\b[\s\S]*data-pressure/.test(css) || /\.overview-mount\[data-pressure=\"warning\"\]\s+\.overview-mount-pct[\s\S]*color:\s*var\(--warn\)/.test(css), 'warning/critical color must be scoped to percentage fields');
+  assert(/\.overview-mount\[data-pressure="warning"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--warn\)/.test(css), 'warning color must be scoped to the exact warning percentage selector');
+  assert(/\.overview-mount\[data-pressure="critical"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--crit\)/.test(css), 'critical color must be scoped to the exact critical percentage selector');
   assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), 'row grid children must keep min-width:0 in the collapsed layout to prevent clipping');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-mounts\b[\s\S]*grid-template-columns:\s*1fr/.test(css), 'mobile overview must collapse mount cells to one column');
@@ -1297,6 +1382,8 @@ async function main() {
   await testZeroActionableMountsUseExactKoreanEmptyCopy();
   testDetailCapacityResponsiveCssContract();
   testOverviewConnectedStripHierarchyContract();
+  testApprovedCleanThemeTokenContract();
+  testSuccessfulOverviewSuppressesServerCountLiveLead();
   testMountCentricResponsiveCssContract();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
