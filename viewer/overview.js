@@ -47,6 +47,12 @@ function asInt(value, fallback) {
   return Number.isFinite(num) ? Math.round(num) : fallback;
 }
 
+
+function isActionableMountPath(path) {
+  const value = String(path || "").replace(/\/+$/, "") || "/";
+  return value !== "/boot" && !value.startsWith("/boot/");
+}
+
 function normalizeSummary(summary) {
   const state = summary && summary.state && typeof summary.state === "object" ? summary.state : summary || {};
   return {
@@ -142,7 +148,7 @@ function selectedRootByMountId(snapshot) {
 function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
   const mounts = Array.isArray(snapshot && snapshot.mounts) ? snapshot.mounts : [];
   const rootsByMountId = selectedRootByMountId(snapshot);
-  return mounts.map((mount, index) => {
+  return mounts.filter(mount => isActionableMountPath(mount && (mount.path || mount.mountpoint))).map((mount, index) => {
     const mountId = mount && mount.mount_id != null ? String(mount.mount_id) : "";
     const selectedRoot = mountId ? rootsByMountId.get(mountId) || null : null;
     const usedBytes = normalizeBytes(mount && mount.df_used);
@@ -425,11 +431,6 @@ function createStatusBadge(doc, status, extraClass) {
   return badge;
 }
 
-function serverSubtotalText(aggregate) {
-  if (!aggregate || aggregate.totalLabel === "—") return "용량 미확인";
-  return aggregate.utilizationLabel + " · " + aggregate.usedLabel + " / " + aggregate.totalLabel + " · " + aggregate.availableLabel + " free";
-}
-
 function totalAvailableMetaText(row) {
   if (!row || row.totalAvailableLabel === "—") return "여유 미확인";
   if (/미확인$/.test(row.totalAvailableLabel) || /^확인된 여유 /.test(row.totalAvailableLabel)) return row.totalAvailableLabel;
@@ -485,20 +486,17 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   const titleWrap = makeEl(doc, "div", "overview-row-title");
   const name = makeEl(doc, "span", "overview-name", row.displayName);
   const meta = makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트 · " + totalAvailableMetaText(row));
-  const subtotal = makeEl(doc, "span", "overview-server-subtotal", serverSubtotalText(row.aggregate));
   titleWrap.appendChild(name);
   titleWrap.appendChild(meta);
-  titleWrap.appendChild(subtotal);
 
   const statusWrap = makeEl(doc, "div", "overview-row-status");
   const primary = createStatusBadge(doc, row.primaryStatus, "overview-badge-primary");
   const secondary = createStatusBadge(doc, row.secondaryStatus, "overview-badge-secondary");
   if (primary) statusWrap.appendChild(primary);
   if (secondary) statusWrap.appendChild(secondary);
-  if (!primary && !secondary) statusWrap.appendChild(makeEl(doc, "span", "overview-quiet", "정상"));
 
   main.appendChild(titleWrap);
-  main.appendChild(statusWrap);
+  if (statusWrap.children.length) main.appendChild(statusWrap);
   button.appendChild(main);
 
   const mountsWrap = makeEl(doc, "div", "overview-mounts");
@@ -508,18 +506,17 @@ function createOverviewRowElement(doc, row, handlers = {}) {
     for (const mount of row.mounts) {
       const mountEl = makeEl(doc, "div", "overview-mount overview-mount-cell");
       mountEl.setAttribute("data-pressure", mount.pressure);
-      mountEl.appendChild(makeEl(doc, "div", "overview-mount-path", mount.path));
+      const pathEl = makeEl(doc, "div", "overview-mount-path", mount.path);
+      pathEl.title = mount.path;
+      mountEl.appendChild(pathEl);
       mountEl.appendChild(makeEl(doc, "div", "overview-media-label", mount.mediaLabel));
-      const usage = makeEl(doc, "div", "overview-mount-usage");
-      usage.appendChild(makeEl(doc, "span", "overview-mount-used-total", mount.usedTotalText));
-      usage.appendChild(makeEl(doc, "span", "overview-mount-pct", mount.usedPctText));
+      mountEl.appendChild(makeEl(doc, "div", "overview-mount-pct", mount.usedPctText));
       const meter = makeEl(doc, "div", "overview-pressure-bar");
       const fill = makeEl(doc, "span", "overview-pressure-fill");
       fill.setAttribute("data-pressure", mount.pressure);
       fill.style.width = Math.max(4, Math.min(100, mount.usedPct == null ? 0 : mount.usedPct)) + "%";
       meter.appendChild(fill);
       const free = makeEl(doc, "div", "overview-mount-free", mount.freeText + " · " + mount.pressureLabel);
-      mountEl.appendChild(usage);
       mountEl.appendChild(meter);
       mountEl.appendChild(free);
       mountsWrap.appendChild(mountEl);
@@ -553,6 +550,7 @@ const overviewExports = {
   KNOWN_DETAIL_TABS,
   DEFAULT_CAPACITY_THRESHOLDS,
   compactBytes,
+  isActionableMountPath,
   normalizeSummary,
   normalizePercent,
   selectedRootByMountId,
