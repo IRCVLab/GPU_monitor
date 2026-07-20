@@ -122,6 +122,18 @@ for mount in payload["mounts"]:
 PYEOF
 pass "tree bytes equal retained child bytes plus other_bytes"
 
+$PY - "$OUT" "$TREE" <<'PYEOF' || fail "user by_mount keys do not match the requested scan root"
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    payload = json.load(fh)
+expected = sys.argv[2]
+keys = {mount for user in payload.get("users", []) for mount in user.get("by_mount", {})}
+if keys != {expected}:
+    raise SystemExit(f"expected by_mount {{{expected!r}}}, got {sorted(keys)!r}")
+PYEOF
+pass "user by_mount keys reference the requested scan root"
+
 # Pull figures out with python for robust assertions.
 read -r SCAN_BYTES BLOCKED_HAS_NOACCESS NODE_NAMES <<EOF
 $($PY - "$OUT" "$TREE" <<'PYEOF'
