@@ -486,7 +486,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   const main = makeEl(doc, "div", "overview-row-main");
   const titleWrap = makeEl(doc, "div", "overview-row-title");
   const name = makeEl(doc, "span", "overview-name", row.displayName);
-  const meta = makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트 · " + totalAvailableMetaText(row));
+  const meta = makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트");
   titleWrap.appendChild(name);
   titleWrap.appendChild(meta);
 
@@ -517,7 +517,8 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       fill.setAttribute("data-pressure", mount.pressure);
       fill.style.width = Math.max(4, Math.min(100, mount.usedPct == null ? 0 : mount.usedPct)) + "%";
       meter.appendChild(fill);
-      const free = makeEl(doc, "div", "overview-mount-free", mount.freeText + " · " + mount.pressureLabel);
+      const freeText = mount.pressure === "normal" ? mount.freeText : mount.freeText + " · " + mount.pressureLabel;
+      const free = makeEl(doc, "div", "overview-mount-free", freeText);
       mountEl.appendChild(meter);
       mountEl.appendChild(free);
       mountsWrap.appendChild(mountEl);
