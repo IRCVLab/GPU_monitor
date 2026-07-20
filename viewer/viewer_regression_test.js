@@ -644,6 +644,21 @@ async function testDetailCapacityUsesCompactRowsAndFiltersBootMounts() {
   assert.deepStrictEqual(state.data.mounts.map(m => m.path), ['/', '/data'], 'detail DATA.mounts must be filtered before downstream mount selectors derive paths');
 }
 
+
+function testDetailCapacityResponsiveCssContract() {
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  assert(/\.detail-capacity-row\b[\s\S]*min-width:\s*0/.test(css), 'detail capacity rows must allow grid children to shrink without forcing horizontal overflow');
+  assert(/\.cap-main\b[\s\S]*flex-wrap:\s*wrap/.test(css), 'detail capacity path/filesystem/media group must wrap instead of clipping on narrow screens');
+  assert(/\.cap-bar\b[\s\S]*min-width:\s*[1-9][0-9]*px/.test(css), 'detail utilization bar must keep a visible minimum width when rows collapse');
+  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/.test(css), '760px detail capacity rows must switch to a shrinkable two-column layout');
+  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.detail-capacity-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), '760px detail capacity row children must explicitly set min-width:0');
+  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.cap-bar\b[\s\S]*grid-column:\s*1\s*\/\s*-1/.test(css), '760px detail utilization bar must span the full row to remain visible');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.caps\.detail-capacity-rail\b[\s\S]*padding:\s*10px\s+14px/.test(css), '390px detail capacity rail must reduce side padding to avoid horizontal overflow');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-columns:\s*1fr/.test(css), '390px detail capacity rows must stack into one column');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.cap-pct\b[\s\S]*text-align:\s*left/.test(css), 'stacked detail percentage must remain readable as normal text');
+  assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.cap-fill\b[\s\S]*transition:\s*none\s*!important/.test(css), 'detail capacity fill animation must be explicitly disabled for reduced motion');
+}
+
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*minmax\([^)]*140px[^)]*\)\s+minmax\(0,\s*1fr\)/.test(css), 'compact overview must use a narrow server column');
@@ -1100,6 +1115,7 @@ async function main() {
   testServerHeaderCapacityMetaUsesAggregateSemantics();
   testUnknownMountCapacityDomStaysNeutralAndAccessible();
   await testDetailCapacityUsesCompactRowsAndFiltersBootMounts();
+  testDetailCapacityResponsiveCssContract();
   testMountCentricResponsiveCssContract();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
