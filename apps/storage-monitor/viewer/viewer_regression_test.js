@@ -246,8 +246,8 @@ function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
     {
       server_id: 'beta-2',
       mounts: [
-        { path: '/data', df_use_pct: 95, df_avail: 800 * 1024 ** 3 },
-        { path: '/archive', df_use_pct: 60, df_avail: 2 * 1024 ** 4 },
+        { path: '/data', df_total: 1000 * 1024 ** 3, df_used: 950 * 1024 ** 3, df_use_pct: 95, df_avail: 800 * 1024 ** 3 },
+        { path: '/archive', df_total: 5 * 1024 ** 4, df_used: 3 * 1024 ** 4, df_use_pct: 60, df_avail: 2 * 1024 ** 4 },
       ],
     },
     viewer.DEFAULT_CAPACITY_THRESHOLDS,
@@ -267,7 +267,7 @@ function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
     },
     {
       server_id: 'alpha-1',
-      mounts: [{ path: '/scratch', df_use_pct: 81, df_avail: 700 * 1024 ** 3 }],
+      mounts: [{ path: '/scratch', df_total: 1000 * 1024 ** 3, df_used: 810 * 1024 ** 3, df_use_pct: 81, df_avail: 700 * 1024 ** 3 }],
     },
     viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
@@ -477,7 +477,11 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
 
   assert.deepStrictEqual(list.children.map(item => item.children[0].dataset.serverId), ['hinton', 'atlas'], 'rendering must not sort by order, name, capacity, or status');
   const hintonButton = list.children[0].children[0];
+  assert.strictEqual(hintonButton.getAttribute('aria-label'), undefined, 'row button must not mask descendant subtotal and mount text with a short aria-label');
   assert(findByClass(hintonButton, 'overview-server-subtotal').length === 1, 'each server header must expose one compact subtotal');
+  const accessibleRowText = textTree(hintonButton);
+  assert(accessibleRowText.includes('hinton'), 'row descendant text must include the visible server label');
+  assert(accessibleRowText.includes('73%') && accessibleRowText.includes('2.15 KB / 2.93 KB'), 'row descendant text must include the server subtotal for assistive technologies');
   const cells = findByClass(hintonButton, 'overview-mount-cell');
   assert.strictEqual(cells.length, 2, 'mount-centric overview must render one cell per mount');
   assert.deepStrictEqual(cells.map(cell => findByClass(cell, 'overview-mount-path')[0].textContent), ['/home', '/data'], 'mount cells must preserve snapshot mount order exactly');
@@ -495,14 +499,59 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert(textTree(findByClass(first, 'overview-mount-usage')[0]).includes('40%'), 'utilization percent must be DOM-adjacent to used/total text');
   assert(textTree(findByClass(first, 'overview-mount-free')[0]).includes('600 B free'), 'free capacity text must be present after the bar');
   assert(/[가-힣]/.test(textTree(findByClass(first, 'overview-mount-free')[0])), 'pressure/health must include text, not color alone');
+  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('400 B / 1000 B') && accessibleRowText.includes('600 B free'), 'mount path, media, usage, and free information must remain accessible as descendant text');
 
   hintonButton.onclick();
   assert.deepStrictEqual(opened, ['hinton'], 'click navigation to server detail must be preserved');
 }
 
+function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
+  const viewer = loadViewer();
+  const row = viewer.buildOverviewServer(
+    {
+      id: 'unknown-1',
+      display_name: 'unknown',
+      mount_count: 2,
+      snapshot_availability: 'available',
+      freshness: 'fresh',
+      latest_pull_status: 'succeeded',
+      latest_scan_result: 'complete',
+      configuration_sync: 'in_sync',
+      active_job: null,
+    },
+    {
+      server_id: 'unknown-1',
+      selected_roots: [
+        { mount_id: 'missing-free', capacity_id: 'dev-8-1', storage_media: 'unknown' },
+        { mount_id: 'invalid-cap', capacity_id: 'dev-8-16', storage_media: 'mixed' },
+      ],
+      mounts: [
+        { mount_id: 'missing-free', path: '/missing-free', df_total: 2048, df_used: 1024, df_use_pct: 95 },
+        { mount_id: 'invalid-cap', path: '/invalid-cap', df_total: '4096', df_used: -1, df_avail: Infinity, df_use_pct: 80 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  assert.strictEqual(row.primaryStatus.code, 'normal', 'unknown-only mount pressure must not promote the server row to warning or critical');
+  const list = viewer.document.getElementById('overviewList');
+  viewer.renderOverviewList(list, [row], { onOpenServer() {} });
+  const button = list.children[0].children[0];
+  assert.strictEqual(button.getAttribute('data-primary-status'), 'normal', 'rendered primary status must remain normal for unknown-only pressure');
+  const text = textTree(button);
+  assert(text.includes('/missing-free') && text.includes('Unknown'), 'unknown media/path must remain visible and accessible');
+  assert(text.includes('여유 미확인'), 'unknown free capacity must render honest Korean copy');
+  assert(text.includes('— / —'), 'invalid used/total capacity must render unknown dashes');
+  assert(!text.includes('0 B free'), 'unknown free capacity must never render as 0 B free');
+  assert.strictEqual(button.getAttribute('aria-label'), undefined, 'unknown mount details must not be hidden behind a row aria-label');
+}
+
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(/\.overview-mounts\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), 'desktop overview must cap server mount cells at three columns');
+  assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');
+  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-server-subtotal\b[\s\S]*white-space:\s*normal/.test(css), 'medium-width layout must allow the server subtotal to wrap at or before row collapse');
+  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-server-subtotal\b[\s\S]*overflow-wrap:\s*(anywhere|break-word)/.test(css), 'medium-width subtotal wrapping must be explicit and maintainable');
+  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), 'row grid children must keep min-width:0 in the collapsed layout to prevent clipping');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-mounts\b[\s\S]*grid-template-columns:\s*1fr/.test(css), 'mobile overview must collapse mount cells to one column');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*main\b[\s\S]*padding:\s*16px/.test(css), '390px mobile layouts must reduce main padding to avoid horizontal overflow');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css), 'overview styling must continue to respect reduced motion');
@@ -592,12 +641,12 @@ async function testOlderSameServerSuccessCannotOverrideNewerSuccess() {
   await withMutedConsole(async () => {
     viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
     viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
-    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-new', mounts: [{ path: '/data', df_use_pct: 91, df_avail: 700 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-new', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 910 * 1024 ** 3, df_use_pct: 91, df_avail: 700 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
     await flushPromises();
     assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-new', 'newer alpha request should win the detail data');
     assert(overviewRowText(viewer, 'alpha-1').includes('91%'), 'overview should reflect the newer alpha snapshot');
 
-    older.resolve({ server_id: 'alpha-1', hostname: 'alpha-old', mounts: [{ path: '/data', df_use_pct: 11, df_avail: 900 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    older.resolve({ server_id: 'alpha-1', hostname: 'alpha-old', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 110 * 1024 ** 3, df_use_pct: 11, df_avail: 900 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
     await flushPromises();
   });
 
@@ -631,7 +680,7 @@ async function testOlderSameServerFailureCannotOverrideNewerSuccess() {
   await withMutedConsole(async () => {
     viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
     viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
-    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-fresh', mounts: [{ path: '/data', df_use_pct: 77, df_avail: 800 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-fresh', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 770 * 1024 ** 3, df_use_pct: 77, df_avail: 800 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
     await flushPromises();
     assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-fresh');
     older.reject(new Error('stale alpha failed'));
@@ -946,6 +995,7 @@ async function main() {
   await testBootstrapDetectionIsExplicitAndSequential();
   testSampleMarkerAndOverviewAggregateAreDataModeDriven();
   testMountCentricOverviewDomFieldsAndStableNavigation();
+  testUnknownMountCapacityDomStaysNeutralAndAccessible();
   testMountCentricResponsiveCssContract();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
