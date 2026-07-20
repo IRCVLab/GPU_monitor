@@ -49,6 +49,16 @@ not leak machine-local private paths beyond the displayed scan roots.
 | `error_count` | number | Non-negative bounded count of scanner errors for this selected root. |
 | `error_code` | string or null | Representative scanner error code, or `null` when there is no root-level error code. |
 
+Optional storage identity/media fields may appear on any selected root. They are
+additive v1 fields; absence means an older producer did not publish media
+metadata.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `capacity_id` | string | Optional stable capacity identity, format `dev-<major>-<minor>`, matching `^dev-(0|[1-9][0-9]{0,9})-(0|[1-9][0-9]{0,9})$`, max 31 characters, with `dev-0-0` reserved/invalid. This is derived from major/minor only and does not expose `/dev`, sysfs, or GPU paths. |
+| `storage_media` | string | Optional media class: exactly `ssd`, `hdd`, `mixed`, or `unknown`. |
+| `storage_media_confidence` | string | Optional confidence: exactly `resolved` or `unresolved`. `unknown` pairs with `unresolved`; `ssd`, `hdd`, and `mixed` pair with `resolved`. |
+
 ## Mount entry
 
 Each `mounts[]` entry contains:
@@ -59,7 +69,15 @@ Each `mounts[]` entry contains:
 - `fstype`
 - `df_total`, `df_used`, `df_avail`, `df_use_pct`
 - `scanned_bytes`, `scanned_files`, `scanned_dirs`, `errors`
+- optional `capacity_id`, `storage_media`, and `storage_media_confidence`
 - `tree`: recursive node used by the treemap
+
+For `complete` and `partial` selected roots, the linked `mounts[]` entry and
+the `selected_roots[]` entry must either both omit the optional storage
+identity/media fields or contain exactly the same values. `failed` and `skipped`
+roots do not have linked mount entries; if they include optional media fields,
+those fields validate independently under the same enum, pairing, length, and
+capacity-id rules.
 
 A tree node contains `name`, `kind`, `bytes`, `files`, `uid`, `mtime`, optional
 `children`, and optional `other_bytes` for children pruned below the configured
@@ -101,7 +119,12 @@ in sync.
 - Missing optional arrays should be treated as empty arrays.
 - New v1 fields are additive; older v1 viewers may ignore `server_id`,
   `scan_finished_unix`, `scan_generation`, `selected_roots`, `mount_id`,
-  `scan_root`, `kind`, `blocked_count`, `error_count`, and `error_code`.
+  `scan_root`, `kind`, `blocked_count`, `error_count`, `error_code`,
+  `capacity_id`, `storage_media`, and `storage_media_confidence`.
+- Older v1 snapshots without storage identity/media fields remain valid. When
+  present, the fields contain only bounded enums and major/minor-derived
+  identity; they must not expose kernel device paths, sysfs paths, GPU paths, or
+  other host-local pathnames.
 - Every `mounts[]` entry must reference a selected root, but `failed` and
   `skipped` selected roots are valid without mount entries.
 - A non-root scan is valid but may undercount unreadable directories; show

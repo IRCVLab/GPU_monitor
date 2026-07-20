@@ -384,3 +384,129 @@ class SnapshotQualityReviewTests(unittest.TestCase):
     def test_status_scan_finished_unix_rejects_bool(self):
         p = self.valid_payload()
         self.assert_invalid(p, "scan_finished_unix", status_mutator=lambda s: s.update({"scan_finished_unix": True}))
+
+
+class SnapshotMediaFieldTests(unittest.TestCase):
+    DIGEST = "a" * 64
+
+    def desired(self):
+        return snapshot.DesiredServer(server_id="alpha-1", config_digest=self.DIGEST)
+
+    def valid_payload(self):
+        p = base_payload()
+        p["config_digest"] = self.DIGEST
+        return p
+
+    def status_data(self, payload, *, status_value="complete"):
+        status, data = status_for(payload, config_digest=self.DIGEST)
+        status["status"] = status_value
+        return status, data
+
+    def assert_valid(self, payload, *, status_value="complete"):
+        status, data = self.status_data(payload, status_value=status_value)
+        return snapshot.validate_download(status, data, self.desired())
+
+    def assert_invalid(self, payload, pattern, *, status_value="complete"):
+        status, data = self.status_data(payload, status_value=status_value)
+        with self.assertRaisesRegex(ValueError, pattern):
+            snapshot.validate_download(status, data, self.desired())
+
+    def add_media(self, record, *, capacity_id="dev-8-1", media="ssd", confidence="resolved"):
+        if capacity_id is not None:
+            record["capacity_id"] = capacity_id
+        record["storage_media"] = media
+        record["storage_media_confidence"] = confidence
+
+    def test_old_snapshots_without_media_fields_remain_valid(self):
+        result = self.assert_valid(self.valid_payload())
+        self.assertNotIn("storage_media", result.payload["selected_roots"][0])
+        self.assertNotIn("capacity_id", result.payload["mounts"][0])
+
+    def test_accepts_valid_additive_media_fields_when_root_and_mount_match(self):
+        p = self.valid_payload()
+        self.add_media(p["selected_roots"][0], capacity_id="dev-8-1", media="mixed", confidence="resolved")
+        self.add_media(p["mounts"][0], capacity_id="dev-8-1", media="mixed", confidence="resolved")
+        result = self.assert_valid(p)
+        self.assertEqual(result.payload["mounts"][0]["storage_media"], "mixed")
+
+    def test_capacity_id_exact_regex_length_and_empty_rules(self):
+        for value in ("dev-8-1", "dev-0-1", "dev-8-0", "dev-1234567890-1", "dev-1-1234567890"):
+            with self.subTest(value=value):
+                p = self.valid_payload()
+                self.add_media(p["selected_roots"][0], capacity_id=value)
+                self.add_media(p["mounts"][0], capacity_id=value)
+                self.assert_valid(p)
+        for value in ("dev-0-0", "dev-01-1", "dev-1-01", "dev-12345678901-1", "dev-1-12345678901", "", None):
+            with self.subTest(value=value):
+                p = self.valid_payload()
+                self.add_media(p["selected_roots"][0], capacity_id="dev-8-1")
+                self.add_media(p["mounts"][0], capacity_id="dev-8-1")
+                p["selected_roots"][0]["capacity_id"] = value
+                p["mounts"][0]["capacity_id"] = value
+                self.assert_invalid(p, "capacity_id")
+
+    def test_media_and_confidence_enums_and_pairing_are_exact(self):
+        for media in ("ssd", "hdd", "mixed"):
+            with self.subTest(media=media):
+                p = self.valid_payload()
+                self.add_media(p["selected_roots"][0], media=media, confidence="resolved")
+                self.add_media(p["mounts"][0], media=media, confidence="resolved")
+                self.assert_valid(p)
+        p = self.valid_payload()
+        self.add_media(p["selected_roots"][0], capacity_id=None, media="unknown", confidence="unresolved")
+        self.add_media(p["mounts"][0], capacity_id=None, media="unknown", confidence="unresolved")
+        self.assert_valid(p)
+
+        for media, confidence, pattern in (
+            ("nvme", "resolved", "storage_media"),
+            ("ssd", "guessed", "storage_media_confidence"),
+            ("unknown", "resolved", "unknown.*unresolved"),
+            ("ssd", "unresolved", "resolved"),
+        ):
+            with self.subTest(media=media, confidence=confidence):
+                p = self.valid_payload()
+                self.add_media(p["selected_roots"][0], media=media, confidence=confidence)
+                self.add_media(p["mounts"][0], media=media, confidence=confidence)
+                self.assert_invalid(p, pattern)
+
+    def test_complete_and_partial_root_and_mount_media_fields_are_all_omitted_or_exactly_equal(self):
+        p = self.valid_payload()
+        self.add_media(p["selected_roots"][0], capacity_id="dev-8-1", media="hdd", confidence="resolved")
+        self.assert_invalid(p, "media fields")
+
+        for key, value, pattern in (("capacity_id", "dev-8-2", "capacity_id"), ("storage_media", "ssd", "storage_media"), ("storage_media_confidence", "unresolved", "resolved")):
+            p = self.valid_payload()
+            self.add_media(p["selected_roots"][0], capacity_id="dev-8-1", media="hdd", confidence="resolved")
+            self.add_media(p["mounts"][0], capacity_id="dev-8-1", media="hdd", confidence="resolved")
+            p["mounts"][0][key] = value
+            with self.subTest(key=key):
+                self.assert_invalid(p, pattern)
+
+    def test_failed_and_skipped_roots_validate_optional_media_independently_without_mounts(self):
+        p = self.valid_payload()
+        failed = {
+            "mount_id": "failed",
+            "major_minor": "8:2",
+            "mount_source": "/dev/storage-viz/failed",
+            "mount_root": "/",
+            "mountpoint": "/failed",
+            "scan_root": "/failed",
+            "fstype": "xfs",
+            "status": "failed",
+            "scanned_bytes": 0,
+            "scanned_files": 0,
+            "scanned_dirs": 0,
+            "blocked_count": 0,
+            "error_count": 1,
+            "error_code": "EIO",
+        }
+        skipped = dict(failed, mount_id="skipped", scan_root="/skipped", mountpoint="/skipped", status="skipped", error_count=0, error_code="POLICY")
+        self.add_media(failed, capacity_id="dev-8-2", media="ssd", confidence="resolved")
+        self.add_media(skipped, capacity_id=None, media="unknown", confidence="unresolved")
+        p["selected_roots"].extend([failed, skipped])
+        self.assert_valid(p, status_value="partial")
+
+        p = self.valid_payload()
+        bad_failed = dict(failed, storage_media="ssd", storage_media_confidence="unresolved")
+        p["selected_roots"].append(bad_failed)
+        self.assert_invalid(p, "resolved", status_value="partial")

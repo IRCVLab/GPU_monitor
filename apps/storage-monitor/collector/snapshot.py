@@ -27,6 +27,10 @@ KINDS = frozenset({"directory", "file", "symlink", "other"})
 ROOT_STATUSES = frozenset({"complete", "partial", "failed", "skipped"})
 TREE_STATUSES = frozenset({"complete", "partial"})
 STATUS_VALUES = frozenset({"complete", "partial"})
+CAPACITY_ID_RE = re.compile(r"^dev-(0|[1-9][0-9]{0,9})-(0|[1-9][0-9]{0,9})$")
+MEDIA_VALUES = frozenset({"ssd", "hdd", "mixed", "unknown"})
+MEDIA_CONFIDENCE_VALUES = frozenset({"resolved", "unresolved"})
+MEDIA_KEYS = ("capacity_id", "storage_media", "storage_media_confidence")
 
 
 @dataclass(frozen=True)
@@ -207,6 +211,7 @@ def _validate_root(root: Any, budget: _Budget) -> None:
     error_code = root.get("error_code")
     if error_code is not None:
         _bounded_string(error_code, "error_code", 127, budget)
+    _validate_media_fields(root, "selected root", budget)
 
 
 def _validate_mount_shape(mount: Any, budget: _Budget) -> None:
@@ -225,6 +230,7 @@ def _validate_mount_shape(mount: Any, budget: _Budget) -> None:
     _validate_tree(tree, budget, depth=0)
     if tree["bytes"] != mount["scanned_bytes"] or tree["files"] != mount["scanned_files"]:
         raise ValueError("mount tree totals must match scanned totals")
+    _validate_media_fields(mount, "mount", budget)
 
 
 def _validate_root_mount_link(root: Mapping[str, Any], mount: Mapping[str, Any]) -> None:
@@ -239,6 +245,33 @@ def _validate_root_mount_link(root: Mapping[str, Any], mount: Mapping[str, Any])
             raise ValueError(f"selected root {key} must equal linked mount")
     if root["error_count"] != mount["errors"]:
         raise ValueError("selected root error_count must equal mount errors")
+    for key in MEDIA_KEYS:
+        if (key in root) != (key in mount):
+            raise ValueError("root and linked mount media fields must both be omitted or present")
+        if key in root and root[key] != mount[key]:
+            raise ValueError(f"root and linked mount {key} must match")
+
+
+def _validate_media_fields(record: Mapping[str, Any], label: str, budget: _Budget) -> None:
+    present = {key for key in MEDIA_KEYS if key in record}
+    if not present:
+        return
+    if "storage_media" not in present or "storage_media_confidence" not in present:
+        raise ValueError(f"{label} media fields require storage_media and storage_media_confidence")
+    if "capacity_id" in present:
+        capacity_id = _bounded_string(record.get("capacity_id"), f"{label}.capacity_id", 31, budget)
+        if not CAPACITY_ID_RE.match(capacity_id) or capacity_id == "dev-0-0":
+            raise ValueError(f"{label}.capacity_id must match dev-major-minor")
+    media = _bounded_string(record.get("storage_media"), f"{label}.storage_media", 7, budget)
+    confidence = _bounded_string(record.get("storage_media_confidence"), f"{label}.storage_media_confidence", 10, budget)
+    if media not in MEDIA_VALUES:
+        raise ValueError(f"{label}.storage_media has invalid value")
+    if confidence not in MEDIA_CONFIDENCE_VALUES:
+        raise ValueError(f"{label}.storage_media_confidence has invalid value")
+    if media == "unknown" and confidence != "unresolved":
+        raise ValueError(f"{label} unknown storage_media must pair with unresolved confidence")
+    if media in {"ssd", "hdd", "mixed"} and confidence != "resolved":
+        raise ValueError(f"{label} concrete storage_media must pair with resolved confidence")
 
 
 def _validate_tree(node: Any, budget: _Budget, *, depth: int) -> None:

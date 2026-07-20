@@ -23,6 +23,7 @@ import tempfile
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from agent.block_media import BlockMediaResolver, MediaResult
 from agent import mount_policy
 
 SCHEMA_VERSION = 1
@@ -61,6 +62,9 @@ _FORBIDDEN_KEYS = frozenset({
 })
 _SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_CAPACITY_ID_RE = re.compile(r"^dev-(0|[1-9][0-9]{0,9})-(0|[1-9][0-9]{0,9})$")
+_MEDIA_VALUES = frozenset({"ssd", "hdd", "mixed", "unknown"})
+_MEDIA_CONFIDENCE_VALUES = frozenset({"resolved", "unresolved"})
 
 
 @dataclass(frozen=True)
@@ -164,6 +168,7 @@ def run_once(
     *,
     mountinfo_reader: Callable[[], str] = mount_policy.read_mountinfo,
     scanner_runner: Callable[..., Any] = subprocess.run,
+    media_resolver: Optional[Any] = None,
     clock: Callable[[], float] = time.time,
 ) -> RunResult:
     cfg = load_config(config_path)
@@ -191,6 +196,7 @@ def run_once(
             return RunResult("failed", error=f"mountinfo: {exc}")
         if not selected.selected:
             return RunResult("failed", error="no safe roots selected")
+        media_by_major_minor = _resolve_media_by_major_minor(selected, media_resolver if media_resolver is not None else BlockMediaResolver())
 
         argv = _scanner_argv(cfg, raw_path, [root.mountpoint for root in selected.selected])
         try:
@@ -205,7 +211,7 @@ def run_once(
         try:
             raw = json.loads(raw_path.read_text(encoding="utf-8"))
             _validate_raw_payload(raw)
-            payload, snapshot_status = _enrich_payload(raw, selected)
+            payload, snapshot_status = _enrich_payload(raw, selected, media_by_major_minor)
             started_unix = raw["scan_started_unix"]
             finished_unix = int(clock())
             scan_duration_sec = finished_unix - started_unix
@@ -403,7 +409,58 @@ def _require_abs_path(value: Any, label: str) -> None:
         raise ValueError(f"{label} must be an absolute path")
 
 
-def _enrich_payload(raw: Mapping[str, Any], selection: mount_policy.SelectionResult) -> Tuple[Dict[str, Any], str]:
+def _resolve_media_by_major_minor(selection: mount_policy.SelectionResult, media_resolver: Any) -> Dict[str, MediaResult]:
+    resolved: Dict[str, MediaResult] = {}
+    ordered: List[str] = []
+    for root in selection.selected:
+        ordered.append(root.entry.major_minor)
+    for skipped in selection.skipped:
+        if skipped.entry is not None:
+            ordered.append(skipped.entry.major_minor)
+    for major_minor in ordered:
+        if major_minor in resolved:
+            continue
+        try:
+            result = media_resolver.resolve(major_minor)
+        except Exception:
+            result = _unknown_media()
+        resolved[major_minor] = _safe_media_result(result)
+    return resolved
+
+
+def _unknown_media() -> MediaResult:
+    return MediaResult(None, "unknown", "unresolved")
+
+
+def _safe_media_result(result: Any) -> MediaResult:
+    capacity_id = getattr(result, "capacity_id", None)
+    media = getattr(result, "media", "unknown")
+    confidence = getattr(result, "confidence", "unresolved")
+    if capacity_id is not None and (
+        not isinstance(capacity_id, str)
+        or len(capacity_id) > 31
+        or not _CAPACITY_ID_RE.match(capacity_id)
+        or capacity_id == "dev-0-0"
+    ):
+        capacity_id = None
+    if media not in _MEDIA_VALUES or confidence not in _MEDIA_CONFIDENCE_VALUES:
+        return _unknown_media()
+    if (media == "unknown") != (confidence == "unresolved"):
+        return _unknown_media()
+    return MediaResult(capacity_id, media, confidence)
+
+
+def _media_fields(result: MediaResult) -> Dict[str, Any]:
+    fields = {
+        "storage_media": result.media,
+        "storage_media_confidence": result.confidence,
+    }
+    if result.capacity_id is not None:
+        fields["capacity_id"] = result.capacity_id
+    return fields
+
+
+def _enrich_payload(raw: Mapping[str, Any], selection: mount_policy.SelectionResult, media_by_major_minor: Mapping[str, MediaResult]) -> Tuple[Dict[str, Any], str]:
     mounts = raw["mounts"]
     roots = selection.selected
     roots_by_path = {root.mountpoint: root for root in roots}
@@ -419,6 +476,7 @@ def _enrich_payload(raw: Mapping[str, Any], selection: mount_policy.SelectionRes
         linked["mount_id"] = str(root.entry.mount_id)
         linked["scan_root"] = root.mountpoint
         linked["fstype"] = root.entry.fstype
+        linked.update(_media_fields(media_by_major_minor.get(root.entry.major_minor, _unknown_media())))
         _ensure_tree_kind(linked.get("tree"))
         enriched_mounts.append(linked)
 
@@ -429,7 +487,7 @@ def _enrich_payload(raw: Mapping[str, Any], selection: mount_policy.SelectionRes
     for root in roots:
         mount = next((m for m in enriched_mounts if m.get("scan_root") == root.mountpoint), None)
         if mount is None:
-            selected_roots.append(_root_record(root, "failed", "MISSING_RAW_MOUNT"))
+            selected_roots.append(_root_record(root, "failed", "MISSING_RAW_MOUNT", media=media_by_major_minor.get(root.entry.major_minor)))
             any_failed = True
             continue
         errors = _nonnegative_int(mount.get("errors", 0), "errors")
@@ -443,6 +501,7 @@ def _enrich_payload(raw: Mapping[str, Any], selection: mount_policy.SelectionRes
             root,
             status,
             "EACCES" if errors else None,
+            media=media_by_major_minor.get(root.entry.major_minor),
             scanned_bytes=_nonnegative_int(mount.get("scanned_bytes", 0), "scanned_bytes"),
             scanned_files=_nonnegative_int(mount.get("scanned_files", 0), "scanned_files"),
             scanned_dirs=_nonnegative_int(mount.get("scanned_dirs", 0), "scanned_dirs"),
@@ -451,7 +510,7 @@ def _enrich_payload(raw: Mapping[str, Any], selection: mount_policy.SelectionRes
         ))
 
     for skipped in selection.skipped:
-        selected_roots.append(_skipped_record(skipped))
+        selected_roots.append(_skipped_record(skipped, media_by_major_minor.get(skipped.entry.major_minor) if skipped.entry is not None else None))
 
     if complete_count < 1:
         raise ValueError("at least one selected root must complete")
@@ -515,9 +574,10 @@ def _root_record(
     scanned_dirs: int = 0,
     blocked_count: int = 0,
     error_count: int = 0,
+    media: Optional[MediaResult] = None,
 ) -> Dict[str, Any]:
     entry = root.entry
-    return {
+    record = {
         "mount_id": str(entry.mount_id),
         "major_minor": entry.major_minor,
         "mount_source": entry.source,
@@ -533,13 +593,15 @@ def _root_record(
         "error_count": error_count,
         "error_code": error_code,
     }
+    record.update(_media_fields(media or _unknown_media()))
+    return record
 
 
-def _skipped_record(skipped: mount_policy.SkippedMount) -> Dict[str, Any]:
+def _skipped_record(skipped: mount_policy.SkippedMount, media: Optional[MediaResult] = None) -> Dict[str, Any]:
     entry = skipped.entry
     reason = _bounded_reason(skipped.reason)
     if entry is not None:
-        return {
+        record = {
             "mount_id": _skipped_mount_id(skipped),
             "major_minor": entry.major_minor,
             "mount_source": entry.source,
@@ -555,7 +617,9 @@ def _skipped_record(skipped: mount_policy.SkippedMount) -> Dict[str, Any]:
             "error_count": 0,
             "error_code": reason,
         }
-    return {
+        record.update(_media_fields(media or _unknown_media()))
+        return record
+    record = {
         "mount_id": str(skipped.mount_id),
         "major_minor": "0:0",
         "mount_source": "unknown",
@@ -571,6 +635,8 @@ def _skipped_record(skipped: mount_policy.SkippedMount) -> Dict[str, Any]:
         "error_count": 0,
         "error_code": reason,
     }
+    record.update(_media_fields(media or _unknown_media()))
+    return record
 
 
 def _skipped_mount_id(skipped: mount_policy.SkippedMount) -> str:
