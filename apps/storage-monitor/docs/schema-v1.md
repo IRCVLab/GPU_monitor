@@ -96,17 +96,24 @@ not execute deletion commands.
 
 ## Synthetic fixture stability
 
-`data/gen_sample.py` writes `data/hinton.sample.json` with deterministic,
-privacy-safe multiserver values:
+`data/gen_sample.py` writes four deterministic, privacy-safe multiserver
+fixtures in manifest order: `hinton`, `atlas`, `orion`, and `zeus`.
+
+All generated fixtures use:
+
+- `scan_duration_sec`: `42`
+- deterministic `scan_started_unix` / `scan_finished_unix` values
+- `scan_generation` formatted as `<server_id>-<scan_started_unix>-v1`
+- synthetic mount sources under `/dev/storage-viz/...`
+
+For example, the `hinton` fixture includes:
 
 - `server_id`: `hinton`
 - `scan_started_unix`: `1719200000`
 - `scan_finished_unix`: `1719200042`
-- `scan_duration_sec`: `42`
 - `scan_generation`: `hinton-1719200000-v1`
 - four tree-producing selected roots: `/home`, `/data`, `/data1`, and `/data3`
 - the root filesystem entry has `mountpoint` `/` and `scan_root`/mount `path` `/home`
-- synthetic mount sources under `/dev/storage-viz/...`
 
 Do not hand-edit generated sample JSON. Update `data/gen_sample.py`, run it, and
 then run `data/test_fixtures.py` so the tracked fixture and schema invariants stay

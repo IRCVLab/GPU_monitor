@@ -505,6 +505,71 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert.deepStrictEqual(opened, ['hinton'], 'click navigation to server detail must be preserved');
 }
 
+function testServerHeaderCapacityMetaUsesAggregateSemantics() {
+  const viewer = loadViewer();
+  const list = viewer.document.getElementById('overviewList');
+  const exact = viewer.buildOverviewServer(
+    { id: 'alpha-1', display_name: 'alpha', mount_count: 2 },
+    {
+      server_id: 'alpha-1',
+      selected_roots: [
+        { mount_id: 'data', capacity_id: 'dev-8-16', storage_media: 'hdd' },
+        { mount_id: 'data-bind', capacity_id: 'dev-8-16', storage_media: 'hdd' },
+      ],
+      mounts: [
+        { mount_id: 'data', path: '/data', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+        { mount_id: 'data-bind', path: '/data-bind', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  assert.strictEqual(exact.aggregate.availableLabel, '500 B', 'aggregate must dedupe available capacity for duplicate canonical identities');
+  viewer.renderOverviewList(list, [exact], { onOpenServer() {} });
+  let button = list.children[0].children[0];
+  let metaText = textTree(findByClass(button, 'overview-meta')[0]);
+  let subtotalText = textTree(findByClass(button, 'overview-server-subtotal')[0]);
+  assert(metaText.includes('500 B free'), 'server header meta must show the deduped aggregate available value once');
+  assert(!metaText.includes('1000 B'), 'server header meta must not sum duplicate mount free bytes');
+  assert(subtotalText.includes('500 B free'), 'server subtotal must show the deduped aggregate available value once');
+  assert(!subtotalText.includes('1000 B'), 'server subtotal must not sum duplicate mount free bytes');
+
+  const partial = viewer.buildOverviewServer(
+    { id: 'partial-1', display_name: 'partial', mount_count: 2 },
+    {
+      server_id: 'partial-1',
+      selected_roots: [
+        { mount_id: 'known', capacity_id: 'dev-8-16', storage_media: 'ssd' },
+        { mount_id: 'unknown', storage_media: 'unknown' },
+      ],
+      mounts: [
+        { mount_id: 'known', path: '/known', df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50 },
+        { mount_id: 'unknown', path: '/unknown', df_total: 4096, df_used: 1024, df_avail: 3072, df_use_pct: 25 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  viewer.renderOverviewList(list, [partial], { onOpenServer() {} });
+  button = list.children[0].children[0];
+  metaText = textTree(findByClass(button, 'overview-meta')[0]);
+  assert(metaText.includes('확인된 여유 ≥ 1.00 KB'), 'partial server header meta must preserve aggregate lower-bound language');
+  assert(!metaText.includes('4.00 KB free'), 'partial server header meta must not imply full free capacity from excluded mounts');
+
+  const unknown = viewer.buildOverviewServer(
+    { id: 'unknown-1', display_name: 'unknown', mount_count: 1 },
+    {
+      server_id: 'unknown-1',
+      selected_roots: [{ mount_id: 'mystery', storage_media: 'unknown' }],
+      mounts: [{ mount_id: 'mystery', path: '/mystery', df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50 }],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  viewer.renderOverviewList(list, [unknown], { onOpenServer() {} });
+  button = list.children[0].children[0];
+  metaText = textTree(findByClass(button, 'overview-meta')[0]);
+  assert(metaText.includes('여유 미확인'), 'unknown server header meta must keep the unknown placeholder');
+  assert(!metaText.includes('0 B'), 'unknown server header meta must never render unavailable capacity as zero');
+}
+
 function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
   const viewer = loadViewer();
   const row = viewer.buildOverviewServer(
@@ -995,6 +1060,7 @@ async function main() {
   await testBootstrapDetectionIsExplicitAndSequential();
   testSampleMarkerAndOverviewAggregateAreDataModeDriven();
   testMountCentricOverviewDomFieldsAndStableNavigation();
+  testServerHeaderCapacityMetaUsesAggregateSemantics();
   testUnknownMountCapacityDomStaysNeutralAndAccessible();
   testMountCentricResponsiveCssContract();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();

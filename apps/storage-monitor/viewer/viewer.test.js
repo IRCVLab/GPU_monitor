@@ -284,13 +284,36 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
   assert.deepStrictEqual(mounts[2].identity, { kind: "major_minor", value: "9:42", key: "major_minor:9:42" }, "legacy nonzero major_minor must be used when capacity_id is absent");
 
   const exactDuplicate = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
+    selected_roots: [
+      { mount_id: "data", capacity_id: "dev-8-16" },
+      { mount_id: "data-bind", capacity_id: "dev-8-16" },
+    ],
     mounts: [
       { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
-      { mount_id: "data", path: "/data-bind", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      { mount_id: "data-bind", path: "/data-bind", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
     ],
   })));
   assert.strictEqual(exactDuplicate.totalBytes, 2000, "exact duplicate capacity identities within a server must count once");
+  assert.strictEqual(exactDuplicate.availableBytes, 500, "exact duplicate capacity identities within a server must count available bytes once");
   assert.strictEqual(exactDuplicate.isPartial, false, "consistent exact duplicates must not make the aggregate partial");
+
+  const exactDuplicateRow = buildOverviewRows([
+    { id: "alpha-1", display_name: "alpha", order: 1, mount_count: 2 },
+  ], [
+    { id: "alpha-1", snapshot: makeCapacitySnapshot({
+      selected_roots: [
+        { mount_id: "data", capacity_id: "dev-8-16" },
+        { mount_id: "data-bind", capacity_id: "dev-8-16" },
+      ],
+      mounts: [
+        { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+        { mount_id: "data-bind", path: "/data-bind", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      ],
+    }) },
+  ])[0];
+  assert.strictEqual(exactDuplicateRow.aggregate.availableLabel, "500 B", "server aggregate label must expose deduped available capacity");
+  assert.strictEqual(exactDuplicateRow.totalAvailableBytes, 500, "server header free byte model must derive from the identity-aware aggregate");
+  assert.strictEqual(exactDuplicateRow.totalAvailableLabel, "500 B", "server header free label must derive from the identity-aware aggregate");
 
   const inconsistentDuplicate = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
     mounts: [
