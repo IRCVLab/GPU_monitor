@@ -121,3 +121,53 @@ Playwright navigation from Storage to `http://127.0.0.1:5173/` was timeboxed bec
 - Remote precheck over `ssh -p 2200 -o BatchMode=yes ircv@166.104.167.11`: `/opt/storage-viz-dashboard/viewer` exists; `systemctl is-active storage-viz-dashboard.service` → `active`; `curl http://127.0.0.1:8088/` → HTTP `200`, `11268` bytes; served HTML still contains `http://127.0.0.1:5173/`.
 - Deployment to `/opt/storage-viz-dashboard/viewer` and restart of only `storage-viz-dashboard.service` are blocked by missing remote write/restart authority for user `ircv`: `/opt/storage-viz-dashboard/viewer` is `root:root` mode `0755`; `touch /opt/storage-viz-dashboard/viewer/.write-test` → `Permission denied`; `sudo -n true` and `sudo -n /usr/bin/systemctl restart storage-viz-dashboard.service` both return `sudo: a password is required`; `root@166.104.167.11` and `storage-viz@166.104.167.11` SSH with `BatchMode=yes` return `Permission denied`.
 - Because the remote service could not be updated with the available non-interactive credentials, runtime Storage served-link verification remains blocked: current remote Storage still serves `http://127.0.0.1:5173/`, while local committed source/tests require the exact same-tab `http://127.0.0.1:15173/` link.
+
+## Superseding final deployment evidence — 2026-07-21 03:25 KST
+
+This section supersedes the earlier historical 5173/blocked deployment notes above. Historical evidence is retained unchanged; the current deployed Storage viewer now serves the approved `15173` GPU link.
+
+### Commit
+
+- Code/tests commit: `75f3dad` (`Fix final storage overview review gaps`).
+
+### Local TDD and verification
+
+- RED: `node viewer/viewer_regression_test.js` failed on the new approved Clean token contract before implementation: dark `--surface2` actual `#1c2024`, expected `#181b1f`.
+- GREEN/full suite:
+  - `node viewer/viewer.test.js` → `viewer regression tests passed`.
+  - `node viewer/viewer_regression_test.js` → `viewer regression tests passed`.
+  - `python3 -m pytest viewer/test_serve.py` → `13 passed in 2.49s`.
+  - `node --check viewer/app.js viewer/data-client.js viewer/overview.js viewer/selection.js viewer/tables.js viewer/treemap.js viewer/users-chart.js` → exit `0` for each file.
+  - `git diff --check` → exit `0`.
+
+### Deployed service and tunnels
+
+- Deployed committed `viewer/` archive to `/opt/storage-viz-dashboard/viewer` on `ircv@166.104.167.11:2200` using sudo password authority provided for this task.
+- Restarted only `storage-viz-dashboard.service`.
+- Remote service evidence: `systemctl is-active storage-viz-dashboard.service` → `active`.
+- Remote 8088 service evidence: `curl http://127.0.0.1:8088/` → `http_code=200 bytes=11269`.
+- Dedicated GPU tunnel evidence: `lsof -nP -iTCP:15173 -sTCP:LISTEN` → `ssh` PID `76509` listening on `127.0.0.1:15173`; `curl http://127.0.0.1:15173/` → `200`, `1286` bytes.
+- Storage tunnel evidence: `lsof -nP -iTCP:8088 -sTCP:LISTEN` → `ssh` PID `4291` listening on `127.0.0.1:8088`; local `curl http://127.0.0.1:8088/` → `200`, `11269` bytes.
+
+### Served contract checks
+
+- Served HTML exact link: `href="http://127.0.0.1:15173/"` present in `http://127.0.0.1:8088/`.
+- Served CSS exact Clean muted tokens from `http://127.0.0.1:8088/styles.css`:
+  - dark `--surface2: #181b1f;`
+  - light `--surface2: #eceff1;`
+- Remote served CSS also contains both exact `--surface2` values.
+
+### Playwright msedge desktop QA
+
+- Browser: Playwright Chromium with `channel: "msedge"`, unique temporary profile `/var/folders/.../storage-viz-msedge-4s8EFX`, closed and removed after the run.
+- Start URL: `http://127.0.0.1:8088/`.
+- Desktop viewport: `1440x1000`.
+- Screenshot: `output/playwright/storage-viz-final-msedge-desktop.png`.
+- Evidence JSON: `output/playwright/storage-viz-final-msedge-evidence.json`.
+- Storage page evidence:
+  - `gpuHref`: `http://127.0.0.1:15173/`.
+  - `visibleSevenServers`: `false`.
+  - `overviewStatus`: `{ text: "", hidden: true, ariaLive: "polite" }`.
+  - computed `surface2`: `{ dark: "#181b1f", light: "#eceff1" }`.
+- Click evidence: clicking the Storage header `GPU Monitor` link navigated to `http://127.0.0.1:15173/`.
+- Console/page errors: `[]` / `[]`.
