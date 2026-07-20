@@ -5,7 +5,7 @@ This project has two independent runtime surfaces:
 - **Central dashboard:** `storage-viz-dashboard.service` runs `viewer/serve.py` on the operator host, polls configured remote servers, stores pulled snapshots, and serves the multi-server UI.
 - **Per-server agent:** `storage-viz-scan.service` plus `storage-viz-scan.timer` run on each storage server through `deploy/install-agent.sh`. The timer uses `OnUnitActiveSec=6h` for six-hour scheduled collection.
 
-The central installer and docs are intentionally separate from any other monitoring stack. Do not reuse other services, ports, credentials, or paths.
+The central installer and docs are intentionally separate from any unrelated monitoring stack. Storage Dashboard uses its own service names, paths, state, and loopback port; do not reuse unrelated services, ports, credentials, or paths, and do not restart or modify unrelated monitoring services for Storage Dashboard work.
 
 ## Central dashboard install
 
@@ -37,7 +37,7 @@ Central defaults:
 | Bind | `127.0.0.1` | Loopback-only by default. |
 | Port | `8088` | Dashboard HTTP port. |
 
-`install.sh` installs only the central dashboard. It does not install scanner agents; use `deploy/deploy-agent.sh` for remote agent bootstrap.
+`install.sh` installs only the central dashboard. It does not install scanner agents, restart unrelated monitoring services, or modify any unrelated monitoring path, service, port, or credential; use `deploy/deploy-agent.sh` for remote agent bootstrap.
 
 Useful central commands:
 
@@ -64,6 +64,19 @@ Security rules:
 - Operator actions require trusted-proxy mode, an authenticated identity header, allowlisted operator id, a signed session cookie, and `X-CSRF-Token`.
 - Read-only viewers may load status and snapshots after proxy authentication but cannot request rescans.
 - Do not store or document password values. Use SSH identity files and strict known-hosts entries instead.
+
+## Local development sample mode
+
+Run the deterministic sample dashboard from the repository root when you need a browser demo without production inventory:
+
+```bash
+STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data" \
+STORAGE_VIZ_BIND=127.0.0.1 \
+STORAGE_VIZ_PORT=8088 \
+python3 viewer/serve.py
+```
+
+Use `http://127.0.0.1:8088`. `STORAGE_VIZ_DEV_SAMPLE_DIR` must point at the repository `data` directory. In this mode `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and `data/hosts.json` keeps the four generated sample servers in this exact order: `hinton`, `atlas`, `orion`, `zeus`. This mode is read-only sample data for local development. Production inventory mode is separate, reports `data_mode: "inventory"`, and does not imply production storage is sample data.
 
 ## Server inventory and SSH material
 
@@ -100,9 +113,32 @@ Security rules:
 
 The inventory must not contain passwords, tokens, private key material, shell commands, arbitrary SSH arguments, or scan roots. Scanner roots are local-only on each agent and stay controlled by `agent.scan_runner` policy.
 
+## Managed local storage and mount identity
+
+The overview reports **managed local storage**. This is the unique filesystem capacity of scan-eligible local mounts managed by the Storage Dashboard agent on each server. It is not raw physical disk inventory, does not claim to include unmounted or unformatted devices, and is not computed by adding every visible mount row.
+
+Each complete or partial selected root may carry a `capacity_id` derived from its safe mount identity. When multiple selected mounts on the same server share the same capacity identity, the overview counts that capacity once for server and page totals. The duplicate mount rows may remain visible for navigation, but they do not double-count capacity.
+
+If a mount identity cannot be resolved safely, or if rows for the same identity report inconsistent capacity numbers, the dashboard does not guess. It leaves the mount visible, excludes that identity from exact totals, and marks the aggregate as partial or unknown. A partial/unknown aggregate means capacity accounting is intentionally conservative; it is not evidence of a scanner failure by itself.
+
+## SSD/HDD media classification
+
+The per-server agent classifies storage media from backing leaf block devices through Linux sysfs. It resolves the selected mount's block `major:minor` under `/sys/dev/block`, follows bounded `slaves` topology, and reads leaf `queue/rotational` values. It does not run heavyweight inventory commands or infer media from names, filesystem types, or capacity sizes.
+
+Media labels have these meanings:
+
+| Label | Meaning |
+| --- | --- |
+| `SSD` | All resolved backing leaves report non-rotational media. |
+| `HDD` | All resolved backing leaves report rotational media. |
+| `Mixed` | Resolved backing leaves include both SSD and HDD media. |
+| `Unknown` | Topology or rotational data could not be resolved safely. |
+
+`Mixed` and `Unknown` are expected safe states. Treat them as conservative metadata, not scanner failures.
+
 ## Mount exclusion policy
 
-Agents scan only local filesystems selected by `agent.scan_runner` policy. The central inventory cannot override mount policy or add scan roots. Mandatory exclusions include network, distributed, virtual, and container-backed filesystems such as NFS/NFS4, CIFS/SMB, sshfs, generic FUSE mounts, distributed filesystems, proc/sys/dev pseudo filesystems, overlay/container layers, and other non-local mounts. These exclusions prevent recursive network scans, container internals, and virtual kernel trees from entering central reports.
+Agents scan only local filesystems selected by `agent.scan_runner` policy. The central inventory cannot override mount policy or add scan roots. Mandatory exclusions include network, distributed, virtual, and container-backed filesystems such as NFS/NFS4, CIFS/SMB, sshfs, generic FUSE mounts, distributed filesystems, proc/sys/dev pseudo filesystems, overlay/container layers, and other non-local mounts. These exclusions prevent recursive network scans, container internals, and virtual kernel trees from entering central reports. Excluded mounts stay outside managed local storage totals.
 
 ## SSH identity ownership and modes
 
