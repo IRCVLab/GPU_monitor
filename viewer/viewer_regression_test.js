@@ -859,6 +859,7 @@ function testDetailCapacityResponsiveCssContract() {
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.cap-bar\b[\s\S]*grid-column:\s*1\s*\/\s*-1/.test(css), '760px detail utilization bar must span the full row to remain visible');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.caps\.detail-capacity-rail\b[\s\S]*padding:\s*10px\s+14px/.test(css), '390px detail capacity rail must reduce side padding to avoid horizontal overflow');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-columns:\s*1fr/.test(css), '390px detail capacity rows must stack into one column');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-areas:\s*"main"\s*"pct"\s*"sub"\s*"free"\s*"bar"/.test(css), '390px detail capacity rows must override every named area into one column');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.cap-pct\b[\s\S]*text-align:\s*left/.test(css), 'stacked detail percentage must remain readable as normal text');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.cap-fill\b[\s\S]*transition:\s*none\s*!important/.test(css), 'detail capacity fill animation must be explicitly disabled for reduced motion');
 }

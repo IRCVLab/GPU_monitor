@@ -625,7 +625,12 @@
     main { padding: 10px; }
     .head-row { padding-left: 14px; padding-right: 14px; }
     .caps.detail-capacity-rail { grid-template-columns: 1fr; padding: 10px 14px; }
-    .detail-capacity-row { grid-template-columns: 1fr; gap: 6px; padding: 8px; }
+    .detail-capacity-row {
+      grid-template-columns: 1fr;
+      grid-template-areas: "main" "pct" "sub" "free" "bar";
+      gap: 6px;
+      padding: 8px;
+    }
     .cap-pct { text-align: left; }
     .cap-sub, .cap-free { white-space: normal; }
     .overview-card { overflow: hidden; }
