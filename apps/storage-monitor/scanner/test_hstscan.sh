@@ -125,7 +125,7 @@ PYEOF
 )
 EOF
 SAMEDEV_DEV="$SAMEDEV_MAJOR:$SAMEDEV_MINOR"
-SAMEDEV_OUT="$(mktemp /tmp/hstscan_samedev_hardlink.XXXXXX.json)"
+SAMEDEV_OUT="$TMP/hstscan_samedev_hardlink.json"
 "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 --out "$SAMEDEV_OUT" \
     --target "$SAMEDEV_HOME" "$SAMEDEV_DEV" \
     --target "$SAMEDEV_DATA" "$SAMEDEV_DEV"
