@@ -529,3 +529,84 @@ class SnapshotMediaFieldTests(unittest.TestCase):
         bad_failed = dict(failed, storage_media="ssd", storage_media_confidence="unresolved")
         p["selected_roots"].append(bad_failed)
         self.assert_invalid(p, "resolved", status_value="partial")
+
+
+class SnapshotLogicalRootValidationTests(unittest.TestCase):
+    DIGEST = "a" * 64
+
+    def desired(self):
+        return snapshot.DesiredServer(server_id="alpha-1", config_digest=self.DIGEST)
+
+    def status_data(self, payload, *, status_value="complete"):
+        status, data = status_for(payload, config_digest=self.DIGEST)
+        status["status"] = status_value
+        return status, data
+
+    def payload_with_two_root_backed_logical_roots(self):
+        payload = base_payload()
+        payload["config_digest"] = self.DIGEST
+        home_root = payload["selected_roots"][0]
+        home_mount = payload["mounts"][0]
+        for record in (home_root, home_mount):
+            record["capacity_id"] = "dev-8-1"
+            record["storage_media"] = "ssd"
+            record["storage_media_confidence"] = "resolved"
+        data_root = copy.deepcopy(home_root)
+        data_root.update({
+            "mount_id": "home-root-data",
+            "mountpoint": "/",
+            "scan_root": "/data",
+            "scanned_bytes": 40,
+            "scanned_files": 3,
+            "scanned_dirs": 1,
+        })
+        data_mount = copy.deepcopy(home_mount)
+        data_mount.update({
+            "path": "/data",
+            "mount_id": "home-root-data",
+            "scan_root": "/data",
+            "scanned_bytes": 40,
+            "scanned_files": 3,
+            "scanned_dirs": 1,
+        })
+        data_mount["tree"] = {
+            "name": "/data",
+            "kind": "directory",
+            "bytes": 40,
+            "files": 3,
+            "uid": 0,
+            "mtime": 1719200042,
+            "other_bytes": 0,
+            "children": [
+                {"name": "dataset", "kind": "file", "bytes": 40, "files": 3, "uid": 0, "mtime": 1719200000}
+            ],
+        }
+        payload["selected_roots"].append(data_root)
+        payload["mounts"].append(data_mount)
+        return payload
+
+    def assert_invalid(self, payload, pattern):
+        status, data = self.status_data(payload)
+        with self.assertRaisesRegex(ValueError, pattern):
+            snapshot.validate_download(status, data, self.desired())
+
+    def test_accepts_unique_logical_roots_sharing_capacity_and_physical_metadata(self):
+        payload = self.payload_with_two_root_backed_logical_roots()
+        result = snapshot.validate_download(*self.status_data(payload), self.desired())
+
+        roots = {root["scan_root"]: root for root in result.payload["selected_roots"]}
+        self.assertEqual(set(roots), {"/home", "/data"})
+        for key in ("major_minor", "capacity_id", "storage_media", "storage_media_confidence", "fstype", "mount_source"):
+            self.assertEqual(roots["/data"][key], roots["/home"][key])
+
+    def test_still_rejects_duplicate_logical_ids_and_scan_roots(self):
+        payload = self.payload_with_two_root_backed_logical_roots()
+        payload["selected_roots"][1]["mount_id"] = payload["selected_roots"][0]["mount_id"]
+        payload["mounts"][1]["mount_id"] = payload["mounts"][0]["mount_id"]
+        self.assert_invalid(payload, "unique")
+
+        payload = self.payload_with_two_root_backed_logical_roots()
+        payload["selected_roots"][1]["scan_root"] = payload["selected_roots"][0]["scan_root"]
+        payload["mounts"][1]["scan_root"] = payload["mounts"][0]["scan_root"]
+        payload["mounts"][1]["path"] = payload["mounts"][0]["path"]
+        self.assert_invalid(payload, "unique")

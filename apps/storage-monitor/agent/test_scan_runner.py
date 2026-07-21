@@ -1328,6 +1328,60 @@ class ScanRunnerTests(unittest.TestCase):
                     self.assertEqual(mount["storage_media"], "unknown")
                     self.assertEqual(mount["storage_media_confidence"], "unresolved")
 
+    def test_root_backed_data_uses_unique_logical_id_and_shared_physical_metadata(self):
+        class FakeResolver:
+            def resolve(self, major_minor):
+                return scan_runner.MediaResult(f"dev-{major_minor.replace(':', '-')}", "ssd", "resolved")
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            mountinfo = mi(42, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+
+            def fake(argv, **kwargs):
+                roots = argv[argv.index("--out") + 2:]
+                self.assertEqual(tuple(roots), ("/home", "/data"))
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(
+                    json.dumps(raw_payload_many(roots, errors_by_path={"/data": 0})), encoding="utf-8"
+                )
+                return scan_runner.CompletedScan(0, "", "")
+
+            result = scan_runner.run_once(
+                config_path,
+                mountinfo_reader=lambda: mountinfo,
+                scanner_runner=fake,
+                media_resolver=FakeResolver(),
+                clock=Clock(2600),
+                lstat=lambda path: fake_lstat_result(stat.S_IFDIR | 0o755, 8, 1),
+            )
+            payload = json.loads(result.snapshot_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(result.status, "complete")
+            roots = {root["scan_root"]: root for root in payload["selected_roots"] if root["status"] == "complete"}
+            self.assertEqual(set(roots), {"/home", "/data"})
+            self.assertEqual(roots["/home"]["mount_id"], "42")
+            self.assertEqual(roots["/data"]["mount_id"], "42-root-data")
+            self.assertEqual(len({root["mount_id"] for root in roots.values()}), 2)
+            self.assertEqual(len({root["scan_root"] for root in roots.values()}), 2)
+
+            for key in ("major_minor", "capacity_id", "storage_media", "storage_media_confidence", "fstype", "mount_source"):
+                self.assertEqual(roots["/data"][key], roots["/home"][key])
+            self.assertEqual(roots["/home"]["major_minor"], "8:1")
+            self.assertEqual(roots["/home"]["capacity_id"], "dev-8-1")
+            self.assertEqual(roots["/home"]["storage_media"], "ssd")
+            self.assertEqual(roots["/home"]["storage_media_confidence"], "resolved")
+
+            mounts = {mount["scan_root"]: mount for mount in payload["mounts"]}
+            self.assertEqual(mounts["/home"]["mount_id"], roots["/home"]["mount_id"])
+            self.assertEqual(mounts["/data"]["mount_id"], roots["/data"]["mount_id"])
+            for scan_root, mount in mounts.items():
+                root = roots[scan_root]
+                for key in ("major_minor", "capacity_id", "storage_media", "storage_media_confidence", "fstype", "mount_source"):
+                    if key in mount:
+                        self.assertEqual(mount[key], root[key])
+
+            assert_schema_v1_snapshot_contract(self, payload)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -553,7 +553,7 @@ def _enrich_payload(raw: Mapping[str, Any], selection: mount_policy.SelectionRes
             continue
         root = roots_by_path[path]
         linked = dict(mount)
-        linked["mount_id"] = str(root.entry.mount_id)
+        linked["mount_id"] = _logical_mount_id(root)
         linked["scan_root"] = root.mountpoint
         linked["fstype"] = root.entry.fstype
         linked.update(_media_fields(media_by_major_minor.get(root.entry.major_minor, _unknown_media())))
@@ -649,6 +649,14 @@ def _path_contains(root: str, path: str) -> bool:
     return path == root or path.startswith(root + "/")
 
 
+def _logical_mount_id(root: mount_policy.SelectedRoot) -> str:
+    source_id = str(root.entry.mount_id)
+    if root.reason == "root-directory" and root.source_mountpoint == "/" and root.mountpoint != root.source_mountpoint:
+        safe_path = re.sub(r"[^A-Za-z0-9_.-]+", "-", root.mountpoint).strip("-") or "root"
+        return f"{source_id}-root-{safe_path}"[:127]
+    return source_id
+
+
 def _root_record(
     root: mount_policy.SelectedRoot,
     status: str,
@@ -663,7 +671,7 @@ def _root_record(
 ) -> Dict[str, Any]:
     entry = root.entry
     record = {
-        "mount_id": str(entry.mount_id),
+        "mount_id": _logical_mount_id(root),
         "major_minor": entry.major_minor,
         "mount_source": entry.source,
         "mount_root": entry.root,
