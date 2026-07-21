@@ -651,9 +651,10 @@ def _path_contains(root: str, path: str) -> bool:
 
 def _logical_mount_id(root: mount_policy.SelectedRoot) -> str:
     source_id = str(root.entry.mount_id)
-    if root.reason == "root-directory" and root.source_mountpoint == "/" and root.mountpoint != root.source_mountpoint:
-        safe_path = re.sub(r"[^A-Za-z0-9_.-]+", "-", root.mountpoint).strip("-") or "root"
-        return f"{source_id}-root-{safe_path}"[:127]
+    if root.reason == "root-directory" and root.source_mountpoint == "/":
+        if root.mountpoint == "/data":
+            return f"{source_id}-root-data"
+        raise ValueError("unsupported root-backed logical root")
     return source_id
 
 

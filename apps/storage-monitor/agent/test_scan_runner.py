@@ -1328,6 +1328,33 @@ class ScanRunnerTests(unittest.TestCase):
                     self.assertEqual(mount["storage_media"], "unknown")
                     self.assertEqual(mount["storage_media_confidence"], "unresolved")
 
+    def test_unsupported_root_backed_logical_root_fails_closed(self):
+        entry = mount_policy.MountEntry(
+            mount_id=42,
+            parent_id=0,
+            major_minor="8:1",
+            root="/",
+            mountpoint="/",
+            options="rw",
+            optional_fields=(),
+            fstype="ext4",
+            source="/dev/sda1",
+            super_options="rw",
+        )
+        selection = mount_policy.SelectionResult(
+            selected=[mount_policy.SelectedRoot(
+                mountpoint="/var",
+                entry=entry,
+                source_mount_id=42,
+                source_mountpoint="/",
+                reason="root-directory",
+            )],
+            skipped=[],
+        )
+
+        with self.assertRaisesRegex(ValueError, "unsupported root-backed logical root"):
+            scan_runner._enrich_payload(raw_payload("/var"), selection, {"8:1": scan_runner.MediaResult("dev-8-1", "ssd", "resolved")})
+
     def test_root_backed_data_uses_unique_logical_id_and_shared_physical_metadata(self):
         class FakeResolver:
             def resolve(self, major_minor):
