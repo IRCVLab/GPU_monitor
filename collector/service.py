@@ -73,6 +73,10 @@ class PollService:
         self.clock = clock or time
         self._verified_status_tuples: dict[str, tuple[Any, ...]] = {}
         self._locks = {s.id: threading.RLock() for s in self.servers}
+        self._overview_cache = {
+            server.id: _overview_snapshot(self.store.load_snapshot(server.id))
+            for server in self.servers
+        }
         if not isinstance(poll_interval_seconds, int) or not 600 <= poll_interval_seconds <= 900:
             raise ValueError("poll interval must be between 600 and 900 seconds")
         self.poll_interval_seconds = poll_interval_seconds
@@ -125,13 +129,14 @@ class PollService:
 
         desired = snapshot.DesiredServer(server_id=server.id, config_digest=server.scanner_digest)
         try:
-            snapshot.validate_download(fetched_status, data, desired)
+            validated = snapshot.validate_download(fetched_status, data, desired)
         except Exception as exc:
             return self._mark_invalid(server.id, TransportError("INVALID", str(exc)))
 
         result = self.store.apply_download(server.id, fetched_status, data, desired)
         if not result.accepted:
             return self._mark_invalid(server.id, TransportError(result.error_code or "WRITE_ERROR", result.message or "download apply failed"))
+        self._overview_cache[server.id] = _overview_snapshot(validated.payload)
         self._verified_status_tuples[server.id] = status_tuple(fetched_status)
         self.store.update_state(server.id, freshness=self._freshness(server.id))
         return self.store.load_state(server.id)
@@ -170,7 +175,7 @@ class PollService:
     def server_summaries(self) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
         for server in self.servers:
-            snap = self.store.load_snapshot(server.id)
+            overview = self._overview_cache.get(server.id)
             state = self.store.load_state(server.id)
             summaries.append({
                 "id": server.id,
@@ -181,8 +186,8 @@ class PollService:
                 "latest_pull_status": state["latest_pull_status"],
                 "latest_scan_result": state["latest_scan_result"],
                 "configuration_sync": state["configuration_sync"],
-                "mount_count": len(snap.get("mounts", [])) if isinstance(snap, Mapping) else 0,
-                "overview_snapshot": _overview_snapshot(snap),
+                "mount_count": len(overview.get("mounts", [])) if isinstance(overview, Mapping) else 0,
+                "overview_snapshot": overview,
                 "active_job": state.get("active_job"),
             })
         return summaries

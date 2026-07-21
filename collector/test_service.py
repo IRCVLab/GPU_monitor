@@ -371,6 +371,39 @@ class PollServiceTests(unittest.TestCase):
             "overview should only include root metadata used by a displayed mount",
         )
 
+    def test_server_summaries_reuse_overviews_warmed_at_service_start(self):
+        server = make_server()
+        self.seed(server)
+        service = self.service([server])
+        original_load_snapshot = self.store.load_snapshot
+        repeated_loads = []
+
+        def counted_load_snapshot(server_id):
+            repeated_loads.append(server_id)
+            return original_load_snapshot(server_id)
+
+        self.store.load_snapshot = counted_load_snapshot
+
+        self.assertEqual(service.server_summaries()[0]["mount_count"], 1)
+        self.assertEqual(service.server_summaries()[0]["mount_count"], 1)
+        self.assertEqual(repeated_loads, [], "overview requests must not reparse full snapshots")
+
+    def test_successful_poll_refreshes_the_warmed_overview(self):
+        server = make_server()
+        self.seed(server)
+        service = self.service([server])
+        updated = payload_for(server.id, started=1719209000, digest=server.scanner_digest)
+        updated["mounts"][0]["df_total"] = 200
+        status, data = status_data(updated)
+        self.tx.status[server.id] = status
+        self.tx.downloads[server.id] = (status, data)
+
+        service.poll_once()
+        self.store.load_snapshot = lambda _server_id: payload_for(server.id)
+
+        overview = service.server_summaries()[0]["overview_snapshot"]
+        self.assertEqual(overview["mounts"][0]["df_total"], 200)
+
     def test_scheduler_runs_sequential_polls_and_waits_remaining_interval(self):
         s = make_server(); self.seed(s)
         old_status = status_data(payload_for(s.id, started=1719200000, digest=s.scanner_digest))[0]
