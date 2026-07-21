@@ -36,6 +36,47 @@ function testCleanShellThemeBootstrapContract() {
 }
 
 
+
+function selectorSpecificity(selector) {
+  const ids = (selector.match(/#[\w-]+/g) || []).length;
+  const classes = (selector.match(/\.[\w-]+|\[[^\]]+\]|:(?!:)[\w-]+(?:\([^)]*\))?/g) || []).length;
+  const elements = (selector.replace(/#[\w-]+|\.[\w-]+|\[[^\]]+\]|:{1,2}[\w-]+(?:\([^)]*\))?/g, ' ').match(/\b[a-z][\w-]*\b/gi) || []).length;
+  return [ids, classes, elements];
+}
+
+function compareSpecificity(a, b) {
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+function cssRuleBody(css, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  const match = css.match(new RegExp(escaped + '\\s*\\{([^}]*)\\}'));
+  return match ? match[1] : '';
+}
+
+function testThemeIconTransformSelectorsWinCascade() {
+  const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
+  const baseSelector = ".theme-mode-button .theme-icon";
+  const hiddenSelectors = [".theme-mode-button .theme-icon-sun", ".theme-mode-button .theme-icon-moon"];
+  const visibleSelector = "html.dark .theme-mode-button .theme-icon-sun, html.light .theme-mode-button .theme-icon-moon";
+  const baseSpecificity = selectorSpecificity(baseSelector);
+
+  assert(/transform:\s*translate\(-50%,\s*-50%\)/.test(cssRuleBody(css, baseSelector)), "base icon rule should only establish center translation");
+  for (const selector of hiddenSelectors) {
+    const body = cssRuleBody(css, selector);
+    assert(body, `${selector} hidden transform rule must exist`);
+    assert(compareSpecificity(selectorSpecificity(selector), baseSpecificity) >= 0, `${selector} must be at least as specific as the base icon selector so hidden rotation/scale wins the cascade`);
+    assert(/transform:\s*translate\(-50%,\s*-50%\)\s*rotate\([^)]*\)\s*scale\(\.72\)/.test(body), `${selector} must include the hidden translate + rotate + scale transform`);
+  }
+  for (const selector of visibleSelector.split(/,\s*/)) {
+    assert(compareSpecificity(selectorSpecificity(selector), baseSpecificity) > 0, `${selector} visible state must be more specific than the base icon selector`);
+  }
+  assert(/html\.dark\s+\.theme-mode-button\s+\.theme-icon-sun\s*,\s*html\.light\s+\.theme-mode-button\s+\.theme-icon-moon\s*\{[^}]*opacity:\s*1[^}]*transform:\s*translate\(-50%,\s*-50%\)\s*rotate\(0deg\)\s*scale\(1\)/.test(css), "visible state selector must preserve centered translate and override hidden rotation/scale");
+}
+
 function testThemeTransitionFlashFreeStaticContracts() {
   const html = fs.readFileSync(path.join(here, "index.html"), "utf8");
   const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
@@ -945,6 +986,7 @@ function testOverviewMonitorCardCssContract() {
 
 async function main() {
   testCleanShellThemeBootstrapContract();
+  testThemeIconTransformSelectorsWinCascade();
   testThemeTransitionFlashFreeStaticContracts();
   testOverviewDoesNotBlockOnTheDetailOnlyChartLibrary();
   testHostManifest();
