@@ -366,9 +366,22 @@
   .panel.active { display: block; }
   /* Treemap fills the visible main area exactly: flex column, chart grows to
      fill, so the whole treemap shows with no inner scroll / no bottom clip. */
-  #panel-treemap.active { display: block; }
+  #panel-treemap.active { display: block; position: relative; }
   #panel-treemap .toolbar { flex: 0 0 auto; }
-  #panel-treemap .legend { flex: 0 0 auto; }
+  #panel-treemap .legend {
+    position: absolute; z-index: 8; left: 12px; right: 12px; bottom: 10px;
+    display: flex; flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-inline: contain;
+    gap: 12px; margin: 0; padding: 7px 9px;
+    border: 1px solid color-mix(in srgb, var(--separator) 82%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow-color) 12%, transparent);
+    -webkit-backdrop-filter: blur(14px) saturate(115%);
+    backdrop-filter: blur(14px) saturate(115%);
+    scrollbar-width: none;
+  }
+  #panel-treemap .legend::-webkit-scrollbar { display: none; }
+  #panel-treemap .legend-item { flex: 0 0 auto; white-space: nowrap; font-size: 11px; }
   .panel-title { font-size: 22px; font-weight: 600; letter-spacing: -.02em; margin: 0 0 4px; }
   .panel-sub { color: var(--text2); font-size: 14px; margin: 0 0 18px; line-height: 1.5; }
   .panel-sub b { color: var(--text); }

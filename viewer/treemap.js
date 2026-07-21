@@ -56,17 +56,14 @@ function renderMountSeg() {
 function sizeTreemap() {
   const main = document.getElementById("main");
   const el = document.getElementById("treemap");
-  const legend = document.getElementById("treemapLegend");
   const toolbar = document.querySelector("#panel-treemap .toolbar");
   const cs = getComputedStyle(main);
   const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
   const toolbarH = toolbar ? toolbar.offsetHeight : 0;
-  const legendH = legend ? legend.offsetHeight : 0;
   // Fit INSIDE the scroll container (main), not the raw viewport: toolbar + chart
-  // + legend must equal main's content height. This is robust to header height
-  // differing across screens/timing, so the chart bottom is never pushed out of
-  // the visible area (which clipped the lower tiles).
-  const avail = main.clientHeight - pad - toolbarH - legendH - 40; // extra bottom breathing room
+  // must equal main's content height. The legend is an overlay rail inside the
+  // chart, so it must not reduce the primary tile viewport.
+  const avail = main.clientHeight - pad - toolbarH - 12;
   const h = Math.max(300, Math.floor(avail));
   el.style.height = h + "px";
   return h;
