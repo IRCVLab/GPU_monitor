@@ -403,8 +403,10 @@ function updateSnapshotEntry(serverId, snapshot, error) {
 
 function startOverviewSnapshotHydration(bootstrap, generation) {
   if (!bootstrap || typeof bootstrap.startSnapshotLoading !== "function") return;
+  const detailVersionsAtStart = new Map(detailRequestVersions);
   void bootstrap.startSnapshotLoading((entry) => {
     if (generation !== overviewLoadGeneration || !entry || !entry.id) return;
+    if ((detailRequestVersions.get(entry.id) || 0) !== (detailVersionsAtStart.get(entry.id) || 0)) return;
     if (entry.snapshot) snapshotCache.set(entry.id, entry.snapshot);
     updateSnapshotEntry(entry.id, entry.snapshot || null, entry.error || null);
     renderOverview();

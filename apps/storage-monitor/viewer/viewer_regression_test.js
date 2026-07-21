@@ -461,6 +461,18 @@ async function testApiBootstrapRendersBeforeSlowSnapshotsAndStreamsCompletedServ
   assert.deepStrictEqual(entries.map(entry => entry.id), ['alpha-1'], 'background hydration must preserve server order');
 }
 
+function testOverviewHydrationCannotOverwriteANewerDetailRequest() {
+  const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  const start = app.indexOf('function startOverviewSnapshotHydration');
+  const end = app.indexOf('\nasync function loadSnapshotForCurrentSource', start);
+  assert(start >= 0 && end > start, 'overview hydration helper must exist');
+  const body = app.slice(start, end);
+  assert(/const detailVersionsAtStart = new Map\(detailRequestVersions\);/.test(body), 'background hydration must capture per-server detail versions before requests start');
+  const guard = body.indexOf('(detailRequestVersions.get(entry.id) || 0) !== (detailVersionsAtStart.get(entry.id) || 0)');
+  const cacheWrite = body.indexOf('snapshotCache.set(entry.id, entry.snapshot)');
+  assert(guard >= 0 && guard < cacheWrite, 'a newer detail request must invalidate stale background snapshot writes');
+}
+
 function testSampleMarkerAndCompactOverviewOmitsAggregateSurface() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.rememberBootstrap, 'function', 'bootstrap state setter must be exposed');
@@ -1450,6 +1462,7 @@ async function main() {
   testRouteNavigationAndBackShellContract();
   await testBootstrapDetectionIsExplicitAndSequential();
   await testApiBootstrapRendersBeforeSlowSnapshotsAndStreamsCompletedServers();
+  testOverviewHydrationCannotOverwriteANewerDetailRequest();
   testSampleMarkerAndCompactOverviewOmitsAggregateSurface();
   testMountCentricOverviewDomFieldsAndStableNavigation();
   testMountStatusTextAppearsOnlyForExceptionalPressure();
