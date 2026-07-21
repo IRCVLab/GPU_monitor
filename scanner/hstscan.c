@@ -617,6 +617,8 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
         return;
     }
     if (dst.st_dev != c->root_dev) {
+        w->errs++;
+        blocked_add(it->path, EXDEV);
         close(dirfd);
         return;
     }
@@ -795,9 +797,33 @@ static struct node *scan_target(const char *target, int nthreads, int stale_days
         return NULL;
     }
 
+    int rootfd = open(target, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (rootfd == -1) {
+        blocked_add(target, errno);
+        return NULL;
+    }
+    struct stat rootst;
+    if (fstat(rootfd, &rootst) != 0) {
+        blocked_add(target, errno);
+        close(rootfd);
+        return NULL;
+    }
+    dev_t opened_root_dev = rootst.st_dev;
+    if (expected_dev && opened_root_dev != *expected_dev) {
+        if (opened_root_dev != rst.st_dev) blocked_add(target, EXDEV);
+        close(rootfd);
+        return NULL;
+    }
+    if (opened_root_dev != rst.st_dev) {
+        blocked_add(target, EXDEV);
+        close(rootfd);
+        return NULL;
+    }
+    close(rootfd);
+
     struct scan_ctx ctx;
     queue_init(&ctx.queue);
-    ctx.root_dev = rst.st_dev;
+    ctx.root_dev = rootst.st_dev;
     ctx.scan_root = target;
     ctx.stale_days = stale_days;
     ctx.nthreads = nthreads;
@@ -806,13 +832,13 @@ static struct node *scan_target(const char *target, int nthreads, int stale_days
     ctx.scanned_dirs = ctx.errors = 0;
 
     /* root node */
-    uint64_t root_blocks = (uint64_t)rst.st_blocks * 512;
-    struct node *root = node_new(target, rst.st_uid, (int64_t)rst.st_mtime, NULL);
+    uint64_t root_blocks = (uint64_t)rootst.st_blocks * 512;
+    struct node *root = node_new(target, rootst.st_uid, (int64_t)rootst.st_mtime, NULL);
     root->bytes += root_blocks;
 
     ctx.scanned_dirs = 1;
     ctx.scanned_bytes = root_blocks;
-    user_add(rst.st_uid, target, root_blocks, 0);
+    user_add(rootst.st_uid, target, root_blocks, 0);
 
     struct work_item *first = xmalloc(sizeof *first);
     first->path = xstrdup(target);
@@ -1035,7 +1061,10 @@ static void fill_df(const char *path, struct mount_result *mr) {
 static void usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [--threads N] [--prune-home MB] [--prune-data MB]\n"
-        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR] [PATH ...]\n"
+        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR]\n"
+        "          [--target PATH MAJOR:MINOR ...] [PATH ...]\n"
+        "       --target may be repeated; each consumes PATH and MAJOR:MINOR.\n"
+        "       Do not mix guarded --target arguments with positional PATH targets.\n"
         "       default output: data/<hostname>.json relative to the current directory\n",
         prog);
 }
@@ -1125,12 +1154,13 @@ int main(int argc, char **argv) {
                 usage(argv[0]); return 2;
             }
             guarded_mode = true;
-            if (ntargets < 64) {
-                targets_buf[ntargets].path = path;
-                targets_buf[ntargets].guarded = true;
-                targets_buf[ntargets].expected_dev = expected_dev;
-                ntargets++;
+            if (ntargets >= 64) {
+                usage(argv[0]); return 2;
             }
+            targets_buf[ntargets].path = path;
+            targets_buf[ntargets].guarded = true;
+            targets_buf[ntargets].expected_dev = expected_dev;
+            ntargets++;
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
             usage(argv[0]); return 0;
         } else if (a[0] == '-') {
@@ -1141,12 +1171,13 @@ int main(int argc, char **argv) {
                 usage(argv[0]); return 2;
             }
             positional_mode = true;
-            if (ntargets < 64) {
-                targets_buf[ntargets].path = a;
-                targets_buf[ntargets].guarded = false;
-                targets_buf[ntargets].expected_dev = 0;
-                ntargets++;
+            if (ntargets >= 64) {
+                usage(argv[0]); return 2;
             }
+            targets_buf[ntargets].path = a;
+            targets_buf[ntargets].guarded = false;
+            targets_buf[ntargets].expected_dev = 0;
+            ntargets++;
         }
     }
 

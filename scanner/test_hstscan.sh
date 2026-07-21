@@ -73,7 +73,12 @@ DU_BYTES="$(du -x --block-size=1 -s "$TREE" 2>/dev/null | cut -f1)"
 
 # Guarded target parser and safety regression checks.
 read -r TREE_MAJOR TREE_MINOR <<EOF
-$(stat -c '%t %T' "$TREE" | $PY -c 'import sys; maj_hex, min_hex = sys.stdin.read().split(); print(int(maj_hex, 16), int(min_hex, 16))')
+$($PY - "$TREE" <<'PYEOF'
+import os, sys
+st = os.lstat(sys.argv[1])
+print(os.major(st.st_dev), os.minor(st.st_dev))
+PYEOF
+)
 EOF
 TREE_DEV="$TREE_MAJOR:$TREE_MINOR"
 
@@ -125,6 +130,30 @@ for args in \
 done
 pass "guarded --target parser rejects malformed, non-absolute, and mixed positional targets"
 
+TOO_MANY_GUARDED=()
+for n in $(seq 1 65); do
+    TOO_MANY_GUARDED+=(--target "$TREE" "$TREE_DEV")
+done
+if "$BIN" --out "$TMP/too-many-guarded.json" "${TOO_MANY_GUARDED[@]}" >/dev/null 2>"$TMP/too-many-guarded.err"; then
+    TMRC=0
+else
+    TMRC=$?
+fi
+[ "$TMRC" -eq 2 ] || fail "65 guarded targets exited $TMRC, expected usage exit 2"
+pass "65 guarded targets are rejected instead of silently dropped"
+
+TOO_MANY_POSITIONAL=()
+for n in $(seq 1 65); do
+    TOO_MANY_POSITIONAL+=("$TREE")
+done
+if "$BIN" --out "$TMP/too-many-positional.json" "${TOO_MANY_POSITIONAL[@]}" >/dev/null 2>"$TMP/too-many-positional.err"; then
+    PMRC=0
+else
+    PMRC=$?
+fi
+[ "$PMRC" -eq 2 ] || fail "65 positional targets exited $PMRC, expected usage exit 2"
+pass "65 positional targets are rejected instead of silently dropped"
+
 $PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "source-order contract violated: process_dir must fstat dirfd before getdents64"
 import re, sys
 s = open(sys.argv[1], encoding="utf-8").read()
@@ -136,10 +165,43 @@ body = s[start:end]
 open_i = body.find("open(")
 fstat_i = body.find("fstat(dirfd")
 getdents_i = body.find("SYS_getdents64")
+mismatch_i = body.find("dst.st_dev != c->root_dev")
+blocked_i = body.find("blocked_add", mismatch_i)
+close_i = body.find("close(dirfd)", mismatch_i)
 if not (open_i != -1 and fstat_i != -1 and getdents_i != -1 and open_i < fstat_i < getdents_i):
     raise SystemExit(f"open={open_i} fstat={fstat_i} getdents={getdents_i}")
+if not (mismatch_i != -1 and blocked_i != -1 and close_i != -1 and mismatch_i < blocked_i < close_i):
+    raise SystemExit("process_dir device mismatch must increment visible blocked/error state before close")
 PYEOF
 pass "source-order contract fstat(dirfd) before getdents64 is present"
+
+$PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "root preflight contract violated: open+fstat must happen before root node creation"
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+start = s.find("static struct node *scan_target(")
+end = s.find("/* ----------------------------------------------------------------------- *\n *  Mount discovery", start)
+if start == -1 or end == -1:
+    raise SystemExit("scan_target bounds not found")
+body = s[start:end]
+open_i = body.find("open(")
+fstat_i = body.find("fstat(rootfd")
+node_i = body.find("node_new")
+if not (open_i != -1 and fstat_i != -1 and node_i != -1 and open_i < fstat_i < node_i):
+    raise SystemExit(f"open={open_i} fstat={fstat_i} node_new={node_i}")
+if "opened_root_dev != rst.st_dev" not in body or "blocked_add(target" not in body:
+    raise SystemExit("root open/lstat device race must be visible and not produce root-only success")
+if "expected_dev && opened_root_dev != *expected_dev" not in body:
+    raise SystemExit("guarded expected-device mismatch must be checked against opened root fd")
+PYEOF
+pass "root preflight source contract open+fstat before node creation is present"
+
+$PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "usage contract missing guarded --target documentation"
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+if "--target PATH MAJOR:MINOR" not in s or "Do not mix" not in s:
+    raise SystemExit("usage must document repeated guarded --target and exclusivity")
+PYEOF
+pass "usage documents repeated guarded --target and positional exclusivity"
 
 # Run the scanner on the tree, no pruning so the whole subtree is retained.
 "$BIN" --threads 4 --prune-home 0 --prune-data 0 --top 50 --out "$OUT" "$TREE"
