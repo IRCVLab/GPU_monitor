@@ -42,9 +42,19 @@ The existing enrichment path links each scanner result to its selected root. `/h
 
 Collector validation continues to require unique logical `mount_id` and `scan_root` values. Linked mount records use the same logical IDs as their selected roots.
 
-### Scanner target-device guard
+### Scanner device guards
 
-The agent passes each target to `hstscan` together with its expected Linux `major:minor` device. `hstscan` compares that expected device with the target's `st_dev` immediately after `lstat` and before starting traversal. A missing target, a symlink, or a device mismatch is skipped and cannot be scanned. The resulting absent raw mount is reported through the existing bounded per-root failure path, while other safe roots continue.
+The guarded CLI is an explicit repeated pair:
+
+```text
+--target /home 8:1 --target /data 8:1
+```
+
+Each `--target` consumes exactly two following arguments: an absolute path and an expected decimal Linux `major:minor`. Missing, malformed, negative, or out-of-range device values cause an immediate usage error and exit code 2. Existing positional paths remain accepted for backward-compatible standalone use, but the production agent always uses guarded `--target` arguments.
+
+`hstscan` compares the expected device with the target's `st_dev` immediately after `lstat` and before starting traversal. A missing target, a symlink, or a device mismatch is skipped and cannot be scanned. The resulting absent raw mount is reported through the existing bounded per-root failure path, while other safe roots continue.
+
+Workers also call `fstat()` immediately after opening every queued directory fd and before reading entries. They skip and close a directory when its open-time `st_dev` differs from the target `root_dev`. This closes the race where a same-device child is queued and then overmounted before a worker opens it.
 
 This guard applies to every agent-selected target, not only synthetic `/data`, and closes the mount-change race between policy selection and traversal.
 
@@ -70,7 +80,7 @@ This guard applies to every agent-selected target, not only synthetic `/data`, a
 - Probe accepts an ordinary same-device directory.
 - Probe rejects missing, non-directory, same-device symlink, different-device path, explicit mount, prohibited mount, and lstat failure cases.
 - Exact `/data` is the only synthesized path; `/data1` and `/dataset` are not synthesized.
-- Scanner tests prove expected-device mismatch skips traversal and that process-global hardlink allocation remains deterministic across same-device targets.
+- Scanner tests prove guarded CLI parsing, malformed-device rejection, target device mismatch handling, opened-directory device revalidation, and deterministic process-global hardlink allocation across same-device targets. Where an actual overmount cannot be created without privileges, a source-level contract test pins the `fstat`-before-read ordering in addition to ordinary integration coverage.
 - Scan runner passes both roots with expected devices to `hstscan`, emits two linked records with unique logical `mount_id` values and one shared `capacity_id`, and preserves existing absent-`/data` behavior.
 - Collector validation accepts the two unique logical roots while still rejecting duplicate logical IDs.
 - Full Python, scanner, deployment, viewer, and snapshot test suites remain green.
