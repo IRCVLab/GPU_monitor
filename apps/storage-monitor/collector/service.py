@@ -18,6 +18,18 @@ FRESH_SNAPSHOT_SECONDS = LOCAL_SCAN_CADENCE_SECONDS + FRESHNESS_GRACE_SECONDS
 SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
+def _overview_snapshot(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    selected_roots = payload.get("selected_roots")
+    mounts = payload.get("mounts")
+    return {
+        "server_id": payload.get("server_id"),
+        "selected_roots": selected_roots if isinstance(selected_roots, list) else [],
+        "mounts": mounts if isinstance(mounts, list) else [],
+    }
+
+
 class Clock(Protocol):
     def time(self) -> float: ...
 
@@ -147,6 +159,7 @@ class PollService:
                 "latest_scan_result": state["latest_scan_result"],
                 "configuration_sync": state["configuration_sync"],
                 "mount_count": len(snap.get("mounts", [])) if isinstance(snap, Mapping) else 0,
+                "overview_snapshot": _overview_snapshot(snap),
                 "active_job": state.get("active_job"),
             })
         return summaries
