@@ -73,6 +73,7 @@ class PollService:
         self.clock = clock or time
         self._verified_status_tuples: dict[str, tuple[Any, ...]] = {}
         self._locks = {s.id: threading.RLock() for s in self.servers}
+        self._summary_lock = threading.RLock()
         self._overview_cache = {
             server.id: _overview_snapshot(self.store.load_snapshot(server.id))
             for server in self.servers
@@ -133,13 +134,14 @@ class PollService:
         except Exception as exc:
             return self._mark_invalid(server.id, TransportError("INVALID", str(exc)))
 
-        result = self.store.apply_download(server.id, fetched_status, data, desired)
-        if not result.accepted:
-            return self._mark_invalid(server.id, TransportError(result.error_code or "WRITE_ERROR", result.message or "download apply failed"))
-        self._overview_cache[server.id] = _overview_snapshot(validated.payload)
-        self._verified_status_tuples[server.id] = status_tuple(fetched_status)
-        self.store.update_state(server.id, freshness=self._freshness(server.id))
-        return self.store.load_state(server.id)
+        with self._summary_lock:
+            result = self.store.apply_download(server.id, fetched_status, data, desired)
+            if not result.accepted:
+                return self._mark_invalid(server.id, TransportError(result.error_code or "WRITE_ERROR", result.message or "download apply failed"))
+            self._overview_cache[server.id] = _overview_snapshot(validated.payload)
+            self._verified_status_tuples[server.id] = status_tuple(fetched_status)
+            self.store.update_state(server.id, freshness=self._freshness(server.id))
+            return self.store.load_state(server.id)
 
     def manual_rescan(self, server_id: str) -> dict[str, Any]:
         server = self._require_server(server_id)
@@ -174,8 +176,8 @@ class PollService:
 
     def server_summaries(self) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
-        for server in self.servers:
-            with self._locks[server.id]:
+        with self._summary_lock:
+            for server in self.servers:
                 overview = self._overview_cache.get(server.id)
                 state = self.store.load_state(server.id)
                 summaries.append({

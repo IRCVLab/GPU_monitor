@@ -450,6 +450,42 @@ class PollServiceTests(unittest.TestCase):
         self.assertFalse(summary.is_alive())
         self.assertEqual(summary_result["overview_snapshot"]["mounts"][0]["df_total"], 200)
 
+    def test_server_summaries_do_not_wait_for_remote_snapshot_transfer(self):
+        server = make_server()
+        self.seed(server)
+        service = self.service([server])
+        updated = payload_for(server.id, started=1719209200, digest=server.scanner_digest)
+        updated["mounts"][0]["df_total"] = 200
+        status, data = status_data(updated)
+        self.tx.status[server.id] = status
+        self.tx.downloads[server.id] = (status, data)
+        self.tx.block_fetch = threading.Event()
+        self.tx.entered_fetch = threading.Event()
+
+        poll = threading.Thread(target=service.poll_once)
+        poll.start()
+        self.assertTrue(self.tx.entered_fetch.wait(2))
+
+        summary_result = {}
+        summary_finished = threading.Event()
+
+        def read_summary():
+            summary_result.update(service.server_summaries()[0])
+            summary_finished.set()
+
+        summary = threading.Thread(target=read_summary)
+        summary.start()
+        summary_finished_during_transfer = summary_finished.wait(0.05)
+        self.tx.block_fetch.set()
+        poll.join(2)
+        summary.join(2)
+
+        self.assertTrue(
+            summary_finished_during_transfer,
+            "overview reads must remain available while a remote snapshot is downloading",
+        )
+        self.assertEqual(summary_result["overview_snapshot"]["mounts"][0]["df_total"], 100)
+
     def test_scheduler_runs_sequential_polls_and_waits_remaining_interval(self):
         s = make_server(); self.seed(s)
         old_status = status_data(payload_for(s.id, started=1719200000, digest=s.scanner_digest))[0]
