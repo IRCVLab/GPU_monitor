@@ -857,11 +857,19 @@ function testDetailCapacityResponsiveCssContract() {
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/.test(css), '760px detail capacity rows must switch to a shrinkable two-column layout');
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.detail-capacity-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), '760px detail capacity row children must explicitly set min-width:0');
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.cap-bar\b[\s\S]*grid-column:\s*1\s*\/\s*-1/.test(css), '760px detail utilization bar must span the full row to remain visible');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.caps\.detail-capacity-rail\b[\s\S]*padding:\s*10px\s+14px/.test(css), '390px detail capacity rail must reduce side padding to avoid horizontal overflow');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.caps\.detail-capacity-rail\b[\s\S]*padding:\s*8px\s+14px/.test(css), '390px detail capacity rail must reduce side padding to avoid horizontal overflow');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.caps\.detail-capacity-rail\b[\s\S]*grid-auto-flow:\s*column[\s\S]*grid-auto-columns:\s*minmax\(220px,\s*78vw\)/.test(css), '390px detail capacity cards must use one horizontal rail so the treemap remains near the top');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-columns:\s*1fr/.test(css), '390px detail capacity rows must stack into one column');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-areas:\s*"main"\s*"pct"\s*"sub"\s*"free"\s*"bar"/.test(css), '390px detail capacity rows must override every named area into one column');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.cap-pct\b[\s\S]*text-align:\s*left/.test(css), 'stacked detail percentage must remain readable as normal text');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.cap-fill\b[\s\S]*transition:\s*none\s*!important/.test(css), 'detail capacity fill animation must be explicitly disabled for reduced motion');
+}
+
+function testDetailHeaderMobileCssContract() {
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*body\[data-shell-mode=['"]detail['"]\]\s+\.head-row\b[\s\S]*display:\s*grid[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/.test(css), '390px detail header must use a bounded three-column control row');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*body\[data-shell-mode=['"]detail['"]\]\s+\.brand-shell\b[\s\S]*display:\s*none/.test(css), '390px detail header must omit the redundant product title');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*body\[data-shell-mode=['"]detail['"]\]\s+#lastUpd\b[\s\S]*display:\s*none/.test(css), '390px detail header must omit the redundant last-updated label');
 }
 
 
@@ -1548,6 +1556,7 @@ async function main() {
   await testDetailCapacityUnknownNumbersRenderNeutralDashes();
   await testZeroActionableMountsUseExactKoreanEmptyCopy();
   testDetailCapacityResponsiveCssContract();
+  testDetailHeaderMobileCssContract();
   testOverviewMonitorCardHierarchyContract();
   testOverviewMasonryPreservesOrderAcrossResponsiveColumns();
   testApprovedCleanThemeTokenContract();
