@@ -26,6 +26,13 @@ function testCleanShellThemeBootstrapContract() {
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*transition:\s*none\s*!important/.test(css), "reduced motion must disable color/surface transitions");
   assert(/function\s+applyStoredThemeMode\s*\(/.test(app), "app.js must produce applyStoredThemeMode()");
   assert(/function\s+toggleThemeMode\s*\(/.test(app), "app.js must produce toggleThemeMode()");
+  assert(/document\.startViewTransition/.test(app), "theme toggle must use the same native view-transition reveal as GPU Monitor when supported");
+  assert(/getBoundingClientRect\(\)/.test(app), "theme reveal must originate from the actual theme button center");
+  assert(/Math\.hypot\(/.test(app), "theme reveal radius must cover the farthest viewport corner");
+  assert(/--theme-reveal-x/.test(app) && /--theme-reveal-y/.test(app) && /--theme-reveal-radius/.test(app), "theme reveal coordinates must be passed to CSS");
+  assert(/::view-transition-old\(root\)/.test(css), "old theme snapshot must remain visible below the reveal");
+  assert(/::view-transition-new\(root\)/.test(css), "new theme snapshot must animate as the reveal layer");
+  assert(/@keyframes\s+theme-root-reveal[\s\S]*clip-path:\s*circle\(0px at var\(--theme-reveal-x\) var\(--theme-reveal-y\)\)[\s\S]*clip-path:\s*circle\(var\(--theme-reveal-radius\) at var\(--theme-reveal-x\) var\(--theme-reveal-y\)\)/.test(css), "new theme must reveal in a circle from the button center");
 }
 
 
@@ -886,7 +893,7 @@ function testCleanupCommandSafetyContracts() {
 function testOverviewMonitorCardCssContract() {
   const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
   assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), "overview must use the GPU Monitor three-column card rhythm");
-  assert(/\.overview-card\b[\s\S]*border-radius:\s*24px/.test(css), "overview cards must share GPU Monitor card geometry");
+  assert(/\.overview-card\b[\s\S]*border-radius:\s*(?:24px|1\.5rem)/.test(css), "overview cards must share GPU Monitor card geometry");
   assert(/\.overview-mounts\b[\s\S]*flex-direction:\s*column/.test(css), "overview mounts must stack as compact monitor rows");
   assert(/\.overview-pressure-fill\b[\s\S]*background:\s*var\(--accent\)/.test(css), "healthy capacity graphs must reuse the suite accent color");
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-card\b[\s\S]*overflow:\s*hidden/.test(css), "mobile overview cards must explicitly guard against horizontal overflow");

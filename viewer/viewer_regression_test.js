@@ -926,7 +926,12 @@ function testMountCentricResponsiveCssContract() {
   assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), 'desktop overview must use the same three-column monitor-card rhythm as GPU Monitor');
   assert(/\.overview-list\b[\s\S]*column-gap:\s*(?:14px|0\.9rem)/.test(css), 'desktop card gutter must match GPU Monitor closely');
   assert(/\.overview-card\b[\s\S]*border-radius:\s*(?:24px|1\.5rem)/.test(css), 'server cards must use GPU Monitor card radius');
-  assert(/\.overview-card\b[\s\S]*background:\s*var\(--surface\)/.test(css), 'server cards must use the shared Clean card surface');
+  assert(/\.overview-card\b[\s\S]*background:\s*var\(--ops-card\)/.test(css), 'server cards must use the shared Clean card surface');
+  assert(/--ops-card:\s*var\(--surface\)/.test(css) && /--ops-border:\s*var\(--separator\)/.test(css), 'Storage must expose the same semantic card aliases as GPU Monitor');
+  assert(/\.overview-card\b[\s\S]*border:\s*1px solid var\(--ops-border\)/.test(css), 'Storage server cards must consume the shared GPU Monitor border token');
+  assert(/\.overview-card\b[\s\S]*background:\s*var\(--ops-card\)/.test(css), 'Storage server cards must consume the shared GPU Monitor card token');
+  assert(/\.overview-card\b[\s\S]*box-shadow:\s*0 10px 28px color-mix\(in srgb, var\(--ops-fg\) 10%, transparent\)/.test(css), 'Storage cards must use the same resting depth as GPU Monitor cards');
+  assert(/\.overview-card-header\b[\s\S]*padding:\s*0\.56rem 0\.75rem 0\.52rem/.test(css), 'Storage card headers must use GPU Monitor card header rhythm');
   assert(/\.overview-card-header\b[\s\S]*border-bottom:\s*1px solid/.test(css), 'server headers must be separated from mount metrics by one quiet rule');
   assert(/\.overview-mounts\b[\s\S]*display:\s*flex[\s\S]*flex-direction:\s*column/.test(css), 'mounts must render as compact vertical monitor rows');
   assert(/\.overview-mount\b[\s\S]*grid-template-columns:\s*(?:34px|2\.15rem)\s+minmax\(0,\s*1fr\)/.test(css), 'mount rows must align a compact media chip with a flexible metric body');
