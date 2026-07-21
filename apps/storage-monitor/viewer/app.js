@@ -15,6 +15,7 @@ let rescanTimer = null;
 let rescanSawActive = false;
 let detailLoadGeneration = 0;
 let detailRequestVersions = new Map();
+let themeRevealLocked = false;
 
 
 function readThemeModeCookie() {
@@ -48,12 +49,75 @@ function applyStoredThemeMode(mode) {
   return next;
 }
 
-function toggleThemeMode() {
+function farthestThemeRevealRadius(x, y) {
+  return Math.hypot(
+    Math.max(x, window.innerWidth - x),
+    Math.max(y, window.innerHeight - y)
+  ) + 24;
+}
+
+function refreshThemeDependentVisuals() {
+  if (typeof DATA !== "undefined" && DATA && typeof renderTreemap === "function" && currentTab === "treemap") renderTreemap();
+  if (typeof usersInited !== "undefined" && usersInited && typeof renderUsers === "function") renderUsers();
+}
+
+async function toggleThemeMode(event) {
+  if (themeRevealLocked) return document.documentElement.classList.contains("dark") ? "dark" : "light";
   const root = document.documentElement;
   const next = root.classList.contains("dark") ? "light" : "dark";
-  applyStoredThemeMode(next);
-  document.cookie = "themeMode=" + next + "; Path=/; SameSite=Lax";
-  return next;
+  const button = (event && event.currentTarget) || document.getElementById("themeModeButton");
+  const rect = button && typeof button.getBoundingClientRect === "function"
+    ? button.getBoundingClientRect()
+    : { left: window.innerWidth - 48, top: 8, width: 40, height: 40 };
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const radius = farthestThemeRevealRadius(x, y);
+  const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const supportsViewTransition = typeof document.startViewTransition === "function";
+  const rootStyle = root.style;
+  const setRevealProperty = (name, value) => {
+    if (rootStyle && typeof rootStyle.setProperty === "function") rootStyle.setProperty(name, value);
+    else if (rootStyle) rootStyle[name] = value;
+  };
+  const removeRevealProperty = (name) => {
+    if (rootStyle && typeof rootStyle.removeProperty === "function") rootStyle.removeProperty(name);
+    else if (rootStyle) delete rootStyle[name];
+  };
+
+  const applyDestination = () => {
+    applyStoredThemeMode(next);
+    document.cookie = "themeMode=" + next + "; Path=/; SameSite=Lax";
+    refreshThemeDependentVisuals();
+  };
+
+  themeRevealLocked = true;
+  if (button) button.setAttribute("aria-busy", "true");
+  setRevealProperty("--theme-reveal-x", x + "px");
+  setRevealProperty("--theme-reveal-y", y + "px");
+  setRevealProperty("--theme-reveal-radius", radius + "px");
+
+  try {
+    if (reducedMotion || !supportsViewTransition) {
+      applyDestination();
+      return next;
+    }
+
+    const transition = document.startViewTransition(() => {
+      applyDestination();
+    });
+    await transition.finished;
+    return next;
+  } finally {
+    themeRevealLocked = false;
+    if (button) {
+      if (typeof button.removeAttribute === "function") button.removeAttribute("aria-busy");
+      else if (button.attributes) delete button.attributes["aria-busy"];
+      button.focus({ preventScroll: true });
+    }
+    removeRevealProperty("--theme-reveal-x");
+    removeRevealProperty("--theme-reveal-y");
+    removeRevealProperty("--theme-reveal-radius");
+  }
 }
 
 /* =========================================================================
