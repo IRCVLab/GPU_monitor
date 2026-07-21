@@ -1658,6 +1658,121 @@ function testCleanupPanelRevealScrollsFocusedControlsIntoView() {
 }
 
 
+
+async function testThemeRevealOriginUsesVisibleIconCenterAndButtonFallback() {
+  const viewer = loadViewer();
+  const root = viewer.document.documentElement;
+  const button = viewer.document.getElementById('themeModeButton');
+  const sun = viewer.document.createElement('svg');
+  const moon = viewer.document.createElement('svg');
+  sun.getBoundingClientRect = () => ({ left: 100, top: 50, width: 20, height: 10 });
+  moon.getBoundingClientRect = () => ({ left: 300, top: 70, width: 12, height: 12 });
+  button.getBoundingClientRect = () => ({ left: 10, top: 20, width: 80, height: 40 });
+  button.querySelector = (selector) => selector === '.theme-icon-sun' ? sun : selector === '.theme-icon-moon' ? moon : null;
+  const firstCaptured = [];
+  root.style = {
+    setProperty(name, value) { firstCaptured.push([name, value]); },
+    removeProperty() {},
+  };
+  root.classList.remove('light', 'dark');
+  root.classList.add('dark');
+  let updateRan = false;
+  viewer.document.startViewTransition = (update) => {
+    update();
+    updateRan = true;
+    return { finished: Promise.resolve() };
+  };
+
+  await viewer.toggleThemeMode({ currentTarget: button });
+  assert.ok(updateRan, 'view transition update callback must run');
+  assert.deepStrictEqual(firstCaptured.filter(([name]) => name === '--theme-reveal-x').map(([, value]) => value), ['110px'], 'reveal x must use the currently visible SVG center, not the button center');
+  assert.deepStrictEqual(firstCaptured.filter(([name]) => name === '--theme-reveal-y').map(([, value]) => value), ['55px'], 'reveal y must use the currently visible SVG center, not the button center');
+
+  const captured = [];
+  root.style = {
+    setProperty(name, value) { captured.push([name, value]); root[name] = value; },
+    removeProperty(name) { delete root[name]; },
+  };
+  button.querySelector = () => null;
+  root.classList.remove('light', 'dark');
+  root.classList.add('dark');
+  await viewer.toggleThemeMode({ currentTarget: button });
+  assert.deepStrictEqual(captured.filter(([name]) => name === '--theme-reveal-x').map(([, value]) => value), ['50px'], 'missing visible icon falls back to button center x');
+  assert.deepStrictEqual(captured.filter(([name]) => name === '--theme-reveal-y').map(([, value]) => value), ['40px'], 'missing visible icon falls back to button center y');
+}
+
+async function testThemeRevealLifecycleLocksAndCleansUpAfterFinished() {
+  const viewer = loadViewer();
+  const root = viewer.document.documentElement;
+  const button = viewer.document.getElementById('themeModeButton');
+  root.classList.remove('light', 'dark');
+  root.classList.add('dark');
+  button.getBoundingClientRect = () => ({ left: 20, top: 30, width: 40, height: 40 });
+  const properties = new Map();
+  root.style = {
+    setProperty(name, value) { properties.set(name, value); },
+    removeProperty(name) { properties.delete(name); },
+  };
+  let finish;
+  let startCalls = 0;
+  let classPresentInsideUpdate = false;
+  viewer.document.startViewTransition = (update) => {
+    startCalls += 1;
+    classPresentInsideUpdate = root.classList.contains('theme-transitioning');
+    update();
+    return { finished: new Promise(resolve => { finish = resolve; }) };
+  };
+
+  const first = viewer.toggleThemeMode({ currentTarget: button });
+  const second = viewer.toggleThemeMode({ currentTarget: button });
+  assert.strictEqual(startCalls, 1, 'rapid repeated activation cannot start an overlapping view transition');
+  assert.ok(classPresentInsideUpdate, 'html.theme-transitioning must be present before startViewTransition captures');
+  assert.ok(root.classList.contains('theme-transitioning'), 'transitioning class stays through transition.finished');
+  assert.strictEqual(button.getAttribute('aria-busy'), 'true', 'theme button is marked busy while locked');
+  assert.ok(properties.has('--theme-reveal-radius'), 'reveal CSS vars stay through transition.finished');
+  finish();
+  await first;
+  await second;
+  assert.ok(!root.classList.contains('theme-transitioning'), 'transitioning class is removed after finished');
+  assert.strictEqual(button.getAttribute('aria-busy'), undefined, 'busy state is cleaned up after finished');
+  assert.strictEqual(properties.size, 0, 'reveal CSS vars are cleaned up after finished');
+  assert.strictEqual(viewer.document.activeElement, button, 'focus returns to the button after transition cleanup');
+}
+
+function testThemeReducedMotionAndUnsupportedSwitchImmediatelyWithoutRevealState() {
+  const viewer = loadViewer();
+  const root = viewer.document.documentElement;
+  const button = viewer.document.getElementById('themeModeButton');
+  root.classList.remove('light', 'dark');
+  root.classList.add('dark');
+  viewer.window.matchMedia = (query) => ({ matches: query.includes('prefers-reduced-motion'), addEventListener() {}, addListener() {} });
+  let startCalls = 0;
+  viewer.document.startViewTransition = () => { startCalls += 1; return { finished: Promise.resolve() }; };
+  const properties = [];
+  root.style = {
+    setProperty(name, value) { properties.push([name, value]); },
+    removeProperty(name) { properties.push(['remove', name]); },
+  };
+  viewer.toggleThemeMode({ currentTarget: button });
+  assert.strictEqual(startCalls, 0, 'reduced motion must not start a native view transition');
+  assert.ok(root.classList.contains('light'), 'reduced motion switches immediately');
+  assert.ok(!root.classList.contains('theme-transitioning'), 'reduced motion must not add transition class that rotates icons');
+  assert.deepStrictEqual(properties, [], 'reduced motion must not set reveal CSS vars');
+  assert.strictEqual(viewer.document.activeElement, button, 'focus is preserved on immediate switch');
+}
+
+function testTreemapThemePrefersSelectedRootClassOverOsPreference() {
+  const viewer = loadViewer();
+  viewer.window.matchMedia = () => ({ matches: true, addEventListener() {}, addListener() {} });
+  viewer.document.documentElement.classList.remove('light', 'dark');
+  viewer.document.documentElement.classList.add('light');
+  assert.strictEqual(viewer.isDark(), false, 'html.light must override a dark OS preference for treemap theme');
+  viewer.document.documentElement.classList.remove('light', 'dark');
+  viewer.document.documentElement.classList.add('dark');
+  viewer.window.matchMedia = () => ({ matches: false, addEventListener() {}, addListener() {} });
+  assert.strictEqual(viewer.isDark(), true, 'html.dark must override a light OS preference for treemap theme');
+}
+
 function testThemeModeCookieContractPreservesHistory() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.applyStoredThemeMode, 'function', 'applyStoredThemeMode must be exposed for shell reuse');
@@ -1707,6 +1822,10 @@ function testTreemapLegendOverlaysWithoutReducingTileViewport() {
 }
 
 async function main() {
+  await testThemeRevealOriginUsesVisibleIconCenterAndButtonFallback();
+  await testThemeRevealLifecycleLocksAndCleansUpAfterFinished();
+  testThemeReducedMotionAndUnsupportedSwitchImmediatelyWithoutRevealState();
+  testTreemapThemePrefersSelectedRootClassOverOsPreference();
   testThemeModeCookieContractPreservesHistory();
   testThemeControlAndTileFirstDetailLayoutContract();
   testTreemapLegendOverlaysWithoutReducingTileViewport();

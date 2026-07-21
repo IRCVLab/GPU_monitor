@@ -69,7 +69,12 @@ function sizeTreemap() {
   return h;
 }
 
-function isDark() { return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches); }
+function isDark() {
+  const root = document.documentElement;
+  if (root && root.classList && root.classList.contains("dark")) return true;
+  if (root && root.classList && root.classList.contains("light")) return false;
+  return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+}
 
 const TM_MAXLEVEL = 3; // nest up to this many levels deep (drill for more); keeps tile area ∝ size
 const TM_MIN_VISIBLE_SIDE = 1;      // below this, border pixels would visually exaggerate size
