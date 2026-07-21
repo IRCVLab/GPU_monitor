@@ -43,7 +43,7 @@
     --overview-gutter: 24px;
     --overview-card-gap: 14px;
     --overview-card-min: 340px;
-    --overview-media-column-width: 52px;
+    --overview-media-column-width: 56px;
   }
 
   html.light {
