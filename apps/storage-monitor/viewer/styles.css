@@ -116,7 +116,12 @@
     animation: none !important;
   }
 
-  html.theme-no-transition .theme-icon {
+  html.theme-no-transition,
+  html.theme-no-transition::before,
+  html.theme-no-transition::after,
+  html.theme-no-transition *,
+  html.theme-no-transition *::before,
+  html.theme-no-transition *::after {
     transition: none !important;
     animation: none !important;
   }

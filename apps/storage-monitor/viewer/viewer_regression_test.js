@@ -1739,7 +1739,61 @@ async function testThemeRevealLifecycleLocksAndCleansUpAfterFinished() {
   assert.strictEqual(viewer.document.activeElement, button, 'focus returns to the button after transition cleanup');
 }
 
-function testThemeReducedMotionAndUnsupportedSwitchImmediatelyWithoutRevealState() {
+
+function testThemeUnsupportedViewTransitionSwitchesImmediatelyWithNoTweenState() {
+  const viewer = loadViewer();
+  const root = viewer.document.documentElement;
+  const button = viewer.document.getElementById('themeModeButton');
+  root.classList.remove('light', 'dark');
+  root.classList.add('dark');
+  viewer.window.matchMedia = (query) => ({ matches: false, media: query, addEventListener() {}, addListener() {} });
+  viewer.document.startViewTransition = undefined;
+  const properties = [];
+  root.style = {
+    setProperty(name, value) { properties.push(['set', name, value]); },
+    removeProperty(name) { properties.push(['remove', name]); },
+  };
+  let classActiveDuringCookie = false;
+  let cookieValue = '';
+  Object.defineProperty(viewer.document, 'cookie', {
+    configurable: true,
+    get() { return cookieValue; },
+    set(value) {
+      classActiveDuringCookie = root.classList.contains('theme-no-transition');
+      cookieValue = String(value);
+    },
+  });
+
+  const result = viewer.toggleThemeMode({ currentTarget: button });
+
+  assert.ok(result && typeof result.then === 'function', 'toggle remains async-compatible on unsupported browsers');
+  return result.then((mode) => {
+    assert.strictEqual(mode, 'light', 'unsupported path returns the destination mode');
+    assert.ok(root.classList.contains('light'), 'unsupported path applies destination immediately');
+    assert.ok(!root.classList.contains('dark'), 'unsupported path removes the previous theme immediately');
+    assert.strictEqual(classActiveDuringCookie, true, 'theme-no-transition must be active while destination/cookie are applied');
+    assert.ok(!root.classList.contains('theme-no-transition'), 'theme-no-transition is removed after final style is forced');
+    assert.ok(!root.classList.contains('theme-transitioning'), 'unsupported path never enters native transition lock class');
+    assert.deepStrictEqual(properties, [], 'unsupported path does not set or remove reveal CSS vars');
+    assert.strictEqual(button.getAttribute('aria-busy'), undefined, 'unsupported path does not leave a transition lock/busy state');
+    assert.strictEqual(button.getAttribute('aria-pressed'), 'false', 'aria-pressed reflects the light destination immediately');
+    assert.match(viewer.document.cookie, /themeMode=light; Path=\/; SameSite=Lax/, 'unsupported path persists the destination theme cookie');
+    assert.strictEqual(viewer.document.activeElement, button, 'focus is preserved on unsupported immediate switch');
+  });
+}
+
+function testInitialThemeAriaSemanticsSynchronizeBeforeInteraction() {
+  const viewer = loadViewer();
+  const button = viewer.document.getElementById('themeModeButton');
+  viewer.document.cookie = 'themeMode=light';
+  viewer.applyStoredThemeMode();
+  assert.strictEqual(button.getAttribute('aria-pressed'), 'false', 'initial stored light mode synchronizes aria before any click');
+  viewer.document.cookie = 'themeMode=dark';
+  viewer.applyStoredThemeMode();
+  assert.strictEqual(button.getAttribute('aria-pressed'), 'true', 'initial stored dark mode synchronizes aria before any click');
+}
+
+function testThemeReducedMotionSwitchesImmediatelyWithNoRevealState() {
   const viewer = loadViewer();
   const root = viewer.document.documentElement;
   const button = viewer.document.getElementById('themeModeButton');
@@ -1824,7 +1878,9 @@ function testTreemapLegendOverlaysWithoutReducingTileViewport() {
 async function main() {
   await testThemeRevealOriginUsesVisibleIconCenterAndButtonFallback();
   await testThemeRevealLifecycleLocksAndCleansUpAfterFinished();
-  testThemeReducedMotionAndUnsupportedSwitchImmediatelyWithoutRevealState();
+  await testThemeUnsupportedViewTransitionSwitchesImmediatelyWithNoTweenState();
+  testThemeReducedMotionSwitchesImmediatelyWithNoRevealState();
+  testInitialThemeAriaSemanticsSynchronizeBeforeInteraction();
   testTreemapThemePrefersSelectedRootClassOverOsPreference();
   testThemeModeCookieContractPreservesHistory();
   testThemeControlAndTileFirstDetailLayoutContract();
