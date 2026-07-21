@@ -23,8 +23,10 @@
 	import { serverOrder, saveOrder } from '$lib/stores/order';
 	import {
 		dashboardLayout,
+		dashboardLayoutWidth,
 		dashboardView,
 		setDashboardLayout,
+		setDashboardLayoutWidth,
 		setDashboardView
 	} from '$lib/stores/dashboardPrefs';
 	import { activeDevScenario, resetDevScenario } from '$lib/stores/devScenario';
@@ -1112,8 +1114,12 @@
 		}
 	}
 
-	const pageShellClass = 'max-w-7xl mx-auto';
-	const pageMainClass = 'max-w-7xl mx-auto px-4 py-4 sm:px-6';
+	const pageShellClass = $derived(
+		$dashboardLayoutWidth === 'full' ? 'w-full' : 'max-w-7xl mx-auto'
+	);
+	const pageMainClass = $derived(
+		$dashboardLayoutWidth === 'full' ? 'w-full px-4 py-4 sm:px-6' : 'max-w-7xl mx-auto px-4 py-4 sm:px-6'
+	);
 	const serverGridStyle = '--monitor-dashboard-card-min: 22rem;';
 	const indicatorPanelId = 'ops-indicator-panel';
 	const headerIndicatorStyle = `--ops-indicator-top-min: ${HEADER_INDICATOR_TOP_MIN_PX}px; --ops-indicator-top-max: ${HEADER_INDICATOR_TOP_MAX_PX}px;`;
@@ -1121,7 +1127,7 @@
 
 <svelte:window onclick={handleWindowClick} onkeydown={handleWindowKeydown} />
 
-<div class="dashboard-page min-h-screen bg-surface">
+<div class="dashboard-page min-h-screen bg-surface" class:dashboard-layout-full={$dashboardLayoutWidth === 'full'}>
 	<div bind:this={headerShellElement} ontransitionend={handleHeaderTransitionEnd} class="ops-header-shell" class:ops-header-compact={headerCompact} class:ops-header-indicator-visible={headerIndicatorVisible} class:ops-header-menu-open={viewMenuOpen || actionsMenuOpen}>
 		<div class={`ops-indicator-anchor ${pageShellClass}`} aria-hidden={!headerIndicatorVisible} style={headerIndicatorStyle}>
 			<div bind:this={indicatorElement} class="ops-indicator" role="group" aria-label="상태 표시기" onmouseenter={openIndicatorPanel} onmouseleave={closeIndicatorPanel} onfocusin={openIndicatorPanel} onfocusout={handleIndicatorFocusOut}>
@@ -1174,6 +1180,7 @@
 				</nav>
 
 				<div class="ops-actions">
+					<a class="ops-utility-action ops-suite-link" href="http://127.0.0.1:8088/">Storage</a>
 					<div class="relative ops-direct-control" bind:this={viewMenuEl}>
 						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen} aria-keyshortcuts="V">{dashboardViewLabel($dashboardView)} <span aria-hidden="true">⌄</span></button>
 						{#if viewMenuOpen}
@@ -1182,6 +1189,12 @@
 									<span>모드</span>
 									<button class:active={$dashboardView === 'default'} onclick={() => { setDashboardView('default'); viewMenuOpen = false; }}>{dashboardViewLabel('default')}</button>
 									<button class:active={$dashboardView === 'compact'} onclick={() => { setDashboardView('compact'); viewMenuOpen = false; }}>{dashboardViewLabel('compact')}</button>
+								</div>
+								<div class="ops-view-divider"></div>
+								<div class="ops-menu-row" role="group" aria-label="레이아웃 폭">
+									<span>폭</span>
+									<button class:active={$dashboardLayoutWidth === 'framed'} aria-pressed={$dashboardLayoutWidth === 'framed'} onclick={() => { setDashboardLayoutWidth('framed'); viewMenuOpen = false; }}>기본</button>
+									<button class:active={$dashboardLayoutWidth === 'full'} aria-pressed={$dashboardLayoutWidth === 'full'} onclick={() => { setDashboardLayoutWidth('full'); viewMenuOpen = false; }}>전체</button>
 								</div>
 								{#if $dashboardView === 'default'}
 									<div class="ops-view-divider"></div>
@@ -1215,7 +1228,7 @@
 					</div>
 					<div class="relative ops-admin-control" bind:this={actionsMenuEl}>
 						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
-						{#if actionsMenuOpen}<div class="ops-overflow-menu"><button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button><a class="ops-menu-link" href="/logs">이벤트 로그</a><a class="ops-menu-link" href="http://127.0.0.1:8088/">Storage</a><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
+						{#if actionsMenuOpen}<div class="ops-overflow-menu"><button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button><a class="ops-menu-link" href="/logs">이벤트 로그</a><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
 					</div>
 					<button bind:this={themeModeButtonElement} class="ops-mode-action" onclick={() => void runThemeModeReveal(themeModeButtonElement)} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'} aria-busy={themeRevealLocked} aria-keyshortcuts="C" data-shortcut-tooltip="C 명암">
 						{#if $themeMode === 'dark'}

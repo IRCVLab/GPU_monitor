@@ -4,6 +4,22 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const pageSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+
+test('header exposes Storage directly and view menu exposes the live width control', () => {
+	assert.match(
+		pageSource,
+		/<a class="ops-utility-action ops-suite-link" href="http:\/\/127\.0\.0\.1:8088\/">Storage<\/a>/
+	);
+	assert.match(pageSource, /role="group" aria-label="레이아웃 폭"/);
+	assert.match(pageSource, /<span>폭<\/span>/);
+	assert.match(pageSource, /\$dashboardLayoutWidth === 'framed'/);
+	assert.match(pageSource, /setDashboardLayoutWidth\('framed'\)/);
+	assert.match(pageSource, /\$dashboardLayoutWidth === 'full'/);
+	assert.match(pageSource, /setDashboardLayoutWidth\('full'\)/);
+	assert.match(pageSource, /const pageShellClass = \$derived\(/);
+	assert.match(pageSource, /\$dashboardLayoutWidth === 'full' \? 'w-full' : 'max-w-7xl mx-auto'/);
+	assert.match(pageSource, /const pageMainClass = \$derived\(/);
+});
 const compactDashboardSource = readFileSync(new URL('../lib/components/CompactDashboard.svelte', import.meta.url), 'utf8');
 const compactServerRowSource = readFileSync(new URL('../lib/components/CompactServerRow.svelte', import.meta.url), 'utf8');
 

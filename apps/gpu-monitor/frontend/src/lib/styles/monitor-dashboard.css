@@ -196,6 +196,14 @@
 		box-shadow 160ms ease;
 }
 
+.ops-suite-link {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	text-decoration: none;
+	white-space: nowrap;
+}
+
 .ops-network button,
 .ops-indicator-network button {
 	display: inline-flex;
