@@ -453,7 +453,7 @@
   .tm-crumb:hover { color: var(--accent); border-color: var(--accent); }
   .tm-sep { color: var(--text2); }
   .tm-note { position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%); text-align: center; color: var(--text2); }
-  .tm-scale-note { position: absolute; right: 10px; bottom: 10px; z-index: 4; max-width: min(430px, calc(100% - 20px));
+  .tm-scale-note { position: absolute; right: 10px; bottom: 52px; z-index: 4; max-width: min(430px, calc(100% - 20px));
     border: 1px solid var(--separator); border-radius: 9px; background: color-mix(in srgb, var(--surface) 92%, transparent);
     box-shadow: var(--shadow); color: var(--text2); padding: 7px 10px; font-size: 12px; }
   .tm-scale-note b { color: var(--text); font-family: var(--mono); }
