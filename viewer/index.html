@@ -27,17 +27,22 @@
       <div class="brand-wrap">
         <button type="button" id="overviewBack" class="overview-back" hidden>← 서버 목록</button>
         <div class="brand-shell">
-          <span class="logo" aria-hidden="true"></span>
-          <div>
-            <h1 class="brand-title">storage<span class="brand-dot">·</span>viz</h1>
-          </div>
+          <h1 class="brand-title">Storage Monitor</h1>
+          <span class="suite-status-indicator" aria-label="Storage inventory available">
+            <svg class="suite-status-orbit" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+              <circle class="suite-status-track" cx="9" cy="9" r="7"></circle>
+              <circle class="suite-status-satellite" cx="9" cy="2" r="1.35"></circle>
+            </svg>
+            <span class="suite-status-dot" aria-hidden="true"></span>
+          </span>
         </div>
       </div>
       <div class="head-spacer"></div>
       <nav class="suite-nav" aria-label="Tool suite">
-        <a class="suite-nav-link" href="http://127.0.0.1:15173/">
+        <a class="suite-nav-link" href="http://127.0.0.1:15173/" aria-label="GPU Monitor">
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 11.5h10M4.5 4.5l2.2 3 2.1-2 2.7 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="12" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-          GPU Monitor
+          <span class="suite-nav-label-full">GPU Monitor</span>
+          <span class="suite-nav-label-short" aria-hidden="true">GPU</span>
         </a>
         <button type="button" id="themeModeButton" class="theme-mode-button" aria-label="Toggle light and dark theme" aria-pressed="true">
           <svg class="theme-icon theme-icon-sun" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>

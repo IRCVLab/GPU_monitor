@@ -2,7 +2,7 @@
 
 ## Status
 
-- Approved: 2026-07-21
+- Superseded in part by the monitor-card correction below: 2026-07-21
 - Primary surfaces: Storage Viz overview/detail, GPU Monitor header navigation
 - Reference implementation: GPU Monitor `Clean` material in `/home/ircv/workspace/monitoring_v2_dev/frontend`
 
@@ -11,6 +11,19 @@
 Storage Viz is a separate tool from GPU Monitor, but both belong to the same internal infrastructure suite. Storage Viz must use GPU Monitor's Clean visual language and provide direct navigation in both directions without coupling either service's data model or deployment lifecycle.
 
 The overview remains fully expanded: every actionable mount is visible without another click. Density must come from stronger grouping and removal of redundant surfaces, not from hiding data.
+
+## Monitor-card correction (approved by direct implementation feedback)
+
+The earlier continuous full-width row treatment copied Clean color tokens but failed to copy GPU Monitor's component language. It made Storage Viz read as a separate light administrative table and reduced graph legibility. The following rules supersede the earlier `Server storage row` and `Continuous mount strip` sections.
+
+1. At 1280px the overview uses the GPU Monitor dev geometry: 24px page insets, three approximately 401px columns, and a 14px gutter.
+2. Each server is a variable-height monitor card with the same 24px radius, Clean surface, subtle border, shadow, header rule, compact metric body, and quiet footer anatomy as GPU Monitor.
+3. Server order and mount order remain unchanged. Masonry packing may remove vertical gaps but must not sort by capacity, pressure, or name.
+4. Each mount is a compact vertical metric row: media identity chip, path and numeric labels, then one long 4px capacity graph. The graph receives the flexible width instead of being squeezed between table cells.
+5. The accent blue is the normal capacity graph color. Orange and red are restricted to warning/critical percentages and fills. Large server-level warning pills are removed.
+6. The footer summarizes per-server storage utilization, free capacity, mount count, and exceptional pressure counts in one low-contrast line.
+7. The shell title becomes `Storage Monitor`; header height, title scale, control radius, border, and backdrop treatment follow GPU Monitor dev. Cross-tool navigation stays visible.
+8. Light and dark modes use the exact existing Clean tokens and the same component geometry. Theme persistence and service isolation remain unchanged.
 
 ## Goals
 

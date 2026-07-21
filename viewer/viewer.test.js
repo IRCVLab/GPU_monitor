@@ -16,7 +16,7 @@ function testCleanShellThemeBootstrapContract() {
   const themeScript = html.match(/<script>\s*\(\(\) => \{[\s\S]*?themeMode=[\s\S]*?document\.documentElement\.classList\.add\(mode\);[\s\S]*?dataset\.material = 'liquid';[\s\S]*?\}\)\(\);\s*<\/script>/);
   assert(themeScript, "index must include an early inline themeMode bootstrap that applies html.light/html.dark and data-material=liquid");
   assert(html.indexOf(themeScript[0]) < html.indexOf('<link rel="stylesheet" href="styles.css">'), "theme bootstrap must run before styles.css can paint");
-  assert(/<a\b(?=[^>]*class="suite-nav-link")(?=[^>]*href="http:\/\/127\.0\.0\.1:15173\/")(?![^>]*target=)[^>]*>\s*(?:<svg[\s\S]*?<\/svg>\s*)?GPU Monitor\s*<\/a>/.test(html), "header must include a same-tab GPU Monitor suite link");
+  assert(/<a\b(?=[^>]*class="suite-nav-link")(?=[^>]*href="http:\/\/127\.0\.0\.1:15173\/")(?=[^>]*aria-label="GPU Monitor")(?![^>]*target=)[^>]*>[\s\S]*?suite-nav-label-full">GPU Monitor<\/span>[\s\S]*?<\/a>/.test(html), "header must include an accessible same-tab GPU Monitor suite link");
   assert(/<button\b(?=[^>]*id="themeModeButton")(?=[^>]*class="theme-mode-button")(?=[^>]*aria-label="Toggle light and dark theme")(?=[^>]*aria-pressed=)[^>]*>[\s\S]*<svg[\s\S]*<\/button>/.test(html), "header must include an accessible circular theme mode button with inline SVG icons");
   assert(!html.includes("고정 순서 서버 저장소 개요"), "old Storage Viz subtitle copy must be absent from the redesigned shell");
   assert(/html\.light\s*\{[\s\S]*--bg:\s*#f4f5f7;[\s\S]*--surface:\s*#ffffff;[\s\S]*--accent:\s*#297cef;/.test(css), "light mode must map Clean semantic tokens to Storage variables");
@@ -883,13 +883,13 @@ function testCleanupCommandSafetyContracts() {
 }
 
 
-function testOverviewConnectedStripCssContract() {
+function testOverviewMonitorCardCssContract() {
   const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
-  assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*140px\s+minmax\(0,\s*1fr\)/.test(css), "overview rows must preserve a compact fixed server column");
-  assert(/\.overview-mounts\b[\s\S]*background:\s*var\(--surface2\)/.test(css), "overview mounts must share one connected strip surface");
-  assert(/\.overview-mount\b[\s\S]*box-shadow:\s*none/.test(css), "overview mount segments must not have independent card shadows");
-  assert(/\.overview-mount\b[\s\S]*border-right:\s*1px solid var\(--separator\)/.test(css), "overview mount segments must use separators inside the shared strip");
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-row\b[\s\S]*overflow:\s*hidden/.test(css), "mobile overview rows must explicitly guard against horizontal overflow");
+  assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), "overview must use the GPU Monitor three-column card rhythm");
+  assert(/\.overview-card\b[\s\S]*border-radius:\s*24px/.test(css), "overview cards must share GPU Monitor card geometry");
+  assert(/\.overview-mounts\b[\s\S]*flex-direction:\s*column/.test(css), "overview mounts must stack as compact monitor rows");
+  assert(/\.overview-pressure-fill\b[\s\S]*background:\s*var\(--accent\)/.test(css), "healthy capacity graphs must reuse the suite accent color");
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-card\b[\s\S]*overflow:\s*hidden/.test(css), "mobile overview cards must explicitly guard against horizontal overflow");
 }
 
 async function main() {
@@ -907,7 +907,7 @@ async function main() {
   testOverviewCapacityIdExactSchemaValidation();
   testOverviewCapacityBytesRequireStrictJsonNumbers();
   testOverviewRouteHelpers();
-  testOverviewConnectedStripCssContract();
+  testOverviewMonitorCardCssContract();
   testRemovedAnalysisSurfaceIsAbsentFromViewerFiles();
   testTreemapFidelity();
   testCleanupCommandSafetyContracts();
