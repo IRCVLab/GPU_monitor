@@ -59,8 +59,8 @@
 - Modify: `agent/scan_runner.py`
 - Modify: `collector/test_snapshot.py`
 
-- [ ] Add failing enrichment tests requiring `/home` to retain the source mount ID, `/data` to use `<id>-root-data`, both selected roots to keep unique `scan_root` values, linked mount records to reuse their selected-root logical IDs, and all records to share `major_minor` and `capacity_id`.
-- [ ] Add a collector validation test accepting two unique logical roots with one shared capacity while retaining duplicate logical-ID and duplicate-`scan_root` rejection.
+- [ ] Add failing enrichment tests requiring `/home` to retain the source mount ID, `/data` to use `<id>-root-data`, both selected roots to keep unique `scan_root` values, linked mount records to reuse their selected-root logical IDs, and all root-backed records to share `major_minor`, `capacity_id`, media classification/confidence, filesystem type, and mount source.
+- [ ] Add a collector validation test accepting two unique logical roots with one shared capacity and matching physical metadata while retaining duplicate logical-ID and duplicate-`scan_root` rejection.
 - [ ] Run focused tests and confirm enrichment currently collides on `mount_id`.
 - [ ] Add one stable logical-ID helper and use it for selected-root and linked-mount records.
 - [ ] Run `python3 -m pytest -q agent/test_scan_runner.py collector/test_snapshot.py` and confirm all tests pass.
