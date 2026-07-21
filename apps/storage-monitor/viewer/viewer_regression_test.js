@@ -1048,6 +1048,62 @@ function testOverviewFlipCapturesAllFirstRectsBeforeClearingPlacement() {
   assert.strictEqual(items[1].style.transform, 'translate(0, 0)', 'later items must complete FLIP from their previous two-column visual position');
 }
 
+
+function testOverviewFlipIgnoresStaleCallbacksAfterRapidRelayout() {
+  const viewer = loadViewer();
+  const animationFrames = [];
+  const timers = [];
+  viewer.requestAnimationFrame = (fn) => { animationFrames.push(fn); return animationFrames.length; };
+  viewer.cancelAnimationFrame = (id) => { animationFrames[id - 1] = null; };
+  viewer.setTimeout = (fn) => { timers.push(fn); return timers.length; };
+  viewer.clearTimeout = (id) => { timers[id - 1] = null; };
+  viewer.window.matchMedia = () => ({ matches: false, addEventListener() {}, addListener() {} });
+  let positions = [{ left: 354, top: 0 }, { left: 0, top: 134 }];
+  const item = {
+    style: {},
+    firstElementChild: { getBoundingClientRect: () => ({ height: 120 }) },
+    getBoundingClientRect: () => positions.shift() || { left: 0, top: 134 },
+    offsetWidth: 10,
+  };
+  const container = { children: [item], offsetWidth: 640, __overviewColumnCount: 2 };
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '640px' });
+
+  viewer.layoutOverviewMasonry(container);
+  assert.strictEqual(item.style.transform, 'translate(354px, -134px)', 'first relayout prepares FLIP before RAF runs');
+
+  item.style.transform = 'translate(18px, 0px)';
+  item.style.transition = 'transform 280ms cubic-bezier(.22,1,.36,1)';
+  positions = [{ left: 0, top: 134 }];
+  viewer.layoutOverviewMasonry(container);
+  assert.strictEqual(item.style.transform, '', 'newer same-column relayout clears stale transform before old RAF can run');
+  assert.strictEqual(item.style.transition, '', 'newer same-column relayout clears stale transition before old RAF can run');
+
+  for (const frame of animationFrames) if (frame) frame();
+  assert.strictEqual(item.style.transform, '', 'stale RAF from the older column-change relayout must not restore transform');
+  assert.strictEqual(item.style.transition, '', 'stale RAF from the older column-change relayout must not restore transition');
+
+  positions = [{ left: 0, top: 134 }, { left: 354, top: 0 }];
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '350px 350px' });
+  let frameStart = animationFrames.length;
+  viewer.layoutOverviewMasonry(container);
+  for (const frame of animationFrames.slice(frameStart)) if (frame) frame();
+  const oldCleanup = timers[timers.length - 1];
+  assert.strictEqual(item.style.transform, 'translate(0, 0)', 'older animation should schedule cleanup after its RAF runs');
+  assert.strictEqual(item.style.transition, 'transform 280ms cubic-bezier(.22,1,.36,1)', 'older animation should use the approved transition before cleanup');
+
+  positions = [{ left: 354, top: 0 }, { left: 0, top: 134 }];
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '640px' });
+  frameStart = animationFrames.length;
+  viewer.layoutOverviewMasonry(container);
+  for (const frame of animationFrames.slice(frameStart)) if (frame) frame();
+  assert.strictEqual(item.style.transform, 'translate(0, 0)', 'newer animation should be allowed to own the transform');
+  assert.strictEqual(item.style.transition, 'transform 280ms cubic-bezier(.22,1,.36,1)', 'newer animation should be allowed to own the transition');
+
+  if (oldCleanup) oldCleanup();
+  assert.strictEqual(item.style.transform, 'translate(0, 0)', 'old cleanup timer must not clear a newer animation transform');
+  assert.strictEqual(item.style.transition, 'transform 280ms cubic-bezier(.22,1,.36,1)', 'old cleanup timer must not clear a newer animation transition');
+}
+
 function testOverviewResizeFallbackSchedulesOnlyOverviewRelayout() {
   const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   assert(/window\.addEventListener\("resize", \(\) => \{[\s\S]*setTimeout\(\(\) => \{[\s\S]*document\.body && document\.body\.dataset\.shellMode === "overview"[\s\S]*scheduleOverviewMasonry\(document\.getElementById\("overviewList"\)\)/.test(app), 'window resize fallback must throttle and schedule overview layout only while the overview shell is active');
@@ -1678,6 +1734,7 @@ async function main() {
   testOverviewLayoutClearsStaleInlinePlacementAndMotion();
   testOverviewFlipRunsOnlyOnColumnCountChangeAndSkipsReducedMotion();
   testOverviewFlipCapturesAllFirstRectsBeforeClearingPlacement();
+  testOverviewFlipIgnoresStaleCallbacksAfterRapidRelayout();
   testOverviewResizeFallbackSchedulesOnlyOverviewRelayout();
   testApprovedCleanThemeTokenContract();
   testSuccessfulOverviewSuppressesServerCountLiveLead();
