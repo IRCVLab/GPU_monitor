@@ -35,6 +35,28 @@ function testCleanShellThemeBootstrapContract() {
   assert(/@keyframes\s+theme-root-reveal[\s\S]*clip-path:\s*circle\(0px at var\(--theme-reveal-x\) var\(--theme-reveal-y\)\)[\s\S]*clip-path:\s*circle\(var\(--theme-reveal-radius\) at var\(--theme-reveal-x\) var\(--theme-reveal-y\)\)/.test(css), "new theme must reveal in a circle from the button center");
 }
 
+
+function testThemeTransitionFlashFreeStaticContracts() {
+  const html = fs.readFileSync(path.join(here, "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
+  const app = fs.readFileSync(path.join(here, "app.js"), "utf8");
+  const treemap = fs.readFileSync(path.join(here, "treemap.js"), "utf8");
+
+  assert(/\.theme-mode-button\s+\.theme-icon\s*\{[^}]*left:\s*50%[^}]*top:\s*50%[^}]*transform:\s*translate\(-50%,\s*-50%\)/.test(css), "theme SVG icons must be centered with left/top 50% and translate, not asymmetric inset");
+  assert(!/\.theme-mode-button\s+\.theme-icon\s*\{[^}]*inset:\s*11px/.test(css), "theme SVG icons must not use the old asymmetric inset centering");
+  assert(/html\.theme-no-transition\s+\.theme-icon\s*\{[^}]*transition:\s*none\s*!important[^}]*animation:\s*none\s*!important/.test(css), "unsupported/reduced immediate switches must suppress icon rotation without a circle reveal");
+  assert(/html\.theme-transitioning\s*,\s*html\.theme-transitioning\s*::before\s*,\s*html\.theme-transitioning\s*::after\s*,\s*html\.theme-transitioning\s*\*\s*,\s*html\.theme-transitioning\s*\*::before\s*,\s*html\.theme-transitioning\s*\*::after\s*\{[^}]*transition:\s*none\s*!important[^}]*animation:\s*none\s*!important/.test(css), "theme-transitioning must suppress ordinary transitions on html/root, descendants, pseudo-elements, and icons");
+  assert(/html\.theme-transitioning::view-transition-old\(root\)\s*\{[^}]*animation:\s*none[^}]*opacity:\s*1[^}]*mix-blend-mode:\s*normal/.test(css), "old root snapshot must stay static, opaque, and non-blended");
+  assert(/html\.theme-transitioning::view-transition-new\(root\)\s*\{[^}]*animation:\s*theme-root-reveal[^}]*opacity:\s*1[^}]*mix-blend-mode:\s*normal/.test(css), "new root snapshot must be the only clipped reveal layer without crossfade opacity");
+  assert(!/(^|[^\w.-])::view-transition-(?:old|new)\(root\)/.test(css.replace(/html\.theme-transitioning::view-transition-(?:old|new)\(root\)/g, '')), "view-transition pseudo selectors must be scoped to html.theme-transitioning");
+  assert(/classList\.add\("theme-transitioning"\)[\s\S]*document\.startViewTransition\(\(\) => \{[\s\S]*applyDestination\(\)/.test(app), "app must add html.theme-transitioning before native startViewTransition and apply destination inside the update callback");
+  assert(/transition\.finished/.test(app), "theme transition lock and CSS vars must survive until transition.finished");
+  assert(/const\s+iconSelector\s*=\s*root\.classList\.contains\("dark"\)\s*\?\s*"\.theme-icon-sun"\s*:\s*"\.theme-icon-moon"[\s\S]*querySelector\(iconSelector\)/.test(app), "reveal origin must inspect the currently visible sun/moon SVG, not only the button rect");
+  assert(/typeof\s+window\s*!==\s*["']undefined["'][\s\S]*window\.matchMedia/.test(html), "early bootstrap must guard matchMedia before use");
+  assert(!/[^.]\bmatchMedia\('\(prefers-color-scheme: dark\)'\)/.test(html), "early bootstrap must not call bare matchMedia");
+  assert(/classList\.contains\("dark"\)[\s\S]*classList\.contains\("light"\)[\s\S]*matchMedia/.test(treemap), "treemap theme detection must prefer html.dark/html.light before OS preference");
+}
+
 function testOverviewDoesNotBlockOnTheDetailOnlyChartLibrary() {
   const html = fs.readFileSync(path.join(here, "index.html"), "utf8");
   const app = fs.readFileSync(path.join(here, "app.js"), "utf8");
@@ -921,6 +943,7 @@ function testOverviewMonitorCardCssContract() {
 
 async function main() {
   testCleanShellThemeBootstrapContract();
+  testThemeTransitionFlashFreeStaticContracts();
   testOverviewDoesNotBlockOnTheDetailOnlyChartLibrary();
   testHostManifest();
   testHostManifestHelpers();

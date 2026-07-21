@@ -52,10 +52,40 @@ function applyStoredThemeMode(mode) {
 }
 
 function farthestThemeRevealRadius(x, y) {
+  const viewportWidth = Math.max(0, Number(window.innerWidth) || 0);
+  const viewportHeight = Math.max(0, Number(window.innerHeight) || 0);
   return Math.hypot(
-    Math.max(x, window.innerWidth - x),
-    Math.max(y, window.innerHeight - y)
+    Math.max(x, viewportWidth - x),
+    Math.max(y, viewportHeight - y)
   ) + 24;
+}
+
+function themeRectCenter(rect) {
+  if (!rect) return null;
+  const left = Number(rect.left);
+  const top = Number(rect.top);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  if (![left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return { x: left + width / 2, y: top + height / 2 };
+}
+
+function currentThemeIconCenter(button, root) {
+  if (!button || typeof button.querySelector !== "function") return null;
+  const iconSelector = root.classList.contains("dark") ? ".theme-icon-sun" : ".theme-icon-moon";
+  const icon = button.querySelector(iconSelector);
+  if (!icon || typeof icon.getBoundingClientRect !== "function") return null;
+  return themeRectCenter(icon.getBoundingClientRect());
+}
+
+function themeButtonCenter(button) {
+  if (!button || typeof button.getBoundingClientRect !== "function") return null;
+  return themeRectCenter(button.getBoundingClientRect());
+}
+
+function safeThemeRevealCenter() {
+  const viewportWidth = Math.max(0, Number(window.innerWidth) || 0);
+  return { x: viewportWidth - 28, y: 28 };
 }
 
 function refreshThemeDependentVisuals() {
@@ -64,18 +94,35 @@ function refreshThemeDependentVisuals() {
 }
 
 async function toggleThemeMode(event) {
-  if (themeRevealLocked) return document.documentElement.classList.contains("dark") ? "dark" : "light";
   const root = document.documentElement;
+  if (themeRevealLocked) return root.classList.contains("dark") ? "dark" : "light";
   const next = root.classList.contains("dark") ? "light" : "dark";
   const button = (event && event.currentTarget) || document.getElementById("themeModeButton");
-  const rect = button && typeof button.getBoundingClientRect === "function"
-    ? button.getBoundingClientRect()
-    : { left: window.innerWidth - 48, top: 8, width: 40, height: 40 };
-  const x = rect.left + rect.width / 2;
-  const y = rect.top + rect.height / 2;
-  const radius = farthestThemeRevealRadius(x, y);
-  const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const reducedMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const supportsViewTransition = typeof document.startViewTransition === "function";
+  const applyDestination = () => {
+    applyStoredThemeMode(next);
+    document.cookie = "themeMode=" + next + "; Path=/; SameSite=Lax";
+    refreshThemeDependentVisuals();
+  };
+  const focusButton = () => {
+    if (button && typeof button.focus === "function") button.focus({ preventScroll: true });
+  };
+
+  if (reducedMotion || !supportsViewTransition) {
+    root.classList.add("theme-no-transition");
+    try {
+      applyDestination();
+      void root.offsetWidth;
+      return next;
+    } finally {
+      root.classList.remove("theme-no-transition");
+      focusButton();
+    }
+  }
+
+  const center = currentThemeIconCenter(button, root) || themeButtonCenter(button) || safeThemeRevealCenter();
+  const radius = farthestThemeRevealRadius(center.x, center.y);
   const rootStyle = root.style;
   const setRevealProperty = (name, value) => {
     if (rootStyle && typeof rootStyle.setProperty === "function") rootStyle.setProperty(name, value);
@@ -86,39 +133,30 @@ async function toggleThemeMode(event) {
     else if (rootStyle) delete rootStyle[name];
   };
 
-  const applyDestination = () => {
-    applyStoredThemeMode(next);
-    document.cookie = "themeMode=" + next + "; Path=/; SameSite=Lax";
-    refreshThemeDependentVisuals();
-  };
-
   themeRevealLocked = true;
+  root.classList.add("theme-transitioning");
   if (button) button.setAttribute("aria-busy", "true");
-  setRevealProperty("--theme-reveal-x", x + "px");
-  setRevealProperty("--theme-reveal-y", y + "px");
+  setRevealProperty("--theme-reveal-x", center.x + "px");
+  setRevealProperty("--theme-reveal-y", center.y + "px");
   setRevealProperty("--theme-reveal-radius", radius + "px");
 
   try {
-    if (reducedMotion || !supportsViewTransition) {
-      applyDestination();
-      return next;
-    }
-
     const transition = document.startViewTransition(() => {
       applyDestination();
     });
-    await transition.finished;
+    await (transition && transition.finished ? transition.finished : Promise.resolve());
     return next;
   } finally {
     themeRevealLocked = false;
+    root.classList.remove("theme-transitioning");
     if (button) {
       if (typeof button.removeAttribute === "function") button.removeAttribute("aria-busy");
       else if (button.attributes) delete button.attributes["aria-busy"];
-      button.focus({ preventScroll: true });
     }
     removeRevealProperty("--theme-reveal-x");
     removeRevealProperty("--theme-reveal-y");
     removeRevealProperty("--theme-reveal-radius");
+    focusButton();
   }
 }
 

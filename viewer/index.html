@@ -9,9 +9,10 @@
 <script>
 (() => {
   const saved = document.cookie.split('; ').find((part) => part.startsWith('themeMode='))?.split('=')[1];
+  const prefersDark = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const mode = saved === 'light' || saved === 'dark'
     ? saved
-    : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    : (prefersDark ? 'dark' : 'light');
   document.documentElement.classList.remove('light', 'dark');
   document.documentElement.classList.add(mode);
   document.documentElement.dataset.material = 'liquid';
