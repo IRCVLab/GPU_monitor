@@ -1195,6 +1195,9 @@ function testSuccessfulOverviewSuppressesServerCountLiveLead() {
 
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  const mediaColumnMatch = css.match(/--overview-media-column-width:\s*([^;]+);/);
+  assert(mediaColumnMatch, 'overview media column width token must exist');
+  assert.strictEqual(mediaColumnMatch[1].trim(), '46px', 'overview media column width token must reserve enough room for UNKNOWN without truncation');
   assert(/--overview-max-width:\s*1440px/.test(css), 'overview CSS must expose a semantic max-width token');
   assert(/--overview-gutter:\s*24px/.test(css), 'overview CSS must expose the desktop gutter token');
   assert(/--overview-card-gap:\s*14px/.test(css), 'overview CSS must expose the card gap token');
@@ -1212,7 +1215,9 @@ function testMountCentricResponsiveCssContract() {
   assert(/\.overview-card-header\b[\s\S]*padding:\s*0\.56rem 0\.75rem 0\.52rem/.test(css), 'Storage card headers must use GPU Monitor card header rhythm');
   assert(/\.overview-card-header\b[\s\S]*border-bottom:\s*1px solid/.test(css), 'server headers must be separated from mount metrics by one quiet rule');
   assert(/\.overview-mounts\b[\s\S]*display:\s*flex[\s\S]*flex-direction:\s*column/.test(css), 'mounts must render as compact vertical monitor rows');
-  assert(/\.overview-mount\b[\s\S]*grid-template-columns:\s*(?:34px|2\.15rem)\s+minmax\(0,\s*1fr\)/.test(css), 'mount rows must align a compact media chip with a flexible metric body');
+  assert(/\.overview-mount\b[\s\S]*grid-template-columns:\s*var\(--overview-media-column-width\)\s+minmax\(0,\s*1fr\)/.test(css), 'mount rows must allocate a dedicated media column and a flexible body column');
+  assert(/\.overview-media-label\b[\s\S]*width:\s*var\(--overview-media-column-width\)/.test(css), 'overview media labels must consume the same dedicated media-column width as the grid track');
+  assert(/\.overview-media-label\b[\s\S]*overflow:\s*hidden/.test(css), 'overview media labels must prevent overflow from intruding into mount path');
   assert(/\.overview-mount\[data-pressure="warning"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--warn\)/.test(css), 'warning color must be scoped to the exact warning percentage selector');
   assert(/\.overview-mount\[data-pressure="critical"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--crit\)/.test(css), 'critical color must be scoped to the exact critical percentage selector');
   assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');

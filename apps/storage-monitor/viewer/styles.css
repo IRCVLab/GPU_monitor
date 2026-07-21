@@ -43,6 +43,7 @@
     --overview-gutter: 24px;
     --overview-card-gap: 14px;
     --overview-card-min: 340px;
+    --overview-media-column-width: 46px;
   }
 
   html.light {
@@ -232,14 +233,16 @@
   .overview-card[data-tone="warning"] .overview-card-state { color: var(--warn); }
   .overview-card[data-tone="critical"] .overview-card-state { color: var(--crit); }
   .overview-mounts { min-width: 0; display: flex; flex-direction: column; gap: 0.48rem; padding: 0.48rem 0.75rem 0.62rem; }
-  .overview-mount { min-width: 0; display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: start; gap: 0.55rem; padding: 0; background: transparent; }
+  .overview-mount { min-width: 0; display: grid; grid-template-columns: var(--overview-media-column-width) minmax(0, 1fr); align-items: start; gap: 0.55rem; padding: 0; background: transparent; }
   .overview-mount-empty { display: block; color: var(--text2); font-size: 12px; text-align: center; padding: 10px 0; }
   .overview-media-label {
     align-self: start;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
+    width: var(--overview-media-column-width);
+    min-width: var(--overview-media-column-width);
+    overflow: hidden;
     min-height: 23px;
     border: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
     border-radius: 9px;
