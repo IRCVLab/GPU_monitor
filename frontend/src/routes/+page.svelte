@@ -27,7 +27,8 @@
 		dashboardView,
 		setDashboardLayout,
 		setDashboardLayoutWidth,
-		setDashboardView
+		setDashboardView,
+		type DashboardLayoutWidth
 	} from '$lib/stores/dashboardPrefs';
 	import { activeDevScenario, resetDevScenario } from '$lib/stores/devScenario';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
@@ -76,9 +77,16 @@
 		easing: cubicOut
 	};
 
-	function masonry(node: HTMLDivElement, initialEnabled: boolean) {
+	type MasonryOptions = {
+		enabled: boolean;
+		layoutWidth: DashboardLayoutWidth;
+	};
+
+	function masonry(node: HTMLDivElement, initialOptions: MasonryOptions) {
 		let frame = 0;
-		let enabled = initialEnabled;
+		let enabled = initialOptions.enabled;
+		let layoutWidth = initialOptions.layoutWidth;
+		let responsiveLayoutInvalidated = false;
 		let itemObserver: ResizeObserver | null = null;
 		let previousRects = new Map<HTMLElement, FlipRect>();
 		let assignedColumns = new Map<HTMLElement, number>();
@@ -136,11 +144,26 @@
 			const visualRects = new Map(
 				items.map((child) => {
 					const rect = child.getBoundingClientRect();
-					return [child, { left: rect.left + window.scrollX, top: rect.top + window.scrollY }];
+					return [
+						child,
+						{
+							left: rect.left + window.scrollX,
+							top: rect.top + window.scrollY,
+							width: rect.width,
+							height: rect.height
+						}
+					];
 				})
 			);
+			const animateResponsiveResize = responsiveLayoutInvalidated;
 
 			if (enabled) {
+				if (responsiveLayoutInvalidated) {
+					clearAssignments();
+					measuredHeights.clear();
+					for (const child of items) clearPlacement(child);
+					responsiveLayoutInvalidated = false;
+				}
 				const styles = getComputedStyle(node);
 				const currentColumnCount = countResolvedGridTracks(styles.gridTemplateColumns);
 				const columnCountChanged = currentColumnCount !== assignedColumnCount;
@@ -187,7 +210,8 @@
 				if (!previousFinal || !next) return [];
 				if (
 					Math.abs(previousFinal.left - next.left) < 0.5 &&
-					Math.abs(previousFinal.top - next.top) < 0.5
+					Math.abs(previousFinal.top - next.top) < 0.5 &&
+					(!animateResponsiveResize || Math.abs((previousFinal.width ?? 0) - (next.width ?? 0)) < 0.5)
 				) return [];
 				const previous = layoutAnimations.has(child) ? visualRects.get(child) ?? previousFinal : previousFinal;
 				return [{ child, previous, next }];
@@ -199,7 +223,7 @@
 			}
 
 			for (const { child, previous, next } of moves) {
-				const animation = animateFlip(child, previous, next, reducedMotion);
+				const animation = animateFlip(child, previous, next, reducedMotion, animateResponsiveResize);
 				if (!animation) continue;
 				layoutAnimations.set(child, animation);
 				animation.addEventListener('finish', () => layoutAnimations.delete(child), { once: true });
@@ -235,11 +259,16 @@
 		observeItems();
 
 		return {
-			update(nextEnabled: boolean) {
-				if (enabled !== nextEnabled) {
+			update(nextOptions: MasonryOptions) {
+				const widthChanged = nextOptions.layoutWidth !== layoutWidth;
+				if (enabled !== nextOptions.enabled) {
 					clearMasonryState();
 				}
-				enabled = nextEnabled;
+				if (widthChanged) {
+					responsiveLayoutInvalidated = true;
+				}
+				enabled = nextOptions.enabled;
+				layoutWidth = nextOptions.layoutWidth;
 				schedule();
 			},
 			destroy() {
@@ -1300,7 +1329,10 @@
 							class="monitor-dashboard-grid"
 							class:monitor-dashboard-grid--masonry={$dashboardLayout === 'masonry'}
 							style={serverGridStyle}
-							use:masonry={$dashboardLayout === 'masonry'}
+							use:masonry={{
+								enabled: $dashboardLayout === 'masonry',
+								layoutWidth: $dashboardLayoutWidth
+							}}
 							role="list"
 						>
 							{#each $displayServers as server (server.server_id)}
