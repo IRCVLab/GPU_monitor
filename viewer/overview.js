@@ -487,17 +487,23 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   card.setAttribute("data-tone", operationalTone);
 
   const cardHeader = makeEl(doc, "header", "overview-card-header");
+  const titleRow = makeEl(doc, "div", "overview-card-title-row");
   const titleLine = makeEl(doc, "div", "overview-card-title-line");
   titleLine.appendChild(makeEl(doc, "h2", "overview-name", row.displayName));
+  const showStatusLabel = row.primaryStatus.code !== "normal" && !capacityOnlyState;
+  const statusLabel = showStatusLabel ? row.primaryStatus.label : "정상";
+  const status = makeEl(doc, "span", "overview-card-status");
+  status.setAttribute("data-tone", operationalTone);
+  status.title = statusLabel;
   const statusDot = makeEl(doc, "span", "overview-status-dot");
   statusDot.setAttribute("aria-hidden", "true");
   statusDot.setAttribute("data-tone", operationalTone);
-  titleLine.appendChild(statusDot);
+  status.appendChild(statusDot);
+  status.appendChild(makeEl(doc, "span", showStatusLabel ? "overview-status-text" : "overview-status-text overview-sr-only", statusLabel));
+  titleLine.appendChild(status);
   titleLine.appendChild(makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트"));
-  cardHeader.appendChild(titleLine);
-  if (row.primaryStatus.code !== "normal" && !capacityOnlyState) {
-    cardHeader.appendChild(makeEl(doc, "span", "overview-card-state", row.primaryStatus.label));
-  }
+  titleRow.appendChild(titleLine);
+  cardHeader.appendChild(titleRow);
   card.appendChild(cardHeader);
 
   const mountsWrap = makeEl(doc, "div", "overview-mounts");
