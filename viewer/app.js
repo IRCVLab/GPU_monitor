@@ -361,6 +361,17 @@ async function loadBootstrapDataWith(loaders) {
     ? normalizeServerSummariesEnvelope(summaryBody)
     : (Array.isArray(summaryBody) ? { data_mode: "inventory", servers: summaryBody } : { data_mode: "inventory", servers: [] });
   const summaries = envelope.servers || [];
+  const snapshots = [];
+  const summariesMissingOverview = [];
+  for (const summary of summaries) {
+    const id = summary && summary.id ? String(summary.id) : "";
+    const embedded = summary && summary.overview_snapshot;
+    if (embedded && typeof embedded === "object") {
+      snapshots.push({ id, snapshot: embedded, error: null, overviewOnly: true });
+    } else {
+      summariesMissingOverview.push(summary);
+    }
+  }
   let snapshotTask = null;
   return {
     mode: "api",
@@ -368,9 +379,13 @@ async function loadBootstrapDataWith(loaders) {
     data_mode: envelope.data_mode || "inventory",
     session,
     summaries,
-    snapshots: [],
+    snapshots,
     startSnapshotLoading(onEntry) {
-      if (!snapshotTask) snapshotTask = orderedSnapshotLoader(summaries, snapshotLoader, onEntry);
+      if (!snapshotTask) {
+        snapshotTask = summariesMissingOverview.length
+          ? orderedSnapshotLoader(summariesMissingOverview, snapshotLoader, onEntry)
+          : Promise.resolve([]);
+      }
       return snapshotTask;
     },
   };
@@ -388,7 +403,9 @@ function rememberBootstrap(bootstrap) {
   currentOverviewSummaries = bootstrap.summaries || [];
   currentOverviewSnapshotEntries = bootstrap.snapshots || [];
   snapshotCache = new Map();
-  for (const entry of currentOverviewSnapshotEntries) if (entry && entry.id && entry.snapshot) snapshotCache.set(entry.id, entry.snapshot);
+  for (const entry of currentOverviewSnapshotEntries) {
+    if (entry && entry.id && entry.snapshot && !entry.overviewOnly) snapshotCache.set(entry.id, entry.snapshot);
+  }
 }
 
 function updateSnapshotEntry(serverId, snapshot, error) {

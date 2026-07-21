@@ -461,6 +461,50 @@ async function testApiBootstrapRendersBeforeSlowSnapshotsAndStreamsCompletedServ
   assert.deepStrictEqual(entries.map(entry => entry.id), ['alpha-1'], 'background hydration must preserve server order');
 }
 
+async function testApiBootstrapUsesEmbeddedOverviewSnapshotsWithoutFullDownloads() {
+  const viewer = loadViewer();
+  let fullSnapshotLoads = 0;
+  const overviewSnapshot = {
+    server_id: 'alpha-1',
+    selected_roots: [{ mount_id: 'data', capacity_id: 'dev-8-1', storage_media: 'ssd' }],
+    mounts: [{ mount_id: 'data', path: '/data', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 }],
+  };
+  const bootstrap = await viewer.loadBootstrapDataWith({
+    loadSession: async () => ({ authenticated: false, can_rescan: false, csrf_token: '' }),
+    loadServerSummaries: async () => ({
+      data_mode: 'inventory',
+      servers: [{ id: 'alpha-1', display_name: 'alpha', order: 1, mount_count: 1, overview_snapshot: overviewSnapshot }],
+    }),
+    loadOrderedSnapshotsForOverview: async () => { fullSnapshotLoads += 1; return []; },
+    loadServerSnapshot: async () => ({})
+  });
+
+  assert.strictEqual(bootstrap.snapshots.length, 1, 'embedded capacity snapshot must be ready for the first meaningful overview render');
+  assert.strictEqual(bootstrap.snapshots[0].snapshot, overviewSnapshot);
+  assert.strictEqual(bootstrap.snapshots[0].overviewOnly, true, 'embedded summaries must be marked as overview-only detail data');
+  const hydrated = await bootstrap.startSnapshotLoading(() => {});
+  assert.strictEqual(fullSnapshotLoads, 0, 'overview must not download a full server snapshot when embedded capacity data exists');
+  assert(Array.isArray(hydrated) && hydrated.length === 0);
+}
+
+async function testOverviewOnlySnapshotNeverSatisfiesDetailLoading() {
+  const viewer = loadViewer();
+  let detailLoads = 0;
+  viewer.rememberBootstrap({
+    mode: 'api', dataMode: 'inventory', session: {},
+    summaries: [{ id: 'alpha-1', display_name: 'alpha', order: 1, mount_count: 1 }],
+    snapshots: [{ id: 'alpha-1', overviewOnly: true, snapshot: { server_id: 'alpha-1', mounts: [] }, error: null }],
+  });
+  viewer.loadSnapshotForCurrentSource = async () => {
+    detailLoads += 1;
+    return { server_id: 'alpha-1', hostname: 'alpha-full', selected_roots: [], mounts: [], users: [], top_files: [], stale: [] };
+  };
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('alpha-1', false);
+  assert.strictEqual(detailLoads, 1, 'detail route must fetch the full snapshot instead of reusing overview-only capacity data');
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-full');
+}
+
 function testOverviewHydrationCannotOverwriteANewerDetailRequest() {
   const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const start = app.indexOf('function startOverviewSnapshotHydration');
@@ -1462,6 +1506,8 @@ async function main() {
   testRouteNavigationAndBackShellContract();
   await testBootstrapDetectionIsExplicitAndSequential();
   await testApiBootstrapRendersBeforeSlowSnapshotsAndStreamsCompletedServers();
+  await testApiBootstrapUsesEmbeddedOverviewSnapshotsWithoutFullDownloads();
+  await testOverviewOnlySnapshotNeverSatisfiesDetailLoading();
   testOverviewHydrationCannotOverwriteANewerDetailRequest();
   testSampleMarkerAndCompactOverviewOmitsAggregateSurface();
   testMountCentricOverviewDomFieldsAndStableNavigation();
