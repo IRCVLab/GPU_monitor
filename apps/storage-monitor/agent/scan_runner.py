@@ -17,6 +17,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -163,6 +164,55 @@ def try_lock_fd(fd: int) -> bool:
         raise
 
 
+def verified_root_directory_paths(
+    entries: Sequence[mount_policy.MountEntry],
+    *,
+    lstat: Callable[[str], os.stat_result] = os.lstat,
+) -> Tuple[str, ...]:
+    """Return verified root-backed directories eligible for policy synthesis.
+
+    scan_runner owns the only live filesystem probe. The only synthesized path
+    is exact /data, and it is eligible only when no exact /data mountinfo entry
+    exists and lstat proves /data is a real directory on the root mount device.
+    """
+
+    candidate = "/data"
+    if any(entry.mountpoint == candidate for entry in entries):
+        return ()
+    root_entry = next((entry for entry in entries if entry.mountpoint == "/"), None)
+    if root_entry is None:
+        return ()
+    root_device = _parse_major_minor(root_entry.major_minor)
+    if root_device is None:
+        return ()
+    try:
+        candidate_stat = lstat(candidate)
+    except OSError:
+        return ()
+    mode = getattr(candidate_stat, "st_mode", 0)
+    if not stat.S_ISDIR(mode):
+        return ()
+    try:
+        candidate_device = (os.major(candidate_stat.st_dev), os.minor(candidate_stat.st_dev))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return ()
+    if candidate_device != root_device:
+        return ()
+    return (candidate,)
+
+
+def _parse_major_minor(value: str) -> Optional[Tuple[int, int]]:
+    try:
+        major_s, minor_s = value.split(":", 1)
+        major = int(major_s, 10)
+        minor = int(minor_s, 10)
+    except (AttributeError, ValueError):
+        return None
+    if major < 0 or minor < 0:
+        return None
+    return major, minor
+
+
 def run_once(
     config_path: os.PathLike[str] | str = DEFAULT_CONFIG,
     *,
@@ -170,6 +220,7 @@ def run_once(
     scanner_runner: Callable[..., Any] = subprocess.run,
     media_resolver: Optional[Any] = None,
     clock: Callable[[], float] = time.time,
+    lstat: Callable[[str], os.stat_result] = os.lstat,
 ) -> RunResult:
     cfg = load_config(config_path)
     data_dir = cfg.data_dir
@@ -191,7 +242,9 @@ def run_once(
         raw_path = run_dir / "hstscan.raw.json"
 
         try:
-            selected = mount_policy.select_scan_roots(mount_policy.parse_mountinfo(mountinfo_reader()))
+            entries = mount_policy.parse_mountinfo(mountinfo_reader())
+            verified_root_directories = verified_root_directory_paths(entries, lstat=lstat)
+            selected = mount_policy.select_scan_roots(entries, root_directory_paths=verified_root_directories)
         except Exception as exc:
             return RunResult("failed", error=f"mountinfo: {exc}")
         if not selected.selected:
