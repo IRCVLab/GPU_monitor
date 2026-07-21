@@ -26,27 +26,40 @@ Only the exact top-level `/data` path is added. Pattern matching such as `/data1
 
 1. Finds the root mount entry.
 2. Refuses synthesis if mountinfo already contains an exact `/data` entry, regardless of whether that mount is selected or prohibited.
-3. Stats `/` and `/data` through an injectable adapter.
-4. Selects `/data` only when it is a directory and both paths have the same `st_dev`.
+3. Uses `lstat` through an injectable adapter so symlinks are never followed.
+4. Selects `/data` only when it is a real directory and its `st_dev` matches the root mount device.
 5. Treats missing, inaccessible, or changing paths as absent rather than failing the scan.
 
 ### Root selection
 
-`mount_policy.select_scan_roots` accepts a supplied list of verified root-directory paths. A canonical root mount may therefore emit `/home` and `/data` as distinct `SelectedRoot` records. Existing duplicate-mount identity handling still prevents root aliases and bind-like duplicates from becoming extra scan roots.
+`mount_policy.select_scan_roots` accepts a supplied list of verified root-directory paths. Selection first chooses one canonical source mount per existing mount identity. Only the canonical `/` source then expands into `/home` and `/data`; aliases sharing the root identity remain skipped duplicates. A root source can therefore emit multiple distinct `SelectedRoot` records without weakening duplicate mount handling.
 
 If `/home` is a separate eligible mount, that mount owns `/home` while the root mount may still own synthetic `/data`.
 
 ### Snapshot and UI
 
-The existing enrichment path links each scanner result to its selected root. Both root-backed records use the root mount's `major_minor`, so block-media resolution and `capacity_id` remain shared. The dashboard can display separate `/home` and `/data` usage trees while showing the physical root capacity once.
+The existing enrichment path links each scanner result to its selected root. `/home` retains the existing logical `mount_id` derived from the source mount ID. Synthetic `/data` uses the stable safe logical ID `<source-mount-id>-root-data`. Both records retain the same source mount ID internally and use the root mount's `major_minor`, so block-media resolution and `capacity_id` remain shared. The dashboard can display separate `/home` and `/data` usage trees while showing the physical root capacity once.
+
+Collector validation continues to require unique logical `mount_id` and `scan_root` values. Linked mount records use the same logical IDs as their selected roots.
+
+### Scanner target-device guard
+
+The agent passes each target to `hstscan` together with its expected Linux `major:minor` device. `hstscan` compares that expected device with the target's `st_dev` immediately after `lstat` and before starting traversal. A missing target, a symlink, or a device mismatch is skipped and cannot be scanned. The resulting absent raw mount is reported through the existing bounded per-root failure path, while other safe roots continue.
+
+This guard applies to every agent-selected target, not only synthetic `/data`, and closes the mount-change race between policy selection and traversal.
+
+### Hardlink accounting
+
+`hstscan` keeps its existing process-global hardlink deduplication. A physical inode linked across `/home` and `/data` is counted once in total and is attributed to the first deterministic target that encounters it (`/home` precedes `/data`). This preserves physical-byte accounting and avoids double-counting users or server totals. Per-root hardlink attribution is therefore intentionally first-target allocation rather than independent `du` parity.
 
 ## Failure and Safety Behavior
 
 - Missing `/data`: unchanged `/home`-only behavior.
 - Separate local `/data` mount: existing mount selection behavior.
 - Remote, bind, virtual, or prohibited `/data` mount: excluded; no synthetic fallback.
-- `/data` symlink or non-directory: excluded.
+- `/data` symlink, including a same-device symlink, or non-directory: excluded.
 - Probe permission or race failure: excluded for that run; the agent continues with other safe roots.
+- Device or mount change after the probe: scanner expected-device guard skips the changed target.
 - Nested mount below `/data`: scanner device boundary prevents crossing into it; its own eligible mount is scanned separately.
 
 ## Tests
@@ -55,8 +68,11 @@ The existing enrichment path links each scanner result to its selected root. Bot
 - Separate `/home` still coexists with root-backed `/data`.
 - Root aliases remain duplicates rather than selected roots.
 - Probe accepts an ordinary same-device directory.
-- Probe rejects missing, non-directory, symlink-resolved different-device, explicit mount, prohibited mount, and stat failure cases.
-- Scan runner passes both roots to `hstscan`, emits two linked records with one `capacity_id`, and preserves existing absent-`/data` behavior.
+- Probe rejects missing, non-directory, same-device symlink, different-device path, explicit mount, prohibited mount, and lstat failure cases.
+- Exact `/data` is the only synthesized path; `/data1` and `/dataset` are not synthesized.
+- Scanner tests prove expected-device mismatch skips traversal and that process-global hardlink allocation remains deterministic across same-device targets.
+- Scan runner passes both roots with expected devices to `hstscan`, emits two linked records with unique logical `mount_id` values and one shared `capacity_id`, and preserves existing absent-`/data` behavior.
+- Collector validation accepts the two unique logical roots while still rejecting duplicate logical IDs.
 - Full Python, scanner, deployment, viewer, and snapshot test suites remain green.
 
 ## Deployment
