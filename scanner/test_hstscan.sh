@@ -71,6 +71,76 @@ PYEOF
 DU_BYTES="$(du -x --block-size=1 -s "$TREE" 2>/dev/null | cut -f1)"
 [ -n "$DU_BYTES" ] || fail "du produced no output"
 
+# Guarded target parser and safety regression checks.
+read -r TREE_MAJOR TREE_MINOR <<EOF
+$(stat -c '%t %T' "$TREE" | $PY -c 'import sys; maj_hex, min_hex = sys.stdin.read().split(); print(int(maj_hex, 16), int(min_hex, 16))')
+EOF
+TREE_DEV="$TREE_MAJOR:$TREE_MINOR"
+
+GUARDED_OUT="$(mktemp /tmp/hstscan_guarded.XXXXXX.json)"
+"$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$GUARDED_OUT" --target "$TREE" "$TREE_DEV"
+GRC=$?
+[ "$GRC" -eq 0 ] || fail "guarded --target scan exited non-zero ($GRC)"
+$PY - "$GUARDED_OUT" "$TREE" <<'PYEOF' || fail "guarded --target did not scan the exact requested root"
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert [m["path"] for m in payload["mounts"]] == [sys.argv[2]]
+PYEOF
+rm -f "$GUARDED_OUT" "$GUARDED_OUT.tmp"
+pass "guarded --target PATH MAJOR:MINOR scans exact absolute target"
+
+MISMATCH_OUT="$(mktemp /tmp/hstscan_mismatch.XXXXXX.json)"
+if [ "$TREE_DEV" = "0:0" ]; then WRONG_DEV="1:0"; else WRONG_DEV="0:0"; fi
+"$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$MISMATCH_OUT" --target "$TREE" "$WRONG_DEV"
+MRC=$?
+[ "$MRC" -eq 0 ] || fail "mismatched guarded target exited non-zero ($MRC)"
+$PY - "$MISMATCH_OUT" <<'PYEOF' || fail "mismatched guarded target was not skipped safely"
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert payload["mounts"] == []
+PYEOF
+rm -f "$MISMATCH_OUT" "$MISMATCH_OUT.tmp"
+pass "guarded target device mismatch skips without traversal"
+
+for args in \
+    "--target" \
+    "--target relative 1:2" \
+    "--target $TREE" \
+    "--target $TREE 1" \
+    "--target $TREE 1:" \
+    "--target $TREE :2" \
+    "--target $TREE +1:2" \
+    "--target $TREE -1:2" \
+    "--target $TREE 1:-2" \
+    "--target $TREE 1:2x" \
+    "--target $TREE 999999999999999999999999999999:0" \
+    "--target $TREE $TREE_DEV $TREE"; do
+    # shellcheck disable=SC2086
+    if "$BIN" --out "$TMP/invalid.json" $args >/dev/null 2>"$TMP/invalid.err"; then
+        IRC=0
+    else
+        IRC=$?
+    fi
+    [ "$IRC" -eq 2 ] || fail "invalid guarded args [$args] exited $IRC, expected 2"
+done
+pass "guarded --target parser rejects malformed, non-absolute, and mixed positional targets"
+
+$PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "source-order contract violated: process_dir must fstat dirfd before getdents64"
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+start = s.find("static void process_dir(")
+end = s.find("static void *worker_main(", start)
+if start == -1 or end == -1:
+    raise SystemExit("process_dir bounds not found")
+body = s[start:end]
+open_i = body.find("open(")
+fstat_i = body.find("fstat(dirfd")
+getdents_i = body.find("SYS_getdents64")
+if not (open_i != -1 and fstat_i != -1 and getdents_i != -1 and open_i < fstat_i < getdents_i):
+    raise SystemExit(f"open={open_i} fstat={fstat_i} getdents={getdents_i}")
+PYEOF
+pass "source-order contract fstat(dirfd) before getdents64 is present"
+
 # Run the scanner on the tree, no pruning so the whole subtree is retained.
 "$BIN" --threads 4 --prune-home 0 --prune-data 0 --top 50 --out "$OUT" "$TREE"
 RC=$?

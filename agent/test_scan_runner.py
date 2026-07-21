@@ -216,7 +216,8 @@ class ScanRunnerTests(unittest.TestCase):
                 policy_calls.append(tuple(kwargs.get("root_directory_paths", ())))
                 return original_select(entries, *args, **kwargs)
             def fake(argv, **kwargs):
-                roots = argv[argv.index("--out") + 2:]
+                tail = argv[argv.index("--out") + 2:]
+                roots = tail[1::3]
                 scanner_roots.append(tuple(roots))
                 pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload_many(roots)), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
@@ -248,7 +249,8 @@ class ScanRunnerTests(unittest.TestCase):
                 policy_calls.append(tuple(kwargs.get("root_directory_paths", ())))
                 return original_select(entries, *args, **kwargs)
             def fake(argv, **kwargs):
-                roots = argv[argv.index("--out") + 2:]
+                tail = argv[argv.index("--out") + 2:]
+                roots = tail[1::3]
                 scanner_roots.append(tuple(roots))
                 pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload_many(roots)), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
@@ -286,8 +288,47 @@ class ScanRunnerTests(unittest.TestCase):
             self.assertFalse(shell)
             self.assertEqual(argv[:2], ["/bin/hstscan", "--threads"])
             self.assertIn("--out", argv)
-            self.assertEqual(argv[-1], "/home")
-            self.assertNotIn("/", argv[:-1])
+            tail = argv[argv.index("--out") + 2:]
+            self.assertEqual(tail, ["--target", "/home", "8:1"])
+            self.assertNotIn("/", argv[:argv.index("--out")])
+
+
+    def test_scanner_argv_accepts_selected_roots_and_emits_only_guarded_triplets(self):
+        cfg = scan_runner.ScannerConfig(
+            server_id="host-a",
+            scanner_path="/bin/hstscan",
+            data_dir=pathlib.Path("/data"),
+            run_dir=pathlib.Path("/run"),
+            threads=2,
+            prune_home_mb=10,
+            prune_data_mb=20,
+            top=7,
+            stale_days=180,
+            config_digest="0" * 64,
+        )
+        entries = mount_policy.parse_mountinfo("\n".join([
+            mi(1, 0, "8:1", "/", "/home", "rw", "ext4", "/dev/sda1"),
+            mi(2, 1, "8:2", "/", "/data", "rw", "xfs", "/dev/sdb1"),
+        ]))
+        roots = [
+            mount_policy.SelectedRoot("/home", entries[0], 1, "/"),
+            mount_policy.SelectedRoot("/data", entries[1], 2, "/data"),
+        ]
+
+        argv = scan_runner._scanner_argv(cfg, pathlib.Path("/tmp/out.json"), roots)
+
+        self.assertEqual(argv, [
+            "/bin/hstscan",
+            "--threads", "2",
+            "--prune-home", "10",
+            "--prune-data", "20",
+            "--top", "7",
+            "--stale-days", "180",
+            "--out", "/tmp/out.json",
+            "--target", "/home", "8:1",
+            "--target", "/data", "8:2",
+        ])
+        self.assertNotIn("/home", argv[:argv.index("--out") + 2])
 
     def test_partial_snapshot_requires_at_least_one_completed_root(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1366,8 +1407,9 @@ class ScanRunnerTests(unittest.TestCase):
             mountinfo = mi(42, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
 
             def fake(argv, **kwargs):
-                roots = argv[argv.index("--out") + 2:]
-                self.assertEqual(tuple(roots), ("/home", "/data"))
+                tail = argv[argv.index("--out") + 2:]
+                self.assertEqual(tuple(tail), ("--target", "/home", "8:1", "--target", "/data", "8:1"))
+                roots = list(tail[1::3])
                 pathlib.Path(argv[argv.index("--out") + 1]).write_text(
                     json.dumps(raw_payload_many(roots, errors_by_path={"/data": 0})), encoding="utf-8"
                 )
