@@ -1006,6 +1006,48 @@ function testOverviewFlipRunsOnlyOnColumnCountChangeAndSkipsReducedMotion() {
   assert.strictEqual(reduced.style.transition, '', 'reduced motion must skip FLIP transitions');
 }
 
+
+function testOverviewFlipCapturesAllFirstRectsBeforeClearingPlacement() {
+  const viewer = loadViewer();
+  viewer.setTimeout = () => undefined;
+  const animationFrames = [];
+  viewer.requestAnimationFrame = (fn) => { animationFrames.push(fn); return animationFrames.length; };
+  viewer.window.matchMedia = () => ({ matches: false, addEventListener() {}, addListener() {} });
+  const items = [];
+  const firstPositions = [
+    { left: 0, top: 0 },
+    { left: 354, top: 0 },
+    { left: 0, top: 150 },
+  ];
+  const finalPositions = [
+    { left: 0, top: 0 },
+    { left: 0, top: 134 },
+    { left: 0, top: 268 },
+  ];
+  for (let index = 0; index < 3; index += 1) {
+    items[index] = {
+      style: { gridColumn: index === 1 ? '2' : '1', gridRow: String(index + 1) + ' / span 9' },
+      firstElementChild: { getBoundingClientRect: () => ({ height: 120 }) },
+      getBoundingClientRect() {
+        const originalTwoColumnPlacementStillIntact = items[0].style.gridColumn === '1' && items[1].style.gridColumn === '2' && items[2].style.gridColumn === '1';
+        return originalTwoColumnPlacementStillIntact ? firstPositions[index] : finalPositions[index];
+      },
+      offsetWidth: 10,
+    };
+  }
+  const container = { children: items, offsetWidth: 640, __overviewColumnCount: 2 };
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '640px' });
+
+  viewer.layoutOverviewMasonry(container);
+
+  assert.strictEqual(items[1].style.transition, 'none', 'later items must be prepared for FLIP before the animation frame runs');
+  assert.strictEqual(items[1].style.transform, 'translate(354px, -134px)', 'later item FLIP delta must be computed from the pre-clear two-column rect, not the post-clear one-column rect');
+  assert.strictEqual(items[2].style.transform, 'translate(0px, -118px)', 'all item first rects must be captured before any stale placement is cleared');
+  for (const frame of animationFrames) frame();
+  assert.strictEqual(items[1].style.transition, 'transform 280ms cubic-bezier(.22,1,.36,1)', 'later items must animate during a real column-count change');
+  assert.strictEqual(items[1].style.transform, 'translate(0, 0)', 'later items must complete FLIP from their previous two-column visual position');
+}
+
 function testOverviewResizeFallbackSchedulesOnlyOverviewRelayout() {
   const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   assert(/window\.addEventListener\("resize", \(\) => \{[\s\S]*setTimeout\(\(\) => \{[\s\S]*document\.body && document\.body\.dataset\.shellMode === "overview"[\s\S]*scheduleOverviewMasonry\(document\.getElementById\("overviewList"\)\)/.test(app), 'window resize fallback must throttle and schedule overview layout only while the overview shell is active');
@@ -1635,6 +1677,7 @@ async function main() {
   testOverviewMasonryPreservesOrderAcrossResponsiveColumns();
   testOverviewLayoutClearsStaleInlinePlacementAndMotion();
   testOverviewFlipRunsOnlyOnColumnCountChangeAndSkipsReducedMotion();
+  testOverviewFlipCapturesAllFirstRectsBeforeClearingPlacement();
   testOverviewResizeFallbackSchedulesOnlyOverviewRelayout();
   testApprovedCleanThemeTokenContract();
   testSuccessfulOverviewSuppressesServerCountLiveLead();

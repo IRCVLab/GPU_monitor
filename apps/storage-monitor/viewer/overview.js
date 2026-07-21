@@ -609,11 +609,13 @@ function layoutOverviewMasonry(container) {
   if (!items.length || typeof items[0].getBoundingClientRect !== "function" || typeof getComputedStyle !== "function") return;
   const firstRects = new Map();
   for (const item of items) {
+    if (typeof item.getBoundingClientRect === "function") firstRects.set(item, item.getBoundingClientRect());
+  }
+  for (const item of items) {
     item.style.transform = "";
     item.style.transition = "";
     item.style.gridRow = "auto";
     item.style.gridColumn = "auto";
-    if (typeof item.getBoundingClientRect === "function") firstRects.set(item, item.getBoundingClientRect());
   }
   void container.offsetWidth;
   const style = getComputedStyle(container);
