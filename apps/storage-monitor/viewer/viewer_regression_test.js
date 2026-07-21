@@ -585,8 +585,8 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert.strictEqual(findByClass(first, 'overview-media-label')[0].textContent, 'SSD', 'media labels must use neutral storage-class text');
   assert.strictEqual(findByClass(first, 'overview-mount-used-total').length, 0, 'compact mount strip must not render used/total capacity text');
   assert.strictEqual(findByClass(first, 'overview-mount-pct')[0].textContent, '40%', 'utilization percent must be rendered as its own compact field');
-  assert.strictEqual(textTree(findByClass(first, 'overview-mount-free')[0]), '600 GB free', 'healthy mount free text must not append redundant normal status text');
-  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('40%') && accessibleRowText.includes('600 GB free'), 'mount path, media, percent, and free information must remain accessible as descendant text');
+  assert.strictEqual(textTree(findByClass(first, 'overview-mount-free')[0]), '여유 600 GB', 'healthy mount free text must not append redundant normal status text');
+  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('40%') && accessibleRowText.includes('여유 600 GB'), 'mount path, media, percent, and free information must remain accessible as descendant text');
   assert(!accessibleRowText.includes('400 GB / 1000 GB'), 'compact mount strip must omit used/total text');
 
   hintonButton.onclick();
@@ -617,9 +617,9 @@ function testMountStatusTextAppearsOnlyForExceptionalPressure() {
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
   const cells = findByClass(list.children[0].children[0], 'overview-mount');
   const freeTexts = cells.map(cell => textTree(findByClass(cell, 'overview-mount-free')[0]));
-  assert.strictEqual(freeTexts[0], '600 GB free', 'healthy mount free text must not append redundant normal text');
-  assert.strictEqual(freeTexts[1], '190 GB free', 'warning mount free text must remain a clean numeric field');
-  assert.strictEqual(freeTexts[2], '70.0 GB free', 'critical mount free text must remain a clean numeric field');
+  assert.strictEqual(freeTexts[0], '여유 600 GB', 'healthy mount free text must not append redundant normal text');
+  assert.strictEqual(freeTexts[1], '여유 190 GB', 'warning mount free text must remain a clean numeric field');
+  assert.strictEqual(freeTexts[2], '여유 70.0 GB', 'critical mount free text must remain a clean numeric field');
   const footerText = textTree(findByClass(list.children[0].children[0], 'overview-card-footer')[0]);
   assert(footerText.includes('주의 1') && footerText.includes('위험 1'), 'non-color pressure labels must be consolidated in the card footer');
   assert(findByClass(list.children[0].children[0], 'overview-mount')[1].getAttribute('aria-label').includes('주의'), 'warning mount must expose its exact state without relying on color');
@@ -649,7 +649,7 @@ function testServerHeaderMetaIsActionableMountCountOnly() {
   const button = list.children[0].children[0];
   const metaText = textTree(findByClass(button, 'overview-meta')[0]);
   assert.strictEqual(metaText, '2개 마운트', 'server header metadata must be actionable mount count only');
-  assert(!metaText.includes('free'), 'server header metadata must not include total available/free aggregate text');
+  assert(!metaText.includes(' free'), 'server header metadata must not include total available/free aggregate text');
   assert(!metaText.includes('500 B'), 'server header metadata must not expose aggregate capacity');
   assert.strictEqual(findByClass(button, 'overview-server-subtotal').length, 0, 'compact server rows must not render subtotal labels');
 }
@@ -690,7 +690,7 @@ function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
   assert(text.includes('/missing-free') && text.includes('Unknown'), 'unknown media/path must remain visible and accessible');
   assert(text.includes('여유 미확인'), 'unknown free capacity must render honest Korean copy');
   assert(!text.includes('— / —'), 'compact mount strip must omit used/total capacity text');
-  assert(!text.includes('0 B free'), 'unknown free capacity must never render as 0 B free');
+  assert(!text.includes('여유 0 B'), 'unknown free capacity must never render as 0 B free');
   assert.strictEqual(button.getAttribute('aria-label'), undefined, 'unknown mount details must not be hidden behind a row aria-label');
 }
 
@@ -926,21 +926,27 @@ function testOverviewMasonryPreservesOrderAcrossResponsiveColumns() {
   const container = { children: items, offsetWidth: 1232 };
   viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '401px 401px 401px' });
   viewer.layoutOverviewMasonry(container);
-  assert.deepStrictEqual(items.map(item => item.style.gridColumn), ['1', '2', '3', '3', '2', '1', '2'], 'three-column masonry must place items in input order while preferring the next visually available column');
+  assert.deepStrictEqual(items.map(item => item.style.gridColumn), ['1', '2', '3', '1', '2', '3', '1'], 'three-column overview layout must assign cards deterministically by DOM order modulo column count');
   const threeColumnStarts = items.map(item => Number(item.style.gridRow.split('/')[0].trim()));
-  assert.deepStrictEqual(threeColumnStarts, [1, 1, 1, 14, 19, 23, 32], 'later servers must never start above an earlier server after the first aligned row');
+  assert.deepStrictEqual(threeColumnStarts, [1, 1, 1, 23, 19, 14, 41], 'three-column starts must stack vertically within each deterministic column');
 
   viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '609px 609px' });
   viewer.layoutOverviewMasonry(container);
-  assert.deepStrictEqual(items.map(item => item.style.gridColumn), ['1', '2', '2', '1', '2', '1', '2'], 'two-column masonry must recompute placement instead of retaining stale desktop columns');
+  assert.deepStrictEqual(items.map(item => item.style.gridColumn), ['1', '2', '1', '2', '1', '2', '1'], 'two-column overview layout must recompute deterministic odd/even columns from cleared placement');
   const twoColumnStarts = items.map(item => Number(item.style.gridRow.split('/')[0].trim()));
-  assert(twoColumnStarts.every((start, index) => index < 2 || start >= twoColumnStarts[index - 1]), 'two-column starts must remain monotonic after responsive relayout');
+  assert.deepStrictEqual(twoColumnStarts, [1, 1, 23, 19, 36, 37, 49], 'two-column starts must stack vertically within each deterministic column');
 
   viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '370px' });
   viewer.layoutOverviewMasonry(container);
-  assert(items.every(item => item.style.gridColumn === '1'), 'mobile masonry must collapse every card to the one visible column');
+  assert.deepStrictEqual(items.map(item => item.style.gridColumn), ['1', '1', '1', '1', '1', '1', '1'], 'one-column overview layout must place every card in column 1');
   const oneColumnStarts = items.map(item => Number(item.style.gridRow.split('/')[0].trim()));
   assert(oneColumnStarts.every((start, index) => index === 0 || start > oneColumnStarts[index - 1]), 'mobile cards must keep strict server order without overlap');
+}
+
+
+function testOverviewResizeFallbackSchedulesOnlyOverviewRelayout() {
+  const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  assert(/window\.addEventListener\("resize", \(\) => \{[\s\S]*setTimeout\(\(\) => \{[\s\S]*document\.body && document\.body\.dataset\.shellMode === "overview"[\s\S]*scheduleOverviewMasonry\(document\.getElementById\("overviewList"\)\)/.test(app), 'window resize fallback must throttle and schedule overview layout only while the overview shell is active');
 }
 
 function cssBlock(css, selector) {
@@ -1036,7 +1042,7 @@ function testMountCentricResponsiveCssContract() {
   assert(/--ops-card:\s*var\(--surface\)/.test(css) && /--ops-border:\s*var\(--separator\)/.test(css), 'Storage must expose the same semantic card aliases as GPU Monitor');
   assert(/\.overview-card\b[\s\S]*border:\s*1px solid var\(--ops-border\)/.test(css), 'Storage server cards must consume the shared GPU Monitor border token');
   assert(/\.overview-card\b[\s\S]*background:\s*var\(--ops-card\)/.test(css), 'Storage server cards must consume the shared GPU Monitor card token');
-  assert(/\.overview-card\b[\s\S]*box-shadow:\s*0 10px 28px color-mix\(in srgb, var\(--ops-fg\) 10%, transparent\)/.test(css), 'Storage cards must use the same resting depth as GPU Monitor cards');
+  assert(/html\.light\s+\.overview-card\b[\s\S]*box-shadow:\s*0 8px 22px color-mix\(in srgb, var\(--ops-fg\) 8%, transparent\)/.test(css), 'light-mode Storage overview cards must use a restrained Clean resting shadow');
   assert(/\.overview-card-header\b[\s\S]*padding:\s*0\.56rem 0\.75rem 0\.52rem/.test(css), 'Storage card headers must use GPU Monitor card header rhythm');
   assert(/\.overview-card-header\b[\s\S]*border-bottom:\s*1px solid/.test(css), 'server headers must be separated from mount metrics by one quiet rule');
   assert(/\.overview-mounts\b[\s\S]*display:\s*flex[\s\S]*flex-direction:\s*column/.test(css), 'mounts must render as compact vertical monitor rows');
@@ -1044,12 +1050,12 @@ function testMountCentricResponsiveCssContract() {
   assert(/\.overview-mount\[data-pressure="warning"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--warn\)/.test(css), 'warning color must be scoped to the exact warning percentage selector');
   assert(/\.overview-mount\[data-pressure="critical"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--crit\)/.test(css), 'critical color must be scoped to the exact critical percentage selector');
   assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');
-  assert(/@media\s*\(max-width:\s*1040px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/.test(css), 'tablet overview must collapse to two monitor-card columns');
-  assert(/@media\s*\(max-width:\s*700px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(css), 'mobile overview must collapse to one monitor-card column');
+  assert(/@media\s*\(max-width:\s*980px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/.test(css), 'tablet overview must collapse to two monitor-card columns');
+  assert(/@media\s*\(max-width:\s*640px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(css), 'mobile overview must collapse to one monitor-card column');
   assert(/\.overview-pressure-bar\b[\s\S]*height:\s*4px/.test(css), 'compact overview pressure bars must be 4px tall');
   assert(/\.overview-mount-path\b[\s\S]*text-overflow:\s*ellipsis/.test(css), 'compact mount paths must truncate visually');
   assert(/font-variant-numeric:\s*tabular-nums/.test(css), 'compact numeric fields must use tabular numbers');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*main\b[\s\S]*padding:\s*10px/.test(css), '390px mobile layouts must reduce main padding to avoid horizontal overflow');
+  assert(/@media\s*\(max-width:\s*640px\)[\s\S]*body\[data-shell-mode=['"]overview['"]\]\s+main\b[\s\S]*padding:\s*12px/.test(css), '390px mobile overview layouts must use the approved 12px gutter');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-card\b[\s\S]*overflow:\s*hidden/.test(css), 'mobile overview cards must explicitly hide horizontal overflow');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css), 'overview styling must continue to respect reduced motion');
 }
@@ -1559,6 +1565,7 @@ async function main() {
   testDetailHeaderMobileCssContract();
   testOverviewMonitorCardHierarchyContract();
   testOverviewMasonryPreservesOrderAcrossResponsiveColumns();
+  testOverviewResizeFallbackSchedulesOnlyOverviewRelayout();
   testApprovedCleanThemeTokenContract();
   testSuccessfulOverviewSuppressesServerCountLiveLead();
   testMountCentricResponsiveCssContract();

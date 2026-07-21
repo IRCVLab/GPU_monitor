@@ -169,6 +169,7 @@
     cursor: pointer;
     transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 260ms cubic-bezier(0.22, 1, 0.36, 1), border-color 260ms cubic-bezier(0.22, 1, 0.36, 1);
   }
+  html.light .overview-card { box-shadow: 0 8px 22px color-mix(in srgb, var(--ops-fg) 8%, transparent); }
   .overview-card::before {
     content: "";
     position: absolute;
@@ -259,7 +260,10 @@
     flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
     padding: 16px 24px 32px; scroll-behavior: smooth;
   }
-  body[data-shell-mode='detail'] main { padding-top: 8px; padding-bottom: 16px; }
+  body[data-shell-mode='overview'] main { padding: 24px; }
+  body[data-shell-mode='detail'] main { max-width: none; padding-top: 8px; padding-bottom: 16px; }
+  .overview-view { max-width: 1440px; margin: 0 auto; }
+  body[data-shell-mode='overview'] .head-row { max-width: 1440px; margin: 0 auto; padding: 0.35rem 24px; }
 
   /* ---- Header content ---- */
   .head-row { min-height: 3.5rem; display: flex; flex-wrap: nowrap; align-items: center; gap: 1rem; padding: 0.35rem 24px; }
@@ -599,7 +603,6 @@
   .rowcount { color: var(--text2); font-size: 12.5px; margin: 12px 2px 0; }
 
   @media (max-width: 1040px) {
-    .overview-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .head-row, .caps, nav.tabs, .warn-banner { padding-left: 20px; padding-right: 20px; }
     main { padding: 18px 20px 32px; }
     .tbl-scroll { max-height: calc(100vh - 340px); }
@@ -617,7 +620,14 @@
     .detail-capacity-row > * { min-width: 0; }
     .cap-bar { grid-column: 1 / -1; }
   }
-  @media (max-width: 700px) {
+  @media (max-width: 980px) {
+    body[data-shell-mode='overview'] main { padding: 20px; }
+    body[data-shell-mode='overview'] .head-row { padding-left: 20px; padding-right: 20px; }
+    .overview-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 640px) {
+    body[data-shell-mode='overview'] main { padding: 12px; }
+    body[data-shell-mode='overview'] .head-row { padding-left: 12px; padding-right: 12px; }
     .overview-list { grid-template-columns: minmax(0, 1fr); }
   }
   @media (max-width: 680px) { .caps { grid-template-columns: 1fr 1fr; } .hide-sm { display: none; } .overview-back { order: -1; } }

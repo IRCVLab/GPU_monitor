@@ -905,10 +905,15 @@ function testCleanupCommandSafetyContracts() {
 
 function testOverviewMonitorCardCssContract() {
   const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
-  assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), "overview must use the GPU Monitor three-column card rhythm");
+  assert(/body\[data-shell-mode=['"]overview['"]\]\s+\.head-row\b[\s\S]*max-width:\s*1440px[\s\S]*margin:\s*0 auto/.test(css), "overview header must align to the 1440px centered shell");
+  assert(/\.overview-view\b[\s\S]*max-width:\s*1440px[\s\S]*margin:\s*0 auto/.test(css), "overview content must be capped at 1440px and centered");
+  assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), "overview must use an explicit three-column card rhythm");
   assert(/\.overview-card\b[\s\S]*border-radius:\s*(?:24px|1\.5rem)/.test(css), "overview cards must share GPU Monitor card geometry");
   assert(/\.overview-mounts\b[\s\S]*flex-direction:\s*column/.test(css), "overview mounts must stack as compact monitor rows");
   assert(/\.overview-pressure-fill\b[\s\S]*background:\s*var\(--accent\)/.test(css), "healthy capacity graphs must reuse the suite accent color");
+  assert(/@media\s*\(max-width:\s*980px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/.test(css), "compact overview must use two explicit columns");
+  assert(/@media\s*\(max-width:\s*640px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(css), "mobile overview must use one explicit column");
+  assert(/body\[data-shell-mode=['"]detail['"]\]\s+main\b[\s\S]*max-width:\s*none/.test(css), "detail mode must remain full width");
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-card\b[\s\S]*overflow:\s*hidden/.test(css), "mobile overview cards must explicitly guard against horizontal overflow");
 }
 
