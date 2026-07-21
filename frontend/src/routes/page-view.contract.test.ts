@@ -288,12 +288,15 @@ test('width changes invalidate pinned masonry columns before paint and reuse FLI
 	assert.match(actionBody, /const widthChanged = nextOptions\.layoutWidth !== layoutWidth;/);
 	assert.match(actionBody, /if \(widthChanged\)[\s\S]*responsiveLayoutInvalidated = true;/);
 	const invalidateIndex = actionBody.indexOf('if (responsiveLayoutInvalidated)');
+	const enabledLayoutIndex = actionBody.indexOf('if (enabled)');
 	const clearAssignmentsIndex = actionBody.indexOf('clearAssignments();', invalidateIndex);
 	const clearPlacementIndex = actionBody.indexOf('clearPlacement(child)', invalidateIndex);
 	const countColumnsIndex = actionBody.indexOf('countResolvedGridTracks', invalidateIndex);
 	assert.ok(invalidateIndex >= 0, 'responsive invalidation branch must exist');
+	assert.ok(invalidateIndex < enabledLayoutIndex, 'width invalidation must be consumed in both Grid and Masonry modes');
 	assert.ok(clearAssignmentsIndex > invalidateIndex, 'cached column assignments must clear');
 	assert.ok(clearPlacementIndex > clearAssignmentsIndex, 'pinned grid columns must clear');
+	assert.match(actionBody.slice(invalidateIndex, enabledLayoutIndex), /responsiveLayoutInvalidated = false;/);
 	assert.ok(countColumnsIndex > clearPlacementIndex, 'auto-fit columns must be measured only after pins clear');
 	assert.match(actionBody, /animateFlip\(child, previous, next, reducedMotion, animateResponsiveResize\)/);
 });

@@ -157,13 +157,14 @@
 			);
 			const animateResponsiveResize = responsiveLayoutInvalidated;
 
+			if (responsiveLayoutInvalidated) {
+				clearAssignments();
+				measuredHeights.clear();
+				for (const child of items) clearPlacement(child);
+				responsiveLayoutInvalidated = false;
+			}
+
 			if (enabled) {
-				if (responsiveLayoutInvalidated) {
-					clearAssignments();
-					measuredHeights.clear();
-					for (const child of items) clearPlacement(child);
-					responsiveLayoutInvalidated = false;
-				}
 				const styles = getComputedStyle(node);
 				const currentColumnCount = countResolvedGridTracks(styles.gridTemplateColumns);
 				const columnCountChanged = currentColumnCount !== assignedColumnCount;
