@@ -197,16 +197,19 @@ async function postServerRescan(serverId, csrfToken) {
     body: "{}",
   });
 }
-async function loadOrderedSnapshotsForOverview(summaries, snapshotLoader) {
+async function loadOrderedSnapshotsForOverview(summaries, snapshotLoader, onEntry) {
   const loader = snapshotLoader || loadServerSnapshot;
   const rows = Array.isArray(summaries) ? summaries : [];
   return Promise.all(rows.map(async (summary) => {
     const id = summary && summary.id ? String(summary.id) : "";
+    let entry;
     try {
-      return { id, snapshot: await loader(id), error: null };
+      entry = { id, snapshot: await loader(id), error: null };
     } catch (error) {
-      return { id, snapshot: null, error };
+      entry = { id, snapshot: null, error };
     }
+    if (typeof onEntry === "function") onEntry(entry);
+    return entry;
   }));
 }
 async function loadHost(host) {

@@ -16,6 +16,7 @@ let rescanSawActive = false;
 let detailLoadGeneration = 0;
 let detailRequestVersions = new Map();
 let themeRevealLocked = false;
+let overviewLoadGeneration = 0;
 
 
 function readThemeModeCookie() {
@@ -335,13 +336,18 @@ async function loadBootstrapDataWith(loaders) {
     ? normalizeServerSummariesEnvelope(summaryBody)
     : (Array.isArray(summaryBody) ? { data_mode: "inventory", servers: summaryBody } : { data_mode: "inventory", servers: [] });
   const summaries = envelope.servers || [];
+  let snapshotTask = null;
   return {
     mode: "api",
     dataMode: envelope.data_mode || "inventory",
     data_mode: envelope.data_mode || "inventory",
     session,
     summaries,
-    snapshots: await orderedSnapshotLoader(summaries, snapshotLoader),
+    snapshots: [],
+    startSnapshotLoading(onEntry) {
+      if (!snapshotTask) snapshotTask = orderedSnapshotLoader(summaries, snapshotLoader, onEntry);
+      return snapshotTask;
+    },
   };
 }
 
@@ -368,6 +374,18 @@ function updateSnapshotEntry(serverId, snapshot, error) {
     return { id: serverId, snapshot, error: error || null };
   });
   if (!found) currentOverviewSnapshotEntries.push({ id: serverId, snapshot, error: error || null });
+}
+
+function startOverviewSnapshotHydration(bootstrap, generation) {
+  if (!bootstrap || typeof bootstrap.startSnapshotLoading !== "function") return;
+  void bootstrap.startSnapshotLoading((entry) => {
+    if (generation !== overviewLoadGeneration || !entry || !entry.id) return;
+    if (entry.snapshot) snapshotCache.set(entry.id, entry.snapshot);
+    updateSnapshotEntry(entry.id, entry.snapshot || null, entry.error || null);
+    renderOverview();
+  }).catch((error) => {
+    if (generation === overviewLoadGeneration) console.error("[storage-viz] failed to hydrate overview snapshots", error);
+  });
 }
 
 async function loadSnapshotForCurrentSource(serverId) {
@@ -519,10 +537,13 @@ function clearRescanPoll() {
 async function refreshOverviewData(options) {
   const opts = options || {};
   const route = currentRoute();
+  const generation = ++overviewLoadGeneration;
   try {
     const bootstrap = await loadBootstrapData();
+    if (generation !== overviewLoadGeneration) return;
     rememberBootstrap(bootstrap);
     renderOverview();
+    startOverviewSnapshotHydration(bootstrap, generation);
     if (route.serverId) {
       navigateToServer(route.serverId, { skipHistory: true, tab: route.tab, forceReload: !!opts.forceReload });
     } else {
@@ -578,6 +599,7 @@ async function init() {
   const themeButton = document.getElementById("themeModeButton");
   if (themeButton) themeButton.onclick = toggleThemeMode;
   const initialRoute = currentRoute();
+  const generation = ++overviewLoadGeneration;
   let bootstrap;
   try {
     bootstrap = await loadBootstrapData();
@@ -587,8 +609,10 @@ async function init() {
     navigateToOverview({ skipHistory: true });
     return;
   }
+  if (generation !== overviewLoadGeneration) return;
   rememberBootstrap(bootstrap);
   renderOverview();
+  startOverviewSnapshotHydration(bootstrap, generation);
   bindSort("#usersTbl", usersSort, renderUsersTable);
   bindSort("#topTbl", topSort, renderTopFiles);
   bindSort("#staleHead", staleSort, renderStale);

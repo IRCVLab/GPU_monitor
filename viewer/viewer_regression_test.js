@@ -416,8 +416,49 @@ async function testBootstrapDetectionIsExplicitAndSequential() {
   });
   assert.strictEqual(apiEnvelope.dataMode, 'sample', 'API bootstrap must carry normalized dataMode from the /api/servers envelope');
   assert.deepStrictEqual(apiEnvelope.summaries.map(row => row.id), ['hinton', 'atlas'], 'API bootstrap must pass only the ordered server rows downstream');
+  assert.deepStrictEqual(orderedSeen, [], 'API bootstrap must leave large snapshot loading deferred until after summary rendering');
+  await apiEnvelope.startSnapshotLoading(() => {});
   assert.deepStrictEqual(orderedSeen, ['hinton', 'atlas'], 'snapshot loading must receive the envelope servers in original order');
   });
+}
+
+async function testApiBootstrapRendersBeforeSlowSnapshotsAndStreamsCompletedServers() {
+  const viewer = loadViewer();
+  let releaseSnapshots;
+  const snapshotGate = new Promise(resolve => { releaseSnapshots = resolve; });
+  let snapshotLoadingStarted = false;
+  const streamed = [];
+
+  const pendingBootstrap = viewer.loadBootstrapDataWith({
+    loadSession: async () => ({ authenticated: false, can_rescan: false, csrf_token: '' }),
+    loadServerSummaries: async () => ({
+      data_mode: 'inventory',
+      servers: [{ id: 'alpha-1', display_name: 'alpha', order: 1, mount_count: 1 }],
+    }),
+    loadOrderedSnapshotsForOverview: async (summaries, snapshotLoader, onEntry) => {
+      snapshotLoadingStarted = true;
+      await snapshotGate;
+      const entry = { id: summaries[0].id, snapshot: { server_id: summaries[0].id, mounts: [] }, error: null };
+      onEntry(entry);
+      return [entry];
+    },
+    loadServerSnapshot: async () => ({})
+  });
+
+  const outcome = await Promise.race([
+    pendingBootstrap.then(bootstrap => ({ kind: 'bootstrap', bootstrap })),
+    new Promise(resolve => setTimeout(() => resolve({ kind: 'timeout' }), 30)),
+  ]);
+  releaseSnapshots();
+  assert.strictEqual(outcome.kind, 'bootstrap', 'API bootstrap must not wait for large server snapshots before first render');
+  const bootstrap = outcome.bootstrap;
+  assert(Array.isArray(bootstrap.snapshots) && bootstrap.snapshots.length === 0, 'first render must begin from lightweight server summaries');
+  assert.strictEqual(snapshotLoadingStarted, false, 'snapshot downloads must start only after the caller renders summaries');
+  assert.strictEqual(typeof bootstrap.startSnapshotLoading, 'function', 'API bootstrap must expose deferred snapshot hydration');
+
+  const entries = await bootstrap.startSnapshotLoading(entry => streamed.push(entry.id));
+  assert.deepStrictEqual(streamed, ['alpha-1'], 'each completed snapshot must be streamable into its existing card');
+  assert.deepStrictEqual(entries.map(entry => entry.id), ['alpha-1'], 'background hydration must preserve server order');
 }
 
 function testSampleMarkerAndCompactOverviewOmitsAggregateSurface() {
@@ -1408,6 +1449,7 @@ async function main() {
   testSnapshotLoadFailureRendersAsVisibleException();
   testRouteNavigationAndBackShellContract();
   await testBootstrapDetectionIsExplicitAndSequential();
+  await testApiBootstrapRendersBeforeSlowSnapshotsAndStreamsCompletedServers();
   testSampleMarkerAndCompactOverviewOmitsAggregateSurface();
   testMountCentricOverviewDomFieldsAndStableNavigation();
   testMountStatusTextAppearsOnlyForExceptionalPressure();

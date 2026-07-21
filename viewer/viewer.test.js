@@ -126,6 +126,7 @@ async function testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailur
     { id: "gamma-3", display_name: "gamma", order: 30 },
   ];
   const events = [];
+  const streamed = [];
   const result = await loadOrderedSnapshotsForOverview(summaries, async (serverId) => {
     if (serverId === "beta-2") {
       await new Promise(resolve => setTimeout(resolve, 25));
@@ -141,9 +142,10 @@ async function testOverviewSnapshotFetchPreservesInventoryOrderAndIsolatesFailur
     }
     events.push(serverId);
     return { server_id: serverId, mounts: [{ path: "/archive", df_use_pct: 32, df_avail: 2 * GiB }] };
-  });
+  }, entry => streamed.push(entry.id));
 
   assert.notDeepStrictEqual(events, result.map(item => item.id), "responses may resolve out of order in the fetch layer");
+  assert.deepStrictEqual(streamed, events, "completed snapshots must stream to the overview as each server resolves");
   assert.deepStrictEqual(result.map(item => item.id), ["beta-2", "alpha-1", "gamma-3"], "returned rows must preserve inventory order");
   assert.strictEqual(result[0].snapshot.server_id, "beta-2");
   assert.strictEqual(result[1].snapshot, null, "snapshot failures must be isolated into the row result");
