@@ -355,6 +355,22 @@ class PollServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             svc.load_state_for_api("../alpha-1")
 
+    def test_overview_snapshot_omits_root_metadata_without_a_visible_mount(self):
+        from collector.service import _overview_snapshot
+
+        payload = payload_for()
+        skipped_root = copy.deepcopy(payload["selected_roots"][0])
+        skipped_root["mount_id"] = "virtual-skipped-root"
+        payload["selected_roots"].append(skipped_root)
+
+        overview = _overview_snapshot(payload)
+
+        self.assertEqual(
+            [root["mount_id"] for root in overview["selected_roots"]],
+            ["home"],
+            "overview should only include root metadata used by a displayed mount",
+        )
+
     def test_scheduler_runs_sequential_polls_and_waits_remaining_interval(self):
         s = make_server(); self.seed(s)
         old_status = status_data(payload_for(s.id, started=1719200000, digest=s.scanner_digest))[0]

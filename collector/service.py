@@ -39,10 +39,17 @@ def _overview_rows(value: Any, fields: tuple[str, ...]) -> list[dict[str, Any]]:
 def _overview_snapshot(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, Mapping):
         return None
+    mounts = _overview_rows(payload.get("mounts"), OVERVIEW_MOUNT_FIELDS)
+    visible_mount_ids = {row.get("mount_id") for row in mounts}
+    selected_roots = [
+        row
+        for row in _overview_rows(payload.get("selected_roots"), OVERVIEW_ROOT_FIELDS)
+        if row.get("mount_id") in visible_mount_ids
+    ]
     return {
         "server_id": payload.get("server_id"),
-        "selected_roots": _overview_rows(payload.get("selected_roots"), OVERVIEW_ROOT_FIELDS),
-        "mounts": _overview_rows(payload.get("mounts"), OVERVIEW_MOUNT_FIELDS),
+        "selected_roots": selected_roots,
+        "mounts": mounts,
     }
 
 
