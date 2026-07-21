@@ -175,21 +175,22 @@ class PollService:
     def server_summaries(self) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
         for server in self.servers:
-            overview = self._overview_cache.get(server.id)
-            state = self.store.load_state(server.id)
-            summaries.append({
-                "id": server.id,
-                "display_name": server.display_name,
-                "order": server.order,
-                "snapshot_availability": state["snapshot_availability"],
-                "freshness": state["freshness"],
-                "latest_pull_status": state["latest_pull_status"],
-                "latest_scan_result": state["latest_scan_result"],
-                "configuration_sync": state["configuration_sync"],
-                "mount_count": len(overview.get("mounts", [])) if isinstance(overview, Mapping) else 0,
-                "overview_snapshot": overview,
-                "active_job": state.get("active_job"),
-            })
+            with self._locks[server.id]:
+                overview = self._overview_cache.get(server.id)
+                state = self.store.load_state(server.id)
+                summaries.append({
+                    "id": server.id,
+                    "display_name": server.display_name,
+                    "order": server.order,
+                    "snapshot_availability": state["snapshot_availability"],
+                    "freshness": state["freshness"],
+                    "latest_pull_status": state["latest_pull_status"],
+                    "latest_scan_result": state["latest_scan_result"],
+                    "configuration_sync": state["configuration_sync"],
+                    "mount_count": len(overview.get("mounts", [])) if isinstance(overview, Mapping) else 0,
+                    "overview_snapshot": overview,
+                    "active_job": state.get("active_job"),
+                })
         return summaries
 
     def load_snapshot_for_api(self, server_id: str) -> Mapping[str, Any] | None:

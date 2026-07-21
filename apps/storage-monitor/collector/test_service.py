@@ -404,6 +404,52 @@ class PollServiceTests(unittest.TestCase):
         overview = service.server_summaries()[0]["overview_snapshot"]
         self.assertEqual(overview["mounts"][0]["df_total"], 200)
 
+    def test_server_summaries_wait_for_poll_to_publish_snapshot_and_overview_together(self):
+        server = make_server()
+        self.seed(server)
+        service = self.service([server])
+        updated = payload_for(server.id, started=1719209100, digest=server.scanner_digest)
+        updated["mounts"][0]["df_total"] = 200
+        status, data = status_data(updated)
+        self.tx.status[server.id] = status
+        self.tx.downloads[server.id] = (status, data)
+        original_apply_download = self.store.apply_download
+        snapshot_committed = threading.Event()
+        allow_cache_publish = threading.Event()
+
+        def paused_apply_download(*args, **kwargs):
+            result = original_apply_download(*args, **kwargs)
+            snapshot_committed.set()
+            allow_cache_publish.wait(2)
+            return result
+
+        self.store.apply_download = paused_apply_download
+        poll = threading.Thread(target=service.poll_once)
+        poll.start()
+        self.assertTrue(snapshot_committed.wait(2))
+
+        summary_result = {}
+        summary_finished = threading.Event()
+
+        def read_summary():
+            summary_result.update(service.server_summaries()[0])
+            summary_finished.set()
+
+        summary = threading.Thread(target=read_summary)
+        summary.start()
+        summary_finished_early = summary_finished.wait(0.05)
+        allow_cache_publish.set()
+        poll.join(2)
+        summary.join(2)
+
+        self.assertFalse(
+            summary_finished_early,
+            "summary must not observe state between snapshot commit and overview publication",
+        )
+        self.assertFalse(poll.is_alive())
+        self.assertFalse(summary.is_alive())
+        self.assertEqual(summary_result["overview_snapshot"]["mounts"][0]["df_total"], 200)
+
     def test_scheduler_runs_sequential_polls_and_waits_remaining_interval(self):
         s = make_server(); self.seed(s)
         old_status = status_data(payload_for(s.id, started=1719200000, digest=s.scanner_digest))[0]
