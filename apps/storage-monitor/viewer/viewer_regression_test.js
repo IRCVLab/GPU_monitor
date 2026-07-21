@@ -1515,9 +1515,19 @@ function testThemeControlAndTileFirstDetailLayoutContract() {
   assert.match(css, /#treemap\s*\{[^}]*height:\s*calc\(100vh\s*-\s*225px\)/);
 }
 
+function testTreemapLegendOverlaysWithoutReducingTileViewport() {
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  const treemap = fs.readFileSync(path.join(__dirname, 'treemap.js'), 'utf8');
+  assert.match(css, /#panel-treemap\.active\s*\{[^}]*position:\s*relative/);
+  assert.match(css, /#panel-treemap\s+\.legend\s*\{[^}]*position:\s*absolute[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/);
+  assert.doesNotMatch(treemap, /const\s+legendH\s*=\s*legend\s*\?\s*legend\.offsetHeight/);
+  assert.match(treemap, /const\s+avail\s*=\s*main\.clientHeight\s*-\s*pad\s*-\s*toolbarH\s*-\s*12/);
+}
+
 async function main() {
   testThemeModeCookieContractPreservesHistory();
   testThemeControlAndTileFirstDetailLayoutContract();
+  testTreemapLegendOverlaysWithoutReducingTileViewport();
   testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars();
   testSnapshotLoadFailureRendersAsVisibleException();
   testRouteNavigationAndBackShellContract();
