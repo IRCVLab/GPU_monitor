@@ -230,17 +230,22 @@ def classify_mount(entry: MountEntry) -> MountDecision:
     return MountDecision("unsupported", "unsupported-fstype")
 
 
-def select_scan_roots(entries: Sequence[MountEntry], home_path: str = "/home") -> SelectionResult:
+def select_scan_roots(
+    entries: Sequence[MountEntry],
+    home_path: str = "/home",
+    root_directory_paths: Sequence[str] = (),
+) -> SelectionResult:
     """Select deterministic scan roots from parsed mount entries.
 
-    Root filesystem entries are limited to ``home_path``. If ``home_path`` has
-    its own eligible mount, that separate mount owns the scan exactly once and
-    the root filesystem's synthetic home scan is skipped.
+    Root filesystem entries are limited to ``home_path`` plus caller-supplied
+    root-backed directory paths. If an exact actual mount exists at a synthetic
+    path, that mount record owns the path and the root fallback is skipped.
     """
 
     normalized_home = _normalize_mountpoint(home_path)
-    exact_home_mount_exists = any(entry.mountpoint == normalized_home for entry in entries)
-    selected_candidates: List[Tuple[MountEntry, str, str]] = []
+    normalized_root_directories = _normalize_unique_mountpoints(root_directory_paths)
+    exact_mountpoints = {entry.mountpoint for entry in entries}
+    selected_entries: List[MountEntry] = []
     skipped: List[SkippedMount] = []
 
     for entry in entries:
@@ -248,56 +253,48 @@ def select_scan_roots(entries: Sequence[MountEntry], home_path: str = "/home") -
         if decision.status != "selected":
             skipped.append(SkippedMount(entry.mount_id, entry.mountpoint, decision.reason, entry=entry))
             continue
-        if entry.mountpoint == "/":
-            selected_candidates.append((entry, normalized_home, "root-home"))
-            skipped.append(SkippedMount(entry.mount_id, entry.mountpoint, "root-limited-to-home", entry=entry))
-        else:
-            selected_candidates.append((entry, entry.mountpoint, "selected"))
+        selected_entries.append(entry)
 
-    if exact_home_mount_exists:
-        kept: List[Tuple[MountEntry, str, str]] = []
-        for entry, scan_root, reason in selected_candidates:
-            if entry.mountpoint == "/" and scan_root == normalized_home:
-                skipped.append(SkippedMount(entry.mount_id, entry.mountpoint, "root-home-covered", entry=entry))
-            else:
-                kept.append((entry, scan_root, reason))
-        selected_candidates = kept
-
+    canonical_entries: List[MountEntry] = []
     groups = {}
-    for entry, scan_root, reason in selected_candidates:
-        groups.setdefault(_identity(entry), []).append((entry, scan_root, reason))
+    for entry in selected_entries:
+        groups.setdefault(_identity(entry), []).append(entry)
 
-    selected: List[SelectedRoot] = []
     for group in groups.values():
-        root_home_candidates = [item for item in group if item[2] == "root-home"]
-        if root_home_candidates:
-            chosen = min(root_home_candidates, key=lambda item: _choice_key(item[0], item[1]))
-        else:
-            chosen = min(group, key=lambda item: _choice_key(item[0], item[1]))
-        chosen_entry, chosen_root, chosen_reason = chosen
-        selected.append(
-            SelectedRoot(
-                mountpoint=chosen_root,
-                entry=chosen_entry,
-                source_mount_id=chosen_entry.mount_id,
-                source_mountpoint=chosen_entry.mountpoint,
-                reason=chosen_reason,
-            )
-        )
-        for entry, scan_root, _reason in sorted(group, key=lambda item: _choice_key(item[0], item[1])):
-            if entry is chosen_entry and scan_root == chosen_root:
+        chosen = _choose_canonical_mount(group)
+        canonical_entries.append(chosen)
+        for entry in sorted(group, key=lambda item: _choice_key(item, item.mountpoint)):
+            if entry is chosen:
                 continue
             skipped.append(
                 SkippedMount(
                     mount_id=entry.mount_id,
-                    mountpoint=scan_root,
+                    mountpoint=entry.mountpoint,
                     reason="duplicate",
-                    chosen_mount_id=chosen_entry.mount_id,
+                    chosen_mount_id=chosen.mount_id,
                     entry=entry,
                 )
             )
 
-    selected.sort(key=lambda record: (record.entry.mount_id, len(_normalize_mountpoint(record.mountpoint)), _normalize_mountpoint(record.mountpoint)))
+    selected: List[SelectedRoot] = []
+    for entry in canonical_entries:
+        if entry.mountpoint == "/":
+            skipped.append(SkippedMount(entry.mount_id, entry.mountpoint, "root-limited-to-home", entry=entry))
+            if normalized_home in exact_mountpoints:
+                skipped.append(SkippedMount(entry.mount_id, entry.mountpoint, "root-home-covered", entry=entry))
+            else:
+                selected.append(_selected_root(entry, normalized_home, "root-home"))
+            for root_directory in normalized_root_directories:
+                if root_directory == normalized_home:
+                    continue
+                if root_directory in exact_mountpoints:
+                    skipped.append(SkippedMount(entry.mount_id, entry.mountpoint, "root-directory-covered", entry=entry))
+                else:
+                    selected.append(_selected_root(entry, root_directory, "root-directory"))
+        else:
+            selected.append(_selected_root(entry, entry.mountpoint, "selected"))
+
+    selected.sort(key=_selected_sort_key)
     skipped.sort(key=lambda record: (record.reason != "duplicate", record.mount_id, len(_normalize_mountpoint(record.mountpoint)), _normalize_mountpoint(record.mountpoint)))
     return SelectionResult(selected=selected, skipped=skipped)
 
@@ -326,6 +323,41 @@ def is_boot_filesystem_path(path: str) -> bool:
 
 def _identity(entry: MountEntry) -> Tuple[str, str, str, str]:
     return (entry.major_minor, entry.fstype.lower(), entry.root, entry.source)
+
+
+def _choose_canonical_mount(entries: Sequence[MountEntry]) -> MountEntry:
+    root_aliases = [entry for entry in entries if entry.mountpoint == "/"]
+    if root_aliases:
+        return min(root_aliases, key=lambda entry: _choice_key(entry, entry.mountpoint))
+    return min(entries, key=lambda entry: _choice_key(entry, entry.mountpoint))
+
+
+def _selected_root(entry: MountEntry, mountpoint: str, reason: str) -> SelectedRoot:
+    return SelectedRoot(
+        mountpoint=mountpoint,
+        entry=entry,
+        source_mount_id=entry.mount_id,
+        source_mountpoint=entry.mountpoint,
+        reason=reason,
+    )
+
+
+def _normalize_unique_mountpoints(paths: Sequence[str]) -> Tuple[str, ...]:
+    normalized: List[str] = []
+    seen = set()
+    for path in paths:
+        mountpoint = _normalize_mountpoint(path)
+        if mountpoint == "/" or mountpoint in seen:
+            continue
+        seen.add(mountpoint)
+        normalized.append(mountpoint)
+    return tuple(normalized)
+
+
+def _selected_sort_key(record: SelectedRoot) -> Tuple[int, int, int, str]:
+    reason_rank = {"root-home": 0, "root-directory": 1}.get(record.reason, 0)
+    normalized = _normalize_mountpoint(record.mountpoint)
+    return (record.entry.mount_id, reason_rank, len(normalized), normalized)
 
 
 def _normalize_mountpoint(path: str) -> str:
