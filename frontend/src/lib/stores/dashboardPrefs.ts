@@ -5,9 +5,11 @@ import type { DashboardView } from '$lib/utils/dashboardViewLabel';
 
 export type { DashboardView } from '$lib/utils/dashboardViewLabel';
 export type DashboardLayout = 'grid' | 'masonry';
+export type DashboardLayoutWidth = 'framed' | 'full';
 
 const DASHBOARD_VIEW_COOKIE = 'dashboardView';
 const DASHBOARD_LAYOUT_COOKIE = 'dashboardLayout';
+const DASHBOARD_LAYOUT_WIDTH_COOKIE = 'dashboardLayoutWidth';
 
 export function readDashboardView(): DashboardView {
 	const value = readCookie(DASHBOARD_VIEW_COOKIE);
@@ -37,4 +39,19 @@ dashboardLayout.subscribe((value) => {
 
 export function setDashboardLayout(value: DashboardLayout): void {
 	dashboardLayout.set(value);
+}
+
+export function readDashboardLayoutWidth(): DashboardLayoutWidth {
+	const value = readCookie(DASHBOARD_LAYOUT_WIDTH_COOKIE);
+	return value === 'full' ? 'full' : 'framed';
+}
+
+export const dashboardLayoutWidth: Writable<DashboardLayoutWidth> = writable(readDashboardLayoutWidth());
+
+dashboardLayoutWidth.subscribe((value) => {
+	writeCookie(DASHBOARD_LAYOUT_WIDTH_COOKIE, value);
+});
+
+export function setDashboardLayoutWidth(value: DashboardLayoutWidth): void {
+	dashboardLayoutWidth.set(value);
 }

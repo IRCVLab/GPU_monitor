@@ -16,6 +16,17 @@ test('dashboard layout preference persists Grid or Masonry independently of Full
 	assert.match(source, /export function setDashboardLayout\(value: DashboardLayout\): void/);
 });
 
+test('dashboard width preference mirrors the live monitor framed or full-width contract', () => {
+	assert.match(source, /export type DashboardLayoutWidth = 'framed' \| 'full';/);
+	assert.match(source, /const DASHBOARD_LAYOUT_WIDTH_COOKIE = 'dashboardLayoutWidth';/);
+	assert.match(source, /export function readDashboardLayoutWidth\(\): DashboardLayoutWidth/);
+	assert.match(source, /readCookie\(DASHBOARD_LAYOUT_WIDTH_COOKIE\)/);
+	assert.match(source, /value === 'full' \? 'full' : 'framed'/);
+	assert.match(source, /export const dashboardLayoutWidth: Writable<DashboardLayoutWidth> = writable\(readDashboardLayoutWidth\(\)\);/);
+	assert.match(source, /dashboardLayoutWidth\.subscribe\([\s\S]*writeCookie\(DASHBOARD_LAYOUT_WIDTH_COOKIE, value\)/);
+	assert.match(source, /export function setDashboardLayoutWidth\(value: DashboardLayoutWidth\): void/);
+});
+
 
 test('dashboard view preference persists Full or Compact in the dashboardView cookie', () => {
 	assert.match(source, /const DASHBOARD_VIEW_COOKIE = 'dashboardView';/);
