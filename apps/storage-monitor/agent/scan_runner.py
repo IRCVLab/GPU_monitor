@@ -251,7 +251,7 @@ def run_once(
             return RunResult("failed", error="no safe roots selected")
         media_by_major_minor = _resolve_media_by_major_minor(selected, media_resolver if media_resolver is not None else BlockMediaResolver())
 
-        argv = _scanner_argv(cfg, raw_path, [root.mountpoint for root in selected.selected])
+        argv = _scanner_argv(cfg, raw_path, selected.selected)
         try:
             completed = scanner_runner(argv, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception as exc:
@@ -320,8 +320,8 @@ def run_once(
             pass
 
 
-def _scanner_argv(cfg: ScannerConfig, out_path: pathlib.Path, roots: Sequence[str]) -> List[str]:
-    return [
+def _scanner_argv(cfg: ScannerConfig, out_path: pathlib.Path, roots: Sequence[mount_policy.SelectedRoot]) -> List[str]:
+    argv = [
         cfg.scanner_path,
         "--threads", str(cfg.threads),
         "--prune-home", str(cfg.prune_home_mb),
@@ -329,8 +329,10 @@ def _scanner_argv(cfg: ScannerConfig, out_path: pathlib.Path, roots: Sequence[st
         "--top", str(cfg.top),
         "--stale-days", str(cfg.stale_days),
         "--out", str(out_path),
-        *roots,
     ]
+    for root in roots:
+        argv.extend(["--target", root.mountpoint, root.entry.major_minor])
+    return argv
 
 
 def _validate_raw_payload(raw: Any) -> None:

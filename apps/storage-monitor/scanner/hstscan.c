@@ -38,6 +38,9 @@
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/resource.h>
+#if defined(__linux__)
+#include <sys/sysmacros.h>
+#endif
 
 #define SCANNER_VERSION "0.1.0"
 #define SCHEMA_VERSION  1
@@ -543,6 +546,12 @@ struct mount_info {
     char  *fstype;
 };
 
+struct target_spec {
+    const char *path;
+    bool        guarded;
+    dev_t       expected_dev;
+};
+
 struct scan_ctx {
     struct queue queue;
     dev_t        root_dev;        /* st_dev of the target root; stay within it */
@@ -597,6 +606,18 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
             fprintf(stderr, "hstscan: WARNING fd exhaustion (%s) opening %s\n",
                     strerror(e), it->path);
         }
+        return;
+    }
+
+    struct stat dst;
+    if (fstat(dirfd, &dst) != 0) {
+        w->errs++;
+        blocked_add(it->path, errno);
+        close(dirfd);
+        return;
+    }
+    if (dst.st_dev != c->root_dev) {
+        close(dirfd);
         return;
     }
 
@@ -763,10 +784,14 @@ static void *worker_main(void *argp) {
 
 /* Returns root node of the scanned tree, or NULL on failure to open root. */
 static struct node *scan_target(const char *target, int nthreads, int stale_days,
+                                const dev_t *expected_dev,
                                 uint64_t *out_bytes, uint64_t *out_files,
                                 uint64_t *out_dirs, uint64_t *out_errors) {
     struct stat rst;
     if (lstat(target, &rst) != 0 || !S_ISDIR(rst.st_mode)) {
+        return NULL;
+    }
+    if (expected_dev && rst.st_dev != *expected_dev) {
         return NULL;
     }
 
@@ -1015,6 +1040,31 @@ static void usage(const char *prog) {
         prog);
 }
 
+static bool parse_u32_decimal(const char *s, const char **endp, unsigned *out) {
+    if (!s || *s < '0' || *s > '9') return false;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long v = strtoull(s, &end, 10);
+    if (errno == ERANGE || end == s || v > UINT32_MAX) return false;
+    *endp = end;
+    *out = (unsigned)v;
+    return true;
+}
+
+static bool parse_major_minor_dev(const char *s, dev_t *out) {
+    unsigned maj = 0, min = 0;
+    const char *p = NULL;
+    if (!parse_u32_decimal(s, &p, &maj)) return false;
+    if (*p != ':') return false;
+    if (!parse_u32_decimal(p + 1, &p, &min)) return false;
+    if (*p != '\0') return false;
+
+    dev_t dev = makedev(maj, min);
+    if ((unsigned)major(dev) != maj || (unsigned)minor(dev) != min) return false;
+    *out = dev;
+    return true;
+}
+
 /* Defense in depth: raise the open-file soft limit to the hard limit (and, if
  * running as root, raise the hard limit too). The path-based queue already
  * bounds concurrently-open fds to ~thread count, so this is belt-and-braces.
@@ -1043,8 +1093,10 @@ int main(int argc, char **argv) {
     const char *out_path = NULL;
     const char *out_dir = "data";
 
-    char *targets_buf[64];
+    struct target_spec targets_buf[64];
     int ntargets = 0;
+    bool guarded_mode = false;
+    bool positional_mode = false;
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -1062,21 +1114,50 @@ int main(int argc, char **argv) {
             out_path = argv[++i];
         } else if (strcmp(a, "--out-dir") == 0 && i+1 < argc) {
             out_dir = argv[++i];
+        } else if (strcmp(a, "--target") == 0) {
+            if (positional_mode || i + 2 >= argc) {
+                usage(argv[0]); return 2;
+            }
+            const char *path = argv[++i];
+            const char *major_minor = argv[++i];
+            dev_t expected_dev;
+            if (path[0] != '/' || !parse_major_minor_dev(major_minor, &expected_dev)) {
+                usage(argv[0]); return 2;
+            }
+            guarded_mode = true;
+            if (ntargets < 64) {
+                targets_buf[ntargets].path = path;
+                targets_buf[ntargets].guarded = true;
+                targets_buf[ntargets].expected_dev = expected_dev;
+                ntargets++;
+            }
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
             usage(argv[0]); return 0;
         } else if (a[0] == '-') {
             fprintf(stderr, "hstscan: unknown option %s\n", a);
             usage(argv[0]); return 2;
         } else {
-            if (ntargets < 64) targets_buf[ntargets++] = (char *)a;
+            if (guarded_mode) {
+                usage(argv[0]); return 2;
+            }
+            positional_mode = true;
+            if (ntargets < 64) {
+                targets_buf[ntargets].path = a;
+                targets_buf[ntargets].guarded = false;
+                targets_buf[ntargets].expected_dev = 0;
+                ntargets++;
+            }
         }
     }
 
-    const char *default_targets[] = { "/", "/data", "/data1", "/data3" };
-    const char **targets;
+    const struct target_spec default_targets[] = {
+        { "/", false, 0 }, { "/data", false, 0 },
+        { "/data1", false, 0 }, { "/data3", false, 0 }
+    };
+    const struct target_spec *targets;
     int target_count;
     if (ntargets > 0) {
-        targets = (const char **)targets_buf;
+        targets = targets_buf;
         target_count = ntargets;
     } else {
         targets = default_targets;
@@ -1103,7 +1184,7 @@ int main(int argc, char **argv) {
     int nresults = 0;
 
     for (int i = 0; i < target_count; i++) {
-        const char *tg = targets[i];
+        const char *tg = targets[i].path;
         struct stat tst;
         if (lstat(tg, &tst) != 0) {
             continue;  /* target absent (e.g. /data not present): skip silently */
@@ -1113,6 +1194,7 @@ int main(int argc, char **argv) {
 
         uint64_t b=0,fl=0,d=0,e=0;
         struct node *tree = scan_target(tg, nthreads, stale_days,
+                                        targets[i].guarded ? &targets[i].expected_dev : NULL,
                                         &b, &fl, &d, &e);
         if (!tree) continue;
 
