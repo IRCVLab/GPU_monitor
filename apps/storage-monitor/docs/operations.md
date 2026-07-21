@@ -145,9 +145,9 @@ Agents scan only local filesystems selected by `agent.scan_runner` policy. The c
 
 ## Root and `/data` policy
 
-The scanner enforces the following behavior:
+The production agent path enforces the following behavior:
 
-- `/` is never scanned directly.
+- The agent never invokes a direct scan of `/`; standalone scanner positional mode remains available for diagnostics.
 - `/home` remains scan-eligible and keeps its normal local-policy treatment.
 - A synthetic `/data` target is created only for an ordinary real directory under the root filesystem when no exact mountinfo entry owns `/data`.
 - Explicit local `/data` mount entries are treated as normal scan targets.
