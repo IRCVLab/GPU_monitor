@@ -341,8 +341,15 @@ class PollServiceTests(unittest.TestCase):
         overview = summaries[0]["overview_snapshot"]
         self.assertEqual(set(overview), {"server_id", "selected_roots", "mounts"})
         self.assertEqual(overview["server_id"], "alpha-1")
-        self.assertEqual(overview["selected_roots"], self.store.load_snapshot("alpha-1")["selected_roots"])
-        self.assertEqual(overview["mounts"], self.store.load_snapshot("alpha-1")["mounts"])
+        self.assertEqual(set(overview["selected_roots"][0]), {
+            "mount_id", "capacity_id", "major_minor", "storage_media", "block_media",
+            "storage_media_confidence", "block_media_confidence",
+        })
+        self.assertEqual(set(overview["mounts"][0]), {
+            "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
+            "storage_media", "block_media", "storage_media_confidence", "block_media_confidence",
+        })
+        self.assertNotIn("tree", overview["mounts"][0], "overview payload must omit the heavyweight directory tree")
         self.assertNotIn("top_files", overview, "overview payload must not include heavyweight detail data")
         self.assertEqual(svc.load_snapshot_for_api("alpha-1")["server_id"], "alpha-1")
         with self.assertRaises(ValueError):

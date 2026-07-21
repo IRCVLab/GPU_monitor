@@ -16,17 +16,33 @@ LOCAL_SCAN_CADENCE_SECONDS = 6 * 60 * 60
 FRESHNESS_GRACE_SECONDS = 60 * 60
 FRESH_SNAPSHOT_SECONDS = LOCAL_SCAN_CADENCE_SECONDS + FRESHNESS_GRACE_SECONDS
 SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+OVERVIEW_ROOT_FIELDS = (
+    "mount_id", "capacity_id", "major_minor", "storage_media", "block_media",
+    "storage_media_confidence", "block_media_confidence",
+)
+OVERVIEW_MOUNT_FIELDS = (
+    "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
+    "storage_media", "block_media", "storage_media_confidence", "block_media_confidence",
+)
+
+
+def _overview_rows(value: Any, fields: tuple[str, ...]) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {field: row.get(field) for field in fields}
+        for row in value
+        if isinstance(row, Mapping)
+    ]
 
 
 def _overview_snapshot(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, Mapping):
         return None
-    selected_roots = payload.get("selected_roots")
-    mounts = payload.get("mounts")
     return {
         "server_id": payload.get("server_id"),
-        "selected_roots": selected_roots if isinstance(selected_roots, list) else [],
-        "mounts": mounts if isinstance(mounts, list) else [],
+        "selected_roots": _overview_rows(payload.get("selected_roots"), OVERVIEW_ROOT_FIELDS),
+        "mounts": _overview_rows(payload.get("mounts"), OVERVIEW_MOUNT_FIELDS),
     }
 
 
