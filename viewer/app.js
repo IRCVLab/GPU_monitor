@@ -709,6 +709,7 @@ async function init() {
       if (currentTab === "treemap") renderTreemap();
       if (currentTab === "users" && usersChart) usersChart.resize();
       if (currentTab === "stale") renderStaleWindow();
+      if (document.body && document.body.dataset.shellMode === "overview" && typeof scheduleOverviewMasonry === "function") scheduleOverviewMasonry(document.getElementById("overviewList"));
     }, 150);
   });
   window.addEventListener("popstate", () => {

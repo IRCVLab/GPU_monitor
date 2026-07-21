@@ -162,7 +162,7 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
     const mediaConfidence = String((selectedRoot && (selectedRoot.storage_media_confidence || selectedRoot.block_media_confidence)) || (mount && (mount.storage_media_confidence || mount.block_media_confidence)) || "unknown");
     const usedPctText = usedPct == null ? "—" : usedPct + "%";
     const usedTotalText = compactBytes(usedBytes) + " / " + compactBytes(totalBytes);
-    const freeText = availableBytes == null ? "여유 미확인" : compactBytes(availableBytes) + " free";
+    const freeText = availableBytes == null ? "여유 미확인" : "여유 " + compactBytes(availableBytes);
     const pressure = pressureLevel(usedPct, freeBytes, thresholds);
     return {
       key: String((mount && mount.mount_id) || (mount && mount.path) || index),
@@ -435,7 +435,7 @@ function createStatusBadge(doc, status, extraClass) {
 function totalAvailableMetaText(row) {
   if (!row || row.totalAvailableLabel === "—") return "여유 미확인";
   if (/미확인$/.test(row.totalAvailableLabel) || /^확인된 여유 /.test(row.totalAvailableLabel)) return row.totalAvailableLabel;
-  return row.totalAvailableLabel + " free";
+  return "여유 " + row.totalAvailableLabel;
 }
 
 function renderOverviewAggregate(container, aggregate) {
@@ -564,11 +564,52 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   return item;
 }
 
+function overviewColumnCountFromStyle(style) {
+  const template = String((style && style.gridTemplateColumns) || "").trim();
+  if (!template || template === "none") return 1;
+  const repeat = template.match(/^repeat\((\d+),/);
+  if (repeat) return Math.max(1, Number(repeat[1]) || 1);
+  return Math.max(1, template.split(/\s+/).filter(Boolean).length);
+}
+
+function prefersReducedOverviewMotion() {
+  return typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function animateOverviewColumnChange(container, items, firstRects, columnCount) {
+  const previousColumnCount = container.__overviewColumnCount;
+  container.__overviewColumnCount = columnCount;
+  if (!previousColumnCount || previousColumnCount === columnCount || prefersReducedOverviewMotion()) return;
+  for (const item of items) {
+    const first = firstRects.get(item);
+    if (!first || typeof item.getBoundingClientRect !== "function") continue;
+    const last = item.getBoundingClientRect();
+    const dx = first.left - last.left;
+    const dy = first.top - last.top;
+    if (!dx && !dy) continue;
+    item.style.transition = "none";
+    item.style.transform = "translate(" + dx + "px, " + dy + "px)";
+    void item.offsetWidth;
+    const run = () => {
+      item.style.transition = "transform 280ms cubic-bezier(.22,1,.36,1)";
+      item.style.transform = "translate(0, 0)";
+      setTimeout(() => {
+        if (item.style.transform === "translate(0, 0)") item.style.transform = "";
+        if (item.style.transition === "transform 280ms cubic-bezier(.22,1,.36,1)") item.style.transition = "";
+      }, 300);
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else run();
+  }
+}
+
 function layoutOverviewMasonry(container) {
   if (!container || !container.children) return;
   const items = Array.from(container.children);
   if (!items.length || typeof items[0].getBoundingClientRect !== "function" || typeof getComputedStyle !== "function") return;
+  const firstRects = new Map();
   for (const item of items) {
+    if (typeof item.getBoundingClientRect === "function") firstRects.set(item, item.getBoundingClientRect());
     item.style.gridRow = "auto";
     item.style.gridColumn = "auto";
   }
@@ -576,30 +617,24 @@ function layoutOverviewMasonry(container) {
   const style = getComputedStyle(container);
   const rowHeight = Number.parseFloat(style.gridAutoRows) || 1;
   const rowGap = Number.parseFloat(style.rowGap) || 0;
-  const columnCount = Math.max(1, String(style.gridTemplateColumns || "").split(/\s+/).filter(Boolean).length);
+  const columnCount = overviewColumnCountFromStyle(style);
   const nextRowByColumn = Array(columnCount).fill(1);
-  const nearTieRows = Math.max(1, Math.ceil(30 / (rowHeight + rowGap)));
-  let lastStartRow = 1;
   items.forEach((item, index) => {
     const card = item.firstElementChild || item;
     const height = card.getBoundingClientRect().height;
     const span = Math.max(1, Math.ceil((height + rowGap) / (rowHeight + rowGap)));
-    let column = index;
-    if (index >= columnCount) {
-      const shortest = Math.min(...nextRowByColumn);
-      column = nextRowByColumn.findIndex(row => row <= shortest + nearTieRows);
-    }
-    const startRow = Math.max(nextRowByColumn[column], lastStartRow);
+    const column = index % columnCount;
+    const startRow = nextRowByColumn[column];
     item.style.gridColumn = String(column + 1);
     item.style.gridRow = String(startRow) + " / span " + span;
     nextRowByColumn[column] = startRow + span;
-    lastStartRow = startRow;
   });
+  animateOverviewColumnChange(container, items, firstRects, columnCount);
 }
 
 function scheduleOverviewMasonry(container) {
   if (!container || typeof requestAnimationFrame !== "function") return;
-  if (container.__overviewLayoutFrame) cancelAnimationFrame(container.__overviewLayoutFrame);
+  if (container.__overviewLayoutFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(container.__overviewLayoutFrame);
   container.__overviewLayoutFrame = requestAnimationFrame(() => {
     container.__overviewLayoutFrame = 0;
     layoutOverviewMasonry(container);
