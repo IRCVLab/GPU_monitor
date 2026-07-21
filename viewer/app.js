@@ -257,6 +257,7 @@ function renderAll() {
   populateFilters();
   requestAnimationFrame(() => {
     renderTreemap();
+    if (currentTab === "users") renderUsersWhenReady();
     renderTopFiles();
     prepStale();
   });

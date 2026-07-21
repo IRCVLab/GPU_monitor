@@ -42,6 +42,8 @@ function testOverviewDoesNotBlockOnTheDetailOnlyChartLibrary() {
   assert(/function\s+ensureEchartsLoaded\s*\(/.test(app), "detail navigation must own lazy chart loading");
   assert(/script\.src\s*=\s*"echarts\.min\.js"/.test(app), "lazy chart loading must use the local vendored asset");
   assert(/currentTab === "users"[\s\S]*renderUsersWhenReady\(\)/.test(app), "the Users tab must wait for the lazy chart dependency before rendering");
+  const renderAll = app.slice(app.indexOf("function renderAll"), app.indexOf("function showOverviewError"));
+  assert(/currentTab === "users"[\s\S]*renderUsersWhenReady\(\)/.test(renderAll), "a direct Users deep-link must request the chart after detail data arrives");
 }
 
 
