@@ -2,11 +2,16 @@ import hashlib
 import json
 import os
 import pathlib
+import stat
 import tempfile
 import unittest
 
-from agent import scan_runner
+from agent import mount_policy, scan_runner
 from data.test_fixtures import assert_schema_v1_snapshot_contract
+
+
+def fake_lstat_result(mode, major=8, minor=1):
+    return os.stat_result((mode, 0, os.makedev(major, minor), 0, 0, 0, 0, 0, 0, 0))
 
 def mi(mid, parent, dev, root, mountpoint, options, fstype, source, super_options="rw"):
     return f"{mid} {parent} {dev} {root} {mountpoint} {options} - {fstype} {source} {super_options}"
@@ -120,6 +125,148 @@ class ScanRunnerTests(unittest.TestCase):
             self.assertEqual(cfg2.config_digest, expected)
             self.assertEqual(cfg1.server_id, "host-a")
             self.assertGreaterEqual(cfg1.threads, 1)
+
+    def test_verified_root_directory_paths_synthesizes_only_same_device_data_directory(self):
+        entries = mount_policy.parse_mountinfo(mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"))
+        calls = []
+        def fake_lstat(path):
+            calls.append(path)
+            if path == "/data":
+                return fake_lstat_result(stat.S_IFDIR | 0o755, 8, 1)
+            if path == "/data1/dataset":
+                self.fail("must not probe arbitrary data-like paths")
+            raise FileNotFoundError(path)
+
+        self.assertEqual(scan_runner.verified_root_directory_paths(entries, lstat=fake_lstat), ("/data",))
+        self.assertEqual(calls, ["/data"])
+
+    def test_verified_root_directory_paths_treats_missing_data_as_absent(self):
+        entries = mount_policy.parse_mountinfo(mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"))
+
+        self.assertEqual(scan_runner.verified_root_directory_paths(entries, lstat=lambda path: (_ for _ in ()).throw(FileNotFoundError(path))), ())
+
+    def test_verified_root_directory_paths_rejects_non_directory_data(self):
+        entries = mount_policy.parse_mountinfo(mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"))
+
+        self.assertEqual(
+            scan_runner.verified_root_directory_paths(entries, lstat=lambda path: fake_lstat_result(stat.S_IFREG | 0o644, 8, 1)),
+            (),
+        )
+
+    def test_verified_root_directory_paths_rejects_same_device_symlink_data(self):
+        entries = mount_policy.parse_mountinfo(mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"))
+
+        self.assertEqual(
+            scan_runner.verified_root_directory_paths(entries, lstat=lambda path: fake_lstat_result(stat.S_IFLNK | 0o777, 8, 1)),
+            (),
+        )
+
+    def test_verified_root_directory_paths_rejects_different_device_data(self):
+        entries = mount_policy.parse_mountinfo(mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"))
+
+        self.assertEqual(
+            scan_runner.verified_root_directory_paths(entries, lstat=lambda path: fake_lstat_result(stat.S_IFDIR | 0o755, 8, 2)),
+            (),
+        )
+
+    def test_verified_root_directory_paths_refuses_exact_explicit_local_data_mount(self):
+        entries = mount_policy.parse_mountinfo("\n".join([
+            mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+            mi(2, 1, "8:2", "/", "/data", "rw", "xfs", "/dev/sdb1"),
+        ]))
+        def not_called(path):
+            self.fail("exact /data mount must prevent synthetic probing")
+
+        self.assertEqual(scan_runner.verified_root_directory_paths(entries, lstat=not_called), ())
+
+    def test_verified_root_directory_paths_refuses_exact_prohibited_data_mount(self):
+        entries = mount_policy.parse_mountinfo("\n".join([
+            mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+            mi(2, 1, "0:2", "/", "/data", "rw", "nfs", "server:/data"),
+        ]))
+        def not_called(path):
+            self.fail("exact prohibited /data mount must prevent synthetic probing")
+
+        self.assertEqual(scan_runner.verified_root_directory_paths(entries, lstat=not_called), ())
+
+    def test_verified_root_directory_paths_refuses_exact_unsupported_data_mount(self):
+        entries = mount_policy.parse_mountinfo("\n".join([
+            mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+            mi(2, 1, "9:9", "/", "/data", "rw", "weirdfs", "weird"),
+        ]))
+        def not_called(path):
+            self.fail("exact unsupported /data mount must prevent synthetic probing")
+
+        self.assertEqual(scan_runner.verified_root_directory_paths(entries, lstat=not_called), ())
+
+    def test_verified_root_directory_paths_treats_lstat_failure_as_absent(self):
+        entries = mount_policy.parse_mountinfo(mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"))
+
+        self.assertEqual(scan_runner.verified_root_directory_paths(entries, lstat=lambda path: (_ for _ in ()).throw(PermissionError(path))), ())
+
+    def test_run_once_passes_verified_data_to_policy_and_scanner_roots(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            original_select = scan_runner.mount_policy.select_scan_roots
+            policy_calls = []
+            scanner_roots = []
+            def capturing_select(entries, *args, **kwargs):
+                policy_calls.append(tuple(kwargs.get("root_directory_paths", ())))
+                return original_select(entries, *args, **kwargs)
+            def fake(argv, **kwargs):
+                roots = argv[argv.index("--out") + 2:]
+                scanner_roots.append(tuple(roots))
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload_many(roots)), encoding="utf-8")
+                return scan_runner.CompletedScan(0, "", "")
+            scan_runner.mount_policy.select_scan_roots = capturing_select
+            try:
+                result = scan_runner.run_once(
+                    config_path,
+                    mountinfo_reader=lambda: mountinfo,
+                    scanner_runner=fake,
+                    clock=Clock(200),
+                    lstat=lambda path: fake_lstat_result(stat.S_IFDIR | 0o755, 8, 1),
+                )
+            finally:
+                scan_runner.mount_policy.select_scan_roots = original_select
+
+            self.assertEqual(result.status, "complete")
+            self.assertEqual(policy_calls, [("/data",)])
+            self.assertEqual(scanner_roots, [("/home", "/data")])
+
+    def test_run_once_absent_data_preserves_existing_policy_and_scanner_roots(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config_path, _ = self.write_config(tmp)
+            mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            original_select = scan_runner.mount_policy.select_scan_roots
+            policy_calls = []
+            scanner_roots = []
+            def capturing_select(entries, *args, **kwargs):
+                policy_calls.append(tuple(kwargs.get("root_directory_paths", ())))
+                return original_select(entries, *args, **kwargs)
+            def fake(argv, **kwargs):
+                roots = argv[argv.index("--out") + 2:]
+                scanner_roots.append(tuple(roots))
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload_many(roots)), encoding="utf-8")
+                return scan_runner.CompletedScan(0, "", "")
+            scan_runner.mount_policy.select_scan_roots = capturing_select
+            try:
+                result = scan_runner.run_once(
+                    config_path,
+                    mountinfo_reader=lambda: mountinfo,
+                    scanner_runner=fake,
+                    clock=Clock(200),
+                    lstat=lambda path: (_ for _ in ()).throw(FileNotFoundError(path)),
+                )
+            finally:
+                scan_runner.mount_policy.select_scan_roots = original_select
+
+            self.assertEqual(result.status, "complete")
+            self.assertEqual(policy_calls, [()])
+            self.assertEqual(scanner_roots, [("/home",)])
 
     def test_scanner_argv(self):
         with tempfile.TemporaryDirectory() as td:
