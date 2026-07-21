@@ -944,6 +944,68 @@ function testOverviewMasonryPreservesOrderAcrossResponsiveColumns() {
 }
 
 
+
+function makeOverviewLayoutItem(height, rects) {
+  let rectIndex = 0;
+  return {
+    style: {},
+    firstElementChild: { getBoundingClientRect: () => ({ height }) },
+    getBoundingClientRect: () => rects[Math.min(rectIndex++, rects.length - 1)],
+    offsetWidth: 10,
+  };
+}
+
+function testOverviewLayoutClearsStaleInlinePlacementAndMotion() {
+  const viewer = loadViewer();
+  const items = [
+    makeOverviewLayoutItem(120, [{ left: 0, top: 0 }, { left: 0, top: 0 }]),
+    makeOverviewLayoutItem(120, [{ left: 0, top: 0 }, { left: 354, top: 0 }]),
+  ];
+  items[0].style.gridColumn = '99';
+  items[0].style.gridRow = '99 / span 99';
+  items[0].style.transform = 'translate(9px, 9px)';
+  items[0].style.transition = 'transform 280ms cubic-bezier(.22,1,.36,1)';
+  const container = { children: items, offsetWidth: 714, __overviewColumnCount: 2 };
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '350px 350px' });
+
+  viewer.layoutOverviewMasonry(container);
+
+  assert.deepStrictEqual(items.map(item => item.style.gridColumn), ['1', '2'], 'layout must recompute grid columns from cleared stale placement');
+  assert.strictEqual(items[0].style.gridRow, '1 / span 9', 'layout must recompute grid rows from cleared stale placement');
+  assert.strictEqual(items[0].style.transform, '', 'same-column-count relayout must clear stale FLIP transform leftovers');
+  assert.strictEqual(items[0].style.transition, '', 'same-column-count relayout must clear stale FLIP transition leftovers');
+}
+
+function testOverviewFlipRunsOnlyOnColumnCountChangeAndSkipsReducedMotion() {
+  const viewer = loadViewer();
+  viewer.setTimeout = () => undefined;
+  viewer.window.matchMedia = () => ({ matches: false, addEventListener() {}, addListener() {} });
+  const moving = makeOverviewLayoutItem(120, [{ left: 354, top: 0 }, { left: 0, top: 150 }]);
+  const container = { children: [moving], offsetWidth: 640, __overviewColumnCount: 2 };
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '640px' });
+
+  viewer.layoutOverviewMasonry(container);
+  assert.strictEqual(container.__overviewColumnCount, 1, 'layout must remember the newly active column count');
+  assert.strictEqual(moving.style.transition, 'transform 280ms cubic-bezier(.22,1,.36,1)', 'column-count changes should use the approved restrained FLIP timing');
+  assert.strictEqual(moving.style.transform, 'translate(0, 0)', 'column-count changes should animate back to natural placement');
+
+  moving.style.transform = '';
+  moving.style.transition = '';
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '620px' });
+  viewer.layoutOverviewMasonry(container);
+  assert.strictEqual(moving.style.transform, '', 'continuous width resize at the same column count must not run FLIP');
+  assert.strictEqual(moving.style.transition, '', 'continuous width resize at the same column count must not add FLIP transition');
+
+  const reduced = makeOverviewLayoutItem(120, [{ left: 0, top: 0 }, { left: 354, top: 0 }]);
+  const reducedContainer = { children: [reduced], offsetWidth: 714, __overviewColumnCount: 1 };
+  viewer.window.matchMedia = () => ({ matches: true, addEventListener() {}, addListener() {} });
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '350px 350px' });
+  viewer.layoutOverviewMasonry(reducedContainer);
+  assert.strictEqual(reducedContainer.__overviewColumnCount, 2, 'reduced-motion relayout still updates the active column count');
+  assert.strictEqual(reduced.style.transform, '', 'reduced motion must skip FLIP transforms');
+  assert.strictEqual(reduced.style.transition, '', 'reduced motion must skip FLIP transitions');
+}
+
 function testOverviewResizeFallbackSchedulesOnlyOverviewRelayout() {
   const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   assert(/window\.addEventListener\("resize", \(\) => \{[\s\S]*setTimeout\(\(\) => \{[\s\S]*document\.body && document\.body\.dataset\.shellMode === "overview"[\s\S]*scheduleOverviewMasonry\(document\.getElementById\("overviewList"\)\)/.test(app), 'window resize fallback must throttle and schedule overview layout only while the overview shell is active');
@@ -1035,8 +1097,14 @@ function testSuccessfulOverviewSuppressesServerCountLiveLead() {
 
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
-  assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), 'desktop overview must use the same three-column monitor-card rhythm as GPU Monitor');
-  assert(/\.overview-list\b[\s\S]*column-gap:\s*(?:14px|0\.9rem)/.test(css), 'desktop card gutter must match GPU Monitor closely');
+  assert(/--overview-max-width:\s*1440px/.test(css), 'overview CSS must expose a semantic max-width token');
+  assert(/--overview-gutter:\s*24px/.test(css), 'overview CSS must expose the desktop gutter token');
+  assert(/--overview-card-gap:\s*14px/.test(css), 'overview CSS must expose the card gap token');
+  assert(/--overview-card-min:\s*340px/.test(css), 'overview CSS must expose the minimum card width token');
+  assert(/body\[data-shell-mode=['"]overview['"]\]\s+\.head-row\b[\s\S]*width:\s*min\(100%,\s*calc\(var\(--overview-max-width\) \+ \(2 \* var\(--overview-gutter\)\)\)\)[\s\S]*padding:\s*0\.35rem var\(--overview-gutter\)/.test(css), 'overview header shell width must include gutters so header content edges match overview cards');
+  assert(/\.overview-view\b[\s\S]*max-width:\s*var\(--overview-max-width\)/.test(css), 'overview view must consume the semantic max-width token');
+  assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(var\(--overview-card-min\),\s*1fr\)\)/.test(css), 'desktop overview must use three columns with the semantic minimum card width');
+  assert(/\.overview-list\b[\s\S]*gap:\s*var\(--overview-card-gap\)/.test(css), 'desktop card gutter must use the semantic card gap token');
   assert(/\.overview-card\b[\s\S]*border-radius:\s*(?:24px|1\.5rem)/.test(css), 'server cards must use GPU Monitor card radius');
   assert(/\.overview-card\b[\s\S]*background:\s*var\(--ops-card\)/.test(css), 'server cards must use the shared Clean card surface');
   assert(/--ops-card:\s*var\(--surface\)/.test(css) && /--ops-border:\s*var\(--separator\)/.test(css), 'Storage must expose the same semantic card aliases as GPU Monitor');
@@ -1050,12 +1118,12 @@ function testMountCentricResponsiveCssContract() {
   assert(/\.overview-mount\[data-pressure="warning"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--warn\)/.test(css), 'warning color must be scoped to the exact warning percentage selector');
   assert(/\.overview-mount\[data-pressure="critical"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--crit\)/.test(css), 'critical color must be scoped to the exact critical percentage selector');
   assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');
-  assert(/@media\s*\(max-width:\s*980px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/.test(css), 'tablet overview must collapse to two monitor-card columns');
-  assert(/@media\s*\(max-width:\s*640px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(css), 'mobile overview must collapse to one monitor-card column');
+  assert(/@media\s*\(max-width:\s*1095px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(var\(--overview-card-min\),\s*1fr\)\)/.test(css), 'overview must switch to two columns before three cards would fall below 340px');
+  assert(/@media\s*\(max-width:\s*733px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(css), 'overview must switch to one column before two cards would fall below 340px');
   assert(/\.overview-pressure-bar\b[\s\S]*height:\s*4px/.test(css), 'compact overview pressure bars must be 4px tall');
   assert(/\.overview-mount-path\b[\s\S]*text-overflow:\s*ellipsis/.test(css), 'compact mount paths must truncate visually');
   assert(/font-variant-numeric:\s*tabular-nums/.test(css), 'compact numeric fields must use tabular numbers');
-  assert(/@media\s*\(max-width:\s*640px\)[\s\S]*body\[data-shell-mode=['"]overview['"]\]\s+main\b[\s\S]*padding:\s*12px/.test(css), '390px mobile overview layouts must use the approved 12px gutter');
+  assert(/@media\s*\(max-width:\s*733px\)[\s\S]*--overview-gutter:\s*12px/.test(css), '390px mobile overview layouts must use the approved 12px semantic gutter');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-card\b[\s\S]*overflow:\s*hidden/.test(css), 'mobile overview cards must explicitly hide horizontal overflow');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css), 'overview styling must continue to respect reduced motion');
 }
@@ -1565,6 +1633,8 @@ async function main() {
   testDetailHeaderMobileCssContract();
   testOverviewMonitorCardHierarchyContract();
   testOverviewMasonryPreservesOrderAcrossResponsiveColumns();
+  testOverviewLayoutClearsStaleInlinePlacementAndMotion();
+  testOverviewFlipRunsOnlyOnColumnCountChangeAndSkipsReducedMotion();
   testOverviewResizeFallbackSchedulesOnlyOverviewRelayout();
   testApprovedCleanThemeTokenContract();
   testSuccessfulOverviewSuppressesServerCountLiveLead();
