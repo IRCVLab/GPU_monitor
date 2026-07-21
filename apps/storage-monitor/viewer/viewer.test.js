@@ -35,6 +35,15 @@ function testCleanShellThemeBootstrapContract() {
   assert(/@keyframes\s+theme-root-reveal[\s\S]*clip-path:\s*circle\(0px at var\(--theme-reveal-x\) var\(--theme-reveal-y\)\)[\s\S]*clip-path:\s*circle\(var\(--theme-reveal-radius\) at var\(--theme-reveal-x\) var\(--theme-reveal-y\)\)/.test(css), "new theme must reveal in a circle from the button center");
 }
 
+function testOverviewDoesNotBlockOnTheDetailOnlyChartLibrary() {
+  const html = fs.readFileSync(path.join(here, "index.html"), "utf8");
+  const app = fs.readFileSync(path.join(here, "app.js"), "utf8");
+  assert(!/<script[^>]+src="echarts\.min\.js"/.test(html), "the 1 MB detail chart library must not block overview HTML parsing");
+  assert(/function\s+ensureEchartsLoaded\s*\(/.test(app), "detail navigation must own lazy chart loading");
+  assert(/script\.src\s*=\s*"echarts\.min\.js"/.test(app), "lazy chart loading must use the local vendored asset");
+  assert(/currentTab === "users"[\s\S]*renderUsersWhenReady\(\)/.test(app), "the Users tab must wait for the lazy chart dependency before rendering");
+}
+
 
 function testHostManifest() {
   const manifestPath = path.join(here, "..", "data", "hosts.json");
@@ -903,6 +912,7 @@ function testOverviewMonitorCardCssContract() {
 
 async function main() {
   testCleanShellThemeBootstrapContract();
+  testOverviewDoesNotBlockOnTheDetailOnlyChartLibrary();
   testHostManifest();
   testHostManifestHelpers();
   await testLoadServerSummariesReturnsNormalizedEnvelope();

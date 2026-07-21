@@ -17,6 +17,7 @@ let detailLoadGeneration = 0;
 let detailRequestVersions = new Map();
 let themeRevealLocked = false;
 let overviewLoadGeneration = 0;
+let echartsLoadPromise = null;
 
 
 function readThemeModeCookie() {
@@ -201,6 +202,29 @@ function clearDetailError() {
   if (panels) panels.hidden = false;
 }
 
+function ensureEchartsLoaded() {
+  if (typeof globalThis !== "undefined" && globalThis.echarts) return Promise.resolve(globalThis.echarts);
+  if (echartsLoadPromise) return echartsLoadPromise;
+  echartsLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "echarts.min.js";
+    script.async = true;
+    script.onload = () => resolve(globalThis.echarts);
+    script.onerror = () => reject(new Error("Could not load the chart renderer."));
+    document.head.appendChild(script);
+  }).catch((error) => {
+    echartsLoadPromise = null;
+    throw error;
+  });
+  return echartsLoadPromise;
+}
+
+function renderUsersWhenReady() {
+  void ensureEchartsLoaded().then(() => {
+    if (DATA && currentTab === "users") renderUsers();
+  }).catch((error) => console.error("[storage-viz] failed to load user chart", error));
+}
+
 function showTab(name, options) {
   const updateRoute = !options || options.updateRoute !== false;
   currentTab = KNOWN_DETAIL_TABS.has(name) ? name : "treemap";
@@ -210,7 +234,7 @@ function showTab(name, options) {
   requestAnimationFrame(() => {
     if (!DATA) return;
     if (currentTab === "treemap") renderTreemap();
-    if (currentTab === "users") { if (!usersInited) renderUsers(); else if (usersChart) usersChart.resize(); }
+    if (currentTab === "users") { if (!usersInited) renderUsersWhenReady(); else if (usersChart) usersChart.resize(); }
     if (currentTab === "stale") renderStaleWindow();
   });
 }
