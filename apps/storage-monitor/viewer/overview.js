@@ -478,25 +478,27 @@ function renderOverviewAggregate(container, aggregate) {
 
 function createOverviewRowElement(doc, row, handlers = {}) {
   const item = makeEl(doc, "li", "overview-item");
-  const button = makeEl(doc, "button", "overview-row");
-  button.type = "button";
-  button.dataset.serverId = row.id;
-  button.setAttribute("data-primary-status", row.primaryStatus.code);
+  const capacityOnlyState = row.primaryStatus.code === "pressure_warning" || row.primaryStatus.code === "pressure_critical";
+  const operationalTone = capacityOnlyState ? "normal" : (row.primaryStatus.tone || "normal");
+  const card = makeEl(doc, "a", "overview-card");
+  card.setAttribute("href", buildRouteHref(handlers.pathname || "/", { serverId: row.id, tab: "treemap" }));
+  card.dataset.serverId = row.id;
+  card.setAttribute("data-primary-status", row.primaryStatus.code);
+  card.setAttribute("data-tone", operationalTone);
 
-  const main = makeEl(doc, "div", "overview-row-main");
-  const titleWrap = makeEl(doc, "div", "overview-row-title");
-  const name = makeEl(doc, "span", "overview-name", row.displayName);
-  const meta = makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트");
-  titleWrap.appendChild(name);
-  titleWrap.appendChild(meta);
-
-  const statusWrap = makeEl(doc, "div", "overview-row-status");
-  const primary = createStatusBadge(doc, row.primaryStatus, "overview-badge-primary");
-  if (primary) statusWrap.appendChild(primary);
-
-  main.appendChild(titleWrap);
-  if (statusWrap.children.length) main.appendChild(statusWrap);
-  button.appendChild(main);
+  const cardHeader = makeEl(doc, "header", "overview-card-header");
+  const titleLine = makeEl(doc, "div", "overview-card-title-line");
+  titleLine.appendChild(makeEl(doc, "h2", "overview-name", row.displayName));
+  const statusDot = makeEl(doc, "span", "overview-status-dot");
+  statusDot.setAttribute("aria-hidden", "true");
+  statusDot.setAttribute("data-tone", operationalTone);
+  titleLine.appendChild(statusDot);
+  titleLine.appendChild(makeEl(doc, "span", "overview-meta", row.mountCount + "개 마운트"));
+  cardHeader.appendChild(titleLine);
+  if (row.primaryStatus.code !== "normal" && !capacityOnlyState) {
+    cardHeader.appendChild(makeEl(doc, "span", "overview-card-state", row.primaryStatus.label));
+  }
+  card.appendChild(cardHeader);
 
   const mountsWrap = makeEl(doc, "div", "overview-mounts");
   if (!row.mounts.length) {
@@ -505,43 +507,114 @@ function createOverviewRowElement(doc, row, handlers = {}) {
     for (const mount of row.mounts) {
       const mountEl = makeEl(doc, "div", "overview-mount");
       mountEl.setAttribute("data-pressure", mount.pressure);
+      if (mount.pressure === "warning" || mount.pressure === "critical") {
+        mountEl.setAttribute("role", "group");
+        mountEl.setAttribute("aria-label", [mount.path, mount.mediaLabel, mount.usedPctText, mount.freeText, mount.pressureLabel].join(", "));
+      }
+      mountEl.appendChild(makeEl(doc, "span", "overview-media-label", mount.mediaLabel));
+      const body = makeEl(doc, "div", "overview-mount-body");
+      const line = makeEl(doc, "div", "overview-mount-line");
       const pathEl = makeEl(doc, "div", "overview-mount-path", mount.path);
       pathEl.title = mount.path;
-      mountEl.appendChild(pathEl);
-      mountEl.appendChild(makeEl(doc, "div", "overview-media-label", mount.mediaLabel));
-      mountEl.appendChild(makeEl(doc, "div", "overview-mount-pct", mount.usedPctText));
+      line.appendChild(pathEl);
+      line.appendChild(makeEl(doc, "div", "overview-mount-pct", mount.usedPctText));
+      body.appendChild(line);
+      const metrics = makeEl(doc, "div", "overview-mount-metrics");
       const meter = makeEl(doc, "div", "overview-pressure-bar");
       const fill = makeEl(doc, "span", "overview-pressure-fill");
       fill.setAttribute("data-pressure", mount.pressure);
       fill.style.width = Math.max(4, Math.min(100, mount.usedPct == null ? 0 : mount.usedPct)) + "%";
       meter.appendChild(fill);
-      const freeText = mount.pressure === "normal" ? mount.freeText : mount.freeText + " · " + mount.pressureLabel;
-      const free = makeEl(doc, "div", "overview-mount-free", freeText);
-      mountEl.appendChild(meter);
-      mountEl.appendChild(free);
+      metrics.appendChild(meter);
+      metrics.appendChild(makeEl(doc, "div", "overview-mount-free", mount.freeText));
+      body.appendChild(metrics);
+      mountEl.appendChild(body);
       mountsWrap.appendChild(mountEl);
     }
   }
-  button.appendChild(mountsWrap);
+  card.appendChild(mountsWrap);
+
+  if (row.mounts.length) {
+    const footer = makeEl(doc, "footer", "overview-card-footer");
+    footer.appendChild(makeEl(doc, "span", "overview-footer-label", "스토리지"));
+    footer.appendChild(makeEl(doc, "span", "overview-footer-value", row.aggregate.utilizationLabel));
+    footer.appendChild(makeEl(doc, "span", "overview-footer-separator", "·"));
+    footer.appendChild(makeEl(doc, "span", "overview-footer-value", totalAvailableMetaText(row)));
+    const warningCount = row.mounts.filter(mount => mount.pressure === "warning").length;
+    const criticalCount = row.mounts.filter(mount => mount.pressure === "critical").length;
+    if (criticalCount) footer.appendChild(makeEl(doc, "span", "overview-footer-pressure overview-footer-critical", "위험 " + criticalCount));
+    if (warningCount) footer.appendChild(makeEl(doc, "span", "overview-footer-pressure overview-footer-warning", "주의 " + warningCount));
+    card.appendChild(footer);
+  }
 
   const activate = () => {
     if (handlers && typeof handlers.onOpenServer === "function") handlers.onOpenServer(row.id);
   };
-  button.onclick = activate;
-  button.onkeydown = (event) => {
-    if (event && (event.key === "Enter" || event.key === " ")) {
+  card.onclick = (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    activate();
+  };
+  card.onkeydown = (event) => {
+    if (event && event.key === " ") {
       if (typeof event.preventDefault === "function") event.preventDefault();
       activate();
     }
   };
-  item.appendChild(button);
+  item.appendChild(card);
   return item;
+}
+
+function layoutOverviewMasonry(container) {
+  if (!container || !container.children) return;
+  const items = Array.from(container.children);
+  if (!items.length || typeof items[0].getBoundingClientRect !== "function" || typeof getComputedStyle !== "function") return;
+  for (const item of items) {
+    item.style.gridRow = "auto";
+    item.style.gridColumn = "auto";
+  }
+  void container.offsetWidth;
+  const style = getComputedStyle(container);
+  const rowHeight = Number.parseFloat(style.gridAutoRows) || 1;
+  const rowGap = Number.parseFloat(style.rowGap) || 0;
+  const columnCount = Math.max(1, String(style.gridTemplateColumns || "").split(/\s+/).filter(Boolean).length);
+  const nextRowByColumn = Array(columnCount).fill(1);
+  const nearTieRows = Math.max(1, Math.ceil(30 / (rowHeight + rowGap)));
+  let lastStartRow = 1;
+  items.forEach((item, index) => {
+    const card = item.firstElementChild || item;
+    const height = card.getBoundingClientRect().height;
+    const span = Math.max(1, Math.ceil((height + rowGap) / (rowHeight + rowGap)));
+    let column = index;
+    if (index >= columnCount) {
+      const shortest = Math.min(...nextRowByColumn);
+      column = nextRowByColumn.findIndex(row => row <= shortest + nearTieRows);
+    }
+    const startRow = Math.max(nextRowByColumn[column], lastStartRow);
+    item.style.gridColumn = String(column + 1);
+    item.style.gridRow = String(startRow) + " / span " + span;
+    nextRowByColumn[column] = startRow + span;
+    lastStartRow = startRow;
+  });
+}
+
+function scheduleOverviewMasonry(container) {
+  if (!container || typeof requestAnimationFrame !== "function") return;
+  if (container.__overviewLayoutFrame) cancelAnimationFrame(container.__overviewLayoutFrame);
+  container.__overviewLayoutFrame = requestAnimationFrame(() => {
+    container.__overviewLayoutFrame = 0;
+    layoutOverviewMasonry(container);
+  });
+  if (!container.__overviewResizeObserver && typeof ResizeObserver === "function") {
+    container.__overviewResizeObserver = new ResizeObserver(() => scheduleOverviewMasonry(container));
+    container.__overviewResizeObserver.observe(container);
+  }
 }
 
 function renderOverviewList(container, rows, handlers = {}) {
   if (!container) return;
   container.innerHTML = "";
   for (const row of Array.isArray(rows) ? rows : []) container.appendChild(createOverviewRowElement(container.ownerDocument || document, row, handlers));
+  scheduleOverviewMasonry(container);
 }
 
 const overviewExports = {
@@ -568,6 +641,7 @@ const overviewExports = {
   buildRouteHref,
   renderOverviewAggregate,
   renderOverviewList,
+  layoutOverviewMasonry,
   totalAvailableMetaText,
 };
 

@@ -286,7 +286,7 @@ function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
 
   assert.strictEqual(overviewList.children.length, 2, 'all servers must render into one dense list');
   assert.strictEqual(overviewList.children[0].tagName, 'LI', 'overview list items must use native li semantics');
-  assert.strictEqual(overviewList.children[0].children[0].tagName, 'BUTTON', 'each overview li must contain a button for whole-row activation');
+  assert.strictEqual(overviewList.children[0].children[0].tagName, 'A', 'each overview li must contain a native monitor-card link');
   assert.strictEqual(overviewList.children[0].children[0].dataset.serverId, 'beta-2', 'inventory order must not change because of severity');
   assert.strictEqual(overviewList.children[1].children[0].dataset.serverId, 'alpha-1', 'inventory order must remain stable for later rows');
 
@@ -294,24 +294,24 @@ function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
   const failedText = textTree(failedButton);
   assert(failedText.includes('beta'), 'row must contain the server display name');
   assert.strictEqual(failedButton.getAttribute('data-primary-status'), failedRow.primaryStatus.code, 'rendered primary status code must match the overview model');
-  const primaryBadge = failedButton.children[0].children[1].children[0];
-  assert(primaryBadge, 'primary exceptional badge must be visible');
-  assert(hangulString(textTree(primaryBadge)), 'primary exceptional badge must expose visible Korean text');
-  assert(primaryBadge.children[0].textContent.length > 0, 'primary exceptional badge must expose a visible shape cue');
+  const primaryState = findByClass(failedButton, 'overview-card-state')[0];
+  assert(primaryState, 'primary exceptional state must remain visible in the compact card header');
+  assert(hangulString(textTree(primaryState)), 'primary exceptional state must expose visible Korean text');
+  assert.strictEqual(findByClass(failedButton, 'overview-status-dot').length, 1, 'primary exceptional state must include a compact shape cue');
   assert(failedText.includes('95%'), 'capacity bars must still show percentage text');
   assert(failedText.includes('800 GB'), 'capacity bars must still show available-byte text');
 
   const staleButton = overviewList.children[1].children[0];
   assert.strictEqual(staleButton.getAttribute('data-primary-status'), staleRow.primaryStatus.code, 'rendered stale status code must match the overview model');
-  assert(hangulString(textTree(staleButton.children[0].children[1].children[0])), 'stale status badge must expose visible Korean text');
+  assert(hangulString(textTree(findByClass(staleButton, 'overview-card-state')[0])), 'stale state must expose visible Korean text');
   assert(textTree(staleButton).includes('81%'), 'warning-capacity rows must still expose their compact bar text');
 
   failedButton.onclick();
   assert.deepStrictEqual(opened, ['beta-2'], 'clicking a row should open its detail workspace');
   let prevented = false;
-  staleButton.onkeydown({ key: 'Enter', preventDefault() { prevented = true; } });
-  assert.strictEqual(prevented, true, 'Enter activation must prevent duplicate default behavior');
-  assert.deepStrictEqual(opened, ['beta-2', 'alpha-1'], 'Enter should activate the row');
+  staleButton.onkeydown({ key: ' ', preventDefault() { prevented = true; } });
+  assert.strictEqual(prevented, true, 'Space activation must prevent page scrolling');
+  assert.deepStrictEqual(opened, ['beta-2', 'alpha-1'], 'Space should activate the card link');
 }
 
 function testSnapshotLoadFailureRendersAsVisibleException() {
@@ -338,10 +338,10 @@ function testSnapshotLoadFailureRendersAsVisibleException() {
   viewer.renderOverviewList(overviewList, [row], { onOpenServer() {} });
   const button = overviewList.children[0].children[0];
   assert.strictEqual(button.getAttribute('data-primary-status'), 'snapshot_load_failed');
-  const badge = button.children[0].children[1].children[0];
-  assert(badge, 'snapshot load failures must render a visible status badge');
-  assert(hangulString(textTree(badge)), 'snapshot load failure badge must render Korean text');
-  assert(badge.children[0].textContent.length > 0, 'snapshot load failure badge must render a visible shape cue');
+  const state = findByClass(button, 'overview-card-state')[0];
+  assert(state, 'snapshot load failures must render a visible compact state');
+  assert(hangulString(textTree(state)), 'snapshot load failure state must render Korean text');
+  assert.strictEqual(findByClass(button, 'overview-status-dot').length, 1, 'snapshot load failure state must render a visible shape cue');
 }
 
 function testRouteNavigationAndBackShellContract() {
@@ -477,17 +477,14 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   const accessibleRowText = textTree(hintonButton);
   assert(accessibleRowText.includes('hinton'), 'row descendant text must include the visible server label');
   const cells = findByClass(hintonButton, 'overview-mount');
-  assert.strictEqual(cells.length, 2, 'mount-centric overview must render one connected segment per mount');
-  assert.deepStrictEqual(cells.map(cell => findByClass(cell, 'overview-mount-path')[0].textContent), ['/home', '/data'], 'mount strip segments must preserve snapshot mount order exactly');
+  assert.strictEqual(cells.length, 2, 'mount-centric overview must render one compact metric row per mount');
+  assert.deepStrictEqual(cells.map(cell => findByClass(cell, 'overview-mount-path')[0].textContent), ['/home', '/data'], 'mount metric rows must preserve snapshot mount order exactly');
   const first = cells[0];
   const fieldClasses = first.children.map(child => child.className);
   assert.deepStrictEqual(fieldClasses, [
-    'overview-mount-path',
     'overview-media-label',
-    'overview-mount-pct',
-    'overview-pressure-bar',
-    'overview-mount-free',
-  ], 'each mount strip must render path, media, percent, pressure bar, then free capacity');
+    'overview-mount-body',
+  ], 'each mount row must use a compact media identity plus one aligned metric body');
   assert.strictEqual(findByClass(first, 'overview-media-label')[0].textContent, 'SSD', 'media labels must use neutral storage-class text');
   assert.strictEqual(findByClass(first, 'overview-mount-used-total').length, 0, 'compact mount strip must not render used/total capacity text');
   assert.strictEqual(findByClass(first, 'overview-mount-pct')[0].textContent, '40%', 'utilization percent must be rendered as its own compact field');
@@ -524,8 +521,12 @@ function testMountStatusTextAppearsOnlyForExceptionalPressure() {
   const cells = findByClass(list.children[0].children[0], 'overview-mount');
   const freeTexts = cells.map(cell => textTree(findByClass(cell, 'overview-mount-free')[0]));
   assert.strictEqual(freeTexts[0], '600 GB free', 'healthy mount free text must not append redundant normal text');
-  assert(/[가-힣]/.test(freeTexts[1]) && freeTexts[1].includes('주의'), 'warning mount free text must include non-color status text');
-  assert(/[가-힣]/.test(freeTexts[2]) && freeTexts[2].includes('위험'), 'critical mount free text must include non-color status text');
+  assert.strictEqual(freeTexts[1], '190 GB free', 'warning mount free text must remain a clean numeric field');
+  assert.strictEqual(freeTexts[2], '70.0 GB free', 'critical mount free text must remain a clean numeric field');
+  const footerText = textTree(findByClass(list.children[0].children[0], 'overview-card-footer')[0]);
+  assert(footerText.includes('주의 1') && footerText.includes('위험 1'), 'non-color pressure labels must be consolidated in the card footer');
+  assert(findByClass(list.children[0].children[0], 'overview-mount')[1].getAttribute('aria-label').includes('주의'), 'warning mount must expose its exact state without relying on color');
+  assert(findByClass(list.children[0].children[0], 'overview-mount')[2].getAttribute('aria-label').includes('위험'), 'critical mount must expose its exact state without relying on color');
 }
 
 function testServerHeaderMetaIsActionableMountCountOnly() {
@@ -766,7 +767,7 @@ function testDetailCapacityResponsiveCssContract() {
 }
 
 
-function testOverviewConnectedStripHierarchyContract() {
+function testOverviewMonitorCardHierarchyContract() {
   const viewer = loadViewer();
   const list = viewer.document.getElementById('overviewList');
   const row = viewer.buildOverviewServer(
@@ -787,21 +788,53 @@ function testOverviewConnectedStripHierarchyContract() {
     viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
-  const button = list.children[0].children[0];
-  const text = textTree(button);
-  assert.strictEqual(findByClass(button, 'overview-badge').length, 1, 'overview must use one server-level warning/status channel');
+  const card = list.children[0].children[0];
+  const text = textTree(card);
+  assert.strictEqual(card.tagName, 'A', 'each server must render as a native monitor-card link');
+  assert.strictEqual(findByClass(card, 'overview-status-dot').length, 1, 'server state must use one compact status dot');
+  assert.strictEqual(findByClass(card, 'overview-badge').length, 0, 'server cards must not lead with a large warning pill');
   assert(!text.includes('정상'), 'overview must not render healthy status copy in server or mount text');
   assert(!text.includes('전체') && !text.includes('집계'), 'overview rows must not include page-level or aggregate capacity copy');
-  assert.strictEqual(findByClass(button, 'overview-mounts').length, 1, 'overview mounts must be one continuous strip container');
-  assert.strictEqual(findByClass(button, 'overview-mount').length, 3, 'overview must keep every actionable mount');
-  assert.strictEqual(findByClass(button, 'overview-mount-cell').length, 0, 'connected strip must not use nested independent mount-card cells');
-  const fields = findByClass(button, 'overview-mount').map(cell => cell.children.map(child => child.className));
+  assert.strictEqual(findByClass(card, 'overview-card-header').length, 1, 'server identity must use the same compact card header anatomy as GPU Monitor');
+  assert.strictEqual(findByClass(card, 'overview-mounts').length, 1, 'overview mounts must use one compact metric-list body');
+  assert.strictEqual(findByClass(card, 'overview-mount').length, 3, 'overview must keep every actionable mount');
+  assert.strictEqual(findByClass(card, 'overview-card-footer').length, 1, 'server totals and pressure summary must live in one quiet card footer');
+  const fields = findByClass(card, 'overview-mount').map(cell => cell.children.map(child => child.className));
   assert.deepStrictEqual(fields, [
-    ['overview-mount-path', 'overview-media-label', 'overview-mount-pct', 'overview-pressure-bar', 'overview-mount-free'],
-    ['overview-mount-path', 'overview-media-label', 'overview-mount-pct', 'overview-pressure-bar', 'overview-mount-free'],
-    ['overview-mount-path', 'overview-media-label', 'overview-mount-pct', 'overview-pressure-bar', 'overview-mount-free'],
-  ], 'each connected strip segment must emit path, media, percent, bar, free in stable snapshot order');
-  assert.deepStrictEqual(findByClass(button, 'overview-mount').map(cell => textTree(findByClass(cell, 'overview-mount-path')[0])), ['/alpha', '/beta', '/gamma'], 'connected strip must preserve snapshot mount order');
+    ['overview-media-label', 'overview-mount-body'],
+    ['overview-media-label', 'overview-mount-body'],
+    ['overview-media-label', 'overview-mount-body'],
+  ], 'each mount row must use the GPU-row anatomy: compact identity chip plus one metric body');
+  assert.deepStrictEqual(findByClass(card, 'overview-mount').map(cell => textTree(findByClass(cell, 'overview-mount-path')[0])), ['/alpha', '/beta', '/gamma'], 'monitor cards must preserve snapshot mount order');
+  assert.strictEqual(findByClass(card, 'overview-pressure-bar').length, 3, 'every mount keeps a visible full-width usage graph');
+}
+
+function testOverviewMasonryPreservesOrderAcrossResponsiveColumns() {
+  const viewer = loadViewer();
+  const heights = [316, 250, 170, 250, 170, 210, 120];
+  const items = heights.map(height => ({
+    style: {},
+    firstElementChild: { getBoundingClientRect: () => ({ height }) },
+    getBoundingClientRect: () => ({ height }),
+  }));
+  const container = { children: items, offsetWidth: 1232 };
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '401px 401px 401px' });
+  viewer.layoutOverviewMasonry(container);
+  assert.deepStrictEqual(items.map(item => item.style.gridColumn), ['1', '2', '3', '3', '2', '1', '2'], 'three-column masonry must place items in input order while preferring the next visually available column');
+  const threeColumnStarts = items.map(item => Number(item.style.gridRow.split('/')[0].trim()));
+  assert.deepStrictEqual(threeColumnStarts, [1, 1, 1, 14, 19, 23, 32], 'later servers must never start above an earlier server after the first aligned row');
+
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '609px 609px' });
+  viewer.layoutOverviewMasonry(container);
+  assert.deepStrictEqual(items.map(item => item.style.gridColumn), ['1', '2', '2', '1', '2', '1', '2'], 'two-column masonry must recompute placement instead of retaining stale desktop columns');
+  const twoColumnStarts = items.map(item => Number(item.style.gridRow.split('/')[0].trim()));
+  assert(twoColumnStarts.every((start, index) => index < 2 || start >= twoColumnStarts[index - 1]), 'two-column starts must remain monotonic after responsive relayout');
+
+  viewer.getComputedStyle = () => ({ gridAutoRows: '1px', rowGap: '14px', gridTemplateColumns: '370px' });
+  viewer.layoutOverviewMasonry(container);
+  assert(items.every(item => item.style.gridColumn === '1'), 'mobile masonry must collapse every card to the one visible column');
+  const oneColumnStarts = items.map(item => Number(item.style.gridRow.split('/')[0].trim()));
+  assert(oneColumnStarts.every((start, index) => index === 0 || start > oneColumnStarts[index - 1]), 'mobile cards must keep strict server order without overlap');
 }
 
 function cssBlock(css, selector) {
@@ -890,24 +923,23 @@ function testSuccessfulOverviewSuppressesServerCountLiveLead() {
 
 function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
-  assert(/\.overview-row\b[\s\S]*grid-template-columns:\s*(?:132px|13[2-9]px|14[0-8]px)\s+minmax\(0,\s*1fr\)/.test(css), 'overview must use a fixed 132-148px compact server column');
-  assert(/\.overview-row\b[\s\S]*padding:\s*(?:[0-9]+px\s+)*([0-9]+)px/.test(css) && Number(css.match(/\.overview-row\b[\s\S]*padding:\s*(?:[0-9]+px\s+)*([0-9]+)px/)[1]) <= 10, 'compact overview row outer padding must be 10px or smaller');
-  assert(/\.overview-mounts\b[\s\S]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*240px\),\s*1fr\)\)/.test(css), 'desktop overview mounts must use a responsive two/three-column auto-fit grid');
-  assert(/\.overview-mounts\b[\s\S]*gap:\s*[0-6]px/.test(css), 'compact overview mount grid gaps must be 6px or smaller');
-  assert(/\.overview-mounts\b[\s\S]*background:\s*var\(--surface2\)/.test(css), 'connected overview strip must put the shared surface on the mount container');
-  assert(/\.overview-mounts\b[\s\S]*gap:\s*[4-6]px/.test(css), 'connected overview strip must keep 4-6px internal gaps');
-  assert(/\.overview-mount\b[\s\S]*box-shadow:\s*none/.test(css), 'connected mount segments must not have independent card shadow depth');
-  assert(/\.overview-mount\b[\s\S]*border-right:\s*1px solid var\(--separator\)/.test(css), 'connected mount segments must use separators instead of nested-card borders');
+  assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(css), 'desktop overview must use the same three-column monitor-card rhythm as GPU Monitor');
+  assert(/\.overview-list\b[\s\S]*column-gap:\s*(?:14px|0\.9rem)/.test(css), 'desktop card gutter must match GPU Monitor closely');
+  assert(/\.overview-card\b[\s\S]*border-radius:\s*(?:24px|1\.5rem)/.test(css), 'server cards must use GPU Monitor card radius');
+  assert(/\.overview-card\b[\s\S]*background:\s*var\(--surface\)/.test(css), 'server cards must use the shared Clean card surface');
+  assert(/\.overview-card-header\b[\s\S]*border-bottom:\s*1px solid/.test(css), 'server headers must be separated from mount metrics by one quiet rule');
+  assert(/\.overview-mounts\b[\s\S]*display:\s*flex[\s\S]*flex-direction:\s*column/.test(css), 'mounts must render as compact vertical monitor rows');
+  assert(/\.overview-mount\b[\s\S]*grid-template-columns:\s*(?:34px|2\.15rem)\s+minmax\(0,\s*1fr\)/.test(css), 'mount rows must align a compact media chip with a flexible metric body');
   assert(/\.overview-mount\[data-pressure="warning"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--warn\)/.test(css), 'warning color must be scoped to the exact warning percentage selector');
   assert(/\.overview-mount\[data-pressure="critical"\]\s+\.overview-mount-pct\s*\{[^}]*color:\s*var\(--crit\)/.test(css), 'critical color must be scoped to the exact critical percentage selector');
   assert(/\.overview-pressure-fill\[data-pressure="unknown"\][\s\S]*background:\s*var\(--text2\)/.test(css), 'unknown pressure bars must use a neutral color instead of inheriting OK green');
-  assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.overview-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), 'row grid children must keep min-width:0 in the collapsed layout to prevent clipping');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-mounts\b[\s\S]*grid-template-columns:\s*1fr/.test(css), 'mobile overview must collapse mount cells to one column');
+  assert(/@media\s*\(max-width:\s*1040px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/.test(css), 'tablet overview must collapse to two monitor-card columns');
+  assert(/@media\s*\(max-width:\s*700px\)[\s\S]*\.overview-list\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(css), 'mobile overview must collapse to one monitor-card column');
   assert(/\.overview-pressure-bar\b[\s\S]*height:\s*4px/.test(css), 'compact overview pressure bars must be 4px tall');
   assert(/\.overview-mount-path\b[\s\S]*text-overflow:\s*ellipsis/.test(css), 'compact mount paths must truncate visually');
   assert(/font-variant-numeric:\s*tabular-nums/.test(css), 'compact numeric fields must use tabular numbers');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*main\b[\s\S]*padding:\s*10px/.test(css), '390px mobile layouts must reduce main padding to avoid horizontal overflow');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-row\b[\s\S]*overflow:\s*hidden/.test(css), 'mobile overview rows must explicitly hide horizontal overflow');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-card\b[\s\S]*overflow:\s*hidden/.test(css), 'mobile overview cards must explicitly hide horizontal overflow');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css), 'overview styling must continue to respect reduced motion');
 }
 
@@ -1381,7 +1413,8 @@ async function main() {
   await testDetailCapacityUnknownNumbersRenderNeutralDashes();
   await testZeroActionableMountsUseExactKoreanEmptyCopy();
   testDetailCapacityResponsiveCssContract();
-  testOverviewConnectedStripHierarchyContract();
+  testOverviewMonitorCardHierarchyContract();
+  testOverviewMasonryPreservesOrderAcrossResponsiveColumns();
   testApprovedCleanThemeTokenContract();
   testSuccessfulOverviewSuppressesServerCountLiveLead();
   testMountCentricResponsiveCssContract();
