@@ -294,7 +294,7 @@ function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
   const failedText = textTree(failedButton);
   assert(failedText.includes('beta'), 'row must contain the server display name');
   assert.strictEqual(failedButton.getAttribute('data-primary-status'), failedRow.primaryStatus.code, 'rendered primary status code must match the overview model');
-  const primaryState = findByClass(failedButton, 'overview-card-state')[0];
+  const primaryState = findByClass(failedButton, 'overview-status-text')[0];
   assert(primaryState, 'primary exceptional state must remain visible in the compact card header');
   assert(hangulString(textTree(primaryState)), 'primary exceptional state must expose visible Korean text');
   assert.strictEqual(findByClass(failedButton, 'overview-status-dot').length, 1, 'primary exceptional state must include a compact shape cue');
@@ -303,7 +303,7 @@ function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
 
   const staleButton = overviewList.children[1].children[0];
   assert.strictEqual(staleButton.getAttribute('data-primary-status'), staleRow.primaryStatus.code, 'rendered stale status code must match the overview model');
-  assert(hangulString(textTree(findByClass(staleButton, 'overview-card-state')[0])), 'stale state must expose visible Korean text');
+  assert(hangulString(textTree(findByClass(staleButton, 'overview-status-text')[0])), 'stale state must expose visible Korean text');
   assert(textTree(staleButton).includes('81%'), 'warning-capacity rows must still expose their compact bar text');
 
   failedButton.onclick();
@@ -338,7 +338,7 @@ function testSnapshotLoadFailureRendersAsVisibleException() {
   viewer.renderOverviewList(overviewList, [row], { onOpenServer() {} });
   const button = overviewList.children[0].children[0];
   assert.strictEqual(button.getAttribute('data-primary-status'), 'snapshot_load_failed');
-  const state = findByClass(button, 'overview-card-state')[0];
+  const state = findByClass(button, 'overview-status-text')[0];
   assert(state, 'snapshot load failures must render a visible compact state');
   assert(hangulString(textTree(state)), 'snapshot load failure state must render Korean text');
   assert.strictEqual(findByClass(button, 'overview-status-dot').length, 1, 'snapshot load failure state must render a visible shape cue');
@@ -834,7 +834,7 @@ async function testZeroActionableMountsUseExactKoreanEmptyCopy() {
   const row = viewer.buildOverviewServer({ id: 'boot-only', display_name: 'boot-only', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null }, snapshot, viewer.DEFAULT_CAPACITY_THRESHOLDS);
   const list = viewer.document.getElementById('overviewList');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
-  assert.strictEqual(textTree(list), 'boot-only0개 마운트표시할 데이터 마운트 없음', 'overview must use the exact Korean empty-mount copy');
+  assert.strictEqual(textTree(list), 'boot-only정상0개 마운트표시할 데이터 마운트 없음', 'overview must keep the hidden healthy status and exact Korean empty-mount copy');
 
   viewer.rememberBootstrap({
     mode: 'api', session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
@@ -899,9 +899,14 @@ function testOverviewMonitorCardHierarchyContract() {
   assert.strictEqual(card.tagName, 'A', 'each server must render as a native monitor-card link');
   assert.strictEqual(findByClass(card, 'overview-status-dot').length, 1, 'server state must use one compact status dot');
   assert.strictEqual(findByClass(card, 'overview-badge').length, 0, 'server cards must not lead with a large warning pill');
-  assert(!text.includes('정상'), 'overview must not render healthy status copy in server or mount text');
+  assert.strictEqual(findByClass(card, 'overview-card-state').length, 0, 'overview must not render a separate healthy or exceptional state column');
   assert(!text.includes('전체') && !text.includes('집계'), 'overview rows must not include page-level or aggregate capacity copy');
   assert.strictEqual(findByClass(card, 'overview-card-header').length, 1, 'server identity must use the same compact card header anatomy as GPU Monitor');
+  assert.strictEqual(findByClass(card, 'overview-card-title-row').length, 1, 'server identity must preserve the shared GPU Monitor title-row wrapper');
+  assert.strictEqual(findByClass(card, 'overview-card-title-line').length, 1, 'server name, status, and metadata must remain in one shared title line');
+  assert.strictEqual(findByClass(card, 'overview-card-status').length, 1, 'server status must use the shared inline GPU Monitor status wrapper');
+  assert.strictEqual(findByClass(card, 'overview-status-text').length, 1, 'healthy status text must remain available to assistive technology');
+  assert(findByClass(card, 'overview-status-text')[0].className.includes('overview-sr-only'), 'healthy status copy must stay visually hidden like GPU Monitor dev');
   assert.strictEqual(findByClass(card, 'overview-mounts').length, 1, 'overview mounts must use one compact metric-list body');
   assert.strictEqual(findByClass(card, 'overview-mount').length, 3, 'overview must keep every actionable mount');
   assert.strictEqual(findByClass(card, 'overview-card-footer').length, 1, 'server totals and pressure summary must live in one quiet card footer');
@@ -913,6 +918,20 @@ function testOverviewMonitorCardHierarchyContract() {
   ], 'each mount row must use the GPU-row anatomy: compact identity chip plus one metric body');
   assert.deepStrictEqual(findByClass(card, 'overview-mount').map(cell => textTree(findByClass(cell, 'overview-mount-path')[0])), ['/alpha', '/beta', '/gamma'], 'monitor cards must preserve snapshot mount order');
   assert.strictEqual(findByClass(card, 'overview-pressure-bar').length, 3, 'every mount keeps a visible full-width usage graph');
+
+  const healthyRow = viewer.buildOverviewServer(
+    { id: 'healthy-1', display_name: 'healthy', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    {
+      server_id: 'healthy-1',
+      selected_roots: [{ mount_id: 'healthy-root', capacity_id: 'dev-9-1', storage_media: 'ssd' }],
+      mounts: [{ mount_id: 'healthy-root', path: '/data', df_total: 1000 * 1024 ** 3, df_used: 200 * 1024 ** 3, df_avail: 800 * 1024 ** 3, df_use_pct: 20 }],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  viewer.renderOverviewList(list, [healthyRow], { onOpenServer() {} });
+  const healthyStatusText = findByClass(list.children[0].children[0], 'overview-status-text')[0];
+  assert.strictEqual(textTree(healthyStatusText), '정상', 'a truly healthy server must expose the same hidden Korean status label as GPU Monitor dev');
+  assert(healthyStatusText.className.includes('overview-sr-only'), 'healthy status text must stay visually hidden');
 }
 
 function testOverviewMasonryPreservesOrderAcrossResponsiveColumns() {
@@ -1214,14 +1233,27 @@ function testMountCentricResponsiveCssContract() {
   assert(/\.overview-view\b[\s\S]*max-width:\s*var\(--overview-max-width\)/.test(css), 'overview view must consume the semantic max-width token');
   assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(var\(--overview-card-min\),\s*1fr\)\)/.test(css), 'desktop overview must use three columns with the semantic minimum card width');
   assert(/\.overview-list\b[\s\S]*gap:\s*var\(--overview-card-gap\)/.test(css), 'desktop card gutter must use the semantic card gap token');
-  assert(/\.overview-card\b[\s\S]*border-radius:\s*(?:24px|1\.5rem)/.test(css), 'server cards must use GPU Monitor card radius');
+  assert(/--monitor-card-radius:\s*24px/.test(css), 'the shared monitor-card radius must use the GPU Monitor computed value, independent of root font size');
+  assert(/--monitor-card-header-padding:\s*9px 12px 8px/.test(css), 'the shared monitor-card header padding must use the GPU Monitor computed value');
+  assert(/--monitor-card-title-row-min-height:\s*30px/.test(css), 'the shared monitor-card title row must preserve the GPU Monitor edit-control height even when Storage has no edit button');
+  assert(/--monitor-card-title-size:\s*15\.2px/.test(css), 'the shared monitor-card title size must use the GPU Monitor computed value');
+  assert(/--monitor-card-title-line-height:\s*19\.76px/.test(css), 'the shared monitor-card title line height must use the GPU Monitor computed value');
+  assert(/--monitor-card-status-dot-size:\s*8px/.test(css), 'the shared monitor-card status dot must use the GPU Monitor computed value');
+  assert(/--monitor-card-meta-size:\s*9\.76px/.test(css), 'the shared monitor-card metadata size must use the GPU Monitor computed value');
+  assert(/\.overview-card\b[\s\S]*border-radius:\s*var\(--monitor-card-radius\)/.test(css), 'server cards must consume the shared GPU Monitor card radius token');
   assert(/\.overview-card\b[\s\S]*background:\s*var\(--ops-card\)/.test(css), 'server cards must use the shared Clean card surface');
   assert(/--ops-card:\s*var\(--surface\)/.test(css) && /--ops-border:\s*var\(--separator\)/.test(css), 'Storage must expose the same semantic card aliases as GPU Monitor');
   assert(/\.overview-card\b[\s\S]*border:\s*1px solid var\(--ops-border\)/.test(css), 'Storage server cards must consume the shared GPU Monitor border token');
   assert(/\.overview-card\b[\s\S]*background:\s*var\(--ops-card\)/.test(css), 'Storage server cards must consume the shared GPU Monitor card token');
   assert(/html\.light\s+\.overview-card\b[\s\S]*box-shadow:\s*0 8px 22px color-mix\(in srgb, var\(--ops-fg\) 8%, transparent\)/.test(css), 'light-mode Storage overview cards must use a restrained Clean resting shadow');
-  assert(/\.overview-card-header\b[\s\S]*padding:\s*0\.56rem 0\.75rem 0\.52rem/.test(css), 'Storage card headers must use GPU Monitor card header rhythm');
-  assert(/\.overview-card-header\b[\s\S]*border-bottom:\s*1px solid/.test(css), 'server headers must be separated from mount metrics by one quiet rule');
+  const overviewHeaderBlock = cssBlock(css, '.overview-card-header');
+  assert(/padding:\s*var\(--monitor-card-header-padding\)/.test(overviewHeaderBlock), 'Storage card headers must consume the shared GPU Monitor header rhythm token');
+  assert(/background:\s*transparent/.test(overviewHeaderBlock), 'Storage card headers must remain part of one continuous GPU Monitor card surface');
+  assert(!/border-bottom\s*:/.test(overviewHeaderBlock), 'Storage card headers must not add a separate cap divider absent from GPU Monitor');
+  assert(/#app\s*>\s*header\s*\{/.test(css), 'sticky frosted shell styling must be scoped to the direct app header');
+  assert(!/(?:^|\n)\s*header\s*\{/.test(css), 'semantic headers inside monitor cards must not inherit the sticky shell border and backdrop');
+  assert(/\.overview-card-title-row\b[\s\S]*display:\s*flex[\s\S]*align-items:\s*center/.test(css), 'Storage card headers must preserve the shared GPU Monitor title-row anatomy');
+  assert(/\.overview-card-title-row\b[\s\S]*min-height:\s*var\(--monitor-card-title-row-min-height\)/.test(css), 'Storage card headers must preserve the shared GPU Monitor rendered height');
   assert(/\.overview-mounts\b[\s\S]*display:\s*flex[\s\S]*flex-direction:\s*column/.test(css), 'mounts must render as compact vertical monitor rows');
   assert(/\.overview-mount\b[\s\S]*grid-template-columns:\s*var\(--overview-media-column-width\)\s+minmax\(0,\s*1fr\)/.test(css), 'mount rows must allocate a dedicated media column and a flexible body column');
   assert(/\.overview-media-label\b[\s\S]*width:\s*var\(--overview-media-column-width\)/.test(css), 'overview media labels must consume the same dedicated media-column width as the grid track');
