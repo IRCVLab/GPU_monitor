@@ -42,10 +42,11 @@
 - Modify: `agent/test_scan_runner.py`
 - Modify: `agent/scan_runner.py`
 
-- [ ] Add failing scanner tests for repeated `--target PATH MAJOR:MINOR`, malformed/missing device values, target mismatch skipping, positional-path backward compatibility, and source ordering that requires `fstat` before directory reads.
+- [ ] Add failing scanner tests for the exact repeated form `--target /home 8:1 --target /data 8:1`, exact two-argument consumption, absolute paths, decimal major/minor parsing, usage exit 2 for missing/malformed/negative/out-of-range device values, target mismatch skipping, and positional-path backward compatibility for standalone use.
+- [ ] Add a source-level contract test pinning `fstat()` after each directory `open()` and before any `getdents64`/entry read, because an unprivileged test cannot deterministically create the queued-child overmount race.
 - [ ] Add a failing agent argv test requiring guarded target triplets for every selected root.
 - [ ] Run `bash scanner/test_hstscan.sh` and the focused agent argv test; confirm expected failures.
-- [ ] Implement strict guarded target parsing while retaining positional target support.
+- [ ] Implement strict guarded target parsing while retaining positional target support only for backward-compatible standalone use; production agent argv must contain guarded `--target PATH MAJOR:MINOR` triplets exclusively.
 - [ ] Compare target `lstat().st_dev` with expected major/minor before traversal.
 - [ ] `fstat` every opened directory fd and skip it if the device differs from the target root device.
 - [ ] Change `_scanner_argv` to accept selected roots and emit repeated guarded target triplets.
@@ -58,8 +59,8 @@
 - Modify: `agent/scan_runner.py`
 - Modify: `collector/test_snapshot.py`
 
-- [ ] Add failing enrichment tests requiring `/home` to retain the source mount ID, `/data` to use `<id>-root-data`, and both records/mounts to share `major_minor` and `capacity_id`.
-- [ ] Add a collector validation test accepting two unique logical roots with one shared capacity while retaining duplicate logical-ID rejection.
+- [ ] Add failing enrichment tests requiring `/home` to retain the source mount ID, `/data` to use `<id>-root-data`, both selected roots to keep unique `scan_root` values, linked mount records to reuse their selected-root logical IDs, and all records to share `major_minor` and `capacity_id`.
+- [ ] Add a collector validation test accepting two unique logical roots with one shared capacity while retaining duplicate logical-ID and duplicate-`scan_root` rejection.
 - [ ] Run focused tests and confirm enrichment currently collides on `mount_id`.
 - [ ] Add one stable logical-ID helper and use it for selected-root and linked-mount records.
 - [ ] Run `python3 -m pytest -q agent/test_scan_runner.py collector/test_snapshot.py` and confirm all tests pass.
@@ -70,7 +71,7 @@
 - Modify: `scanner/test_hstscan.sh`
 - Modify: `docs/operations.md`
 
-- [ ] Add a scanner integration test with a cross-target hardlink proving process-global physical-byte deduplication and deterministic first-target allocation.
+- [ ] Add a scanner integration test with a cross-target hardlink proving the inode is counted once total and is attributed to `/home`, the deterministic first target, before `/data`.
 - [ ] Run `bash scanner/test_hstscan.sh` and confirm current behavior satisfies the documented allocation contract.
 - [ ] Document root `/data` synthesis, exact-path scope, shared capacity identity, prohibited mount behavior, and first-target hardlink allocation.
 
@@ -80,7 +81,7 @@
 - Verify all modified files.
 
 - [ ] Run `python3 -m pytest -q`.
-- [ ] Run `bash scanner/test_hstscan.sh`.
+- [ ] Run `bash scanner/test_hstscan.sh`; if the macOS host rejects the suite's deliberate non-UTF-8 filename fixture, run the same suite in the deployed Linux build environment and record that platform-specific local validation gap separately.
 - [ ] Run `bash deploy/test_deploy_scripts.sh`.
 - [ ] Run `node viewer/viewer.test.js` and `node viewer/viewer_regression_test.js`.
 - [ ] Run repository static checks documented by existing scripts.
@@ -94,8 +95,8 @@
 - Inventory: `/etc/storage-viz/servers.json` on the central host.
 
 - [ ] Read enabled inventory entries and perform a dry-run deployment check per server.
-- [ ] Deploy the agent package per server through `deploy/deploy-agent.sh`; do not alter central GPU Monitor services.
+- [ ] Deploy the agent package per server through `deploy/deploy-agent.sh`; do not alter the central dashboard service contract.
 - [ ] Trigger one bounded scan per successfully deployed server through the fixed systemd command or central rescan endpoint, respecting active-job/cooldown guards.
 - [ ] Wait for completion, pull snapshots, and verify ordinary root-backed `/data` appears with a unique logical mount ID and shared root capacity.
 - [ ] Verify explicit local `/data` mounts remain unchanged and prohibited/network `/data` mounts remain excluded.
-- [ ] Confirm Storage Monitor, GPU Dev, and GPU Live endpoints remain HTTP 200.
+- [ ] Confirm the Storage Monitor endpoint remains HTTP 200 and the central service continues accepting the new snapshots without schema errors.
