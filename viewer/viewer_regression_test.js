@@ -1197,7 +1197,15 @@ function testMountCentricResponsiveCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   const mediaColumnMatch = css.match(/--overview-media-column-width:\s*([^;]+);/);
   assert(mediaColumnMatch, 'overview media column width token must exist');
-  assert.strictEqual(mediaColumnMatch[1].trim(), '46px', 'overview media column width token must reserve enough room for UNKNOWN without truncation');
+  const mediaColumnWidthPx = Number.parseFloat(mediaColumnMatch[1]);
+  assert.strictEqual(mediaColumnMatch[1].trim(), '52px', 'overview media column width token must be set to 52px to avoid label clipping at mobile density');
+  assert.strictEqual(mediaColumnWidthPx, 52, 'overview media column token must remain an integer CSS pixel width');
+  const mediaLabelBlock = cssBlock(css, '.overview-media-label');
+  const mediaLabelBorderMatch = mediaLabelBlock.match(/border:\s*([^;]+);/);
+  assert(mediaLabelBorderMatch, 'overview media label must use an explicit border in its baseline state');
+  const borderWidth = Number.parseFloat(mediaLabelBorderMatch[1].match(/([\d.]+)px/)[0]);
+  assert(mediaColumnWidthPx - (2 * borderWidth) >= 48, 'media-column width is border-box; 52px minus 1px borders should leave at least 48px for label text (content-area-safe, no clipping workaround)');
+  assert(!/text-overflow\s*:\s*ellipsis/.test(mediaLabelBlock), 'media labels should not rely on text-overflow truncation; containment-only clipping is expected to avoid overlap');
   assert(/--overview-max-width:\s*1440px/.test(css), 'overview CSS must expose a semantic max-width token');
   assert(/--overview-gutter:\s*24px/.test(css), 'overview CSS must expose the desktop gutter token');
   assert(/--overview-card-gap:\s*14px/.test(css), 'overview CSS must expose the card gap token');
