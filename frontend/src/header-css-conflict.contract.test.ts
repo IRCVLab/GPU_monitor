@@ -300,6 +300,9 @@ test('header controls and dashboard cards share the same framed content gutter',
 	assert.ok(pageSource.includes('class="ops-header border-b border-surface-border"'));
 	assert.ok(pageSource.includes('ops-header-inner $' + '{pageShellClass} px-4 sm:px-6'));
 	assert.ok(
-		pageSource.includes("const pageMainClass = 'max-w-7xl mx-auto px-4 py-4 sm:px-6';")
+		pageSource.includes("$dashboardLayoutWidth === 'full' ? 'w-full' : 'max-w-7xl mx-auto'")
+	);
+	assert.ok(
+		pageSource.includes("$dashboardLayoutWidth === 'full' ? 'w-full px-4 py-4 sm:px-6' : 'max-w-7xl mx-auto px-4 py-4 sm:px-6'")
 	);
 });
