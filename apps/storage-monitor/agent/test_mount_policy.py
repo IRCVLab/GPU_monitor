@@ -55,6 +55,84 @@ class MountPolicyTests(unittest.TestCase):
                 self.assertIn(("/home", expected_reason), [(s.mountpoint, s.reason) for s in result.skipped])
                 self.assertIn(("/", "root-home-covered"), [(s.mountpoint, s.reason) for s in result.skipped])
 
+    def test_supplied_data_root_expands_from_single_root_filesystem(self):
+        entries = parse_mountinfo(mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"))
+
+        result = select_scan_roots(entries, root_directory_paths=("/data",))
+
+        self.assertEqual([(r.mountpoint, r.source_mountpoint, r.reason) for r in result.selected], [
+            ("/home", "/", "root-home"),
+            ("/data", "/", "root-directory"),
+        ])
+        self.assertIn(("/", "root-limited-to-home"), [(s.mountpoint, s.reason) for s in result.skipped])
+
+    def test_separate_home_coexists_with_root_backed_data(self):
+        text = "\n".join([
+            mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+            mi(2, 1, "8:2", "/", "/home", "rw", "xfs", "/dev/sda2"),
+        ])
+
+        result = select_scan_roots(parse_mountinfo(text), root_directory_paths=("/data",))
+
+        self.assertEqual([(r.mountpoint, r.source_mount_id, r.reason) for r in result.selected], [
+            ("/data", 1, "root-directory"),
+            ("/home", 2, "selected"),
+        ])
+        self.assertIn((1, "/", "root-home-covered"), [(s.mount_id, s.mountpoint, s.reason) for s in result.skipped])
+
+    def test_only_exact_supplied_data_path_controls_synthetic_root(self):
+        text = "\n".join([
+            mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+            mi(2, 1, "8:2", "/", "/data1", "rw", "xfs", "/dev/sda2"),
+            mi(3, 1, "8:3", "/", "/dataset", "rw", "xfs", "/dev/sda3"),
+        ])
+
+        result = select_scan_roots(parse_mountinfo(text), root_directory_paths=("/data",))
+
+        self.assertEqual([r.mountpoint for r in result.selected], ["/home", "/data", "/data1", "/dataset"])
+
+    def test_explicit_data_mount_is_authoritative_over_synthetic_root(self):
+        text = "\n".join([
+            mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+            mi(2, 1, "8:2", "/", "/data", "rw", "xfs", "/dev/sdb1"),
+        ])
+
+        result = select_scan_roots(parse_mountinfo(text), root_directory_paths=("/data",))
+
+        self.assertEqual([(r.mountpoint, r.source_mount_id, r.reason) for r in result.selected], [
+            ("/home", 1, "root-home"),
+            ("/data", 2, "selected"),
+        ])
+        self.assertIn((1, "/", "root-directory-covered"), [(s.mount_id, s.mountpoint, s.reason) for s in result.skipped])
+
+    def test_prohibited_explicit_data_mount_blocks_synthetic_fallback(self):
+        text = "\n".join([
+            mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+            mi(2, 1, "0:42", "/", "/data", "rw", "nfs", "server:/data"),
+        ])
+
+        result = select_scan_roots(parse_mountinfo(text), root_directory_paths=("/data",))
+
+        self.assertEqual([r.mountpoint for r in result.selected], ["/home"])
+        self.assertIn(("/data", "remote-fs"), [(s.mountpoint, s.reason) for s in result.skipped])
+        self.assertIn(("/", "root-directory-covered"), [(s.mountpoint, s.reason) for s in result.skipped])
+
+    def test_root_alias_is_duplicate_before_root_data_expansion(self):
+        text = "\n".join([
+            mi(20, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+            mi(10, 20, "8:1", "/", "/mnt/root-bind", "rw", "ext4", "/dev/sda1"),
+        ])
+
+        result = select_scan_roots(parse_mountinfo(text), root_directory_paths=("/data",))
+
+        self.assertEqual([(r.entry.mount_id, r.mountpoint, r.reason) for r in result.selected], [
+            (20, "/home", "root-home"),
+            (20, "/data", "root-directory"),
+        ])
+        self.assertIn((10, "/mnt/root-bind", 20, "duplicate"), [
+            (s.mount_id, s.mountpoint, s.chosen_mount_id, s.reason) for s in result.skipped
+        ])
+
     def test_plain_ext4_xfs_lvm_and_mdraid_mounts_are_local(self):
         text = "\n".join([
             mi(10, 1, "8:17", "/", "/srv/ext", "rw", "ext4", "/dev/sdb1"),
