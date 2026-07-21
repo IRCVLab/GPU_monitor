@@ -119,8 +119,11 @@ The overview reports **managed local storage**. This is the unique filesystem ca
 
 Each complete or partial selected root may carry a `capacity_id` derived from its safe mount identity. When multiple selected mounts on the same server share the same capacity identity, the overview counts that capacity once for server and page totals. The duplicate mount rows may remain visible for navigation, but they do not double-count capacity.
 
+When no exact `/data` mount exists in `/proc/self/mountinfo`, `/data` may be represented by a synthetic root-backed target only for ordinary real directories on the root device. That synthetic target uses logical id `<source-id>-root-data`; it shares `capacity_id` and physical metadata with the root-backed `/home` entry so totals are not inflated.
+
 If a mount identity cannot be resolved safely, or if rows for the same identity report inconsistent capacity numbers, the dashboard does not guess. It leaves the mount visible, excludes that identity from exact totals, and marks the aggregate as partial or unknown. A partial/unknown aggregate means capacity accounting is intentionally conservative; it is not evidence of a scanner failure by itself.
 
+Hardlinks are deduplicated process-wide. If a hardlinked file belongs to both `/home` and synthetic `/data`, it is counted once and attributed deterministically to the first target, `/home`.
 ## SSD/HDD media classification
 
 The per-server agent classifies storage media from backing leaf block devices through Linux sysfs. It resolves the selected mount's block `major:minor` under `/sys/dev/block`, follows bounded `slaves` topology, and reads leaf `queue/rotational` values. It does not run heavyweight inventory commands or infer media from names, filesystem types, or capacity sizes.
@@ -139,6 +142,17 @@ Media labels have these meanings:
 ## Mount exclusion policy
 
 Agents scan only local filesystems selected by `agent.scan_runner` policy. The central inventory cannot override mount policy or add scan roots. Mandatory exclusions include network, distributed, virtual, and container-backed filesystems such as NFS/NFS4, CIFS/SMB, sshfs, generic FUSE mounts, distributed filesystems, proc/sys/dev pseudo filesystems, overlay/container layers, and other non-local mounts. These exclusions prevent recursive network scans, container internals, and virtual kernel trees from entering central reports. Excluded mounts stay outside managed local storage totals.
+
+## Root and `/data` policy
+
+The scanner enforces the following behavior:
+
+- `/` is never scanned directly.
+- `/home` remains scan-eligible and keeps its normal local-policy treatment.
+- A synthetic `/data` target is created only for an ordinary real directory under the root filesystem when no exact mountinfo entry owns `/data`.
+- Explicit local `/data` mount entries are treated as normal scan targets.
+- Explicit prohibited, network, unsupported, or symlinked `/data` roots block synthetic `/data` fallback.
+- The scanner performs `lstat` symlink checks and runtime expected-device/opened-directory guards before accepting any candidate root, so synthetic `/data` is only used for local real directories.
 
 ## SSH identity ownership and modes
 
@@ -161,6 +175,8 @@ Do not grant shell, restart, stop, daemon-reload, edit, or wildcard sudo privile
 Each agent writes snapshots under `/var/lib/storage-viz` and status under `/var/lib/storage-viz/scan-status.json`. The agent timer runs every six hours using `storage-viz-scan.timer` with `OnUnitActiveSec=6h`, `Persistent=true`, and randomized delay.
 
 Central manual rescans are bounded: the dashboard first queries only the fixed unprivileged remote command `/usr/bin/systemctl show --property=ActiveState --value storage-viz-scan.service`; if the unit is active, activating, or reloading, the request is rejected as an active job before any start/cooldown is consumed. When inactive, the dashboard can request only the fixed remote command `sudo -n /usr/bin/systemctl start storage-viz-scan.service` for a configured server id. Operators cannot submit paths or commands. Rescan transport has bounded timeouts and central job concurrency/cooldown limits.
+
+The `/data` policy affects root selection only; six-hour scheduled scans and manual scan behavior remain unchanged.
 
 ## Cleanup workflow
 
