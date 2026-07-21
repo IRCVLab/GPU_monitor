@@ -168,6 +168,7 @@ function setShellMode(isDetail) {
   const warnBanner = document.getElementById("warnBanner");
   const caps = document.getElementById("caps");
   const detailTabs = document.getElementById("detailTabs");
+  document.body.dataset.shellMode = isDetail ? "detail" : "overview";
   if (overviewView) overviewView.hidden = !!isDetail;
   if (detailView) detailView.hidden = !isDetail;
   if (back) back.hidden = !isDetail;

@@ -1499,8 +1499,25 @@ function testThemeModeCookieContractPreservesHistory() {
   assert.deepStrictEqual(viewer.__historyCalls, [], 'theme toggles must not touch route/history state');
 }
 
+function testThemeControlAndTileFirstDetailLayoutContract() {
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  const button = html.slice(html.indexOf('id="themeModeButton"'), html.indexOf('</button>', html.indexOf('id="themeModeButton"')));
+  assert.match(button, /theme-icon-sun/);
+  assert.match(button, /theme-icon-moon/);
+  assert.match(css, /\.theme-mode-button\s*\{[^}]*width:\s*40px[^}]*height:\s*40px[^}]*border-radius:\s*50%/);
+  assert.match(css, /\.theme-mode-button\s+\.theme-icon\s*\{[^}]*position:\s*absolute[^}]*transition:[^}]*opacity[^}]*transform/);
+  assert.doesNotMatch(css, /html\.dark\s+\.theme-icon-moon\s*,\s*html\.light\s+\.theme-icon-sun\s*\{[^}]*display:\s*none/);
+  assert.match(app, /document\.body\.dataset\.shellMode\s*=\s*isDetail\s*\?\s*"detail"\s*:\s*"overview"/);
+  assert.match(css, /\.caps\.detail-capacity-rail\s*\{[^}]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /body\[data-shell-mode=['"]detail['"]\]\s+main\s*\{[^}]*padding-top:\s*8px/);
+  assert.match(css, /#treemap\s*\{[^}]*height:\s*calc\(100vh\s*-\s*225px\)/);
+}
+
 async function main() {
   testThemeModeCookieContractPreservesHistory();
+  testThemeControlAndTileFirstDetailLayoutContract();
   testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars();
   testSnapshotLoadFailureRendersAsVisibleException();
   testRouteNavigationAndBackShellContract();
