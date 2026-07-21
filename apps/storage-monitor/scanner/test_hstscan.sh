@@ -94,6 +94,111 @@ PYEOF
 rm -f "$GUARDED_OUT" "$GUARDED_OUT.tmp"
 pass "guarded --target PATH MAJOR:MINOR scans exact absolute target"
 
+# Cross-target hardlink regression: when two guarded targets on the same device
+# contain directory entries for the same regular-file inode, the inode must be
+# charged once globally, to the first target in CLI order.  Keep the fixture
+# limited to target roots plus one hardlinked file so ordinary directory/root
+# metadata can be subtracted explicitly from the assertions.
+SAMEDEV_HOME="$TMP/home"
+SAMEDEV_DATA="$TMP/data"
+mkdir -p "$SAMEDEV_HOME" "$SAMEDEV_DATA"
+head -c 131072 /dev/zero > "$SAMEDEV_HOME/shared.bin"
+ln "$SAMEDEV_HOME/shared.bin" "$SAMEDEV_DATA/shared.bin"
+read -r SAMEDEV_MAJOR SAMEDEV_MINOR HOME_ROOT_BYTES DATA_ROOT_BYTES SHARED_BYTES SHARED_UID <<EOF
+$($PY - "$SAMEDEV_HOME" "$SAMEDEV_DATA" "$SAMEDEV_HOME/shared.bin" <<'PYEOF'
+import os, sys
+home, data, shared = sys.argv[1:4]
+hst = os.lstat(home)
+dst = os.lstat(data)
+fst = os.lstat(shared)
+if hst.st_dev != dst.st_dev or hst.st_dev != fst.st_dev:
+    raise SystemExit("same-device hardlink fixture crossed devices")
+print(
+    os.major(hst.st_dev),
+    os.minor(hst.st_dev),
+    hst.st_blocks * 512,
+    dst.st_blocks * 512,
+    fst.st_blocks * 512,
+    fst.st_uid,
+)
+PYEOF
+)
+EOF
+SAMEDEV_DEV="$SAMEDEV_MAJOR:$SAMEDEV_MINOR"
+SAMEDEV_OUT="$(mktemp /tmp/hstscan_samedev_hardlink.XXXXXX.json)"
+"$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 --out "$SAMEDEV_OUT" \
+    --target "$SAMEDEV_HOME" "$SAMEDEV_DEV" \
+    --target "$SAMEDEV_DATA" "$SAMEDEV_DEV"
+SRC=$?
+[ "$SRC" -eq 0 ] || fail "same-device hardlink guarded scan exited non-zero ($SRC)"
+if ! $PY - "$SAMEDEV_OUT" "$SAMEDEV_HOME" "$SAMEDEV_DATA" \
+    "$HOME_ROOT_BYTES" "$DATA_ROOT_BYTES" "$SHARED_BYTES" "$SHARED_UID" <<'PYEOF'
+import json, sys
+
+out, home, data = sys.argv[1:4]
+home_root, data_root, shared_bytes, shared_uid = map(int, sys.argv[4:8])
+with open(out, encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+mounts = payload.get("mounts", [])
+paths = [m.get("path") for m in mounts]
+if paths != [home, data]:
+    raise SystemExit(f"mount order/path mismatch: {paths!r}")
+
+by_path = {m["path"]: m for m in mounts}
+for path, root_bytes in ((home, home_root), (data, data_root)):
+    tree = by_path[path].get("tree", {})
+    if tree.get("kind") != "directory" or tree.get("children", []) != []:
+        raise SystemExit(f"unexpected single-root mount tree for {path}: {tree!r}")
+    if tree.get("bytes") != by_path[path]["scanned_bytes"]:
+        raise SystemExit(
+            f"tree/scanned byte mismatch for {path}: "
+            f"tree={tree.get('bytes')} scanned={by_path[path]['scanned_bytes']}"
+        )
+    if tree.get("bytes", 0) < root_bytes:
+        raise SystemExit(f"tree bytes for {path} are less than root metadata bytes")
+
+home_file_bytes = by_path[home]["tree"]["bytes"] - home_root
+data_file_bytes = by_path[data]["tree"]["bytes"] - data_root
+if home_file_bytes != shared_bytes:
+    raise SystemExit(
+        f"first target file contribution {home_file_bytes}, expected {shared_bytes}"
+    )
+if data_file_bytes != 0:
+    raise SystemExit(f"second target file contribution {data_file_bytes}, expected 0")
+if by_path[home]["scanned_files"] != 1 or by_path[data]["scanned_files"] != 0:
+    raise SystemExit(
+        f"scanned_files mismatch: home={by_path[home]['scanned_files']} "
+        f"data={by_path[data]['scanned_files']}"
+    )
+
+users = [u for u in payload.get("users", []) if u.get("uid") == shared_uid]
+if len(users) != 1:
+    raise SystemExit(f"expected exactly one user row for uid {shared_uid}, got {len(users)}")
+user = users[0]
+if user.get("files") != 1:
+    raise SystemExit(f"uid {shared_uid} files={user.get('files')}, expected 1")
+by_mount = user.get("by_mount", {})
+user_home_file_bytes = by_mount.get(home, 0) - home_root
+user_data_file_bytes = by_mount.get(data, 0) - data_root
+if user_home_file_bytes != shared_bytes or user_data_file_bytes != 0:
+    raise SystemExit(
+        f"user by_mount file bytes mismatch: home={user_home_file_bytes} "
+        f"data={user_data_file_bytes} expected home={shared_bytes} data=0"
+    )
+
+top = payload.get("top_files", [])
+if len(top) != 1 or top[0].get("path") != home + "/shared.bin":
+    raise SystemExit(f"top_files should contain only first-target hardlink path, got {top!r}")
+if top[0].get("bytes") != shared_bytes or top[0].get("uid") != shared_uid:
+    raise SystemExit(f"top_files metadata mismatch: {top[0]!r}")
+PYEOF
+then
+    fail "same-device hardlink was not counted once and attributed to first target"
+fi
+rm -f "$SAMEDEV_OUT" "$SAMEDEV_OUT.tmp"
+pass "same-device hardlink across guarded /home then /data targets is counted once and attributed to /home"
+
 MISMATCH_OUT="$(mktemp /tmp/hstscan_mismatch.XXXXXX.json)"
 if [ "$TREE_DEV" = "0:0" ]; then WRONG_DEV="1:0"; else WRONG_DEV="0:0"; fi
 "$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$MISMATCH_OUT" --target "$TREE" "$WRONG_DEV"
