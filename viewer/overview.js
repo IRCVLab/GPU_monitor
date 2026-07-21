@@ -576,7 +576,7 @@ function prefersReducedOverviewMotion() {
   return typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-function animateOverviewColumnChange(container, items, firstRects, columnCount) {
+function animateOverviewColumnChange(container, items, firstRects, columnCount, generation) {
   const previousColumnCount = container.__overviewColumnCount;
   container.__overviewColumnCount = columnCount;
   if (!previousColumnCount || previousColumnCount === columnCount || prefersReducedOverviewMotion()) return;
@@ -591,15 +591,20 @@ function animateOverviewColumnChange(container, items, firstRects, columnCount) 
     item.style.transform = "translate(" + dx + "px, " + dy + "px)";
     void item.offsetWidth;
     const run = () => {
+      item.__overviewFlipFrame = 0;
+      if (container.__overviewLayoutGeneration !== generation) return;
       item.style.transition = "transform 280ms cubic-bezier(.22,1,.36,1)";
       item.style.transform = "translate(0, 0)";
-      setTimeout(() => {
+      const cleanup = () => {
+        item.__overviewFlipTimer = 0;
+        if (container.__overviewLayoutGeneration !== generation) return;
         if (item.style.transform === "translate(0, 0)") item.style.transform = "";
         if (item.style.transition === "transform 280ms cubic-bezier(.22,1,.36,1)") item.style.transition = "";
-      }, 300);
+      };
+      item.__overviewFlipTimer = typeof setTimeout === "function" ? setTimeout(cleanup, 300) : 0;
     };
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
-    else run();
+    item.__overviewFlipFrame = typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : 0;
+    if (!item.__overviewFlipFrame) run();
   }
 }
 
@@ -607,6 +612,16 @@ function layoutOverviewMasonry(container) {
   if (!container || !container.children) return;
   const items = Array.from(container.children);
   if (!items.length || typeof items[0].getBoundingClientRect !== "function" || typeof getComputedStyle !== "function") return;
+  const generation = (container.__overviewLayoutGeneration || 0) + 1;
+  container.__overviewLayoutGeneration = generation;
+  const pendingItems = new Set((container.__overviewFlipItems || []).concat(items));
+  for (const item of pendingItems) {
+    if (item.__overviewFlipFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(item.__overviewFlipFrame);
+    if (item.__overviewFlipTimer && typeof clearTimeout === "function") clearTimeout(item.__overviewFlipTimer);
+    item.__overviewFlipFrame = 0;
+    item.__overviewFlipTimer = 0;
+  }
+  container.__overviewFlipItems = items;
   const firstRects = new Map();
   for (const item of items) {
     if (typeof item.getBoundingClientRect === "function") firstRects.set(item, item.getBoundingClientRect());
@@ -633,7 +648,7 @@ function layoutOverviewMasonry(container) {
     item.style.gridRow = String(startRow) + " / span " + span;
     nextRowByColumn[column] = startRow + span;
   });
-  animateOverviewColumnChange(container, items, firstRects, columnCount);
+  animateOverviewColumnChange(container, items, firstRects, columnCount, generation);
 }
 
 function scheduleOverviewMasonry(container) {
