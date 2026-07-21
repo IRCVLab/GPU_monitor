@@ -40,3 +40,25 @@ test('animateFlip uses the tuned non-jumping transition contract', () => {
 	assert.equal(calls[0][1].fill, 'both');
 });
 
+test('animateFlip can smoothly interpolate card width during responsive relayout', () => {
+	const calls = [];
+	const element = {
+		animate: (...args) => {
+			calls.push(args);
+			return { addEventListener() {} };
+		}
+	};
+
+	animateFlip(
+		element,
+		{ left: 10, top: 10, width: 400, height: 200 },
+		{ left: 30, top: 10, width: 500, height: 200 },
+		false,
+		true
+	);
+
+	assert.deepEqual(calls[0][0], [
+		{ transform: 'translate3d(-20px, 0px, 0) scaleX(0.8)', transformOrigin: 'top left' },
+		{ transform: 'translate3d(0, 0, 0) scaleX(1)', transformOrigin: 'top left' }
+	]);
+});

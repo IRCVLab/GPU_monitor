@@ -1,6 +1,8 @@
 export type FlipRect = {
 	left: number;
 	top: number;
+	width?: number;
+	height?: number;
 };
 
 export type FlipDelta = {
@@ -19,7 +21,7 @@ export function documentRect(element: HTMLElement): FlipRect {
 		current = current.offsetParent instanceof HTMLElement ? current.offsetParent : null;
 	}
 
-	return { left, top };
+	return { left, top, width: element.offsetWidth, height: element.offsetHeight };
 }
 
 export function flipDelta(previous: FlipRect, next: FlipRect): FlipDelta {
@@ -37,16 +39,26 @@ export function animateFlip(
 	element: HTMLElement,
 	previous: FlipRect,
 	next: FlipRect,
-	reducedMotion: boolean
+	reducedMotion: boolean,
+	animateWidth = false
 ): Animation | null {
 	const delta = flipDelta(previous, next);
-	if (!shouldAnimateFlip(delta, reducedMotion)) return null;
+	const scaleX =
+		animateWidth && previous.width && next.width && next.width > 0
+			? previous.width / next.width
+			: 1;
+	const widthChanged = animateWidth && Math.abs(scaleX - 1) >= 0.005;
+	if (!shouldAnimateFlip(delta, reducedMotion) && (reducedMotion || !widthChanged)) return null;
+	const fromTransform = `translate3d(${delta.x}px, ${delta.y}px, 0)`;
+	const keyframes = animateWidth
+		? [
+				{ transform: `${fromTransform} scaleX(${scaleX})`, transformOrigin: 'top left' },
+				{ transform: 'translate3d(0, 0, 0) scaleX(1)', transformOrigin: 'top left' }
+			]
+		: [{ transform: fromTransform }, { transform: 'translate3d(0, 0, 0)' }];
 
 	return element.animate(
-		[
-			{ transform: `translate3d(${delta.x}px, ${delta.y}px, 0)` },
-			{ transform: 'translate3d(0, 0, 0)' }
-		],
+		keyframes,
 		{
 			duration: 400,
 			easing: 'cubic-bezier(0.22, 1, 0.36, 1)',

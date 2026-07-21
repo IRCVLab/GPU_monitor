@@ -132,7 +132,7 @@ test('task 2 has no css zoom or dashboard scale wrappers in page dashboard card 
 });
 
 test('task 2 preserves masonry grid behavior', () => {
-	assert.match(pageSource, /class="monitor-dashboard-grid"[\s\S]*use:masonry=\{\$dashboardLayout === 'masonry'\}/);
+	assert.match(pageSource, /class="monitor-dashboard-grid"[\s\S]*use:masonry=\{\{[\s\S]*enabled:\s*\$dashboardLayout === 'masonry'/);
 	const masonryRule = cssRule(dashboardCss, '.monitor-dashboard-grid--masonry');
 	assertDeclaration(masonryRule, 'grid-auto-rows', 'var(--monitor-dashboard-masonry-row)');
 });
@@ -154,7 +154,7 @@ test('View menu chooses aligned Grid or gapless Masonry without changing server 
 	assert.match(pageSource, /\bsetDashboardLayout\b/);
 	assert.match(pageSource, />그리드<\/button>/);
 	assert.match(pageSource, />빈틈 없이<\/button>/);
-	assert.match(pageSource, /use:masonry=\{\$dashboardLayout === 'masonry'\}/);
+	assert.match(pageSource, /use:masonry=\{\{[\s\S]*enabled:\s*\$dashboardLayout === 'masonry'/);
 	assert.match(pageSource, /class:monitor-dashboard-grid--masonry=\{\$dashboardLayout === 'masonry'\}/);
 
 	const gridRule = cssRule(dashboardCss, '.monitor-dashboard-grid');
@@ -276,6 +276,26 @@ test('task 3 column-count structural change clears height cache before masonry p
 	const spansIndex = layoutBody.indexOf('const spans = items.map', columnChangedIndex);
 	assert.ok(heightClearIndex > columnChangedIndex, 'column-count changes must invalidate cached heights');
 	assert.ok(spansIndex > heightClearIndex, 'height cache must be invalidated before computing spans/assignments');
+});
+
+test('width changes invalidate pinned masonry columns before paint and reuse FLIP motion', () => {
+	assert.match(
+		pageSource,
+		/use:masonry=\{\{[\s\S]*enabled:\s*\$dashboardLayout === 'masonry'[\s\S]*layoutWidth:\s*\$dashboardLayoutWidth[\s\S]*\}\}/
+	);
+	const actionBody = functionBody(pageSource, 'masonry');
+	assert.match(actionBody, /let responsiveLayoutInvalidated = false;/);
+	assert.match(actionBody, /const widthChanged = nextOptions\.layoutWidth !== layoutWidth;/);
+	assert.match(actionBody, /if \(widthChanged\)[\s\S]*responsiveLayoutInvalidated = true;/);
+	const invalidateIndex = actionBody.indexOf('if (responsiveLayoutInvalidated)');
+	const clearAssignmentsIndex = actionBody.indexOf('clearAssignments();', invalidateIndex);
+	const clearPlacementIndex = actionBody.indexOf('clearPlacement(child)', invalidateIndex);
+	const countColumnsIndex = actionBody.indexOf('countResolvedGridTracks', invalidateIndex);
+	assert.ok(invalidateIndex >= 0, 'responsive invalidation branch must exist');
+	assert.ok(clearAssignmentsIndex > invalidateIndex, 'cached column assignments must clear');
+	assert.ok(clearPlacementIndex > clearAssignmentsIndex, 'pinned grid columns must clear');
+	assert.ok(countColumnsIndex > clearPlacementIndex, 'auto-fit columns must be measured only after pins clear');
+	assert.match(actionBody, /animateFlip\(child, previous, next, reducedMotion, animateResponsiveResize\)/);
 });
 
 test('task 3 cold and ResizeObserver height cache share one border-box measurement helper', () => {
