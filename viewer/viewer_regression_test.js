@@ -1337,7 +1337,7 @@ async function testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders() {
   };
   viewer.rememberBootstrap({
     mode: 'api',
-    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    session: { authenticated: true, can_rescan: true, csrf_token: 'csrf' },
     summaries: [
       { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
       { id: 'beta-2', display_name: 'beta', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
@@ -1350,6 +1350,13 @@ async function testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders() {
   assert.strictEqual(viewer.document.getElementById('h-host').textContent, 'alpha-host');
 
   viewer.navigateToOverview({ skipHistory: true });
+  const caps = viewer.document.getElementById('caps');
+  const warning = viewer.document.getElementById('warnBanner');
+  const rescan = viewer.document.getElementById('rescanBtn');
+  caps.hidden = false;
+  caps.innerHTML = '<div>alpha capacity</div>';
+  warning.hidden = false;
+  warning.innerHTML = 'alpha warning';
   viewer.navigateToServer('beta-2', { skipHistory: true });
 
   assert.strictEqual(viewer.getCurrentDetailDebugState().currentServerId, 'beta-2');
@@ -1357,6 +1364,11 @@ async function testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders() {
   assert.match(viewer.document.getElementById('detailLoading').textContent, /beta/, 'the pending detail must identify the server being loaded');
   assert.strictEqual(viewer.document.getElementById('detailLoading').hidden, false, 'a pending server snapshot must expose a loading state');
   assert.strictEqual(viewer.document.getElementById('detailPanels').hidden, true, 'previous server panels must be hidden while the next snapshot is pending');
+  assert.strictEqual(caps.hidden, true, 'previous server capacities must be hidden while the next snapshot is pending');
+  assert.strictEqual(caps.innerHTML, '', 'previous server capacities must be cleared while the next snapshot is pending');
+  assert.strictEqual(warning.hidden, true, 'previous server warnings must be hidden while the next snapshot is pending');
+  assert.strictEqual(warning.innerHTML, '', 'previous server warnings must be cleared while the next snapshot is pending');
+  assert.strictEqual(rescan.disabled, false, 'manual rescan must be enabled immediately for an API-backed selected server, even while its snapshot is loading');
 
   beta.resolve({ server_id: 'beta-2', hostname: 'beta-host', mounts: [], users: [], top_files: [], stale: [] });
   await flushPromises();
@@ -1473,15 +1485,9 @@ function testDeleteCommandQuoting() {
   assert.strictEqual(validation.accepted, true, 'file selections inside selected scan roots must be accepted');
 
   const plan = viewer.buildCleanupCommandPlan(snapshot, { path: "/data/O'Hara/checkpoint.pt", kind: 'file' }, { freshness: 'stale', revealDestructive: false });
-  assert.deepStrictEqual(Array.from(plan.inspectionCommands, entry => entry.command), [
-    "sudo du -shx -- '/data/O'\"'\"'Hara/checkpoint.pt'",
-    "sudo find '/data/O'\"'\"'Hara/checkpoint.pt' -xdev \\( -type f -o -type d \\) -printf '%s\\t%TY-%Tm-%Td %TH:%TM\\t%p\\n' | sort -nr | head -n 20",
-    "sudo stat -- '/data/O'\"'\"'Hara/checkpoint.pt'",
-    "sudo find '/data/O'\"'\"'Hara/checkpoint.pt' -xdev -printf '%TY-%Tm-%Td %TH:%TM\\t%s\\t%p\\n' | sort -r | head -n 20",
-  ]);
-  assert.strictEqual(plan.destructiveVisible, false, 'destructive command must stay hidden by default');
+  assert.strictEqual(plan.inspectionCommands, undefined, 'selection must not produce unrelated size or metadata inspection commands');
+  assert.strictEqual(plan.destructiveVisible, undefined, 'removal commands must not require a reveal state');
   assert.strictEqual(plan.destructiveCommand.command, "sudo rm -i -- '/data/O'\"'\"'Hara/checkpoint.pt'");
-  assert.ok(plan.warnings.some(w => /stale/i.test(w)), 'stale snapshot warnings must stay visible in the plan');
 }
 
 function testTreemapCleanupModeBindsCleanupRenderedListenerOnce() {
@@ -1493,7 +1499,7 @@ function testTreemapCleanupModeBindsCleanupRenderedListenerOnce() {
   assert.strictEqual(listeners.length, 1, 'cleanup-selection-rendered listener must not duplicate across repeated bindTreemapCleanupMode calls');
 }
 
-function testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange() {
+function testCleanupSelectionLifecycleShowsRemovalImmediatelyAndResetsOnServerChange() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.setCleanupSelectedItem, 'function', 'cleanup selection setter must be exposed');
   assert.strictEqual(typeof viewer.resetCleanupSelectionState, 'function', 'cleanup selection reset must be exposed');
@@ -1517,14 +1523,15 @@ function testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange() {
   };
 
   assert.strictEqual(viewer.setCleanupSelectedItem({ path: '/data/one', kind: 'file', bytes: 10, source: 'top' }, true), true, 'first valid selection should be accepted');
-  viewer.cleanupSelectionState.revealDestructive = true;
   let plan = viewer.renderCleanupPanel();
-  assert.strictEqual(plan.destructiveVisible, true, 'test fixture should be able to expose the destructive command after explicit reveal');
+  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -i -- '/data/one'");
+  assert.match(viewer.document.getElementById('cleanupDangerCommand').innerHTML, /sudo rm -i -- &#39;\/data\/one&#39;/, 'the removal command must be visible immediately');
 
   assert.strictEqual(viewer.setCleanupSelectedItem({ path: '/data/two', kind: 'file', bytes: 20, source: 'top' }, true), true, 'changing to a different valid selection should be accepted');
   plan = viewer.renderCleanupPanel();
   assert.deepStrictEqual(Array.from(viewer.cleanupItems(), item => item.path), ['/data/one', '/data/two']);
-  assert.strictEqual(plan.destructiveVisible, false, 'adding another selected path must reset destructive reveal state');
+  assert.deepStrictEqual(Array.from(plan.items, item => item.path), ['/data/one', '/data/two']);
+  assert.match(viewer.document.getElementById('cleanupDangerCommand').innerHTML, /\/data\/one[\s\S]*\/data\/two/, 'adding a path must update the visible removal script without another action');
 
   viewer.applyRouteState({ serverId: 'beta-2', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
   assert.strictEqual(viewer.document.getElementById('cleanupPanel').getAttribute('aria-hidden'), 'true', 'switching servers must hide the cleanup panel until a fresh selection is made');
@@ -1553,8 +1560,16 @@ function testCleanupSelectionKeepsMultipleTreemapPaths() {
   assert.strictEqual(viewer.isCleanupSelectedPath('/data/one'), true);
   assert.strictEqual(viewer.isCleanupSelectedPath('/data/two'), true);
   assert.match(viewer.document.getElementById('cleanupSummary').textContent, /2 paths selected/, 'the cleanup panel must summarize a multi-selection');
-  assert.match(viewer.document.getElementById('cleanupInspectList').innerHTML, /\/data\/one/);
-  assert.match(viewer.document.getElementById('cleanupInspectList').innerHTML, /\/data\/two/);
+  assert.strictEqual(typeof viewer.cleanupRemovalScript, 'function', 'cleanupRemovalScript must expose the compact multi-path removal script');
+  const plans = viewer.cleanupItems().map(item => ({
+    item,
+    plan: viewer.buildCleanupCommandPlan(viewer.DATA, item, {}),
+  }));
+  assert.strictEqual(viewer.cleanupRemovalScript(plans), "sudo rm -ri --one-file-system -- '/data/one'\nsudo rm -i -- '/data/two'", 'different directories must stay readable as one command per line');
+  const removalHtml = viewer.document.getElementById('cleanupDangerCommand').innerHTML;
+  assert.strictEqual((removalHtml.match(/<li\b/g) || []).length, 1, 'multi-selection must render one compact command card');
+  assert.doesNotMatch(removalHtml, /sudo (?:du|find|stat)\b/, 'the panel must not include unrelated inspection commands');
+  assert.match(removalHtml, /\/data\/one[\s\S]*\/data\/two/, 'the single command card must contain every selected path');
 
   assert.strictEqual(viewer.toggleCleanupSelectedItem({ path: '/data/one', kind: 'directory', bytes: 10, source: 'treemap' }), false, 'toggling one selected tile must remove only that tile');
   assert.deepStrictEqual(Array.from(viewer.cleanupItems(), item => item.path), ['/data/two']);
@@ -1606,8 +1621,8 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   assert.strictEqual(viewer.isTopLevelCleanupPath('/home'), true, 'absolute top-level directories are too broad to select');
   assert.strictEqual(viewer.isTopLevelCleanupPath('/home/project'), false, 'deeper paths may be selected');
   const idleCopy = viewer.treemapShortcutCopy(false);
-  assert.strictEqual(idleCopy.label, 'Ctrl/⌘ click: inspect');
-  assert.strictEqual(idleCopy.hint, 'Click: drill · Ctrl/⌘ click: inspect path · 클릭: 열기 · Ctrl/⌘ 클릭: 경로 점검');
+  assert.strictEqual(idleCopy.label, 'Ctrl/⌘ click: select for removal');
+  assert.strictEqual(idleCopy.hint, 'Click: drill · Ctrl/⌘ click: select for removal · 클릭: 열기 · Ctrl/⌘ 클릭: 삭제 선택');
   const activeCopy = viewer.treemapShortcutCopy(true);
   assert.strictEqual(activeCopy.label, 'Selecting… / 선택 중');
   assert.strictEqual(activeCopy.hint, 'Release Ctrl/⌘ to leave selection mode · 키를 떼면 선택 모드 종료');
@@ -1658,7 +1673,7 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   assert.strictEqual(project.tabIndex, 0, 'selectable/drillable treemap tiles must be keyboard focusable');
   assert.strictEqual(project.getAttribute('aria-selected'), 'false', 'unselected selectable tiles must expose aria-selected=false');
   assert.match(project.getAttribute('aria-label'), /Click or Enter drills into \/data\/project/, 'drillable treemap tile label must describe primary drill behavior');
-  assert.match(project.getAttribute('aria-label'), /Ctrl\/Command click or selection mode inspects \/data\/project/, 'drillable treemap tile label must describe modifier/selection-mode inspection');
+  assert.match(project.getAttribute('aria-label'), /Ctrl\/Command click or selection mode selects \/data\/project for removal/, 'drillable treemap tile label must describe modifier/selection-mode removal');
   assert.ok(project.children.some(c => c.className === 'tm-cleanup-badge'), 'real-path tile should have a hidden selected-state badge');
   assert.ok(!other.dataset.cleanupPath, 'aggregate non-path tiles must not be selectable');
   assert.ok(!other.children.some(c => c.className === 'tm-cleanup-badge'), 'aggregate non-path tiles must not show cleanup controls');
@@ -1752,8 +1767,15 @@ function testTreemapScaleNoteStaysInLegendWithoutCoveringTiles() {
 
 function testCleanupPanelResponsiveCssAndDangerListSemantics() {
   const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const treemap = fs.readFileSync(path.join(__dirname, 'treemap.js'), 'utf8');
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(/<(ol|ul)\s+id="cleanupDangerCommand"/.test(html), 'destructive cleanup command container must be a real list to avoid orphan list items');
+  assert(!/id="cleanupInspectList"/.test(html), 'cleanup UI must not include unrelated inspection commands');
+  assert(!/id="cleanupReveal"/.test(html), 'removal commands must not be hidden behind a reveal button');
+  assert(!/id="cleanupWarnings"|id="cleanupDangerWarning"/.test(html), 'the compact removal UI must not be dominated by warning blocks');
+  assert(!/>Inspect first</.test(html), 'the cleanup panel must focus only on removal');
+  assert(!/treemapCleanupMode[^>]*inspect|Ctrl\/⌘ click: inspect/i.test(html), 'treemap selection controls must describe removal rather than inspection');
+  assert(!/Ctrl\/⌘ click: inspect|selection mode inspects/i.test(treemap), 'dynamic treemap copy must describe removal selection consistently');
   assert(/#cleanupPanel\b[\s\S]*max-height:\s*calc\(100vh\s*-/.test(css), 'cleanup panel must keep a fallback viewport-bounded max-height');
   assert(/#cleanupPanel\b[\s\S]*max-height:\s*calc\(100dvh\s*-/.test(css), 'cleanup panel must keep a modern dynamic-viewport max-height');
   assert(/#cleanupPanel\b[\s\S]*overflow-y:\s*auto/.test(css), 'cleanup panel must scroll internally when taller than the viewport');
@@ -1762,7 +1784,7 @@ function testCleanupPanelResponsiveCssAndDangerListSemantics() {
   assert(/#cleanupDangerCommand\b[\s\S]*list-style:\s*none/.test(css) || /\.cleanup-command-list\b[\s\S]*list-style:\s*none/.test(css), 'cleanup command lists must reset list bullets');
 }
 
-function testCleanupPanelRevealScrollsFocusedControlsIntoView() {
+function testCleanupPanelRendersRemovalCommandWithoutReveal() {
   const viewer = loadViewer();
   viewer.currentServerId = 'alpha-1';
   viewer.currentServerSummary = { freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete' };
@@ -1772,13 +1794,10 @@ function testCleanupPanelRevealScrollsFocusedControlsIntoView() {
     mounts: [{ mount_id: 'data', path: '/data', scan_root: '/data' }],
   };
   viewer.setCleanupSelectedItem({ path: '/data/project', kind: 'directory', bytes: 100, source: 'treemap' }, true);
-  const reveal = viewer.document.getElementById('cleanupReveal');
   const danger = viewer.document.getElementById('cleanupDangerCommand');
-  assert.ok(reveal, 'reveal control must exist');
   assert.ok(danger, 'destructive command list must exist');
-  viewer.cleanupSelectionState.revealDestructive = true;
   viewer.renderCleanupPanel();
-  assert.ok(reveal.scrollIntoViewCalls.length > 0 || danger.scrollIntoViewCalls.length > 0, 'revealing the destructive command must scroll controls into view inside the cleanup panel');
+  assert.match(danger.innerHTML, /sudo rm -ri --one-file-system -- &#39;\/data\/project&#39;/, 'directory removal command must render immediately');
 }
 
 
@@ -2058,7 +2077,7 @@ async function main() {
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
   testDeleteCommandQuoting();
   testTreemapCleanupModeBindsCleanupRenderedListenerOnce();
-  testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange();
+  testCleanupSelectionLifecycleShowsRemovalImmediatelyAndResetsOnServerChange();
   testCleanupSelectionKeepsMultipleTreemapPaths();
   testTreemapHidesMicroTilesInsteadOfInflatingThem();
   testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes();
@@ -2066,7 +2085,7 @@ async function main() {
   testTreemapDoesNotExposeTopLevelCleanupCandidates();
   testTreemapScaleNoteStaysInLegendWithoutCoveringTiles();
   testCleanupPanelResponsiveCssAndDangerListSemantics();
-  testCleanupPanelRevealScrollsFocusedControlsIntoView();
+  testCleanupPanelRendersRemovalCommandWithoutReveal();
   console.log('viewer regression tests passed');
 }
 

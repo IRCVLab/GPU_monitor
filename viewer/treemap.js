@@ -153,8 +153,8 @@ function treemapShortcutCopy(active) {
         hint: "Release Ctrl/⌘ to leave selection mode · 키를 떼면 선택 모드 종료",
       }
     : {
-        label: "Ctrl/⌘ click: inspect",
-        hint: "Click: drill · Ctrl/⌘ click: inspect path · 클릭: 열기 · Ctrl/⌘ 클릭: 경로 점검",
+        label: "Ctrl/⌘ click: select for removal",
+        hint: "Click: drill · Ctrl/⌘ click: select for removal · 클릭: 열기 · Ctrl/⌘ 클릭: 삭제 선택",
       };
 }
 function treemapCleanupItem(c, path, owner) {
@@ -169,10 +169,10 @@ function treemapCleanupItem(c, path, owner) {
 }
 function treemapTileAriaLabel(path, hasKids, selectable) {
   if (hasKids && selectable) {
-    return "Click or Enter drills into " + path + "; Ctrl/Command click or selection mode inspects " + path;
+    return "Click or Enter drills into " + path + "; Ctrl/Command click or selection mode selects " + path + " for removal";
   }
   if (hasKids) return "Click or Enter drills into " + path;
-  if (selectable) return "Inspect snapshot path " + path;
+  if (selectable) return "Select snapshot path " + path + " for removal";
   return "";
 }
 function syncTreemapTileSelection(tile) {

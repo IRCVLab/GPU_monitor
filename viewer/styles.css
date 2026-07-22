@@ -458,8 +458,7 @@
   .cleanup-mode-btn:focus-visible,
   .cleanup-select-btn:focus-visible,
   .cleanup-copy-btn:focus-visible,
-  #cleanupClear:focus-visible,
-  #cleanupReveal:focus-visible {
+  #cleanupClear:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
@@ -613,16 +612,13 @@
   .cleanup-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
   .cleanup-title { font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
   .cleanup-summary { color: var(--text2); font: 12px/1.45 var(--mono); white-space: normal; word-break: break-word; }
-  #cleanupClear, #cleanupReveal, .cleanup-copy-btn {
+  #cleanupClear, .cleanup-copy-btn {
     appearance: none; -webkit-appearance: none; border: 1px solid var(--separator); background: var(--surface);
     color: var(--text); border-radius: 8px; padding: 6px 11px; font: 600 12px var(--font); cursor: pointer;
     transition: all .18s var(--ease);
   }
-  #cleanupClear:hover, #cleanupReveal:hover, .cleanup-copy-btn:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
-  #cleanupReveal.danger,
+  #cleanupClear:hover, .cleanup-copy-btn:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
   .cleanup-danger .cleanup-copy-btn { border-color: color-mix(in srgb, var(--crit) 35%, var(--separator)); }
-  .cleanup-warnings { margin-bottom: 8px; }
-  .cleanup-note { margin: 0 0 6px; color: var(--warn); font-size: 12px; line-height: 1.45; }
   .cleanup-section { margin-top: 12px; }
   .cleanup-section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
   .cleanup-section-title { margin: 0; font-size: 13px; font-weight: 700; }
