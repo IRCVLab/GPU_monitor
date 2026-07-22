@@ -344,11 +344,35 @@ function commandCardHtml(entry, copyLabel) {
 }
 
 function cleanupRemovalScript(entries) {
-  return (entries || [])
+  const source = (entries || []).filter(Boolean);
+  const directoryPaths = source
+    .map(entry => entry && entry.plan ? entry.plan : entry)
+    .filter(plan => plan && plan.kind === "directory" && isCanonicalCleanupPath(plan.path))
+    .map(plan => plan.path);
+  const seen = new Set();
+  return source
+    .filter(entry => {
+      const plan = entry && entry.plan ? entry.plan : entry;
+      const path = plan && plan.path;
+      if (!path || seen.has(path)) return false;
+      seen.add(path);
+      return !directoryPaths.some(directoryPath => directoryPath !== path && cleanupPathWithinRoot(path, directoryPath));
+    })
     .map(entry => entry && entry.plan ? entry.plan.destructiveCommand : entry && entry.destructiveCommand)
     .filter(Boolean)
     .map(command => command.command)
     .join("\n");
+}
+
+function syncCleanupSelectionControls() {
+  if (typeof document === "undefined") return;
+  document.querySelectorAll(".cleanup-select-btn[data-cleanup-path]").forEach(control => {
+    const path = control && control.dataset ? control.dataset.cleanupPath : "";
+    const selected = !!path && isCleanupSelectedPath(path);
+    control.classList.toggle("is-selected", selected);
+    control.setAttribute("aria-pressed", selected ? "true" : "false");
+    control.textContent = selected ? "Selected" : "Select";
+  });
 }
 
 function renderCleanupPanel() {
@@ -369,6 +393,7 @@ function renderCleanupPanel() {
   const hasSelection = entries.length > 0;
   panel.classList.toggle("show", hasSelection);
   panel.setAttribute("aria-hidden", hasSelection ? "false" : "true");
+  syncCleanupSelectionControls();
 
   if (!hasSelection) {
     if (title) title.textContent = "No path selected";
@@ -476,6 +501,7 @@ if (typeof globalThis !== "undefined") {
   globalThis.validateCleanupSelection = validateCleanupSelection;
   globalThis.buildCleanupCommandPlan = buildCleanupCommandPlan;
   globalThis.cleanupRemovalScript = cleanupRemovalScript;
+  globalThis.syncCleanupSelectionControls = syncCleanupSelectionControls;
   globalThis.renderCleanupPanel = renderCleanupPanel;
   globalThis.bindCleanupSelection = bindCleanupSelection;
   globalThis.isCleanupSelectedPath = isCleanupSelectedPath;
@@ -495,6 +521,7 @@ if (typeof module !== "undefined" && module.exports) {
     validateCleanupSelection,
     buildCleanupCommandPlan,
     cleanupRemovalScript,
+    syncCleanupSelectionControls,
     renderCleanupPanel,
     bindCleanupSelection,
     isCleanupSelectedPath,

@@ -557,6 +557,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
     if (handlers && typeof handlers.onOpenServer === "function") handlers.onOpenServer(row.id);
   };
   card.onclick = (event) => {
+    if (event && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || (event.button != null && event.button !== 0))) return;
     if (event && typeof event.preventDefault === "function") event.preventDefault();
     activate();
   };
