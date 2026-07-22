@@ -13,6 +13,11 @@ let snapshotCache = new Map();
 let resizeTimer = null;
 let rescanTimer = null;
 let rescanSawActive = false;
+let rescanServerId = null;
+let rescanPollInFlight = false;
+let rescanPollFailures = 0;
+let rescanTrackingGeneration = 0;
+let rescanExpectedJobId = null;
 let detailLoadGeneration = 0;
 let detailRequestVersions = new Map();
 let themeRevealLocked = false;
@@ -204,6 +209,7 @@ function setShellMode(isDetail) {
   const detailActions = document.getElementById("detailActions");
   const detailHead = document.getElementById("detailHead");
   const warnBanner = document.getElementById("warnBanner");
+  const rescanNotice = document.getElementById("rescanNotice");
   const caps = document.getElementById("caps");
   const detailTabs = document.getElementById("detailTabs");
   document.body.dataset.shellMode = isDetail ? "detail" : "overview";
@@ -213,6 +219,7 @@ function setShellMode(isDetail) {
   if (detailActions) detailActions.hidden = !isDetail;
   if (detailHead) detailHead.hidden = !isDetail;
   if (warnBanner) warnBanner.hidden = !isDetail;
+  if (rescanNotice) rescanNotice.hidden = !isDetail || !rescanNotice.classList.contains("show");
   if (caps) caps.hidden = !isDetail;
   if (detailTabs) detailTabs.hidden = !isDetail;
   const subtitle = document.getElementById("brandSubtitle");
@@ -249,6 +256,7 @@ function showDetailLoading(summary) {
   const panels = document.getElementById("detailPanels");
   const caps = document.getElementById("caps");
   const warning = document.getElementById("warnBanner");
+  const rescanNotice = document.getElementById("rescanNotice");
   const displayName = summary && summary.display_name ? summary.display_name : "Server";
   if (loading) {
     loading.textContent = displayName + " 데이터를 불러오는 중…";
@@ -263,6 +271,11 @@ function showDetailLoading(summary) {
     warning.innerHTML = "";
     warning.classList.remove("show");
     warning.hidden = true;
+  }
+  if (rescanNotice) {
+    rescanNotice.textContent = "";
+    rescanNotice.classList.remove("show");
+    rescanNotice.hidden = true;
   }
   const host = document.getElementById("h-host");
   const scan = document.getElementById("h-scan");
@@ -483,14 +496,17 @@ async function loadBootstrapData() {
   return loadBootstrapDataWith();
 }
 
-function rememberBootstrap(bootstrap) {
+function rememberBootstrap(bootstrap, options) {
+  const opts = options || {};
+  const previousSnapshotCache = opts.preserveSnapshotCache ? snapshotCache : new Map();
   currentDataSource = bootstrap.mode;
   currentDataMode = bootstrap.dataMode || bootstrap.data_mode || "inventory";
   setSampleDataMarker(currentDataMode);
   currentSession = bootstrap.session || { authenticated: false, can_rescan: false, csrf_token: "" };
   currentOverviewSummaries = bootstrap.summaries || [];
   currentOverviewSnapshotEntries = bootstrap.snapshots || [];
-  snapshotCache = new Map();
+  const currentIds = new Set(currentOverviewSummaries.map(item => item && item.id).filter(Boolean));
+  snapshotCache = new Map(Array.from(previousSnapshotCache.entries()).filter(([serverId]) => currentIds.has(serverId)));
   for (const entry of currentOverviewSnapshotEntries) {
     if (entry && entry.id && entry.snapshot && !entry.overviewOnly) snapshotCache.set(entry.id, entry.snapshot);
   }
@@ -570,9 +586,18 @@ async function ensureDetailLoaded(serverId, forceReload, generationOverride, req
     } catch (error) {
       if (!isCurrentDetailRequestVersion(serverId, requestVersion)) return;
       console.error("[storage-viz] failed to load snapshot", serverId, error);
-      updateSnapshotEntry(serverId, null, error);
+      const existingSnapshot = DATA && DATA.server_id === serverId ? DATA : snapshotCache.get(serverId);
+      updateSnapshotEntry(serverId, existingSnapshot || null, error);
       renderOverview();
-      if (isCurrentDetailGeneration(serverId, generation)) showDetailError("Could not load snapshot for " + summary.display_name + ".");
+      if (isCurrentDetailGeneration(serverId, generation)) {
+        if (existingSnapshot) {
+          clearDetailLoading();
+          clearDetailError();
+          showRescanNotice("Could not refresh this server. Existing data is still shown.");
+        } else {
+          showDetailError("Could not load snapshot for " + summary.display_name + ".");
+        }
+      }
       return;
     }
   }
@@ -592,6 +617,7 @@ function applyRouteState(route, options) {
     tab: route && route.tab ? route.tab : "treemap",
   };
   if (!opts.skipHistory) syncHistory(safeRoute, !!opts.replaceHistory);
+  if (rescanServerId && rescanServerId !== safeRoute.serverId) clearRescanPoll();
   detailLoadGeneration += 1;
   currentServerId = safeRoute.serverId;
   currentServerSummary = safeRoute.serverId ? (currentOverviewSummaries.find(item => item.id === safeRoute.serverId) || null) : null;
@@ -658,10 +684,34 @@ function setRescanUnsupported(btn, message) {
 
 function setRescanActivityState(btn, state) {
   if (!btn) return;
-  const active = state === "starting" || state === "requested" || state === "running";
+  const active = state === "starting" || state === "requested" || state === "running" || state === "reconnecting" || state === "refreshing";
   if (active) btn.dataset.rescanState = state;
   else delete btn.dataset.rescanState;
   btn.setAttribute("aria-busy", active ? "true" : "false");
+}
+
+function showRescanNotice(message) {
+  const warning = document.getElementById("rescanNotice");
+  if (!warning) return;
+  warning.textContent = message || "Rescan failed.";
+  warning.hidden = false;
+  warning.classList.add("show");
+}
+
+function clearRescanNotice() {
+  const warning = document.getElementById("rescanNotice");
+  if (!warning) return;
+  warning.textContent = "";
+  warning.classList.remove("show");
+  warning.hidden = true;
+}
+
+function setRescanRetry(btn, message, title) {
+  if (!btn) return;
+  setRescanActivityState(btn, "idle");
+  btn.disabled = false;
+  btn.textContent = message || "↻ Retry rescan";
+  btn.title = title || "Try the scan again";
 }
 
 function syncRescanButton() {
@@ -669,79 +719,243 @@ function syncRescanButton() {
   if (!btn) return;
   if (!currentServerId || currentDataSource !== "api") return setRescanUnsupported(btn, "Manual rescan only in API-backed mode.");
   if (!currentSession.can_rescan) return setRescanUnsupported(btn, "Read-only session: manual rescan is disabled.");
+  if (rescanServerId === currentServerId && (rescanPollInFlight || rescanTimer || rescanSawActive)) return;
   setRescanActivityState(btn, "idle");
   btn.disabled = false;
   btn.textContent = "↻ Rescan";
   btn.title = "Run a fresh scan now";
 }
 
+function clearRescanTimer() {
+  if (!rescanTimer) return;
+  clearTimeout(rescanTimer);
+  rescanTimer = null;
+}
+
 function clearRescanPoll() {
-  if (rescanTimer) {
-    clearInterval(rescanTimer);
+  clearRescanTimer();
+  rescanTrackingGeneration += 1;
+  rescanServerId = null;
+  rescanSawActive = false;
+  rescanPollInFlight = false;
+  rescanPollFailures = 0;
+  rescanExpectedJobId = null;
+}
+
+function beginRescanTracking(serverId, sawActive) {
+  clearRescanPoll();
+  rescanServerId = serverId || null;
+  rescanSawActive = !!sawActive;
+}
+
+function scheduleRescanPoll(serverId, delay, generation) {
+  const trackingGeneration = generation == null ? rescanTrackingGeneration : generation;
+  if (!serverId || rescanServerId !== serverId || currentServerId !== serverId || trackingGeneration !== rescanTrackingGeneration) return;
+  clearRescanTimer();
+  rescanTimer = setTimeout(() => {
     rescanTimer = null;
-  }
+    void pollRescanJob(serverId, trackingGeneration);
+  }, delay == null ? 2000 : delay);
+}
+
+function getRescanDebugState() {
+  return {
+    serverId: rescanServerId,
+    hasTimer: !!rescanTimer,
+    sawActive: rescanSawActive,
+    inFlight: rescanPollInFlight,
+    failures: rescanPollFailures,
+    generation: rescanTrackingGeneration,
+    expectedJobId: rescanExpectedJobId,
+  };
+}
+
+function currentServerJobLoader() {
+  if (typeof globalThis !== "undefined" && typeof globalThis.loadServerJob === "function") return globalThis.loadServerJob;
+  return loadServerJob;
+}
+
+function currentRescanPoster() {
+  if (typeof globalThis !== "undefined" && typeof globalThis.postServerRescan === "function") return globalThis.postServerRescan;
+  return postServerRescan;
 }
 
 async function refreshOverviewData(options) {
   const opts = options || {};
-  const route = currentRoute();
+  const routeAtStart = { serverId: currentServerId, tab: currentTab };
+  const detailGenerationAtStart = detailLoadGeneration;
   const generation = ++overviewLoadGeneration;
   try {
-    const bootstrap = await loadBootstrapData();
-    if (generation !== overviewLoadGeneration) return;
-    rememberBootstrap(bootstrap);
+    const loader = typeof opts.bootstrapLoader === "function" ? opts.bootstrapLoader : loadBootstrapData;
+    const bootstrap = await loader();
+    if (generation !== overviewLoadGeneration) return { ok: false, stale: true };
+    const selectedServerId = currentServerId;
+    const selectedTab = currentTab;
+    const selectedData = DATA;
+    const navigationChanged = detailLoadGeneration !== detailGenerationAtStart || selectedServerId !== routeAtStart.serverId || selectedTab !== routeAtStart.tab;
+    rememberBootstrap(bootstrap, { preserveSnapshotCache: true });
+    if (selectedServerId) {
+      currentServerSummary = currentOverviewSummaries.find(item => item.id === selectedServerId) || null;
+      const refreshedSelectedData = snapshotCache.get(selectedServerId);
+      if (refreshedSelectedData) DATA = refreshedSelectedData;
+      else if (selectedData) {
+        DATA = selectedData;
+        snapshotCache.set(selectedServerId, selectedData);
+      }
+    }
     renderOverview();
     startOverviewSnapshotHydration(bootstrap, generation);
-    if (route.serverId) {
-      navigateToServer(route.serverId, { skipHistory: true, tab: route.tab, forceReload: !!opts.forceReload });
+    const expectedRouteStillActive = !opts.expectedServerId || opts.expectedServerId === selectedServerId;
+    if (navigationChanged || !expectedRouteStillActive) {
+      syncRescanButton();
+      return { ok: true, preservedRoute: true };
+    }
+    if (selectedServerId) {
+      if (opts.forceReload) {
+        applyRouteState({ serverId: selectedServerId, tab: selectedTab }, { skipHistory: true, skipDataLoad: true, forceReload: true });
+        const requestVersion = beginDetailRequestVersion(selectedServerId);
+        await ensureDetailLoaded(selectedServerId, true, detailLoadGeneration, requestVersion);
+      } else {
+        navigateToServer(selectedServerId, { skipHistory: true, tab: selectedTab });
+      }
     } else {
       navigateToOverview({ skipHistory: true });
     }
+    return { ok: true, preservedRoute: false };
   } catch (error) {
     console.error("[storage-viz] failed to refresh overview", error);
-    showOverviewError("Overview refresh failed.");
+    if (currentServerId) showRescanNotice("Could not refresh the latest scan data. Existing data is still shown.");
+    else showOverviewError("Overview refresh failed.");
+    return { ok: false, error };
   }
 }
 
-async function pollRescanJob() {
+async function pollRescanJob(serverId, generation) {
   const btn = document.getElementById("rescanBtn");
-  if (!btn || !currentServerId || currentDataSource !== "api") return;
+  const targetServerId = serverId || rescanServerId;
+  const trackingGeneration = generation == null ? rescanTrackingGeneration : generation;
+  if (!btn || !targetServerId || currentDataSource !== "api" || rescanServerId !== targetServerId || currentServerId !== targetServerId || trackingGeneration !== rescanTrackingGeneration) {
+    if (rescanServerId === targetServerId && trackingGeneration === rescanTrackingGeneration) clearRescanPoll();
+    return;
+  }
+  if (rescanPollInFlight) return;
+  clearRescanTimer();
+  rescanPollInFlight = true;
   try {
-    const body = await loadServerJob(currentServerId);
+    const body = await currentServerJobLoader()(targetServerId);
+    if (rescanServerId !== targetServerId || currentServerId !== targetServerId || trackingGeneration !== rescanTrackingGeneration) return;
     const job = body && body.job;
+    if (rescanExpectedJobId && job && job.id && job.id !== rescanExpectedJobId) {
+      rescanPollFailures += 1;
+      if (rescanPollFailures <= 2) {
+        setRescanActivityState(btn, "reconnecting");
+        btn.disabled = true;
+        btn.textContent = "⟳ Waiting for scan…";
+        btn.title = "Waiting for the new scan job to become visible.";
+        scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
+        return;
+      }
+      clearRescanPoll();
+      setRescanRetry(btn, "↻ Retry rescan", "The new scan status did not become visible. Try again.");
+      showRescanNotice("The new scan status is not available yet.");
+      return;
+    }
+    rescanPollFailures = 0;
     if (job && (job.state === "requested" || job.state === "running")) {
       rescanSawActive = true;
       setRescanActivityState(btn, job.state);
       btn.disabled = true;
       btn.textContent = job.state === "requested" ? "⟳ Queued…" : "⟳ Scanning…";
-      if (!rescanTimer) rescanTimer = setInterval(() => { void pollRescanJob(); }, 2000);
+      btn.title = job.state === "requested" ? "Scan is queued" : "Scan is running";
+      scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
+      return;
+    }
+    const observedActiveJob = rescanSawActive;
+    const failed = !!(job && job.state === "failed");
+    const resultCode = failed ? (job.result_code || job.error || "UNKNOWN_FAILURE") : "";
+    if (failed) {
+      clearRescanPoll();
+      setRescanRetry(btn, "↻ Retry rescan", "The previous scan failed. Try again.");
+      showRescanNotice("Rescan failed: " + resultCode);
+      return;
+    }
+    if (observedActiveJob) {
+      setRescanActivityState(btn, "refreshing");
+      btn.disabled = true;
+      btn.textContent = "⟳ Refreshing…";
+      await refreshOverviewData({ forceReload: true, expectedServerId: targetServerId });
+      if (currentServerId === targetServerId && rescanServerId === targetServerId && trackingGeneration === rescanTrackingGeneration) {
+        clearRescanPoll();
+        syncRescanButton();
+      }
       return;
     }
     clearRescanPoll();
     syncRescanButton();
-    if (rescanSawActive) {
-      rescanSawActive = false;
-      await refreshOverviewData({ forceReload: true });
-    }
   } catch (error) {
+    if (rescanServerId !== targetServerId || currentServerId !== targetServerId || trackingGeneration !== rescanTrackingGeneration) return;
+    rescanPollFailures += 1;
+    if (rescanPollFailures <= 2) {
+      setRescanActivityState(btn, "reconnecting");
+      btn.disabled = true;
+      btn.textContent = "⟳ Reconnecting…";
+      btn.title = "Scan status is temporarily unavailable; retrying automatically.";
+      scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
+      return;
+    }
     clearRescanPoll();
-    setRescanUnsupported(btn, "Rescan status unavailable.");
+    setRescanRetry(btn, "↻ Retry rescan", "Scan status could not be reached. Try again.");
+    showRescanNotice("Rescan status is temporarily unavailable.");
+  } finally {
+    if (rescanServerId === targetServerId && trackingGeneration === rescanTrackingGeneration) rescanPollInFlight = false;
   }
 }
 
 async function triggerRescan() {
   const btn = document.getElementById("rescanBtn");
   if (!btn || !currentServerId || currentDataSource !== "api" || !currentSession.can_rescan) return;
+  const targetServerId = currentServerId;
+  beginRescanTracking(targetServerId, true);
+  clearRescanNotice();
   setRescanActivityState(btn, "starting");
   btn.disabled = true;
   btn.textContent = "⟳ Starting…";
   try {
-    await postServerRescan(currentServerId, currentSession.csrf_token);
+    const response = await currentRescanPoster()(targetServerId, currentSession.csrf_token);
+    if (rescanServerId !== targetServerId || currentServerId !== targetServerId) return;
+    rescanExpectedJobId = response && response.job && response.job.id ? String(response.job.id) : null;
   } catch (error) {
-    setRescanUnsupported(btn, (error && error.body && error.body.error) || "Rescan unavailable.");
+    if (rescanServerId !== targetServerId || currentServerId !== targetServerId) return;
+    const body = error && error.body ? error.body : {};
+    if (error && error.status === 409 && body.error === "ACTIVE_JOB") {
+      if (!body.job && body.remote_active_state) {
+        clearRescanPoll();
+        setRescanRetry(btn, "↻ Check later", "A remote scan is already running. Check again after it completes.");
+        showRescanNotice("A remote scan is already running. Existing data remains visible.");
+        return;
+      }
+      rescanExpectedJobId = body.job && body.job.id ? String(body.job.id) : null;
+      const state = body.job && (body.job.state === "requested" || body.job.state === "running") ? body.job.state : "running";
+      setRescanActivityState(btn, state);
+      btn.disabled = true;
+      btn.textContent = state === "requested" ? "⟳ Queued…" : "⟳ Scanning…";
+      await pollRescanJob(targetServerId);
+      return;
+    }
+    clearRescanPoll();
+    if (error && error.status === 429) {
+      const retryAfter = Number(body.retry_after_seconds);
+      const suffix = Number.isFinite(retryAfter) && retryAfter > 0 ? " in " + Math.ceil(retryAfter) + "s" : " shortly";
+      setRescanRetry(btn, "↻ Retry rescan", "Rescan is cooling down; try again" + suffix + ".");
+      showRescanNotice("Rescan is cooling down. Try again" + suffix + ".");
+      return;
+    }
+    const code = body.error || "RESCAN_UNAVAILABLE";
+    setRescanRetry(btn, "↻ Retry rescan", "The scan request failed. Try again.");
+    showRescanNotice("Rescan request failed: " + code);
     return;
   }
-  await pollRescanJob();
+  await pollRescanJob(targetServerId);
 }
 
 async function init() {
@@ -878,6 +1092,12 @@ if (typeof globalThis !== "undefined") Object.assign(globalThis, {
   getCurrentDetailDebugState,
   getOverviewModeDebugState,
   setRescanActivityState,
+  beginRescanTracking,
+  pollRescanJob,
+  clearRescanPoll,
+  getRescanDebugState,
+  refreshOverviewData,
+  triggerRescan,
   applyStoredThemeMode,
   toggleThemeMode,
 });

@@ -348,6 +348,7 @@
     content: ""; position: absolute; inset: -3px; border-radius: inherit; padding: 2px; pointer-events: none;
     background: conic-gradient(from 0deg, transparent 0 58%, color-mix(in srgb, var(--accent) 35%, transparent) 72%, var(--accent) 100%);
     -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
     -webkit-mask-composite: xor; mask-composite: exclude;
     animation: rescan-orbit 1.15s linear infinite;
   }

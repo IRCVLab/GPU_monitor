@@ -110,6 +110,7 @@ function loadViewer() {
   assert(!html.includes('class="overview-lead"'), 'compact overview lead must be absent from markup');
   assert(!html.includes('서버와 마운트 순서는 입력 순서를 그대로 따릅니다'), 'compact overview must not keep the explanatory lead copy in markup');
   assert(html.includes('id="overviewBack"'), 'detail back-to-overview control must be present');
+  assert(html.includes('id="rescanNotice"'), 'rescan lifecycle notices must have a dedicated region instead of overwriting snapshot warnings');
   const removedName = 'ad' + 'visor';
   assert(!html.includes('data-tab="' + removedName + '"'), 'removed analysis tab must not exist');
   assert(!html.includes('id="panel-' + removedName + '"'), 'removed analysis panel must not exist');
@@ -893,7 +894,8 @@ function testOverviewMonitorCardHierarchyContract() {
     },
     viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
-  viewer.renderOverviewList(list, [row], { onOpenServer() {} });
+  let opened = 0;
+  viewer.renderOverviewList(list, [row], { onOpenServer() { opened += 1; } });
   const card = list.children[0].children[0];
   const text = textTree(card);
   assert.strictEqual(card.tagName, 'A', 'each server must render as a native monitor-card link');
@@ -918,6 +920,14 @@ function testOverviewMonitorCardHierarchyContract() {
   ], 'each mount row must use the GPU-row anatomy: compact identity chip plus one metric body');
   assert.deepStrictEqual(findByClass(card, 'overview-mount').map(cell => textTree(findByClass(cell, 'overview-mount-path')[0])), ['/alpha', '/beta', '/gamma'], 'monitor cards must preserve snapshot mount order');
   assert.strictEqual(findByClass(card, 'overview-pressure-bar').length, 3, 'every mount keeps a visible full-width usage graph');
+  let modifiedPrevented = false;
+  card.onclick({ metaKey: true, button: 0, preventDefault() { modifiedPrevented = true; } });
+  assert.strictEqual(modifiedPrevented, false, 'Cmd/Ctrl/Shift clicks must preserve native anchor behavior for opening server detail in another tab');
+  assert.strictEqual(opened, 0, 'modified clicks must not invoke same-tab SPA navigation');
+  let plainPrevented = false;
+  card.onclick({ button: 0, preventDefault() { plainPrevented = true; } });
+  assert.strictEqual(plainPrevented, true);
+  assert.strictEqual(opened, 1, 'plain primary clicks must keep fast same-tab SPA navigation');
 
   const healthyRow = viewer.buildOverviewServer(
     { id: 'healthy-1', display_name: 'healthy', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
@@ -1398,6 +1408,305 @@ function testRescanButtonExposesPersistentActivityCue() {
   assert.match(css, /\.rescan-btn\[data-rescan-state\]\s*::after\s*\{[^}]*conic-gradient[^}]*animation:\s*rescan-orbit/i, 'active rescan button must draw an orbiting border without changing layout');
   assert.match(css, /@keyframes\s+rescan-orbit\s*\{[\s\S]*transform:\s*rotate\(1turn\)/, 'rescan border cue must rotate continuously');
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.rescan-btn\[data-rescan-state\]\s*::after\s*\{[^}]*animation:\s*none/i, 'reduced-motion users must keep a static activity ring');
+  assert.match(css, /(?:^|[;\s])mask:\s*linear-gradient\(#000 0 0\) content-box,\s*linear-gradient\(#000 0 0\)/m, 'the orbit ring must include the unprefixed mask for standards-based engines');
+}
+
+function apiBootstrapForRescan(snapshots) {
+  return {
+    mode: 'api',
+    session: { authenticated: true, can_rescan: true, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+      { id: 'beta-2', display_name: 'beta', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: snapshots || [],
+  };
+}
+
+async function testRescanPollingIsBoundToOriginAndStopsOnNavigation() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.beginRescanTracking, 'function');
+  assert.strictEqual(typeof viewer.pollRescanJob, 'function');
+  assert.strictEqual(typeof viewer.clearRescanPoll, 'function');
+  assert.strictEqual(typeof viewer.getRescanDebugState, 'function');
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  const calls = [];
+  viewer.loadServerJob = async serverId => {
+    calls.push(serverId);
+    return { job: { state: 'running' } };
+  };
+
+  viewer.beginRescanTracking('alpha-1', true);
+  await viewer.pollRescanJob('alpha-1');
+  assert.deepStrictEqual(calls, ['alpha-1']);
+  assert.strictEqual(viewer.getRescanDebugState().serverId, 'alpha-1');
+  assert.strictEqual(viewer.getRescanDebugState().hasTimer, true, 'active job must schedule one follow-up poll');
+
+  viewer.applyRouteState({ serverId: 'beta-2', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(viewer.getRescanDebugState().serverId, null, 'switching servers must release the previous polling owner');
+  assert.strictEqual(viewer.getRescanDebugState().hasTimer, false, 'switching servers must cancel the previous poll timer');
+  await viewer.pollRescanJob('alpha-1');
+  assert.deepStrictEqual(calls, ['alpha-1'], 'a stale poll must never follow the user to another server');
+}
+
+async function testOverviewRefreshDoesNotRestoreAStaleRoute() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.refreshOverviewData, 'function');
+  const snapshot = id => ({ server_id: id, hostname: id, mounts: [], users: [], top_files: [], stale: [] });
+  viewer.rememberBootstrap(apiBootstrapForRescan([
+    { id: 'alpha-1', snapshot: snapshot('alpha-1'), error: null },
+    { id: 'beta-2', snapshot: snapshot('beta-2'), error: null },
+  ]));
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  const pending = deferred();
+  const refresh = viewer.refreshOverviewData({ bootstrapLoader: () => pending.promise, forceReload: true, expectedServerId: 'alpha-1' });
+  viewer.applyRouteState({ serverId: 'beta-2', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  pending.resolve(apiBootstrapForRescan([
+    { id: 'alpha-1', snapshot: snapshot('alpha-new'), error: null },
+    { id: 'beta-2', snapshot: snapshot('beta-new'), error: null },
+  ]));
+  await refresh;
+  assert.strictEqual(viewer.getCurrentDetailDebugState().currentServerId, 'beta-2', 'refresh completion must preserve the route selected while bootstrap was pending');
+}
+
+async function testFastFailedRescanShowsRecoverableFailure() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.triggerRescan, 'function');
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.postServerRescan = async () => ({ status: 'started' });
+  viewer.loadServerJob = async () => ({ job: { state: 'failed', result_code: 'AGENT_UNREACHABLE' } });
+  const scanWarning = viewer.document.getElementById('warnBanner');
+  scanWarning.textContent = 'run_as_root=false';
+  scanWarning.hidden = false;
+  scanWarning.classList.add('show');
+  await viewer.triggerRescan();
+  const button = viewer.document.getElementById('rescanBtn');
+  const warning = viewer.document.getElementById('rescanNotice');
+  assert.strictEqual(button.disabled, false, 'a failed rescan must remain retryable');
+  assert.match(button.textContent, /Retry/i);
+  assert.strictEqual(button.getAttribute('aria-busy'), 'false');
+  assert.strictEqual(warning.hidden, false);
+  assert.strictEqual(warning.classList.contains('show'), true);
+  assert.match(warning.textContent || warning.innerHTML, /AGENT_UNREACHABLE/);
+  assert.strictEqual(scanWarning.textContent, 'run_as_root=false', 'rescan failures must not erase independent snapshot warnings');
+  assert.strictEqual(scanWarning.classList.contains('show'), true);
+  assert.strictEqual(viewer.getRescanDebugState().hasTimer, false);
+}
+
+async function testActiveJobAndTransientPollErrorsStayRecoverable() {
+  const activeViewer = loadViewer();
+  activeViewer.rememberBootstrap(apiBootstrapForRescan());
+  activeViewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  activeViewer.postServerRescan = async () => {
+    const error = new Error('active');
+    error.status = 409;
+    error.body = { error: 'ACTIVE_JOB', job: { state: 'running' } };
+    throw error;
+  };
+  activeViewer.loadServerJob = async () => ({ job: { state: 'running' } });
+  await activeViewer.triggerRescan();
+  const activeButton = activeViewer.document.getElementById('rescanBtn');
+  assert.strictEqual(activeButton.dataset.rescanState, 'running', '409 ACTIVE_JOB must attach to the existing job instead of bricking the button');
+  assert.match(activeButton.textContent, /Scanning/);
+  activeViewer.clearRescanPoll();
+
+  const retryViewer = loadViewer();
+  retryViewer.rememberBootstrap(apiBootstrapForRescan());
+  retryViewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  retryViewer.postServerRescan = async () => ({ status: 'started' });
+  retryViewer.loadServerJob = async () => { throw new Error('temporary network failure'); };
+  await retryViewer.triggerRescan();
+  const retryButton = retryViewer.document.getElementById('rescanBtn');
+  assert.strictEqual(retryButton.disabled, true, 'a transient poll error should retain the in-progress state while retrying');
+  assert.match(retryButton.textContent, /Reconnecting/);
+  assert.strictEqual(retryViewer.getRescanDebugState().hasTimer, true, 'a transient poll error must schedule a bounded retry');
+  retryViewer.clearRescanPoll();
+}
+
+async function testCurrentRescanIgnoresAStaleTerminalJobId() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.postServerRescan = async () => ({ status: 'started', job: { id: 'job-new', state: 'running' } });
+  viewer.loadServerJob = async () => ({ job: { id: 'job-old', state: 'failed', result_code: 'OLD_FAILURE' } });
+  await viewer.triggerRescan();
+  const button = viewer.document.getElementById('rescanBtn');
+  const warning = viewer.document.getElementById('rescanNotice');
+  assert.strictEqual(button.dataset.rescanState, 'reconnecting', 'a persisted terminal job from a prior run must be treated as stale while the new job becomes visible');
+  assert.strictEqual(viewer.getRescanDebugState().hasTimer, true);
+  assert.strictEqual(warning.classList.contains('show'), false, 'a stale job id must not surface a false failure notice');
+  assert.doesNotMatch(warning.textContent || '', /OLD_FAILURE/);
+  viewer.clearRescanPoll();
+}
+
+async function testRemoteActiveConflictNeverPollsPersistedTerminalJob() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.postServerRescan = async () => {
+    const error = new Error('remote active');
+    error.status = 409;
+    error.body = { error: 'ACTIVE_JOB', remote_active_state: 'running' };
+    throw error;
+  };
+  let jobLoads = 0;
+  viewer.loadServerJob = async () => { jobLoads += 1; return { job: { id: 'old', state: 'failed', result_code: 'OLD_FAILURE' } }; };
+  await viewer.triggerRescan();
+  const button = viewer.document.getElementById('rescanBtn');
+  const warning = viewer.document.getElementById('rescanNotice');
+  assert.strictEqual(jobLoads, 0, 'remote-active conflicts without a collector job id must not poll and misattribute a persisted terminal job');
+  assert.strictEqual(button.disabled, false, 'the user must not be left with a permanently disabled control');
+  assert.match(button.textContent, /Check later/i);
+  assert.match(warning.textContent || '', /remote scan is already running/i);
+  assert.doesNotMatch(warning.textContent || '', /OLD_FAILURE/);
+}
+
+async function testCooldownRescanFailureStaysRetryable() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.postServerRescan = async () => {
+    const error = new Error('cooldown');
+    error.status = 429;
+    error.body = { error: 'COOLDOWN', retry_after_seconds: 900 };
+    throw error;
+  };
+  await viewer.triggerRescan();
+  const button = viewer.document.getElementById('rescanBtn');
+  const notice = viewer.document.getElementById('rescanNotice');
+  assert.strictEqual(button.disabled, false);
+  assert.strictEqual(button.getAttribute('aria-busy'), 'false');
+  assert.match(button.textContent, /Retry/);
+  assert.match(notice.textContent || '', /cooling down.*900s/i);
+  assert.strictEqual(viewer.getRescanDebugState().hasTimer, false);
+}
+
+async function testRescanRefreshStateOwnsButtonUntilDetailRefreshFinishes() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.loadServerJob = async () => ({ job: { id: 'job-1', state: 'succeeded', result_code: 'OK' } });
+  const refreshDone = deferred();
+  let refreshCalls = 0;
+  viewer.refreshOverviewData = async () => { refreshCalls += 1; return refreshDone.promise; };
+  viewer.beginRescanTracking('alpha-1', true);
+  const poll = viewer.pollRescanJob('alpha-1');
+  await flushPromises();
+  const button = viewer.document.getElementById('rescanBtn');
+  assert.strictEqual(refreshCalls, 1, 'terminal success must start the owned refresh path');
+  assert.strictEqual(button.dataset.rescanState, 'refreshing', 'the button must remain in refreshing state while fresh detail data is pending');
+  assert.strictEqual(button.disabled, true);
+  assert.strictEqual(viewer.getRescanDebugState().serverId, 'alpha-1', 'refreshing must retain ownership so route synchronization cannot reset the button early');
+  refreshDone.resolve({ ok: true });
+  await poll;
+  assert.strictEqual(viewer.getRescanDebugState().serverId, null);
+  assert.strictEqual(button.disabled, false);
+  assert.match(button.textContent, /Rescan/);
+}
+
+async function testStaleSameServerPollCannotClobberNewTrackingGeneration() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  const oldResponse = deferred();
+  const newResponse = deferred();
+  let callCount = 0;
+  viewer.loadServerJob = async () => (++callCount === 1 ? oldResponse.promise : newResponse.promise);
+
+  viewer.beginRescanTracking('alpha-1', true);
+  const oldPoll = viewer.pollRescanJob('alpha-1');
+  viewer.applyRouteState({ serverId: 'beta-2', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.beginRescanTracking('alpha-1', true);
+  const button = viewer.document.getElementById('rescanBtn');
+  viewer.setRescanActivityState(button, 'running');
+  button.disabled = true;
+  button.textContent = '⟳ Scanning…';
+  const newPoll = viewer.pollRescanJob('alpha-1');
+
+  oldResponse.resolve({ job: { state: 'failed', result_code: 'STALE_FAILURE' } });
+  await oldPoll;
+  assert.strictEqual(button.dataset.rescanState, 'running', 'an old alpha poll must not overwrite a newer alpha tracking session after alpha→beta→alpha navigation');
+  assert.strictEqual(button.disabled, true);
+  assert.strictEqual(viewer.getRescanDebugState().inFlight, true, 'the old poll finally block must not clear the newer poll in-flight flag');
+
+  newResponse.resolve({ job: { state: 'running' } });
+  await newPoll;
+  assert.strictEqual(button.dataset.rescanState, 'running');
+  assert.strictEqual(viewer.getRescanDebugState().hasTimer, true);
+  viewer.clearRescanPoll();
+}
+
+function testSameServerForceReloadKeepsExistingDetailVisible() {
+  const viewer = loadViewer();
+  const snapshot = { server_id: 'alpha-1', hostname: 'alpha', mounts: [], users: [], top_files: [], stale: [] };
+  viewer.rememberBootstrap(apiBootstrapForRescan([{ id: 'alpha-1', snapshot, error: null }]));
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  const loading = viewer.document.getElementById('detailLoading');
+  const panels = viewer.document.getElementById('detailPanels');
+  loading.hidden = true;
+  panels.hidden = false;
+  viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true, forceReload: true });
+  assert.strictEqual(loading.hidden, true, 'refreshing the current server should not replace useful existing data with a full-panel loading screen');
+  assert.strictEqual(panels.hidden, false, 'existing same-server detail must remain visible while fresh data is fetched');
+}
+
+async function testOverviewRefreshPreservesOtherServerSnapshotCache() {
+  const viewer = loadViewer();
+  const snapshot = id => ({ server_id: id, hostname: id, mounts: [], users: [], top_files: [], stale: [] });
+  viewer.rememberBootstrap(apiBootstrapForRescan([
+    { id: 'alpha-1', snapshot: snapshot('alpha-1'), error: null },
+    { id: 'beta-2', snapshot: snapshot('beta-2'), error: null },
+  ]));
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  await viewer.refreshOverviewData({ bootstrapLoader: async () => apiBootstrapForRescan([]) });
+  let loads = 0;
+  viewer.loadSnapshotForCurrentSource = async serverId => { loads += 1; return snapshot(serverId + '-network'); };
+  viewer.applyRouteState({ serverId: 'beta-2', tab: 'treemap' }, { skipHistory: true });
+  await flushPromises();
+  assert.strictEqual(loads, 0, 'refreshing overview metadata must not discard other servers full snapshots and force avoidable refetches');
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.server_id, 'beta-2');
+}
+
+async function testForcedOverviewRefreshWaitsForFreshDetailSnapshot() {
+  const viewer = loadViewer();
+  const snapshot = { server_id: 'alpha-1', hostname: 'alpha', mounts: [], users: [], top_files: [], stale: [] };
+  viewer.rememberBootstrap(apiBootstrapForRescan([{ id: 'alpha-1', snapshot, error: null }]));
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  const detail = deferred();
+  viewer.loadSnapshotForCurrentSource = async () => detail.promise;
+  let settled = false;
+  const refresh = viewer.refreshOverviewData({
+    bootstrapLoader: async () => apiBootstrapForRescan([]),
+    forceReload: true,
+    expectedServerId: 'alpha-1',
+  }).then(result => { settled = true; return result; });
+  await flushPromises();
+  assert.strictEqual(settled, false, 'a forced overview refresh must not report completion while its fresh detail snapshot is still pending');
+  detail.resolve({ ...snapshot, scan_started_unix: 123 });
+  await refresh;
+  assert.strictEqual(settled, true);
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.scan_started_unix, 123);
+}
+
+async function testFailedSameServerForceReloadKeepsCachedDetailVisible() {
+  const viewer = loadViewer();
+  const snapshot = { server_id: 'alpha-1', hostname: 'alpha', mounts: [], users: [], top_files: [], stale: [] };
+  viewer.rememberBootstrap(apiBootstrapForRescan([{ id: 'alpha-1', snapshot, error: null }]));
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  const panels = viewer.document.getElementById('detailPanels');
+  const detailError = viewer.document.getElementById('detailError');
+  const warning = viewer.document.getElementById('rescanNotice');
+  panels.hidden = false;
+  detailError.hidden = true;
+  viewer.loadSnapshotForCurrentSource = async () => { throw new Error('snapshot unavailable'); };
+  await withMutedConsole(() => viewer.ensureDetailLoaded('alpha-1', true));
+  assert.strictEqual(panels.hidden, false, 'a failed refresh of the current server must keep the last good detail visible');
+  assert.strictEqual(detailError.hidden, true, 'a recoverable refresh failure must not replace cached detail with a full error screen');
+  assert.strictEqual(warning.classList.contains('show'), true);
+  assert.match(warning.textContent || '', /existing data/i);
 }
 
 
@@ -1589,6 +1898,11 @@ function testCleanupSelectionKeepsMultipleTreemapPaths() {
     plan: viewer.buildCleanupCommandPlan(viewer.DATA, item, {}),
   }));
   assert.strictEqual(viewer.cleanupRemovalScript(plans), "sudo rm -ri --one-file-system -- '/data/one'\nsudo rm -i -- '/data/two'", 'different directories must stay readable as one command per line');
+  const nestedPlans = plans.concat({
+    item: { path: '/data/one/model.bin', kind: 'file', bytes: 5 },
+    plan: viewer.buildCleanupCommandPlan(viewer.DATA, { path: '/data/one/model.bin', kind: 'file', bytes: 5 }, {}),
+  });
+  assert.strictEqual(viewer.cleanupRemovalScript(nestedPlans), "sudo rm -ri --one-file-system -- '/data/one'\nsudo rm -i -- '/data/two'", 'a selected directory command must subsume selected descendants instead of emitting redundant rm commands');
   const removalHtml = viewer.document.getElementById('cleanupDangerCommand').innerHTML;
   assert.strictEqual((removalHtml.match(/<li\b/g) || []).length, 1, 'multi-selection must render one compact command card');
   assert.doesNotMatch(removalHtml, /sudo (?:du|find|stat)\b/, 'the panel must not include unrelated inspection commands');
@@ -1598,6 +1912,38 @@ function testCleanupSelectionKeepsMultipleTreemapPaths() {
   assert.deepStrictEqual(Array.from(viewer.cleanupItems(), item => item.path), ['/data/two']);
   assert.strictEqual(viewer.isCleanupSelectedPath('/data/one'), false);
   assert.strictEqual(viewer.isCleanupSelectedPath('/data/two'), true);
+}
+
+function testCleanupTableControlsReflectSelectionImmediately() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: '' },
+    summaries: [{ id: 'alpha-1', display_name: 'alpha' }],
+    snapshots: [],
+  });
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.DATA = {
+    server_id: 'alpha-1',
+    selected_roots: [{ mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' }],
+    mounts: [{ mount_id: 'data', path: '/data', scan_root: '/data' }],
+  };
+  const control = new FakeElement('button', viewer.document);
+  control.className = 'cleanup-select-btn';
+  control.textContent = 'Select';
+  control.dataset.cleanupPath = '/data/model.bin';
+  control.setAttribute('aria-pressed', 'false');
+  const originalQuery = viewer.document.querySelectorAll;
+  viewer.document.querySelectorAll = selector => selector === '.cleanup-select-btn[data-cleanup-path]' ? [control] : originalQuery(selector);
+  assert.strictEqual(typeof viewer.syncCleanupSelectionControls, 'function');
+  viewer.setCleanupSelectedItem({ path: '/data/model.bin', kind: 'file', bytes: 10, source: 'top' }, true);
+  assert.strictEqual(control.classList.contains('is-selected'), true, 'table cleanup controls must visually reflect selection without waiting for a table rerender');
+  assert.strictEqual(control.getAttribute('aria-pressed'), 'true');
+  assert.strictEqual(control.textContent, 'Selected');
+  viewer.setCleanupSelectedItem({ path: '/data/model.bin', kind: 'file', bytes: 10, source: 'top' }, false);
+  assert.strictEqual(control.classList.contains('is-selected'), false);
+  assert.strictEqual(control.getAttribute('aria-pressed'), 'false');
+  assert.strictEqual(control.textContent, 'Select');
 }
 
 function testTreemapHidesMicroTilesInsteadOfInflatingThem() {
@@ -1694,7 +2040,8 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   assert.strictEqual(project.dataset.cleanupKind, 'directory', 'treemap selection metadata must retain snapshot kind');
   assert.strictEqual(project.getAttribute('role'), 'button', 'selectable/drillable treemap tiles must expose button semantics');
   assert.strictEqual(project.tabIndex, 0, 'selectable/drillable treemap tiles must be keyboard focusable');
-  assert.strictEqual(project.getAttribute('aria-selected'), 'false', 'unselected selectable tiles must expose aria-selected=false');
+  assert.strictEqual(project.getAttribute('aria-pressed'), 'false', 'unselected selectable button tiles must expose aria-pressed=false');
+  assert.strictEqual(project.getAttribute('aria-selected'), undefined, 'role=button tiles must not use the incompatible aria-selected state');
   assert.match(project.getAttribute('aria-label'), /Click or Enter drills into \/data\/project/, 'drillable treemap tile label must describe primary drill behavior');
   assert.match(project.getAttribute('aria-label'), /Ctrl\/Command click or selection mode selects \/data\/project for removal/, 'drillable treemap tile label must describe modifier/selection-mode removal');
   assert.ok(project.children.some(c => c.className === 'tm-cleanup-badge'), 'real-path tile should have a hidden selected-state badge');
@@ -1717,6 +2064,21 @@ function testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes() {
   assert.strictEqual(spacePrevented, true, 'Space on a button-like tile must prevent default browser scrolling');
   assert.strictEqual(drillCount, 1, 'keyboard activation in cleanup mode must stop drilling');
   assert.strictEqual(inspectCount, 1, 'keyboard activation in cleanup mode must inspect/select instead of drilling');
+
+  viewer.setTreemapModifierActive(false);
+  const rejectedRoot = {
+    name: '/', kind: 'directory', bytes: 500, other_bytes: 0, uid: 1001,
+    children: [{
+      name: 'boot', kind: 'directory', bytes: 500, uid: 1001,
+      children: [{ name: 'kernel', kind: 'file', bytes: 500, uid: 1001, children: [] }],
+    }],
+  };
+  const rejectedEl = new FakeElement('div');
+  viewer.layoutTreemap(rejectedEl, rejectedRoot, 0, 0, 600, 400, 0, '/');
+  const boot = rejectedEl.children.find(c => c._tip && c._tip.path === '/boot');
+  assert.ok(boot && (boot.className || '').includes('drillable'), 'a non-cleanup-safe parent can still be drillable');
+  assert.strictEqual(boot.getAttribute('role'), 'button', 'every drillable tile must expose button semantics even when it cannot be selected for removal');
+  assert.strictEqual(boot.tabIndex, 0, 'every drillable tile must be keyboard focusable even when cleanup selection is rejected');
 }
 
 function testTreemapGroupTilesStayBehindDescendants() {
@@ -1747,6 +2109,20 @@ function testTreemapGroupTilesStayBehindDescendants() {
   assert.ok(child, 'child tile should render above parent group');
   assert.strictEqual(group.style.zIndex, '1', 'group background/header must stay in lower stacking layer');
   assert.strictEqual(child.style.zIndex, '2', 'descendant tiles must stay above group backgrounds');
+}
+
+function testTreemapButtonSelectionModeSurvivesKeyboardNavigation() {
+  const viewer = loadViewer();
+  viewer.bindTreemapCleanupMode();
+  const button = viewer.document.getElementById('treemapCleanupMode');
+  button.onclick();
+  assert.strictEqual(viewer.isTreemapCleanupGesture({}), true, 'the explicit selection-mode button must latch selection mode');
+  viewer.document.dispatchEvent({ type: 'keyup', key: 'Tab', ctrlKey: false, metaKey: false });
+  assert.strictEqual(viewer.isTreemapCleanupGesture({}), true, 'Tab keyup must not cancel button-latched selection mode before a keyboard user reaches a tile');
+  viewer.document.dispatchEvent({ type: 'keyup', key: 'Control', ctrlKey: false, metaKey: false });
+  assert.strictEqual(viewer.isTreemapCleanupGesture({}), true, 'releasing a modifier must not cancel a separately button-latched mode');
+  button.onclick();
+  assert.strictEqual(viewer.isTreemapCleanupGesture({}), false, 'pressing the explicit mode button again must release the latch');
 }
 
 function testTreemapDoesNotExposeTopLevelCleanupCandidates() {
@@ -2096,6 +2472,19 @@ async function main() {
   testMountCentricResponsiveCssContract();
   await testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders();
   testRescanButtonExposesPersistentActivityCue();
+  await testRescanPollingIsBoundToOriginAndStopsOnNavigation();
+  await testOverviewRefreshDoesNotRestoreAStaleRoute();
+  await testFastFailedRescanShowsRecoverableFailure();
+  await testActiveJobAndTransientPollErrorsStayRecoverable();
+  await testCurrentRescanIgnoresAStaleTerminalJobId();
+  await testRemoteActiveConflictNeverPollsPersistedTerminalJob();
+  await testCooldownRescanFailureStaysRetryable();
+  await testRescanRefreshStateOwnsButtonUntilDetailRefreshFinishes();
+  await testStaleSameServerPollCannotClobberNewTrackingGeneration();
+  testSameServerForceReloadKeepsExistingDetailVisible();
+  await testOverviewRefreshPreservesOtherServerSnapshotCache();
+  await testForcedOverviewRefreshWaitsForFreshDetailSnapshot();
+  await testFailedSameServerForceReloadKeepsCachedDetailVisible();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
@@ -2103,9 +2492,11 @@ async function main() {
   testTreemapCleanupModeBindsCleanupRenderedListenerOnce();
   testCleanupSelectionLifecycleShowsRemovalImmediatelyAndResetsOnServerChange();
   testCleanupSelectionKeepsMultipleTreemapPaths();
+  testCleanupTableControlsReflectSelectionImmediately();
   testTreemapHidesMicroTilesInsteadOfInflatingThem();
   testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes();
   testTreemapGroupTilesStayBehindDescendants();
+  testTreemapButtonSelectionModeSurvivesKeyboardNavigation();
   testTreemapDoesNotExposeTopLevelCleanupCandidates();
   testTreemapScaleNoteStaysInLegendWithoutCoveringTiles();
   testCleanupPanelResponsiveCssAndDangerListSemantics();

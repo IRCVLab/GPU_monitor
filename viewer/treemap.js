@@ -9,6 +9,7 @@
    exactly, so there is no canvas to mis-size or clip. */
 let treemapStack = [];   // drill path: [{node, name, mount}] from mount root to current
 let treemapModifierActive = false;
+let treemapCleanupLatched = false;
 
 function rectArea(r) {
   return Math.max(0, Number(r && r.w) || 0) * Math.max(0, Number(r && r.h) || 0);
@@ -146,11 +147,13 @@ function isTreemapCleanupSelectablePath(path, kind, owner, bytes) {
 function isTreemapCleanupGesture(e) {
   return !!(treemapModifierActive || (e && (e.ctrlKey || e.metaKey)));
 }
-function treemapShortcutCopy(active) {
+function treemapShortcutCopy(active, latched) {
   return active
     ? {
         label: "Selecting… / 선택 중",
-        hint: "Release Ctrl/⌘ to leave selection mode · 키를 떼면 선택 모드 종료",
+        hint: latched
+          ? "Select multiple tiles; click this button again to finish · 여러 타일 선택 후 버튼을 다시 눌러 종료"
+          : "Release Ctrl/⌘ to leave selection mode · 키를 떼면 선택 모드 종료",
       }
     : {
         label: "Ctrl/⌘ click: select for removal",
@@ -179,7 +182,7 @@ function syncTreemapTileSelection(tile) {
   if (!tile || !tile.dataset || !tile.dataset.cleanupPath) return;
   const selected = typeof isCleanupSelectedPath === "function" && isCleanupSelectedPath(tile.dataset.cleanupPath);
   tile.classList.toggle("cleanup-selected", selected);
-  tile.setAttribute("aria-selected", selected ? "true" : "false");
+  tile.setAttribute("aria-pressed", selected ? "true" : "false");
 }
 function syncTreemapCleanupTiles() {
   if (typeof document === "undefined") return;
@@ -214,7 +217,7 @@ function setTreemapModifierActive(active) {
     if (el) el.classList.toggle("cleanup-select-mode", treemapModifierActive);
     const btn = document.getElementById("treemapCleanupMode");
     if (btn) {
-      const copy = treemapShortcutCopy(treemapModifierActive);
+      const copy = treemapShortcutCopy(treemapModifierActive, treemapCleanupLatched);
       btn.classList.toggle("active", treemapModifierActive);
       btn.setAttribute("aria-pressed", treemapModifierActive ? "true" : "false");
       btn.textContent = copy.label;
@@ -222,21 +225,22 @@ function setTreemapModifierActive(active) {
     }
     const hint = document.getElementById("treemapCleanupHint");
     if (hint) {
-      hint.textContent = treemapShortcutCopy(treemapModifierActive).hint;
+      hint.textContent = treemapShortcutCopy(treemapModifierActive, treemapCleanupLatched).hint;
     }
   }
   syncTreemapCleanupTiles();
   return treemapModifierActive;
 }
 function setTreemapCleanupMode(enabled) {
-  return setTreemapModifierActive(enabled);
+  treemapCleanupLatched = !!enabled;
+  return setTreemapModifierActive(treemapCleanupLatched);
 }
 function bindTreemapCleanupMode() {
   if (typeof document === "undefined") return;
   const btn = document.getElementById("treemapCleanupMode");
   if (btn && !btn._cleanupModeBound) {
     btn._cleanupModeBound = true;
-    btn.onclick = () => setTreemapModifierActive(!treemapModifierActive);
+    btn.onclick = () => setTreemapCleanupMode(!treemapCleanupLatched);
   }
   if (!document._treemapCleanupShortcutBound) {
     document._treemapCleanupShortcutBound = true;
@@ -246,11 +250,13 @@ function bindTreemapCleanupMode() {
       }
     });
     document.addEventListener("keyup", e => {
-      if (!e.ctrlKey && !e.metaKey) setTreemapModifierActive(false);
+      if ((e.key === "Control" || e.key === "Meta" || e.key === "OS") && !e.ctrlKey && !e.metaKey) {
+        setTreemapModifierActive(treemapCleanupLatched);
+      }
     });
-    if (typeof window !== "undefined") window.addEventListener("blur", () => setTreemapModifierActive(false));
+    if (typeof window !== "undefined") window.addEventListener("blur", () => setTreemapModifierActive(treemapCleanupLatched));
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) setTreemapModifierActive(false);
+      if (document.hidden) setTreemapModifierActive(treemapCleanupLatched);
     });
   }
   if (!document._treemapCleanupRenderedBound) {
@@ -303,10 +309,8 @@ function tmTile(el, c, k, crumbPath, isGroup, level) {
     t.classList.add("drillable");
   }
   if (selectable || hasKids) {
-    if (selectable) {
-      t.setAttribute("role", "button");
-      t.setAttribute("tabindex", "0");
-    }
+    t.setAttribute("role", "button");
+    t.setAttribute("tabindex", "0");
     const ariaLabel = treemapTileAriaLabel(path, hasKids, selectable);
     if (ariaLabel) t.setAttribute("aria-label", ariaLabel);
     t.onclick = (e) => activateTreemapTile(t, c, path, owner, e);
