@@ -15,7 +15,8 @@ from backend.models import Base, Note, Server
 from backend.routers.notes import NoteCreate, NoteDelete, _note_to_out, create_note, delete_note, list_notes
 
 
-FUTURE = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+def future_time(*, days: int = 365) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(days=days)
 
 
 class NotePrioritySchemaTests(TestCase):
@@ -150,7 +151,7 @@ class NotePriorityRouteTests(IsolatedAsyncioTestCase):
                     display_name='Owner Alias',
                     ssh_password='pw',
                     content='memo',
-                    expires_at=FUTURE,
+                    expires_at=future_time(),
                 ),
             )
 
@@ -170,7 +171,7 @@ class NotePriorityRouteTests(IsolatedAsyncioTestCase):
                     display_name='   ',
                     ssh_password='pw',
                     content='memo',
-                    expires_at=FUTURE,
+                    expires_at=future_time(),
                     priority='urgent',
                 ),
             )
@@ -193,8 +194,8 @@ class NotePriorityRouteTests(IsolatedAsyncioTestCase):
             kind='memo',
             gpu_indices='[]',
             priority=None,
-            created_at=FUTURE,
-            expires_at=FUTURE + timedelta(hours=1),
+            created_at=future_time(),
+            expires_at=future_time(days=366),
         )
 
         serialized = _note_to_out(note)
@@ -203,7 +204,7 @@ class NotePriorityRouteTests(IsolatedAsyncioTestCase):
         self.assertEqual(serialized.display_name, 'Legacy Alias')
 
     async def test_delete_note_authorizes_by_username_not_display_name(self) -> None:
-        note_id = await self._insert_note('owner', 'keep', FUTURE + timedelta(hours=1), display_name='someone-else', priority='high')
+        note_id = await self._insert_note('owner', 'keep', future_time(days=366), display_name='someone-else', priority='high')
 
         with patch('backend.routers.notes.AsyncSessionLocal', self.session_factory), patch('backend.routers.notes._verify_user', AsyncMock(return_value=True)), patch('backend.routers.notes.get_settings', return_value=SimpleNamespace(admin_password='ircv_admin')):
             with self.assertRaises(HTTPException) as ctx:

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import unittest
 
 from pydantic import ValidationError
@@ -6,7 +6,8 @@ from pydantic import ValidationError
 from backend.routers.notes import NoteCreate, NoteOut, parse_gpu_indices, serialize_gpu_indices
 
 
-FUTURE = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+def future_time(*, days: int = 365) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(days=days)
 
 
 class NoteValidationTests(unittest.TestCase):
@@ -32,7 +33,7 @@ class NoteValidationTests(unittest.TestCase):
                 username='u',
                 ssh_password='pw',
                 content='memo',
-                expires_at=FUTURE,
+                expires_at=future_time(),
                 kind='memo',
                 gpu_indices=[1],
             )
@@ -42,7 +43,7 @@ class NoteValidationTests(unittest.TestCase):
             username='u',
             ssh_password='pw',
             content='memo',
-            expires_at=FUTURE,
+            expires_at=future_time(),
         )
         self.assertEqual(note.kind, 'memo')
         self.assertEqual(note.gpu_indices, [])
@@ -56,7 +57,7 @@ class NoteValidationTests(unittest.TestCase):
                     username='u',
                     ssh_password='pw',
                     content='memo',
-                    expires_at=FUTURE,
+                    expires_at=future_time(),
                     priority=priority,
                 )
                 self.assertEqual(note.priority, priority)
@@ -67,7 +68,7 @@ class NoteValidationTests(unittest.TestCase):
                 username='u',
                 ssh_password='pw',
                 content='memo',
-                expires_at=FUTURE,
+                expires_at=future_time(),
                 priority='low',
             )
 
@@ -76,21 +77,21 @@ class NoteValidationTests(unittest.TestCase):
             username='u',
             ssh_password='pw',
             content='memo',
-            expires_at=FUTURE,
+            expires_at=future_time(),
             display_name='  Grace Hopper  ',
         )
         blank = NoteCreate(
             username='u',
             ssh_password='pw',
             content='memo',
-            expires_at=FUTURE,
+            expires_at=future_time(),
             display_name='   ',
         )
         omitted = NoteCreate(
             username='u',
             ssh_password='pw',
             content='memo',
-            expires_at=FUTURE,
+            expires_at=future_time(),
         )
 
         self.assertEqual(trimmed.display_name, 'Grace Hopper')
@@ -103,7 +104,7 @@ class NoteValidationTests(unittest.TestCase):
                 username='u',
                 ssh_password='pw',
                 content='memo',
-                expires_at=FUTURE,
+                expires_at=future_time(),
                 display_name='x' * 41,
             )
 
@@ -113,7 +114,7 @@ class NoteValidationTests(unittest.TestCase):
                 username='u',
                 ssh_password='pw',
                 content='hold',
-                expires_at=FUTURE,
+                expires_at=future_time(),
                 kind='hold',
                 gpu_indices=[],
             )
@@ -122,7 +123,7 @@ class NoteValidationTests(unittest.TestCase):
                 username='u',
                 ssh_password='pw',
                 content='hold',
-                expires_at=FUTURE,
+                expires_at=future_time(),
                 kind='hold',
                 gpu_indices=[1, '2'],
             )
@@ -131,7 +132,7 @@ class NoteValidationTests(unittest.TestCase):
                 username='u',
                 ssh_password='pw',
                 content='hold',
-                expires_at=FUTURE,
+                expires_at=future_time(),
                 kind='hold',
                 gpu_indices=[True],
             )
@@ -141,7 +142,7 @@ class NoteValidationTests(unittest.TestCase):
             username='u',
             ssh_password='pw',
             content='hold',
-            expires_at=FUTURE,
+            expires_at=future_time(),
             kind='hold',
             gpu_indices=[3, 1, 3],
         )
