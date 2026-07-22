@@ -223,7 +223,9 @@ function setShellMode(isDetail) {
 
 function showDetailError(message) {
   const err = document.getElementById("detailError");
+  const loading = document.getElementById("detailLoading");
   const panels = document.getElementById("detailPanels");
+  if (loading) loading.hidden = true;
   if (err) {
     err.textContent = message;
     err.hidden = false;
@@ -233,10 +235,40 @@ function showDetailError(message) {
 
 function clearDetailError() {
   const err = document.getElementById("detailError");
+  const loading = document.getElementById("detailLoading");
   const panels = document.getElementById("detailPanels");
   if (err) {
     err.textContent = "";
     err.hidden = true;
+  }
+  if (panels) panels.hidden = !!(loading && !loading.hidden);
+}
+
+function showDetailLoading(summary) {
+  const loading = document.getElementById("detailLoading");
+  const panels = document.getElementById("detailPanels");
+  const displayName = summary && summary.display_name ? summary.display_name : "Server";
+  if (loading) {
+    loading.textContent = displayName + " 데이터를 불러오는 중…";
+    loading.hidden = false;
+  }
+  if (panels) panels.hidden = true;
+  const host = document.getElementById("h-host");
+  const scan = document.getElementById("h-scan");
+  const scanner = document.getElementById("h-scanner");
+  const lastUpdated = document.getElementById("lastUpd");
+  if (host) host.textContent = displayName;
+  if (scan) scan.textContent = "—";
+  if (scanner) scanner.textContent = "";
+  if (lastUpdated) lastUpdated.textContent = "";
+}
+
+function clearDetailLoading() {
+  const loading = document.getElementById("detailLoading");
+  const panels = document.getElementById("detailPanels");
+  if (loading) {
+    loading.textContent = "";
+    loading.hidden = true;
   }
   if (panels) panels.hidden = false;
 }
@@ -529,6 +561,7 @@ async function ensureDetailLoaded(serverId, forceReload, generationOverride, req
   }
   if (!isCurrentDetailGeneration(serverId, generation)) return;
   DATA = snapshot;
+  clearDetailLoading();
   clearDetailError();
   renderAll();
   updateLastUpdated();
@@ -549,7 +582,11 @@ function applyRouteState(route, options) {
   if (typeof resetCleanupSelectionState === "function") resetCleanupSelectionState();
   clearDetailError();
   setShellMode(!!safeRoute.serverId);
-  if (!safeRoute.serverId) return safeRoute;
+  if (!safeRoute.serverId) {
+    clearDetailLoading();
+    return safeRoute;
+  }
+  if (!DATA) showDetailLoading(currentServerSummary);
   showTab(safeRoute.tab, { updateRoute: false });
   if (!opts.skipDataLoad) {
     const requestVersion = beginDetailRequestVersion(safeRoute.serverId);
