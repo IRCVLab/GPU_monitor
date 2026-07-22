@@ -616,6 +616,19 @@ test('Task 6 mode button uses inline SVG sun and moon icons instead of glyph cha
 	assert.doesNotMatch(buttonMarkup, /☀|☾|☽|🌙|🌞/);
 });
 
+test('theme mode control is circular and morphs continuously mounted sun and moon icons', () => {
+	const buttonStart = pageSource.indexOf('class="ops-mode-action"');
+	const buttonEnd = pageSource.indexOf('</button>', buttonStart);
+	const buttonMarkup = pageSource.slice(buttonStart, buttonEnd);
+	assert.doesNotMatch(buttonMarkup, /\{#if\s+\$themeMode/, 'theme icons must remain mounted during mode changes');
+	assert.match(buttonMarkup, /class:active=\{\$themeMode === 'dark'\}[\s\S]*ops-mode-icon--sun/);
+	assert.match(buttonMarkup, /class:active=\{\$themeMode === 'light'\}[\s\S]*ops-mode-icon--moon/);
+	assert.match(dashboardCss, /\.ops-mode-action\s*\{[\s\S]*width:\s*2\.5rem[\s\S]*height:\s*2\.5rem[\s\S]*border-radius:\s*50%/);
+	assert.match(dashboardCss, /\.ops-mode-icon\s*\{[\s\S]*position:\s*absolute[\s\S]*transition:[\s\S]*opacity[\s\S]*transform/);
+	assert.match(dashboardCss, /\.ops-mode-icon\.active\s*\{[\s\S]*opacity:\s*1[\s\S]*transform:\s*rotate\(0deg\)\s*scale\(1\)/);
+	assert.match(dashboardCss, /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.ops-mode-icon[\s\S]*transition:\s*none/);
+});
+
 test('Task 6 mobile indicator panel keeps a closed translate-scale transition', () => {
 	const mobile = dashboardCss.match(/@media \(max-width: 640px\) \{[\s\S]*?\n\}/)?.[0] ?? '';
 	assert.match(mobile, /\.ops-indicator-panel\s*\{[\s\S]*transform:\s*translate3d\([^)]*\)\s*scale\(/);
