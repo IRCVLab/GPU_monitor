@@ -1,0 +1,17 @@
+# Initial monorepo ownership for governance-sensitive paths.
+/.github/ @shchoi00
+/apps/*/deploy/ @shchoi00
+/deploy/ @shchoi00
+/scripts/ @shchoi00
+/Makefile @shchoi00
+/.gitignore @shchoi00
+/.gitattributes @shchoi00
+/package.json @shchoi00
+/package-lock.json @shchoi00
+/pnpm-lock.yaml @shchoi00
+/yarn.lock @shchoi00
+/pyproject.toml @shchoi00
+/poetry.lock @shchoi00
+/uv.lock @shchoi00
+/requirements.txt @shchoi00
+/requirements-*.txt @shchoi00
