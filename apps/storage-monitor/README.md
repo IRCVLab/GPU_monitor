@@ -7,6 +7,19 @@ Fast local disk scanner plus a central loopback dashboard for lab storage visibi
 - **Central dashboard:** `storage-viz-dashboard.service` runs on the operator host, binds `127.0.0.1:8088` by default, reads `/etc/storage-viz/servers.json`, stores pulled snapshots under `/var/lib/storage-viz-dashboard`, and is published through an authenticating reverse proxy.
 - **Per-server agent:** `storage-viz-scan.service` and `storage-viz-scan.timer` run on each storage server. The timer performs six-hour scheduled collection; manual rescan is the fixed `systemctl start storage-viz-scan.service` command only.
 
+
+## Repository-root checks
+
+Run storage checks from the repository root through the delegating Makefile:
+
+```bash
+make test-storage
+```
+
+The root Makefile delegates into `apps/storage-monitor`; it does not require a shared monorepo package manager. Full repository verification is available as `make verify`, which combines layout/history checks with the independent GPU and storage application checks.
+
+On non-Linux hosts, scanner checks that depend on Linux `SYS_getdents64` are skipped with an explicit message and remain covered by Linux verification.
+
 ## Quick local demo
 
 Run the local sample dashboard from the repository root:

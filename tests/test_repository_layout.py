@@ -63,6 +63,22 @@ BROWSER_OUTPUT_SUFFIXES = {
 }
 
 
+def makefile_text() -> str:
+    return Path("Makefile").read_text()
+
+
+def make_target_names() -> set[str]:
+    targets: set[str] = set()
+    for line in makefile_text().splitlines():
+        if not line or line.startswith(("	", "#", ".")) or ":" not in line:
+            continue
+        target_part = line.split(":", 1)[0]
+        if "=" in target_part:
+            continue
+        targets.update(name for name in target_part.split() if name)
+    return targets
+
+
 def tracked_paths() -> list[str]:
     result = subprocess.run(
         ["git", "ls-files"],
@@ -103,6 +119,41 @@ class RepositoryLayoutTest(unittest.TestCase):
         assert Path("apps/storage-monitor/agent/scan_runner.py").is_file()
         assert not Path("frontend").exists()
         assert not Path("backend").exists()
+
+
+    def test_root_makefile_exposes_application_command_contracts(self):
+        self.assertLessEqual(
+            {"test-gpu", "build-gpu", "test-storage", "verify"},
+            make_target_names(),
+        )
+
+        text = makefile_text()
+        self.assertIn("cd apps/gpu-monitor/frontend && npm run check", text)
+        self.assertIn("cd apps/gpu-monitor/frontend && npm run build", text)
+        self.assertIn("cd apps/storage-monitor", text)
+        self.assertNotIn("npm --workspace", text)
+        self.assertNotIn("pnpm", text)
+        self.assertNotIn("yarn workspace", text)
+
+    def test_gpu_shell_scripts_are_app_local_and_resolve_root_from_script_location(self):
+        old_script_paths = [
+            Path("apps/gpu-monitor/run_monitoring.sh"),
+            Path("apps/gpu-monitor/run_development.sh"),
+        ]
+        new_script_paths = [
+            Path("apps/gpu-monitor/scripts/run_monitoring.sh"),
+            Path("apps/gpu-monitor/scripts/run_development.sh"),
+        ]
+
+        for path in old_script_paths:
+            self.assertFalse(path.exists(), f"legacy root-level script remains: {path}")
+        for path in new_script_paths:
+            self.assertTrue(path.is_file(), f"missing app-local script: {path}")
+            content = path.read_text()
+            self.assertIn("BASH_SOURCE[0]", content)
+            self.assertIn("/..", content)
+            self.assertNotIn("/home/ircv/workspace", content)
+            self.assertNotIn('ROOT_DIR="$(pwd)"', content)
 
     def test_tracked_files_exclude_generated_runtime_and_local_environment_data(self):
         disallowed = [path for path in tracked_paths() if is_disallowed_tracked_path(path)]

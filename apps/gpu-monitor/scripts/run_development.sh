@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Isolated development stack: its source tree, SQLite DB, tmux sessions, and ports
 # differ from the live monitoring_v2 stack. It never launches the Slack bridge.
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_SESSION="monitoring_v2_dev_backend"
 FRONTEND_SESSION="monitoring_v2_dev_frontend"
 BACKEND_PORT="8101"

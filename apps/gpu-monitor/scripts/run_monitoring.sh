@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_SESSION="monitoring_v2_backend"
 FRONTEND_SESSION="monitoring_v2_frontend"
 BRIDGE_SESSION="monitoring_v2_slack_bridge"
@@ -13,7 +13,7 @@ BRIDGE_CMD="cd \"$ROOT_DIR\" && ./.venv/bin/uvicorn backend.slack_bridge:app --h
 
 usage() {
   cat <<'EOF'
-Usage: ./run_monitoring.sh <command>
+Usage: ./scripts/run_monitoring.sh <command>
 
 Commands:
   start      Start backend, built frontend preview, and slack bridge in tmux
@@ -127,8 +127,8 @@ Monitoring stack requested.
   bridge:   http://127.0.0.1:8000
 
 Use:
-  ./run_monitoring.sh status
-  ./run_monitoring.sh logs
+  ./scripts/run_monitoring.sh status
+  ./scripts/run_monitoring.sh logs
 EOF
 }
 
