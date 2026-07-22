@@ -16,13 +16,27 @@ build-gpu:
 	cd apps/gpu-monitor/frontend && npm run build
 
 test-storage:
-	cd apps/storage-monitor && python3 -m pytest -q -p no:cacheprovider
-	cd apps/storage-monitor && find viewer -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check
-	cd apps/storage-monitor && bash deploy/test_deploy_scripts.sh
-	@if [ "$$(uname -s)" = Linux ]; then \
-		cd apps/storage-monitor && bash scanner/test_hstscan.sh && bash deploy/verify-linux.sh --local; \
+	@set -euo pipefail; \
+	assembled=$$(git rev-parse --show-toplevel); \
+	storage_verify=$$(mktemp -d /tmp/storage-monorepo-command-check.XXXXXX); \
+	trap 'rm -rf "$$storage_verify"' EXIT; \
+	git clone --no-hardlinks "$$assembled" "$$storage_verify/repo"; \
+	rsync -a --delete \
+	  --exclude '.git/' \
+	  --exclude '.pytest_cache/' \
+	  --exclude '__pycache__/' \
+	  --exclude 'output/verification/' \
+	  "$$assembled/apps/storage-monitor/" \
+	  "$$storage_verify/repo/apps/storage-monitor/"; \
+	cd "$$storage_verify/repo/apps/storage-monitor"; \
+	PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \
+	find viewer -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check; \
+	bash deploy/test_deploy_scripts.sh; \
+	if [ "$$(uname -s)" = Linux ]; then \
+	  bash scanner/test_hstscan.sh; \
+	  bash deploy/verify-linux.sh --local; \
 	else \
-		printf '%s\n' 'SKIP: Linux-only scanner tests use SYS_getdents64; covered by Task 3 remote Linux verification.'; \
+	  printf '%s\n' 'SKIP: Linux-only scanner tests use SYS_getdents64; covered by Task 3 remote Linux verification.'; \
 	fi
 
 verify: layout-test history-test test-gpu build-gpu test-storage diff-check

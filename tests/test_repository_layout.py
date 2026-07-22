@@ -79,6 +79,34 @@ def make_target_names() -> set[str]:
     return targets
 
 
+def make_target_dependencies(target: str) -> list[str]:
+    prefix = f"{target}:"
+    for line in makefile_text().splitlines():
+        if line.startswith(prefix):
+            return line.split(":", 1)[1].split()
+    return []
+
+def make_target_recipe(target: str) -> list[str]:
+    lines = makefile_text().splitlines()
+    recipe: list[str] = []
+    in_target = False
+    for line in lines:
+        if line == f"{target}:":
+            in_target = True
+            continue
+        if in_target:
+            if line.startswith("	") or not line:
+                if line.startswith("	"):
+                    recipe.append(line[1:])
+                continue
+            break
+    return recipe
+
+
+def normalized_make_recipe(target: str) -> str:
+    return "\n".join(make_target_recipe(target))
+
+
 def tracked_paths() -> list[str]:
     result = subprocess.run(
         ["git", "ls-files"],
@@ -121,19 +149,60 @@ class RepositoryLayoutTest(unittest.TestCase):
         assert not Path("backend").exists()
 
 
-    def test_root_makefile_exposes_application_command_contracts(self):
-        self.assertLessEqual(
-            {"test-gpu", "build-gpu", "test-storage", "verify"},
-            make_target_names(),
+    def test_root_makefile_exposes_exact_application_command_contracts(self):
+        self.assertEqual(
+            ["layout-test", "history-test"],
+            make_target_dependencies("test"),
+        )
+        self.assertEqual(
+            [
+                "cd apps/gpu-monitor/frontend && npm run check",
+                "cd apps/gpu-monitor && SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password python3.12 -m unittest discover -s backend/tests -v",
+            ],
+            make_target_recipe("test-gpu"),
+        )
+        self.assertEqual(
+            ["cd apps/gpu-monitor/frontend && npm run build"],
+            make_target_recipe("build-gpu"),
+        )
+        self.assertEqual(
+            ["layout-test", "history-test", "test-gpu", "build-gpu", "test-storage", "diff-check"],
+            make_target_dependencies("verify"),
         )
 
         text = makefile_text()
-        self.assertIn("cd apps/gpu-monitor/frontend && npm run check", text)
-        self.assertIn("cd apps/gpu-monitor/frontend && npm run build", text)
-        self.assertIn("cd apps/storage-monitor", text)
         self.assertNotIn("npm --workspace", text)
         self.assertNotIn("pnpm", text)
         self.assertNotIn("yarn workspace", text)
+
+    def test_storage_make_targets_run_artifact_checks_in_disposable_clone(self):
+        self.assertEqual(
+            [
+                '@set -euo pipefail; \\',
+                'assembled=$$(git rev-parse --show-toplevel); \\',
+                'storage_verify=$$(mktemp -d /tmp/storage-monorepo-command-check.XXXXXX); \\',
+                'trap \'rm -rf "$$storage_verify"\' EXIT; \\',
+                'git clone --no-hardlinks "$$assembled" "$$storage_verify/repo"; \\',
+                'rsync -a --delete \\',
+                "  --exclude '.git/' \\",
+                "  --exclude '.pytest_cache/' \\",
+                "  --exclude '__pycache__/' \\",
+                "  --exclude 'output/verification/' \\",
+                '  "$$assembled/apps/storage-monitor/" \\',
+                '  "$$storage_verify/repo/apps/storage-monitor/"; \\',
+                'cd "$$storage_verify/repo/apps/storage-monitor"; \\',
+                'PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \\',
+                "find viewer -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check; \\",
+                'bash deploy/test_deploy_scripts.sh; \\',
+                'if [ "$$(uname -s)" = Linux ]; then \\',
+                '  bash scanner/test_hstscan.sh; \\',
+                '  bash deploy/verify-linux.sh --local; \\',
+                'else \\',
+                "  printf '%s\\n' 'SKIP: Linux-only scanner tests use SYS_getdents64; covered by Task 3 remote Linux verification.'; \\",
+                'fi',
+            ],
+            make_target_recipe("test-storage"),
+        )
 
     def test_gpu_shell_scripts_are_app_local_and_resolve_root_from_script_location(self):
         old_script_paths = [
@@ -150,10 +219,16 @@ class RepositoryLayoutTest(unittest.TestCase):
         for path in new_script_paths:
             self.assertTrue(path.is_file(), f"missing app-local script: {path}")
             content = path.read_text()
-            self.assertIn("BASH_SOURCE[0]", content)
-            self.assertIn("/..", content)
+            self.assertIn('ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"', content)
             self.assertNotIn("/home/ircv/workspace", content)
             self.assertNotIn('ROOT_DIR="$(pwd)"', content)
+
+    def test_storage_readme_commands_match_their_stated_working_directory(self):
+        content = Path("apps/storage-monitor/README.md").read_text()
+        self.assertIn("Run the local sample dashboard from `apps/storage-monitor`:", content)
+        self.assertIn('STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data"', content)
+        self.assertIn("python3 viewer/serve.py", content)
+        self.assertNotIn("Run the local sample dashboard from the repository root:", content)
 
     def test_tracked_files_exclude_generated_runtime_and_local_environment_data(self):
         disallowed = [path for path in tracked_paths() if is_disallowed_tracked_path(path)]

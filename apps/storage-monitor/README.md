@@ -22,9 +22,10 @@ On non-Linux hosts, scanner checks that depend on Linux `SYS_getdents64` are ski
 
 ## Quick local demo
 
-Run the local sample dashboard from the repository root:
+Run the local sample dashboard from `apps/storage-monitor`:
 
 ```bash
+cd apps/storage-monitor
 STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data" \
 STORAGE_VIZ_BIND=127.0.0.1 \
 STORAGE_VIZ_PORT=8088 \
