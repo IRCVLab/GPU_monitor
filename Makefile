@@ -1,3 +1,4 @@
+SHELL := /bin/bash
 .PHONY: test layout-test history-test test-gpu build-gpu test-storage verify diff-check
 
 test: layout-test history-test

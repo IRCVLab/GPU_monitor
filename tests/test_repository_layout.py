@@ -150,6 +150,7 @@ class RepositoryLayoutTest(unittest.TestCase):
 
 
     def test_root_makefile_exposes_exact_application_command_contracts(self):
+        self.assertEqual("SHELL := /bin/bash", makefile_text().splitlines()[0])
         self.assertEqual(
             ["layout-test", "history-test"],
             make_target_dependencies("test"),
