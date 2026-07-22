@@ -334,6 +334,20 @@ test('task 3 masonry FLIP uses active visual rects and cancels after next layout
 	assert.ok(masonryBody.indexOf('const nextRects') < masonryBody.indexOf('animation.cancel()'));
 });
 
+test('masonry follows disclosure height motion without restarting FLIP every resize frame', () => {
+	const masonryStart = pageSource.indexOf('function masonry');
+	assert.notEqual(masonryStart, -1, 'Missing masonry action');
+	const masonryBody = pageSource.slice(masonryStart, pageSource.indexOf('\n\tfunction readTab', masonryStart));
+
+	assert.match(masonryBody, /const activeHeightTransitions = new Set<EventTarget>\(\)/);
+	assert.match(masonryBody, /transitionrun/);
+	assert.match(masonryBody, /transitionend/);
+	assert.match(masonryBody, /transitioncancel/);
+	assert.match(masonryBody, /event\.propertyName === 'grid-template-rows'/);
+	assert.match(masonryBody, /const animateLayoutMoves = activeHeightTransitions\.size === 0/);
+	assert.match(masonryBody, /if \(!animateLayoutMoves\) \{[\s\S]*animation\.cancel\(\)[\s\S]*previousRects = nextRects;[\s\S]*return;/);
+});
+
 test('persistent header shows semantic health and cadence without visible second-by-second copy', () => {
 	const statusClass = pageSource.indexOf('class="ops-status"');
 	assert.notEqual(statusClass, -1, 'Missing persistent header status');
@@ -382,7 +396,13 @@ test('GPU Monitor identity, refresh ring, and health label share one header row'
 	assertDeclaration(identityRule, 'align-items', 'center');
 	const statusRule = cssRule(dashboardCss, '.ops-status');
 	assertDeclaration(statusRule, 'margin', '0');
-	assert.match(pageSource, /<div class="ops-identity">[\s\S]*<h1>GPU Monitor<\/h1>[\s\S]*<p[\s\S]*class="ops-status"/);
+	assert.match(pageSource, /<div class="ops-identity">[\s\S]*<h1>GPU <span class="ops-identity__long">Monitor<\/span><\/h1>[\s\S]*<p[\s\S]*class="ops-status"/);
+});
+
+test('narrow mobile header keeps the status ring and visually hides the wordmark from actions', () => {
+	assert.match(pageSource, /<h1>GPU <span class="ops-identity__long">Monitor<\/span><\/h1>/);
+	assert.match(dashboardCss, /@media \(max-width: 480px\) \{[\s\S]*\.ops-identity h1\s*\{[\s\S]*position:\s*absolute;[\s\S]*width:\s*1px;[\s\S]*clip:\s*rect\(0, 0, 0, 0\);/);
+	assert.match(dashboardCss, /@media \(max-width: 480px\) \{[\s\S]*\.ops-identity\s*\{[\s\S]*gap:\s*0;/);
 });
 
 test('header and collapsed indicator share a continuous ten-second satellite cadence', () => {
@@ -412,6 +432,15 @@ test('refresh requests run on a fixed cadence independent of response completion
 	assert.match(autoBody, /if \(refreshInFlight\) return/);
 	assert.match(autoBody, /await reloadDashboard\(\)/);
 	assert.doesNotMatch(autoBody, /schedulePollingTick|startPollingCadence/);
+});
+
+test('dashboard refreshes serialize requests and coalesce a queued full refresh', () => {
+	assert.match(pageSource, /let queuedFullRefresh = false/);
+	const reloadBody = functionBody(pageSource, 'reloadDashboard');
+	assert.match(reloadBody, /if \(refreshInFlight\) \{[\s\S]*queuedFullRefresh \|\|= fullRefresh;[\s\S]*return;/);
+	assert.match(reloadBody, /const runQueuedFullRefresh = queuedFullRefresh;/);
+	assert.match(reloadBody, /queuedFullRefresh = false;/);
+	assert.match(reloadBody, /if \(runQueuedFullRefresh\) void reloadDashboard\(true\);/);
 });
 
 test('page runtime is mounted and destroyed through the Svelte 5 effect lifecycle', () => {

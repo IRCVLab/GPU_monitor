@@ -94,6 +94,7 @@
 		let assignedItems: HTMLElement[] = [];
 		let assignedColumnCount = 0;
 		const layoutAnimations = new Map<HTMLElement, Animation>();
+		const activeHeightTransitions = new Set<EventTarget>();
 		const containerObserver = new ResizeObserver(() => schedule());
 		const mutationObserver = new MutationObserver(() => observeItems());
 
@@ -134,6 +135,21 @@
 		function clearMasonryState(): void {
 			clearAssignments();
 			measuredHeights.clear();
+		}
+
+		function isHeightTransition(event: TransitionEvent): boolean {
+			return event.propertyName === 'grid-template-rows';
+		}
+
+		function handleHeightTransitionRun(event: TransitionEvent): void {
+			if (!isHeightTransition(event) || !event.target) return;
+			activeHeightTransitions.add(event.target);
+		}
+
+		function handleHeightTransitionSettled(event: TransitionEvent): void {
+			if (!isHeightTransition(event) || !event.target) return;
+			activeHeightTransitions.delete(event.target);
+			schedule();
 		}
 
 		function layout(): void {
@@ -205,6 +221,7 @@
 
 			const nextRects = new Map(items.map((child) => [child, documentRect(child)]));
 			const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+			const animateLayoutMoves = activeHeightTransitions.size === 0;
 			const moves = items.flatMap((child) => {
 				const previousFinal = previousRects.get(child);
 				const next = nextRects.get(child);
@@ -217,6 +234,13 @@
 				const previous = layoutAnimations.has(child) ? visualRects.get(child) ?? previousFinal : previousFinal;
 				return [{ child, previous, next }];
 			});
+
+			if (!animateLayoutMoves) {
+				for (const animation of layoutAnimations.values()) animation.cancel();
+				layoutAnimations.clear();
+				previousRects = nextRects;
+				return;
+			}
 
 			if (moves.length > 0) {
 				for (const animation of layoutAnimations.values()) animation.cancel();
@@ -257,6 +281,9 @@
 
 		containerObserver.observe(node);
 		mutationObserver.observe(node, { childList: true });
+		node.addEventListener('transitionrun', handleHeightTransitionRun);
+		node.addEventListener('transitionend', handleHeightTransitionSettled);
+		node.addEventListener('transitioncancel', handleHeightTransitionSettled);
 		observeItems();
 
 		return {
@@ -274,6 +301,10 @@
 			},
 			destroy() {
 				if (frame !== 0) cancelAnimationFrame(frame);
+				node.removeEventListener('transitionrun', handleHeightTransitionRun);
+				node.removeEventListener('transitionend', handleHeightTransitionSettled);
+				node.removeEventListener('transitioncancel', handleHeightTransitionSettled);
+				activeHeightTransitions.clear();
 				for (const animation of layoutAnimations.values()) animation.cancel();
 				layoutAnimations.clear();
 				previousRects.clear();
@@ -312,6 +343,7 @@
 	let lastRefreshAtMs = $state(0);
 	let nextRefreshAtMs = $state<number | null>(null);
 	let refreshInFlight = $state(false);
+	let queuedFullRefresh = false;
 	let refreshFailureCount = $state(0);
 	let headerCompact = $state(false);
 	let headerIndicatorVisible = $state(false);
@@ -446,6 +478,11 @@
 	}
 
 	async function reloadDashboard(fullRefresh = false): Promise<void> {
+		if (refreshInFlight) {
+			queuedFullRefresh ||= fullRefresh;
+			return;
+		}
+
 		refreshInFlight = true;
 		loadError = '';
 		try {
@@ -460,8 +497,11 @@
 			loadError = error instanceof Error ? error.message : '대시보드 데이터를 불러오지 못했습니다.';
 			refreshFailureCount += 1;
 		} finally {
+			const runQueuedFullRefresh = queuedFullRefresh;
+			queuedFullRefresh = false;
 			refreshInFlight = false;
 			finishLoading();
+			if (runQueuedFullRefresh) void reloadDashboard(true);
 		}
 	}
 
@@ -479,6 +519,7 @@
 			autoRefreshTimer = null;
 		}
 		nextRefreshAtMs = null;
+		queuedFullRefresh = false;
 	}
 
 	function currentTickIntervalMs(): number {
@@ -1187,7 +1228,7 @@
 		<header bind:this={headerSurfaceElement} class="ops-header border-b border-surface-border" inert={headerCompact} aria-hidden={headerCompact}>
 			<div class={`ops-header-inner ${pageShellClass} px-4 sm:px-6`}>
 				<div class="ops-identity">
-					<h1>GPU Monitor</h1>
+					<h1>GPU <span class="ops-identity__long">Monitor</span></h1>
 					<p
 						class="ops-status"
 						aria-live="polite"

@@ -4,7 +4,7 @@
 	import { fly } from 'svelte/transition';
 	import type { GpuInfo, Note, ServerState, ServerStatus } from '$lib/types';
 	import type { CompactGpuState } from '$lib/utils/compactGpuAvailability';
-	import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
+	import { countCompactAvailableGpus, getCompactGpuState } from '$lib/utils/compactGpuAvailability';
 	import { compactGpuBankSlots } from '$lib/utils/compactGpuMatrix';
 	import { buildHoldAdvisory, getNotePriorityMeta, resolveDisplayName } from '$lib/utils/noteAdvisory';
 
@@ -83,8 +83,8 @@
 
 	const visibleSlots = $derived(compactGpuBankSlots(server.gpus, bankIndex));
 	const visibleStatusLabel = $derived(statusConfig[server.status]?.label ?? statusConfig.unknown.label);
-	const availableCount = $derived.by(() =>
-		visibleSlots.filter((gpu): gpu is GpuInfo => gpu !== null).filter((gpu) => gpuState(gpu) === 'available').length
+	const availableCount = $derived(
+		countCompactAvailableGpus(server.status, server.last_seen, server.gpus)
 	);
 	const hasAvailable = $derived(availableCount > 0);
 

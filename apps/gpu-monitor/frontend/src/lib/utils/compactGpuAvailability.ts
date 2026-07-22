@@ -12,6 +12,17 @@ type CompactGpuStateOptions = {
 	maxAgeMs?: number;
 };
 
+export function countCompactAvailableGpus(
+	serverStatus: ServerStatus,
+	lastSeen: string | null,
+	gpus: readonly GpuInfo[],
+	options: CompactGpuStateOptions = {}
+): number {
+	return gpus.filter(
+		(gpu) => getCompactGpuState(serverStatus, lastSeen, gpu, options) === 'available'
+	).length;
+}
+
 /**
  * Compact view is availability-first. Treat a GPU as free only when the server
  * is online, telemetry is fresh enough to exist, no users are attached, and

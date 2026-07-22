@@ -55,6 +55,12 @@ test('compact rows support absent placeholders, keep held overlays orthogonal to
 	assert.match(cssSource, /\.compact-slot\[data-held='true'\]::after/);
 });
 
+test('compact server availability cue counts every GPU bank instead of only the visible bank', () => {
+	assert.match(rowSource, /import \{[^}]*countCompactAvailableGpus[^}]*\} from '\$lib\/utils\/compactGpuAvailability';/);
+	assert.match(rowSource, /countCompactAvailableGpus\(server\.status, server\.last_seen, server\.gpus\)/);
+	assert.doesNotMatch(rowSource, /visibleSlots\.filter[\s\S]*gpuState\(gpu\) === 'available'/);
+});
+
 test('compact occupied cells keep per-user grid rows with dense ellipsized usernames', () => {
 	assert.doesNotMatch(rowSource, /getLinuxUsernameInitials/);
 	assert.doesNotMatch(rowSource, /compact-slot__badge/);
@@ -273,7 +279,7 @@ test('task 4 compact tooltip stays passive, keyboard reachable, and availability
 	assert.match(dashboardSource, /compact-dashboard__tooltip-note-memo/);
 	assert.doesNotMatch(dashboardSource, /compact-dashboard__tooltip[\s\S]*<button/);
 	assert.match(rowSource, /function gpuState\(gpu: GpuInfo\): CompactGpuState \{[\s\S]*return getCompactGpuState\(server\.status, server\.last_seen, gpu\);[\s\S]*\}/);
-	assert.match(rowSource, /const availableCount = \$derived\.by\([\s\S]*gpuState\(gpu\) === 'available'[\s\S]*\);/);
+	assert.match(rowSource, /const availableCount = \$derived\([\s\S]*countCompactAvailableGpus\(server\.status, server\.last_seen, server\.gpus\)[\s\S]*\);/);
 	assert.doesNotMatch(rowSource, /getCompactGpuState\([^\n]*hold/);
 });
 
