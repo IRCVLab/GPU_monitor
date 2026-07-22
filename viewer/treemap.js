@@ -93,13 +93,18 @@ function addHiddenTreemapItem(el, c) {
 function renderTreemapScaleNote(el) {
   const h = el._tmHiddenItems;
   if (!h || !h.count || h.bytes <= 0) return;
+  const legend = document.getElementById("treemapLegend");
+  if (!legend) return;
   const note = document.createElement("div");
-  note.className = "tm-scale-note";
-  note.innerHTML =
-    "Tiny items too small to draw proportionally / 실제 비율을 지키기 위해 너무 작은 항목은 숨김: <b>" +
-    humanBytes(h.bytes) + "</b> across " + h.count.toLocaleString() + " item" + (h.count === 1 ? "" : "s") +
-    ". Drill in or use tables for exact paths. / 자세한 경로는 드릴인하거나 표에서 확인하세요.";
-  el.appendChild(note);
+  const itemLabel = h.count.toLocaleString() + " tiny item" + (h.count === 1 ? "" : "s");
+  note.className = "legend-item tm-scale-note";
+  note.textContent = itemLabel + " · " + humanBytes(h.bytes) + " hidden";
+  note.setAttribute("title",
+    "Tiny items too small to draw proportionally are hidden. Drill in or use tables for exact paths. / " +
+    "실제 비율을 지키기 위해 너무 작은 항목은 숨깁니다. 자세한 경로는 드릴인하거나 표에서 확인하세요.");
+  note.setAttribute("role", "note");
+  note.setAttribute("tabindex", "0");
+  legend.appendChild(note);
 }
 /* Progressively darken the owner color with nesting depth so the hierarchy is
    readable at a glance (top-level full color, each level deeper a bit darker). */
