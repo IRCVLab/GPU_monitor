@@ -192,6 +192,72 @@ class ApiServerTest(unittest.TestCase):
         self.assertEqual(code, 200); self.assertEqual(servers["data_mode"], "inventory")
         self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
 
+    def test_direct_loopback_rescan_opt_in_allows_only_the_ssh_tunnel_origin(self):
+        inv = self.write_inventory()
+        self.port = free_port()
+        origin = f"http://127.0.0.1:{self.port}"
+        localhost_origin = f"http://localhost:{self.port}"
+        env = os.environ.copy()
+        env.update(
+            STORAGE_VIZ_BIND="127.0.0.1",
+            STORAGE_VIZ_PORT=str(self.port),
+            STORAGE_VIZ_DEV_SAMPLE_DIR="",
+            STORAGE_VIZ_INVENTORY=str(inv),
+            STORAGE_VIZ_STATE_DIR=str(Path(self.tmp.name) / "state"),
+            STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN="1",
+            STORAGE_VIZ_ALLOWED_ORIGINS=f"{origin},{localhost_origin}",
+            STORAGE_VIZ_OPERATOR_ALLOWLIST="direct-viewer",
+        )
+        env.pop("STORAGE_VIZ_DEV_SAMPLE_DIR", None)
+        self.proc = subprocess.Popen([sys.executable, str(SERVE)], cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                code, headers, sess = self.request("GET", "/api/session")
+                break
+            except Exception:
+                if self.proc.poll() is not None:
+                    out, err = self.proc.communicate(timeout=1)
+                    self.fail(f"serve.py exited early\nstdout={out}\nstderr={err}")
+                time.sleep(0.05)
+        else:
+            self.fail("serve.py did not become ready")
+        self.assertEqual(code, 200)
+        self.assertTrue(sess["can_rescan"])
+        cookie = self.cookie_value(headers)
+        valid_headers = {"Cookie":cookie, "Origin":origin, "X-CSRF-Token":sess["csrf_token"]}
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers=valid_headers)[0], 404)
+        mismatch_headers = {**valid_headers, "Origin":localhost_origin}
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers=mismatch_headers)[0], 403)
+        lan_headers = {**valid_headers, "Host":"192.168.0.3:8088", "Origin":"http://192.168.0.3:8088"}
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers=lan_headers)[0], 403)
+        self.assertFalse(self.request("GET", "/api/session", headers={"Host":"192.168.0.3:8088"})[2]["can_rescan"])
+
+    def test_direct_loopback_rescan_rejects_unsafe_startup_configuration(self):
+        inv = self.write_inventory()
+        base = {
+            "STORAGE_VIZ_DEV_SAMPLE_DIR":"",
+            "STORAGE_VIZ_INVENTORY":str(inv),
+            "STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN":"1",
+            "STORAGE_VIZ_OPERATOR_ALLOWLIST":"direct-viewer",
+            "STORAGE_VIZ_ALLOWED_ORIGINS":"http://127.0.0.1:8088",
+        }
+        for overrides in (
+            {"STORAGE_VIZ_BIND":"0.0.0.0"},
+            {"STORAGE_VIZ_ALLOWED_ORIGINS":""},
+            {"STORAGE_VIZ_ALLOWED_ORIGINS":"http://127.0.0.1:notaport"},
+            {"STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1"},
+            {"STORAGE_VIZ_TRUSTED_PROXY":"1"},
+        ):
+            with self.subTest(overrides=overrides):
+                self.start_server({**base, **overrides}, expect_exit=True)
+                self._stop(); self.proc = None
+        self.start_server({
+            "STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN":"1",
+            "STORAGE_VIZ_OPERATOR_ALLOWLIST":"direct-viewer",
+            "STORAGE_VIZ_ALLOWED_ORIGINS":"http://127.0.0.1:8088",
+        }, expect_exit=True)
+
     def test_trusted_proxy_requires_loopback_exact_origin_operator_and_csrf(self):
         inv = self.write_inventory()
         self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_DATA_DIR":str(self.sample_dir), "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1"})

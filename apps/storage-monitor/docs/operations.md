@@ -65,6 +65,19 @@ Security rules:
 - Read-only viewers may load status and snapshots after proxy authentication but cannot request rescans.
 - Do not store or document password values. Use SSH identity files and strict known-hosts entries instead.
 
+### SSH-tunnel-only manual rescans
+
+When the dashboard is reachable only through a local SSH tunnel and the central host is trusted, direct loopback rescans can be enabled without opening POST access on the LAN proxy:
+
+```bash
+STORAGE_VIZ_TRUSTED_PROXY=0
+STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN=1
+STORAGE_VIZ_ALLOWED_ORIGINS=http://127.0.0.1:8088,http://localhost:8088
+STORAGE_VIZ_OPERATOR_ALLOWLIST=direct-viewer
+```
+
+Keep `STORAGE_VIZ_BIND=127.0.0.1`. This mode rejects sample data, non-loopback binds, non-loopback or malformed origins, Host/Origin mismatches, and configurations without production inventory. It still requires the signed session cookie and CSRF token. Any LAN-facing proxy must remain GET/HEAD-only and forward the browser's original `Host` header so `/api/session` reports `can_rescan: false` outside the SSH tunnel.
+
 ## Local development sample mode
 
 Run the deterministic sample dashboard from the repository root when you need a browser demo without production inventory:

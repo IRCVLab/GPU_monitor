@@ -57,13 +57,14 @@ function sizeTreemap() {
   const main = document.getElementById("main");
   const el = document.getElementById("treemap");
   const toolbar = document.querySelector("#panel-treemap .toolbar");
+  const legend = document.querySelector("#panel-treemap .legend");
   const cs = getComputedStyle(main);
   const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
   const toolbarH = toolbar ? toolbar.offsetHeight : 0;
+  const legendH = legend ? legend.offsetHeight : 0;
   // Fit INSIDE the scroll container (main), not the raw viewport: toolbar + chart
-  // must equal main's content height. The legend is an overlay rail inside the
-  // chart, so it must not reduce the primary tile viewport.
-  const avail = main.clientHeight - pad - toolbarH - 12;
+  // and the dedicated legend rail must equal main's content height.
+  const avail = main.clientHeight - pad - toolbarH - legendH - 12;
   const h = Math.max(300, Math.floor(avail));
   el.style.height = h + "px";
   return h;
@@ -341,6 +342,7 @@ function renderTreemap() {
   const el = document.getElementById("treemap");
   if (!m || !m.tree) { el.innerHTML = '<div class="empty">No tree data for this mount.</div>'; return; }
   if (!treemapStack.length || treemapStack[0].mount !== m.path) treemapStack = [{ node: m.tree, name: m.path, mount: m.path }];
+  renderTreemapLegend();
   const H = sizeTreemap(), W = el.clientWidth;
   el.innerHTML = "";
   el._tmHiddenItems = { bytes: 0, count: 0 };
@@ -356,12 +358,11 @@ function renderTreemap() {
 
   const cur = treemapStack[treemapStack.length - 1].node;
   const crumbPath = treemapStack.map(s => s.name).join("/").replace(/\/+/g, "/");
-  if (!tmChildren(cur).length) { const d = document.createElement("div"); d.className = "tm-note"; d.textContent = "No sub-items above the size threshold here."; el.appendChild(d); renderTreemapLegend(); return; }
+  if (!tmChildren(cur).length) { const d = document.createElement("div"); d.className = "tm-note"; d.textContent = "No sub-items above the size threshold here."; el.appendChild(d); return; }
   const P = 10, TOP = 38;
   layoutTreemap(el, cur, P, TOP, Math.max(0, W - 2 * P), Math.max(0, H - TOP - P), 0, crumbPath);
   setTreemapModifierActive(treemapModifierActive);
   renderTreemapScaleNote(el);
-  renderTreemapLegend();
 }
 
 function renderTreemapLegend() {

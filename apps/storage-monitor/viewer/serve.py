@@ -42,6 +42,7 @@ def _configured_port(*, include_argv: bool = False) -> int:
 PORT = _configured_port()
 BIND = os.environ.get("STORAGE_VIZ_BIND", os.environ.get("BIND", "127.0.0.1"))
 TRUSTED_PROXY = os.environ.get("STORAGE_VIZ_TRUSTED_PROXY", "").lower() in {"1", "true", "yes", "on"}
+DIRECT_LOOPBACK_RESCAN = os.environ.get("STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN", "").lower() in {"1", "true", "yes", "on"}
 IDENTITY_HEADER = os.environ.get("STORAGE_VIZ_IDENTITY_HEADER", "X-Forwarded-User")
 ALLOWED_ORIGINS = frozenset(v.strip() for v in os.environ.get("STORAGE_VIZ_ALLOWED_ORIGINS", "").split(",") if v.strip())
 OPERATORS = frozenset(v.strip() for v in os.environ.get("STORAGE_VIZ_OPERATOR_ALLOWLIST", "").split(",") if v.strip())
@@ -58,12 +59,45 @@ def _is_loopback(bind: str) -> bool:
     return bind in {"127.0.0.1", "::1", "localhost"}
 
 
+def _is_loopback_origin(origin: str) -> bool:
+    try:
+        parsed = urlsplit(origin)
+        parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.netloc.endswith(":")
+        and parsed.path == ""
+        and parsed.query == ""
+        and parsed.fragment == ""
+    )
+
+
 if TRUSTED_PROXY and not _is_loopback(BIND):
     raise SystemExit("trusted-proxy mode requires a loopback bind")
 if TRUSTED_PROXY and DEV_SAMPLE_DIR:
     raise SystemExit("dev sample mode is rejected in trusted-proxy production mode")
 if TRUSTED_PROXY and OPERATORS and not ALLOWED_ORIGINS:
     raise SystemExit("trusted-proxy operator mode requires at least one exact allowed origin")
+if DIRECT_LOOPBACK_RESCAN:
+    if TRUSTED_PROXY:
+        raise SystemExit("direct loopback rescan mode cannot be combined with trusted-proxy mode")
+    if not _is_loopback(BIND):
+        raise SystemExit("direct loopback rescan mode requires a loopback bind")
+    if DEV_SAMPLE_DIR:
+        raise SystemExit("direct loopback rescan mode is rejected in dev sample mode")
+    if not INVENTORY_PATH:
+        raise SystemExit("direct loopback rescan mode requires production inventory")
+    if "direct-viewer" not in OPERATORS:
+        raise SystemExit("direct loopback rescan mode requires direct-viewer in operator allowlist")
+    if not ALLOWED_ORIGINS:
+        raise SystemExit("direct loopback rescan mode requires at least one exact allowed origin")
+    if not all(_is_loopback_origin(origin) for origin in ALLOWED_ORIGINS):
+        raise SystemExit("direct loopback rescan mode accepts loopback HTTP origins only")
 
 
 class _DevSampleService:
@@ -184,7 +218,7 @@ elif INVENTORY_PATH:
     service = PollService(list(inventory.servers), CentralStore(STATE_DIR), OpenSshTransport())
     service.data_mode = "inventory"
     jobs = RescanJobManager(service, cooldown_seconds=COOLDOWN_SECONDS, max_concurrent=MAX_CONCURRENT_RESCANS)
-    RESCAN_API_ENABLED = TRUSTED_PROXY and bool(OPERATORS)
+    RESCAN_API_ENABLED = (TRUSTED_PROXY or DIRECT_LOOPBACK_RESCAN) and bool(OPERATORS)
 else:
     service = None
 
@@ -335,6 +369,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return None
         return raw
 
+    def _direct_loopback_origin(self) -> str | None:
+        if not DIRECT_LOOPBACK_RESCAN:
+            return None
+        host = self.headers.get("Host", "").strip()
+        if not host or any(c in host for c in "\r\n/\\"):
+            return None
+        origin = "http://" + host
+        if origin not in ALLOWED_ORIGINS or not _is_loopback_origin(origin):
+            return None
+        return origin
+
     def _session(self) -> tuple[int, dict[str, Any], str | None]:
         actor = self._actor()
         if actor is None:
@@ -347,7 +392,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             cookie_value = _make_session_cookie(actor)
             attrs = "Path=/; SameSite=Strict; HttpOnly; Secure" if TRUSTED_PROXY else "Path=/; SameSite=Lax; HttpOnly"
             new_cookie = f"storage_viz_session={cookie_value}; {attrs}"
-        can_rescan = RESCAN_API_ENABLED and actor in OPERATORS and bool(ALLOWED_ORIGINS)
+        direct_origin = self._direct_loopback_origin()
+        can_rescan = RESCAN_API_ENABLED and actor in OPERATORS and bool(ALLOWED_ORIGINS) and (TRUSTED_PROXY or direct_origin is not None)
         token = _csrf_token(cookie_value)
         return 200, {"authenticated": TRUSTED_PROXY, "actor": actor, "can_rescan": can_rescan, "csrf_token": token}, new_cookie
 
@@ -367,6 +413,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return 403, {"error": "FORBIDDEN"}, None
         origin = self.headers.get("Origin", "")
         if not origin or origin not in ALLOWED_ORIGINS:
+            return 403, {"error": "BAD_ORIGIN"}, None
+        if DIRECT_LOOPBACK_RESCAN and origin != self._direct_loopback_origin():
             return 403, {"error": "BAD_ORIGIN"}, None
         cookies = _parse_cookies(self.headers.get("Cookie", ""))
         cookie_value = cookies.get("storage_viz_session", "")
