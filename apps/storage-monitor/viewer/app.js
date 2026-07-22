@@ -247,12 +247,23 @@ function clearDetailError() {
 function showDetailLoading(summary) {
   const loading = document.getElementById("detailLoading");
   const panels = document.getElementById("detailPanels");
+  const caps = document.getElementById("caps");
+  const warning = document.getElementById("warnBanner");
   const displayName = summary && summary.display_name ? summary.display_name : "Server";
   if (loading) {
     loading.textContent = displayName + " 데이터를 불러오는 중…";
     loading.hidden = false;
   }
   if (panels) panels.hidden = true;
+  if (caps) {
+    caps.innerHTML = "";
+    caps.hidden = true;
+  }
+  if (warning) {
+    warning.innerHTML = "";
+    warning.classList.remove("show");
+    warning.hidden = true;
+  }
   const host = document.getElementById("h-host");
   const scan = document.getElementById("h-scan");
   const scanner = document.getElementById("h-scanner");
@@ -266,11 +277,17 @@ function showDetailLoading(summary) {
 function clearDetailLoading() {
   const loading = document.getElementById("detailLoading");
   const panels = document.getElementById("detailPanels");
+  const caps = document.getElementById("caps");
+  const warning = document.getElementById("warnBanner");
   if (loading) {
     loading.textContent = "";
     loading.hidden = true;
   }
   if (panels) panels.hidden = false;
+  if (currentServerId) {
+    if (caps) caps.hidden = false;
+    if (warning) warning.hidden = false;
+  }
 }
 
 function ensureEchartsLoaded() {
@@ -582,6 +599,7 @@ function applyRouteState(route, options) {
   if (typeof resetCleanupSelectionState === "function") resetCleanupSelectionState();
   clearDetailError();
   setShellMode(!!safeRoute.serverId);
+  syncRescanButton();
   if (!safeRoute.serverId) {
     clearDetailLoading();
     return safeRoute;

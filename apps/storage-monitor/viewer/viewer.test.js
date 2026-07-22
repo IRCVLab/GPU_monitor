@@ -875,22 +875,14 @@ function testCleanupCommandSafetyContracts() {
     scanRoot: "/data",
   }, "valid file/directory selections must stay opaque and stay anchored to the matched selected scan root");
 
-  const plan = buildCleanupCommandPlan(snapshot, candidate, { revealDestructive: false, freshness: "fresh" });
-  assert.deepStrictEqual(plan.inspectionCommands.map(entry => entry.command), [
-    "sudo du -shx -- '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s'",
-    "sudo find '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s' -xdev \\( -type f -o -type d \\) -printf '%s\\t%TY-%Tm-%Td %TH:%TM\\t%p\\n' | sort -nr | head -n 20",
-    "sudo stat -- '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s'",
-    "sudo find '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s' -xdev -printf '%TY-%Tm-%Td %TH:%TM\\t%s\\t%p\\n' | sort -r | head -n 20",
-  ], "inspection commands must remain first, fixed-template, and safely quoted");
-  assert.strictEqual(plan.destructiveVisible, false, "destructive output must stay hidden until an explicit reveal");
+  const plan = buildCleanupCommandPlan(snapshot, candidate, {});
+  assert.strictEqual(plan.inspectionCommands, undefined, "selection must produce removal output only");
+  assert.strictEqual(plan.destructiveVisible, undefined, "removal output must not depend on reveal state");
   assert.strictEqual(plan.destructiveCommand.command, "sudo rm -ri --one-file-system -- '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s'");
   assert.ok(!plan.destructiveCommand.command.includes(" -f"), "destructive commands must never use force");
-  assert.ok(plan.warnings.some(w => /may have changed/i.test(w)), "copy-only panel must warn that the live path may have changed since the snapshot");
 
-  const stalePlan = buildCleanupCommandPlan(snapshot, { path: "/data/old.bin", kind: "file", source: "stale" }, { revealDestructive: true, freshness: "stale" });
-  assert.strictEqual(stalePlan.destructiveVisible, true, "destructive output may appear only after a separate explicit reveal");
+  const stalePlan = buildCleanupCommandPlan(snapshot, { path: "/data/old.bin", kind: "file", source: "stale" }, {});
   assert.strictEqual(stalePlan.destructiveCommand.command, "sudo rm -i -- '/data/old.bin'");
-  assert.ok(stalePlan.warnings.some(w => /stale/i.test(w)), "retained stale snapshot state must be explicit in the warning text");
 
   const rejectedCases = [
     [{ path: "/data/link", kind: "symlink" }, "unsupported_kind"],

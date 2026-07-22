@@ -7,7 +7,6 @@
 var cleanupSelectionState = (typeof globalThis !== "undefined" && globalThis.cleanupSelectionState) || {
   serverId: null,
   items: [],
-  revealDestructive: false,
 };
 if (!Array.isArray(cleanupSelectionState.items)) {
   cleanupSelectionState.items = cleanupSelectionState.item ? [cleanupSelectionState.item] : [];
@@ -32,10 +31,6 @@ function cleanupBytesLabel(bytes) {
 
 function cleanupBoundedReason(code, message) {
   return { code, message: String(message || "Selection is not eligible for cleanup commands.") };
-}
-
-function cleanupWarning(message) {
-  return String(message || "").slice(0, 240);
 }
 
 function hasControlCharacters(value) {
@@ -102,19 +97,9 @@ function cleanupLongestMatchingRoot(roots, path) {
   return match;
 }
 
-function cleanupSnapshotFreshness(options) {
-  return String((options && options.freshness) || (options && options.summary && options.summary.freshness) || "unknown");
-}
-
 function currentCleanupServerId() {
   if (typeof currentServerId !== "undefined" && currentServerId) return currentServerId;
   if (typeof globalThis !== "undefined" && globalThis.currentServerId) return globalThis.currentServerId;
-  return null;
-}
-
-function currentCleanupSummary() {
-  if (typeof currentServerSummary !== "undefined" && currentServerSummary) return currentServerSummary;
-  if (typeof globalThis !== "undefined" && globalThis.currentServerSummary) return globalThis.currentServerSummary;
   return null;
 }
 
@@ -128,7 +113,6 @@ function currentCleanupContext() {
   return {
     serverId: currentCleanupServerId(),
     snapshot: currentCleanupSnapshot(),
-    summary: currentCleanupSummary(),
   };
 }
 
@@ -201,20 +185,7 @@ function validateCleanupSelection(snapshot, candidate) {
   };
 }
 
-function cleanupRetainedSnapshotWarning(options) {
-  const freshness = cleanupSnapshotFreshness(options);
-  const summary = options && options.summary;
-  if (freshness === "stale") return "Snapshot may be stale or retained from an earlier scan. Confirm the live path before removing anything.";
-  if (summary && summary.latest_pull_status && summary.latest_pull_status !== "succeeded") {
-    return "This server may be showing retained snapshot data after a pull problem. Confirm the live path before removing anything.";
-  }
-  if (summary && summary.latest_scan_result && summary.latest_scan_result !== "complete" && summary.latest_scan_result !== "partial") {
-    return "This server may be showing retained snapshot data after a scan problem. Confirm the live path before removing anything.";
-  }
-  return "";
-}
-
-function buildCleanupCommandPlan(snapshot, candidate, options) {
+function buildCleanupCommandPlan(snapshot, candidate) {
   const validation = validateCleanupSelection(snapshot, candidate);
   if (!validation.accepted) {
     return {
@@ -222,37 +193,11 @@ function buildCleanupCommandPlan(snapshot, candidate, options) {
       path: validation.path || "",
       kind: validation.kind || "",
       reason: validation.reason,
-      warnings: [validation.reason.message],
-      inspectionCommands: [],
       destructiveCommand: null,
-      destructiveVisible: false,
     };
   }
 
   const quotedPath = shellQuote(validation.path);
-  const inspectionCommands = [
-    {
-      id: "du",
-      label: "Check total size",
-      command: "sudo du -shx -- " + quotedPath,
-    },
-    {
-      id: "largest",
-      label: "List largest descendants",
-      command: "sudo find " + quotedPath + " -xdev \\( -type f -o -type d \\) -printf '%s\\t%TY-%Tm-%Td %TH:%TM\\t%p\\n' | sort -nr | head -n 20",
-    },
-    {
-      id: "stat",
-      label: "Inspect metadata",
-      command: "sudo stat -- " + quotedPath,
-    },
-    {
-      id: "mtime",
-      label: "Review modification times",
-      command: "sudo find " + quotedPath + " -xdev -printf '%TY-%Tm-%Td %TH:%TM\\t%s\\t%p\\n' | sort -r | head -n 20",
-    },
-  ];
-
   const destructiveCommand = {
     id: validation.kind === "file" ? "rm-file" : "rm-directory",
     label: validation.kind === "file" ? "Remove file" : "Remove directory",
@@ -261,25 +206,13 @@ function buildCleanupCommandPlan(snapshot, candidate, options) {
       : "sudo rm -ri --one-file-system -- " + quotedPath,
   };
 
-  const warnings = [
-    cleanupWarning("Snapshot path may have changed on the live server since this scan. Review the copied command before running it."),
-  ];
-  if (validation.selectedRoot && validation.selectedRoot.status === "partial") {
-    warnings.push(cleanupWarning("This selection came from a partial scan root. Some descendants may have been unreadable during the snapshot."));
-  }
-  const retainedSnapshotWarning = cleanupRetainedSnapshotWarning(options);
-  if (retainedSnapshotWarning) warnings.push(cleanupWarning(retainedSnapshotWarning));
-
   return {
     accepted: true,
     path: validation.path,
     kind: validation.kind,
     scanRoot: validation.scanRoot,
     selectedRoot: validation.selectedRoot,
-    warnings,
-    inspectionCommands,
     destructiveCommand,
-    destructiveVisible: !!(options && options.revealDestructive),
   };
 }
 
@@ -298,7 +231,7 @@ function cleanupSelectionButtonHtml(file, source) {
   }
   const selected = isCleanupSelectedPath(validation.path) ? " is-selected" : "";
   const pressed = isCleanupSelectedPath(validation.path) ? "true" : "false";
-  const label = (validation.kind === "directory" ? "Inspect directory " : "Inspect file ") + validation.path;
+  const label = (validation.kind === "directory" ? "Select directory " : "Select file ") + validation.path;
   return '<button type="button" class="cleanup-select-btn' + selected + '"' +
     ' data-cleanup-path="' + htmlEscape(validation.path) + '"' +
     ' data-cleanup-kind="' + htmlEscape(validation.kind) + '"' +
@@ -306,7 +239,7 @@ function cleanupSelectionButtonHtml(file, source) {
     ' data-cleanup-owner="' + htmlEscape(item.owner) + '"' +
     ' data-cleanup-source="' + htmlEscape(item.source) + '"' +
     ' aria-pressed="' + pressed + '"' +
-    ' aria-label="' + htmlEscape(label) + '">Inspect</button>';
+    ' aria-label="' + htmlEscape(label) + '">Select</button>';
 }
 
 function cleanupCheckboxHtml(file, source) {
@@ -330,11 +263,7 @@ function currentCleanupPlans() {
   if (cleanupSelectionState.serverId && ctx.serverId && cleanupSelectionState.serverId !== ctx.serverId) return [];
   return cleanupItems().map(item => ({
     item,
-    plan: buildCleanupCommandPlan(ctx.snapshot, item, {
-      revealDestructive: cleanupSelectionState.revealDestructive,
-      freshness: cleanupSnapshotFreshness({ summary: ctx.summary }),
-      summary: ctx.summary,
-    }),
+    plan: buildCleanupCommandPlan(ctx.snapshot, item),
   })).filter(entry => entry.plan.accepted);
 }
 
@@ -375,7 +304,6 @@ function setCleanupSelectedItem(item, selected) {
       cleanupSelectionState.serverId = ctx.serverId;
       items.splice(existingIndex, 1);
       cleanupSelectionState.items = items;
-      cleanupSelectionState.revealDestructive = false;
       renderCleanupPanel();
     }
     return false;
@@ -385,7 +313,6 @@ function setCleanupSelectedItem(item, selected) {
   if (!same) {
     items.push(nextItem);
     cleanupSelectionState.items = items;
-    cleanupSelectionState.revealDestructive = false;
   }
   renderCleanupPanel();
   return true;
@@ -402,7 +329,6 @@ function toggleCleanupSelectedItem(item) {
 function resetCleanupSelectionState() {
   cleanupSelectionState.serverId = currentCleanupServerId();
   cleanupSelectionState.items = [];
-  cleanupSelectionState.revealDestructive = false;
   renderCleanupPanel();
 }
 
@@ -417,9 +343,12 @@ function commandCardHtml(entry, copyLabel) {
   '</li>';
 }
 
-function scrollCleanupPanelControlIntoView(target) {
-  if (!target || typeof target.scrollIntoView !== "function") return;
-  target.scrollIntoView({ block: "nearest", inline: "nearest" });
+function cleanupRemovalScript(entries) {
+  return (entries || [])
+    .map(entry => entry && entry.plan ? entry.plan.destructiveCommand : entry && entry.destructiveCommand)
+    .filter(Boolean)
+    .map(command => command.command)
+    .join("\n");
 }
 
 function renderCleanupPanel() {
@@ -430,15 +359,10 @@ function renderCleanupPanel() {
     accepted: true,
     items: entries.map(entry => entry.item),
     plans: entries.map(entry => entry.plan),
-    destructiveVisible: !!cleanupSelectionState.revealDestructive,
   } : null);
   if (!panel) return result;
 
   const title = document.getElementById("cleanupSummary");
-  const warnings = document.getElementById("cleanupWarnings");
-  const inspectList = document.getElementById("cleanupInspectList");
-  const reveal = document.getElementById("cleanupReveal");
-  const dangerWarning = document.getElementById("cleanupDangerWarning");
   const dangerCommand = document.getElementById("cleanupDangerCommand");
   const clear = document.getElementById("cleanupClear");
 
@@ -448,14 +372,7 @@ function renderCleanupPanel() {
 
   if (!hasSelection) {
     if (title) title.textContent = "No path selected";
-    if (warnings) warnings.innerHTML = "";
-    if (inspectList) inspectList.innerHTML = "";
-    if (dangerWarning) {
-      dangerWarning.hidden = true;
-      dangerWarning.textContent = "";
-    }
     if (dangerCommand) dangerCommand.innerHTML = "";
-    if (reveal) reveal.hidden = true;
     if (clear) clear.disabled = true;
     return result;
   }
@@ -467,45 +384,12 @@ function renderCleanupPanel() {
       title.textContent = entries.length + " paths selected · " + cleanupBytesLabel(totalBytes);
     }
   }
-  if (warnings) {
-    const uniqueWarnings = [...new Set(entries.flatMap(entry => entry.plan.warnings))];
-    warnings.innerHTML = uniqueWarnings.map(text => '<p class="cleanup-note">⚠ ' + htmlEscape(text) + "</p>").join("");
-  }
-  if (inspectList) {
-    inspectList.innerHTML = entries.flatMap(({ item, plan }) => plan.inspectionCommands.map(command => commandCardHtml({
-      label: item.path + " · " + command.label,
-      command: command.command,
-    }, "Copy inspection command:"))).join("");
-  }
   if (clear) clear.disabled = false;
-
-  if (reveal) {
-    reveal.hidden = false;
-    reveal.disabled = !!cleanupSelectionState.revealDestructive;
-    reveal.textContent = cleanupSelectionState.revealDestructive
-      ? (entries.length === 1 ? "Removal command revealed" : "Removal commands revealed")
-      : (entries.length === 1 ? "Reveal removal command" : "Reveal removal commands");
-  }
-
-  if (dangerWarning) {
-    dangerWarning.hidden = !cleanupSelectionState.revealDestructive;
-    dangerWarning.textContent = cleanupSelectionState.revealDestructive
-      ? "Danger: review the live path carefully. The browser only copies this command; it never runs it."
-      : "";
-  }
-
   if (dangerCommand) {
-    dangerCommand.innerHTML = cleanupSelectionState.revealDestructive
-      ? entries.map(({ item, plan }) => commandCardHtml({
-          label: item.path + " · " + plan.destructiveCommand.label,
-          command: plan.destructiveCommand.command,
-        }, "Copy removal command:")).join("")
-      : "";
-  }
-  if (cleanupSelectionState.revealDestructive) {
-    scrollCleanupPanelControlIntoView(dangerCommand || dangerWarning || reveal);
-  } else {
-    scrollCleanupPanelControlIntoView(reveal);
+    dangerCommand.innerHTML = commandCardHtml({
+      label: entries.length === 1 ? entries[0].plan.destructiveCommand.label : "Remove selected paths",
+      command: cleanupRemovalScript(entries),
+    }, "Copy removal command:");
   }
 
   if (typeof document !== "undefined" && document.dispatchEvent && typeof CustomEvent !== "undefined") {
@@ -560,14 +444,6 @@ function bindCleanupSelection() {
         return;
       }
 
-      const reveal = e.target && e.target.closest ? e.target.closest("#cleanupReveal") : null;
-      if (reveal) {
-        e.preventDefault();
-        cleanupSelectionState.revealDestructive = true;
-        renderCleanupPanel();
-        return;
-      }
-
       const clear = e.target && e.target.closest ? e.target.closest("#cleanupClear") : null;
       if (clear) {
         e.preventDefault();
@@ -599,6 +475,7 @@ if (typeof globalThis !== "undefined") {
   globalThis.cleanupItems = cleanupItems;
   globalThis.validateCleanupSelection = validateCleanupSelection;
   globalThis.buildCleanupCommandPlan = buildCleanupCommandPlan;
+  globalThis.cleanupRemovalScript = cleanupRemovalScript;
   globalThis.renderCleanupPanel = renderCleanupPanel;
   globalThis.bindCleanupSelection = bindCleanupSelection;
   globalThis.isCleanupSelectedPath = isCleanupSelectedPath;
@@ -617,6 +494,7 @@ if (typeof module !== "undefined" && module.exports) {
     cleanupItems,
     validateCleanupSelection,
     buildCleanupCommandPlan,
+    cleanupRemovalScript,
     renderCleanupPanel,
     bindCleanupSelection,
     isCleanupSelectedPath,

@@ -89,8 +89,8 @@
         <section class="panel active" id="panel-treemap">
           <div class="toolbar">
             <div class="grp"><label>Mount</label><div class="seg" id="mountSeg"></div></div>
-            <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: inspect path · 클릭: 열기 · Ctrl/⌘ 클릭: 경로 점검">Ctrl/⌘ click: inspect</button>
-            <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: inspect path · 클릭: 열기 · Ctrl/⌘ 클릭: 경로 점검</span>
+            <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: select for removal · 클릭: 열기 · Ctrl/⌘ 클릭: 삭제 선택">Ctrl/⌘ click: select for removal</button>
+            <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: select for removal · 클릭: 열기 · Ctrl/⌘ 클릭: 삭제 선택</span>
           </div>
           <div id="treemap"></div>
           <div class="legend" id="treemapLegend"></div>
@@ -170,24 +170,15 @@
 <div id="cleanupPanel" class="cleanup-panel" aria-hidden="true" aria-live="polite">
   <div class="cleanup-head">
     <div>
-      <div class="cleanup-title">Storage cleanup workflow</div>
+      <div class="cleanup-title">Removal commands</div>
       <div class="cleanup-summary" id="cleanupSummary">No path selected</div>
     </div>
     <button type="button" id="cleanupClear">Clear</button>
   </div>
-  <div id="cleanupWarnings" class="cleanup-warnings" aria-live="polite"></div>
-  <section class="cleanup-section" aria-labelledby="cleanupInspectHeading">
-    <div class="cleanup-section-head">
-      <h2 class="cleanup-section-title" id="cleanupInspectHeading">Inspect first</h2>
-    </div>
-    <ol id="cleanupInspectList" class="cleanup-command-list"></ol>
-  </section>
   <section class="cleanup-section cleanup-danger" aria-labelledby="cleanupDangerHeading">
     <div class="cleanup-section-head">
       <h2 class="cleanup-section-title" id="cleanupDangerHeading">Removal command</h2>
-      <button type="button" class="danger" id="cleanupReveal">Reveal removal command</button>
     </div>
-    <p id="cleanupDangerWarning" class="cleanup-safe" hidden></p>
     <ol id="cleanupDangerCommand" class="cleanup-command-list"></ol>
   </section>
   <div class="cleanup-safe">Copy-only safety rail: storage-viz never runs these commands. Review ownership and paths before pasting into a shell.</div>
