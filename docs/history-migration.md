@@ -126,7 +126,7 @@ Executed in the ignored disposable `import/gpu-current` worktree:
 
 ## Task 9 foundation verification (redacted)
 
-Task 9 created the root development and architecture documentation and rechecked the monorepo foundation without publishing or deploying.
+Task 9 created the root development and architecture documentation and rechecked the monorepo foundation without publishing or deploying. This section records the final executable foundation evidence at HEAD `a45cb90` (`Prevent root verification bytecode caches`) plus the remaining Kimi advisory-gate state. Later docs-only commits do not change the executable verification target.
 
 ### Executable verification
 
@@ -134,18 +134,19 @@ Fresh verification artifacts are stored outside Git under the planning worktree 
 
 | Check | Evidence artifact | Result |
 | --- | --- | --- |
-| Full root verification | `make-verify-venv.exit`, `make-verify-venv.stdout`, `make-verify-venv.stderr` | exit 0 |
-| Repository object integrity | `git-fsck-final.*` | exit 0 |
-| Worktree status before final report | `git-status-final.*` | clean after docs commit |
-| Source/import history comparison | `foundation-history-verification.json` | 88 checks, 0 failures |
+| Full final root verification at `a45cb90` | `make-verify-a45cb90.*` | exit 0 |
+| Strict/full repository object integrity | `git-fsck-strict-full-a45cb90.*` | exit 0, stdout/stderr empty |
+| Worktree status at `a45cb90` | `git-status-a45cb90.*` | exit 0, clean |
+| Source/import history comparison | `foundation-history-verification-final.json` | 88 checks, 0 failures |
 | Source refs | `source-ref-status-clean.stdout` | planning, Storage, and local mirror refs recorded |
 | Live isolation snapshots | `live-readonly-snapshot.stdout`, `live-readonly-snapshot-final.stdout`, `live-readonly-diff.*` | no Task 9 live mutation detected |
-| Kimi K3 review attempt | `kimi-review.*` | attempted once; terminated after bounded wait with exit 130 and no verdict |
+| Kimi K3 final review attempts | `kimi-review.*`; later direct retry reported by operator | no final approval: hung attempt exit 130, later quota HTTP 403 |
 
-`make verify` result details:
+`PATH="$PWD/apps/gpu-monitor/.venv/bin:$PATH" make verify` at final executable HEAD `a45cb90` exited 0 with this evidence:
 
-- repository layout tests: 6 tests passed;
+- repository layout tests: 7 tests passed, including `test_root_python_verification_recipes_suppress_bytecode_writes`;
 - history inventory tests: 8 tests passed;
+- root Python verification recipes use `PYTHONDONTWRITEBYTECODE=1`, hardening root verification against `tests/__pycache__` bytecode caches;
 - GPU frontend check: `svelte-check found 0 errors and 0 warnings`;
 - GPU backend tests: 63 tests passed;
 - GPU frontend build: Vite/SvelteKit build succeeded;
@@ -154,7 +155,7 @@ Fresh verification artifacts are stored outside Git under the planning worktree 
 - non-Linux scanner branch: explicit skip, covered by prior Linux verification;
 - whitespace check: `git diff --check` passed.
 
-The first direct `make verify` attempt failed because the current Python interpreter did not have the declared GPU backend dependencies installed. The accepted verification run used an ignored app-local virtual environment at `apps/gpu-monitor/.venv` with packages installed from `apps/gpu-monitor/backend/requirements.txt` plus `pytest`, then executed `PATH="$PWD/apps/gpu-monitor/.venv/bin:$PATH" make verify`.
+The first direct `make verify` attempt failed because the current Python interpreter did not have the declared GPU backend dependencies installed. The accepted verification runs used an ignored app-local virtual environment at `apps/gpu-monitor/.venv` with packages installed from `apps/gpu-monitor/backend/requirements.txt` plus `pytest`.
 
 ### History/ref comparison
 
@@ -185,6 +186,13 @@ Read-only runtime snapshot showed the existing tmux session names and listening 
 
 Storage service read-only state showed `storage-viz-dashboard.service` loaded, active, running, `NRestarts=0`, with start timestamp `Wed 2026-07-22 13:15:00 KST`; checked alternate Storage service names were not found/inactive. A second Task 9 live snapshot was diffed against the first to verify the local documentation work did not change live refs, tmux names, filtered ports, health responses, monorepo process scan, or Storage restart counters.
 
-### Foundation gate concern
+### Kimi state
 
-Kimi K3 did not return `APPROVED`. The required Kimi attempt was started with model `kimi-code/k3` in read-only prompt mode and was terminated after a bounded wait per operator instruction. The artifact records exit 130 and partial progress text, but no final verdict. This is an explicit remaining foundation-gate concern, not an approval.
+Kimi history is recorded without converting earlier advisory approvals into final Task 9 approval:
+
+- earlier Kimi plan validations returned `APPROVED` twice;
+- the final required Task 9 Kimi K3 read-only review attempt hung, was terminated after a bounded wait, and `kimi-review.exit` records `exit=130` with partial progress text but no verdict;
+- a later direct retry was rejected by the provider with quota HTTP 403;
+- therefore there is no final Kimi `APPROVED` verdict for Task 9.
+
+All executable checks passed at final executable HEAD `a45cb90`; the only remaining advisory/foundation-gate gap is final Kimi approval.
