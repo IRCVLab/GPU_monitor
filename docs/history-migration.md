@@ -123,3 +123,68 @@ Executed in the ignored disposable `import/gpu-current` worktree:
 - `npm run check --prefix frontend`: pass, `svelte-check found 0 errors and 0 warnings`.
 - `npm run build --prefix frontend`: pass.
 - `SECRET_KEY=<dummy> ADMIN_PASSWORD=<dummy> python -m pytest backend/tests`: pass, 63 tests passed with 3 warnings.
+
+## Task 9 foundation verification (redacted)
+
+Task 9 created the root development and architecture documentation and rechecked the monorepo foundation without publishing or deploying.
+
+### Executable verification
+
+Fresh verification artifacts are stored outside Git under the planning worktree at `.superpowers/sdd/task-9-evidence/`.
+
+| Check | Evidence artifact | Result |
+| --- | --- | --- |
+| Full root verification | `make-verify-venv.exit`, `make-verify-venv.stdout`, `make-verify-venv.stderr` | exit 0 |
+| Repository object integrity | `git-fsck-final.*` | exit 0 |
+| Worktree status before final report | `git-status-final.*` | clean after docs commit |
+| Source/import history comparison | `foundation-history-verification.json` | 88 checks, 0 failures |
+| Source refs | `source-ref-status-clean.stdout` | planning, Storage, and local mirror refs recorded |
+| Live isolation snapshots | `live-readonly-snapshot.stdout`, `live-readonly-snapshot-final.stdout`, `live-readonly-diff.*` | no Task 9 live mutation detected |
+| Kimi K3 review attempt | `kimi-review.*` | attempted once; terminated after bounded wait with exit 130 and no verdict |
+
+`make verify` result details:
+
+- repository layout tests: 6 tests passed;
+- history inventory tests: 8 tests passed;
+- GPU frontend check: `svelte-check found 0 errors and 0 warnings`;
+- GPU backend tests: 63 tests passed;
+- GPU frontend build: Vite/SvelteKit build succeeded;
+- Storage disposable-clone checks: 224 tests and 513 subtests passed;
+- Storage deploy contract checks: all PASS;
+- non-Linux scanner branch: explicit skip, covered by prior Linux verification;
+- whitespace check: `git diff --check` passed.
+
+The first direct `make verify` attempt failed because the current Python interpreter did not have the declared GPU backend dependencies installed. The accepted verification run used an ignored app-local virtual environment at `apps/gpu-monitor/.venv` with packages installed from `apps/gpu-monitor/backend/requirements.txt` plus `pytest`, then executed `PATH="$PWD/apps/gpu-monitor/.venv/bin:$PATH" make verify`.
+
+### History/ref comparison
+
+The Task 9 verifier compared current refs against the existing ignored inventories and commit-map artifacts:
+
+- GPU imported history: 219 original commits, 219 rewritten commits, mapping length 219;
+- Storage imported history: 195 original commits, 195 rewritten commits, mapping length 195;
+- source and imported author sets matched for mapped histories;
+- checkpoint content match flags remained true;
+- active rewritten heads remained reachable from integration refs;
+- all archive refs and checkpoint tags resolved;
+- Task 5 ref-verification artifact still had zero failures;
+- one GPU live-only commit remained reachable from `refs/heads/archive/gpu-live/main`;
+- Storage checkpoint ref `0685b5f2161041ccce7025a8e5d2b4dd140d6590` remained reachable as an archive ref;
+- representative `git log --follow` histories for GPU `backend/main.py` and Storage `viewer/serve.py` followed through their prefixes;
+- tracked generated/runtime exclusions had zero violations.
+
+### Live isolation
+
+Remote read-only SSH checks used `BatchMode=yes` and `IdentitiesOnly=yes`. No restart, deploy, push, tmux mutation, port mutation, or remote add command was run.
+
+Live GPU source state at the snapshot:
+
+- `/home/ircv/workspace/monitoring_v2`: branch `main`, HEAD `f2ea62f5ba4dc6a791bf0faf3fee4153e83462ce`, status `## main...origin/main [ahead 2]`;
+- `/home/ircv/workspace/monitoring_v2_dev`: branch `feature/compact-gpu-dashboard`, HEAD `64c4b838d6e1293daf52ab0039084a2b9f84bc59`, clean short status.
+
+Read-only runtime snapshot showed the existing tmux session names and listening GPU ports, including `monitoring_v2_backend`, `monitoring_v2_frontend`, `monitoring_v2_slack_bridge`, development sessions, `storage-viz-direct`, and ports `8000`, `8001`, `5173`, and `5174`. GPU health endpoints on `127.0.0.1:8001/health` and `127.0.0.1:8000/health` returned `{"status":"ok"}`. Port `8011` was not listening and returned connection refused. No process containing `assembled-monorepo`, `monitoring-platform`, `apps/gpu-monitor`, or `apps/storage-monitor` was found on the server.
+
+Storage service read-only state showed `storage-viz-dashboard.service` loaded, active, running, `NRestarts=0`, with start timestamp `Wed 2026-07-22 13:15:00 KST`; checked alternate Storage service names were not found/inactive. A second Task 9 live snapshot was diffed against the first to verify the local documentation work did not change live refs, tmux names, filtered ports, health responses, monorepo process scan, or Storage restart counters.
+
+### Foundation gate concern
+
+Kimi K3 did not return `APPROVED`. The required Kimi attempt was started with model `kimi-code/k3` in read-only prompt mode and was terminated after a bounded wait per operator instruction. The artifact records exit 130 and partial progress text, but no final verdict. This is an explicit remaining foundation-gate concern, not an approval.
