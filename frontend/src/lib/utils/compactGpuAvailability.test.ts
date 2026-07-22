@@ -2,7 +2,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getCompactGpuState } from "./compactGpuAvailability.ts";
+import * as compactAvailability from "./compactGpuAvailability.ts";
+
+const { getCompactGpuState } = compactAvailability;
 
 const baseGpu = {
 	index: 0,
@@ -86,5 +88,27 @@ test("prefers occupied when usernames are present", () => {
 			{ nowMs: freshNowMs }
 		),
 		"occupied"
+	);
+});
+
+test("counts available GPUs across every compact bank", () => {
+	assert.equal(
+		typeof compactAvailability.countCompactAvailableGpus,
+		"function",
+		"compact availability must expose an all-bank counter"
+	);
+
+	const gpus = Array.from({ length: 9 }, (_, index) => ({
+		...baseGpu,
+		index,
+		users: index < 8 ? [`user-${index}`] : [],
+		utilization: index < 8 ? 80 : 0,
+		memory_used: index < 8 ? 32_000 : 0
+	}));
+
+	assert.equal(
+		compactAvailability.countCompactAvailableGpus("online", lastSeen, gpus, { nowMs: freshNowMs }),
+		1,
+		"a free GPU in bank 2 must keep the server availability cue active while bank 1 is visible"
 	);
 });
