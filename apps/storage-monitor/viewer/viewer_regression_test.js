@@ -1377,6 +1377,29 @@ async function testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders() {
   assert.strictEqual(viewer.document.getElementById('detailPanels').hidden, false, 'next server panels must become visible after rendering');
 }
 
+function testRescanButtonExposesPersistentActivityCue() {
+  const viewer = loadViewer();
+  assert.strictEqual(typeof viewer.setRescanActivityState, 'function', 'rescan activity state helper must be exposed');
+  const button = viewer.document.getElementById('rescanBtn');
+
+  viewer.setRescanActivityState(button, 'starting');
+  assert.strictEqual(button.dataset.rescanState, 'starting');
+  assert.strictEqual(button.getAttribute('aria-busy'), 'true');
+
+  viewer.setRescanActivityState(button, 'running');
+  assert.strictEqual(button.dataset.rescanState, 'running');
+  assert.strictEqual(button.getAttribute('aria-busy'), 'true');
+
+  viewer.setRescanActivityState(button, 'idle');
+  assert.strictEqual(button.dataset.rescanState, undefined, 'idle state must remove the animated activity selector');
+  assert.strictEqual(button.getAttribute('aria-busy'), 'false');
+
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  assert.match(css, /\.rescan-btn\[data-rescan-state\]\s*::after\s*\{[^}]*conic-gradient[^}]*animation:\s*rescan-orbit/i, 'active rescan button must draw an orbiting border without changing layout');
+  assert.match(css, /@keyframes\s+rescan-orbit\s*\{[\s\S]*transform:\s*rotate\(1turn\)/, 'rescan border cue must rotate continuously');
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.rescan-btn\[data-rescan-state\]\s*::after\s*\{[^}]*animation:\s*none/i, 'reduced-motion users must keep a static activity ring');
+}
+
 
 function overviewRowText(viewer, serverId) {
   const list = viewer.document.getElementById('overviewList');
@@ -2072,6 +2095,7 @@ async function main() {
   testSuccessfulOverviewSuppressesServerCountLiveLead();
   testMountCentricResponsiveCssContract();
   await testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders();
+  testRescanButtonExposesPersistentActivityCue();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();

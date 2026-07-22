@@ -650,9 +650,18 @@ function updateLastUpdated() {
 
 function setRescanUnsupported(btn, message) {
   if (!btn) return;
+  setRescanActivityState(btn, "idle");
   btn.disabled = true;
   btn.textContent = "Manual rescan";
   btn.title = message || "Manual rescan only: run scanner separately and refresh.";
+}
+
+function setRescanActivityState(btn, state) {
+  if (!btn) return;
+  const active = state === "starting" || state === "requested" || state === "running";
+  if (active) btn.dataset.rescanState = state;
+  else delete btn.dataset.rescanState;
+  btn.setAttribute("aria-busy", active ? "true" : "false");
 }
 
 function syncRescanButton() {
@@ -660,6 +669,7 @@ function syncRescanButton() {
   if (!btn) return;
   if (!currentServerId || currentDataSource !== "api") return setRescanUnsupported(btn, "Manual rescan only in API-backed mode.");
   if (!currentSession.can_rescan) return setRescanUnsupported(btn, "Read-only session: manual rescan is disabled.");
+  setRescanActivityState(btn, "idle");
   btn.disabled = false;
   btn.textContent = "↻ Rescan";
   btn.title = "Run a fresh scan now";
@@ -701,6 +711,7 @@ async function pollRescanJob() {
     const job = body && body.job;
     if (job && (job.state === "requested" || job.state === "running")) {
       rescanSawActive = true;
+      setRescanActivityState(btn, job.state);
       btn.disabled = true;
       btn.textContent = job.state === "requested" ? "⟳ Queued…" : "⟳ Scanning…";
       if (!rescanTimer) rescanTimer = setInterval(() => { void pollRescanJob(); }, 2000);
@@ -721,6 +732,7 @@ async function pollRescanJob() {
 async function triggerRescan() {
   const btn = document.getElementById("rescanBtn");
   if (!btn || !currentServerId || currentDataSource !== "api" || !currentSession.can_rescan) return;
+  setRescanActivityState(btn, "starting");
   btn.disabled = true;
   btn.textContent = "⟳ Starting…";
   try {
@@ -865,6 +877,7 @@ if (typeof globalThis !== "undefined") Object.assign(globalThis, {
   loadSnapshotForCurrentSource,
   getCurrentDetailDebugState,
   getOverviewModeDebugState,
+  setRescanActivityState,
   applyStoredThemeMode,
   toggleThemeMode,
 });

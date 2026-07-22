@@ -338,11 +338,23 @@
   html.dark .theme-mode-button .theme-icon-sun, html.light .theme-mode-button .theme-icon-moon { opacity: 1; transform: translate(-50%, -50%) rotate(0deg) scale(1); }
   .host-pick { display: flex; align-items: center; gap: 9px; }
   .host-pick label { color: var(--text2); font-size: 13px; }
-  .rescan-btn { appearance: none; -webkit-appearance: none; border: 1px solid var(--separator); background: var(--surface);
+  .rescan-btn { position: relative; isolation: isolate; appearance: none; -webkit-appearance: none; border: 1px solid var(--separator); background: var(--surface);
     color: var(--accent); border-radius: 9px; padding: 7px 13px; font-size: 13px; font-weight: 600; font-family: var(--font);
     cursor: pointer; transition: border-color .18s var(--ease), box-shadow .18s var(--ease), color .18s var(--ease); }
   .rescan-btn:hover:not(:disabled) { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .rescan-btn:disabled { color: var(--text2); cursor: default; }
+  .rescan-btn[data-rescan-state] { border-color: color-mix(in srgb, var(--accent) 45%, var(--separator)); }
+  .rescan-btn[data-rescan-state]::after {
+    content: ""; position: absolute; inset: -3px; border-radius: inherit; padding: 2px; pointer-events: none;
+    background: conic-gradient(from 0deg, transparent 0 58%, color-mix(in srgb, var(--accent) 35%, transparent) 72%, var(--accent) 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    animation: rescan-orbit 1.15s linear infinite;
+  }
+  @keyframes rescan-orbit { to { transform: rotate(1turn); } }
+  @media (prefers-reduced-motion: reduce) {
+    .rescan-btn[data-rescan-state]::after { animation: none; background: var(--accent); }
+  }
   #lastUpd { white-space: nowrap; }
 
   select {
