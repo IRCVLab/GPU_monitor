@@ -1,0 +1,11 @@
+{
+  "server_id": "hinton",
+  "scanner_path": "/opt/storage-viz/scanner/hstscan",
+  "data_dir": "/var/lib/storage-viz",
+  "run_dir": "/run/storage-viz",
+  "threads": 4,
+  "prune_home_mb": 50,
+  "prune_data_mb": 100,
+  "top": 200,
+  "stale_days": 180
+}

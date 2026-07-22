@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en" class="dark" data-material="liquid">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>storage-viz</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3.5' fill='%230071e3'/><rect x='2.5' y='2.5' width='6' height='6' rx='1' fill='%23fff'/><rect x='9.5' y='2.5' width='4' height='4' rx='1' fill='%23fff' opacity='.7'/><rect x='9.5' y='9.5' width='4' height='4' rx='1' fill='%23fff' opacity='.5'/><rect x='2.5' y='9.5' width='6' height='4' rx='1' fill='%23fff' opacity='.85'/></svg>">
+<script>
+(() => {
+  const saved = document.cookie.split('; ').find((part) => part.startsWith('themeMode='))?.split('=')[1];
+  const prefersDark = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const mode = saved === 'light' || saved === 'dark'
+    ? saved
+    : (prefersDark ? 'dark' : 'light');
+  document.documentElement.classList.remove('light', 'dark');
+  document.documentElement.classList.add(mode);
+  document.documentElement.dataset.material = 'liquid';
+})();
+</script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="head-row">
+      <div class="brand-wrap">
+        <button type="button" id="overviewBack" class="overview-back" hidden>← 서버 목록</button>
+        <div class="brand-shell">
+          <h1 class="brand-title">Storage Monitor</h1>
+          <span class="beta-badge" title="Beta 기능입니다. 버그가 있을 수 있습니다." aria-label="Beta 기능입니다. 버그가 있을 수 있습니다.">Beta</span>
+          <span class="suite-status-indicator" aria-label="Storage inventory available">
+            <svg class="suite-status-orbit" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+              <circle class="suite-status-track" cx="9" cy="9" r="7"></circle>
+              <circle class="suite-status-satellite" cx="9" cy="2" r="1.35"></circle>
+            </svg>
+            <span class="suite-status-dot" aria-hidden="true"></span>
+          </span>
+        </div>
+      </div>
+      <div class="head-spacer"></div>
+      <nav class="suite-nav" aria-label="Tool suite">
+        <a class="suite-nav-link" href="http://127.0.0.1:15173/" aria-label="GPU Monitor">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 11.5h10M4.5 4.5l2.2 3 2.1-2 2.7 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="2" width="12" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          <span class="suite-nav-label-full">GPU Monitor</span>
+          <span class="suite-nav-label-short" aria-hidden="true">GPU</span>
+        </a>
+        <button type="button" id="themeModeButton" class="theme-mode-button" aria-label="Toggle light and dark theme" aria-pressed="true">
+          <svg class="theme-icon theme-icon-sun" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          <svg class="theme-icon theme-icon-moon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M12.8 10.1A5.4 5.4 0 0 1 5.9 3.2a5.4 5.4 0 1 0 6.9 6.9Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        </button>
+      </nav>
+      <div class="head-actions detail-only" id="detailActions" hidden>
+        <span class="head-meta" id="lastUpd" title="last scan time"></span>
+        <button id="rescanBtn" class="rescan-btn" title="Run a fresh scan now" aria-busy="false">↻ Rescan</button>
+      </div>
+    </div>
+    <div class="detail-head detail-only" id="detailHead" hidden>
+      <div class="detail-title"><span class="detail-server" id="h-host">—</span></div>
+      <div class="detail-meta-wrap">
+        <div class="head-meta">Scanned <b id="h-scan">—</b></div>
+        <div class="head-meta" id="h-scanner">—</div>
+      </div>
+    </div>
+    <div class="warn-banner detail-only" id="warnBanner" hidden></div>
+    <div class="warn-banner detail-only" id="rescanNotice" role="status" aria-live="polite" hidden></div>
+    <div class="caps detail-only" id="caps" hidden></div>
+    <nav class="tabs detail-only" id="detailTabs" hidden>
+      <div class="seg-tabs" id="tabs" role="tablist">
+        <button class="tab active" data-tab="treemap" role="tab">Treemap</button>
+        <button class="tab" data-tab="users" role="tab">Users</button>
+        <button class="tab" data-tab="topfiles" role="tab">Top files</button>
+        <button class="tab" data-tab="stale" role="tab">Stale</button>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section id="overviewView" class="overview-view">
+      <p id="sampleDataMarker" class="sample-data-marker" hidden>샘플 데이터</p>
+      <div id="overviewError" class="err" hidden></div>
+      <p id="overviewStatus" class="overview-status" aria-live="polite"></p>
+      <ul id="overviewList" class="overview-list"></ul>
+    </section>
+
+    <section id="detailView" class="detail-view" hidden>
+      <div id="detailError" class="err" hidden></div>
+      <div id="detailLoading" class="detail-loading" role="status" aria-live="polite" hidden></div>
+      <div id="detailPanels">
+        <section class="panel active" id="panel-treemap">
+          <div class="toolbar">
+            <div class="grp"><label>Mount</label><div class="seg" id="mountSeg"></div></div>
+            <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: select for removal · 클릭: 열기 · Ctrl/⌘ 클릭: 삭제 선택">Ctrl/⌘ click: select for removal</button>
+            <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: select for removal · 클릭: 열기 · Ctrl/⌘ 클릭: 삭제 선택</span>
+          </div>
+          <div id="treemap"></div>
+          <div class="legend" id="treemapLegend"></div>
+        </section>
+
+        <section class="panel" id="panel-users">
+          <div class="toolbar">
+            <div class="grp"><label>Storage</label><div class="seg" id="userMountSeg"></div></div>
+            <span class="hint">Bars stacked by storage. Pick one to re-rank within it. Click a bar/row for the breakdown.</span>
+          </div>
+          <div class="mount-legend" id="userMountLegend"></div>
+          <div id="usersChart"></div>
+          <div class="card" style="margin-top:18px"><div class="tbl-scroll">
+            <table id="usersTbl">
+              <thead><tr>
+                <th class="sortable" data-key="name">User<span class="arrow"></span></th>
+                <th class="sortable num" data-key="bytes">Usage<span class="arrow"></span></th>
+                <th class="num" data-key="pct">Share<span class="arrow"></span></th>
+                <th class="sortable num" data-key="files">Files<span class="arrow"></span></th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div></div>
+          <div class="rowcount" id="usersCount"></div>
+        </section>
+
+        <section class="panel" id="panel-topfiles">
+          <h2 class="panel-title">Top files</h2>
+          <p class="panel-sub">The largest individual files found in the scan.</p>
+          <div class="toolbar">
+            <div class="grp"><label for="ownerFilter">Owner</label><select id="ownerFilter"><option value="">All</option></select></div>
+            <div class="grp"><label>Storage</label><div class="seg" id="topMountSeg"></div></div>
+            <span class="hint">Sort by any column · hover a row to copy its path</span>
+          </div>
+          <div class="card"><div class="tbl-scroll">
+            <table id="topTbl">
+              <thead><tr>
+                <th class="selectcell" title="Inspect a snapshot path and copy safe command templates">Inspect</th>
+                <th class="sortable num" data-key="bytes" style="width:168px">Size<span class="arrow"></span></th>
+                <th class="sortable num" data-key="age" style="width:96px">Age<span class="arrow"></span></th>
+                <th class="sortable" data-key="owner" style="width:168px">Owner<span class="arrow"></span></th>
+                <th class="sortable" data-key="mount" style="width:96px">Storage<span class="arrow"></span></th>
+                <th class="sortable pathcell" data-key="path">Path<span class="arrow"></span></th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div></div>
+          <div class="rowcount" id="topCount"></div>
+        </section>
+
+        <section class="panel" id="panel-stale">
+          <h2 class="panel-title">Stale files</h2>
+          <p class="panel-sub" id="staleCaption">Big, long-untouched files — inspect these first before considering cleanup.</p>
+          <div class="toolbar">
+            <div class="grp"><label for="staleOwnerFilter">Owner</label><select id="staleOwnerFilter"><option value="">All</option></select></div>
+            <div class="grp"><label>Storage</label><div class="seg" id="staleMountSeg"></div></div>
+            <span class="hint">Sorted by size · rows tint redder with age · scroll for more</span>
+          </div>
+          <div class="card">
+            <div class="vhead" id="staleHead">
+              <div class="vc vc-select" title="Inspect a snapshot path and copy safe command templates">Inspect</div>
+              <div class="vc vc-size sortable" data-key="bytes" style="text-align:right">Size<span class="arrow"></span></div>
+              <div class="vc vc-age sortable" data-key="age_days" style="text-align:right">Age<span class="arrow"></span></div>
+              <div class="vc vc-own sortable" data-key="owner">Owner<span class="arrow"></span></div>
+              <div class="vc vc-mnt sortable" data-key="mount">Storage<span class="arrow"></span></div>
+              <div class="vc vc-path sortable" data-key="path">Path<span class="arrow"></span></div>
+            </div>
+            <div id="staleViewport"><div id="staleSpacer"><div id="staleRows"></div></div></div>
+          </div>
+          <div class="rowcount" id="staleCount"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+</div>
+<div id="tmtip"></div>
+<div id="cleanupPanel" class="cleanup-panel" aria-hidden="true" aria-live="polite">
+  <div class="cleanup-head">
+    <div>
+      <div class="cleanup-title">Removal commands</div>
+      <div class="cleanup-summary" id="cleanupSummary">No path selected</div>
+    </div>
+    <button type="button" id="cleanupClear">Clear</button>
+  </div>
+  <section class="cleanup-section cleanup-danger" aria-labelledby="cleanupDangerHeading">
+    <div class="cleanup-section-head">
+      <h2 class="cleanup-section-title" id="cleanupDangerHeading">Removal command</h2>
+    </div>
+    <ol id="cleanupDangerCommand" class="cleanup-command-list"></ol>
+  </section>
+  <div class="cleanup-safe">Copy-only safety rail: storage-viz never runs these commands. Review ownership and paths before pasting into a shell.</div>
+</div>
+<script src="data-client.js"></script>
+<script src="selection.js"></script>
+<script src="treemap.js"></script>
+<script src="tables.js"></script>
+<script src="overview.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

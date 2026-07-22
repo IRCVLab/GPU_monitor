@@ -1,0 +1,2 @@
+# Allow the dedicated monitoring account to trigger exactly one storage-viz scan.
+monitoring ALL=(root) NOPASSWD: /usr/bin/systemctl start storage-viz-scan.service
