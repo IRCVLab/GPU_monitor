@@ -637,6 +637,8 @@
 
   .empty { color: var(--text2); padding: 48px; text-align: center; }
   .err { color: var(--crit); padding: 48px; text-align: center; }
+  .detail-loading { min-height: 160px; display: grid; place-items: center; color: var(--text2); font-size: 13px; letter-spacing: -.01em; }
+  .detail-loading[hidden] { display: none; }
   .rowcount { color: var(--text2); font-size: 12.5px; margin: 12px 2px 0; }
 
   @media (max-width: 1040px) {

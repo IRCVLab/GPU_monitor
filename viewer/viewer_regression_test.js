@@ -1325,6 +1325,46 @@ async function testDetailNavigationGuardsAgainstStaleAsyncCompletion() {
   });
 }
 
+async function testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders() {
+  const viewer = loadViewer();
+  const beta = deferred();
+  viewer.loadSnapshotForCurrentSource = (serverId) => {
+    if (serverId === 'alpha-1') {
+      return Promise.resolve({ server_id: 'alpha-1', hostname: 'alpha-host', mounts: [], users: [], top_files: [], stale: [] });
+    }
+    if (serverId === 'beta-2') return beta.promise;
+    throw new Error('unexpected server ' + serverId);
+  };
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+      { id: 'beta-2', display_name: 'beta', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+  });
+
+  viewer.navigateToServer('alpha-1', { skipHistory: true });
+  await flushPromises();
+  assert.strictEqual(viewer.document.getElementById('h-host').textContent, 'alpha-host');
+
+  viewer.navigateToOverview({ skipHistory: true });
+  viewer.navigateToServer('beta-2', { skipHistory: true });
+
+  assert.strictEqual(viewer.getCurrentDetailDebugState().currentServerId, 'beta-2');
+  assert.strictEqual(viewer.document.getElementById('h-host').textContent, 'beta', 'the next server name must replace the previous server header immediately');
+  assert.match(viewer.document.getElementById('detailLoading').textContent, /beta/, 'the pending detail must identify the server being loaded');
+  assert.strictEqual(viewer.document.getElementById('detailLoading').hidden, false, 'a pending server snapshot must expose a loading state');
+  assert.strictEqual(viewer.document.getElementById('detailPanels').hidden, true, 'previous server panels must be hidden while the next snapshot is pending');
+
+  beta.resolve({ server_id: 'beta-2', hostname: 'beta-host', mounts: [], users: [], top_files: [], stale: [] });
+  await flushPromises();
+  assert.strictEqual(viewer.document.getElementById('h-host').textContent, 'beta-host');
+  assert.strictEqual(viewer.document.getElementById('detailLoading').hidden, true, 'loading state must clear after the next snapshot renders');
+  assert.strictEqual(viewer.document.getElementById('detailPanels').hidden, false, 'next server panels must become visible after rendering');
+}
+
 
 function overviewRowText(viewer, serverId) {
   const list = viewer.document.getElementById('overviewList');
@@ -1959,6 +1999,7 @@ async function main() {
   testApprovedCleanThemeTokenContract();
   testSuccessfulOverviewSuppressesServerCountLiveLead();
   testMountCentricResponsiveCssContract();
+  await testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
