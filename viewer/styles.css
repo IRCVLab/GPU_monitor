@@ -163,6 +163,7 @@
   .brand-wrap { display: flex; align-items: center; gap: 14px; min-width: 0; }
   .brand-shell { display: flex; align-items: center; gap: 9px; min-width: 0; }
   .brand-title { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.02em; white-space: nowrap; }
+  .beta-badge { display: inline-flex; align-items: center; min-height: 18px; padding: 1px 6px; border: 1px solid var(--separator); border-radius: 999px; background: var(--surface2); color: var(--text2); font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 1; text-transform: uppercase; }
   .brand-dot { color: var(--text2); }
   .brand-subtitle { margin: 3px 0 0; color: var(--text2); font-size: 13px; }
   .detail-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 5px 14px; min-height: 27px; padding: 0 24px 5px; }
@@ -410,9 +411,9 @@
   #panel-treemap.active { display: block; position: relative; }
   #panel-treemap .toolbar { flex: 0 0 auto; }
   #panel-treemap .legend {
-    position: absolute; z-index: 8; left: 12px; right: 12px; bottom: 10px;
+    position: relative; z-index: 8;
     display: flex; flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-inline: contain;
-    gap: 12px; margin: 0; padding: 7px 9px;
+    gap: 12px; margin: 8px 0 0; padding: 7px 9px;
     border: 1px solid color-mix(in srgb, var(--separator) 82%, transparent);
     border-radius: 10px;
     background: color-mix(in srgb, var(--surface) 88%, transparent);
@@ -494,7 +495,7 @@
   .tm-crumb:hover { color: var(--accent); border-color: var(--accent); }
   .tm-sep { color: var(--text2); }
   .tm-note { position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%); text-align: center; color: var(--text2); }
-  .tm-scale-note { position: absolute; right: 10px; bottom: 52px; z-index: 4; max-width: min(430px, calc(100% - 20px));
+  .tm-scale-note { position: absolute; right: 10px; bottom: 10px; z-index: 4; max-width: min(430px, calc(100% - 20px));
     border: 1px solid var(--separator); border-radius: 9px; background: color-mix(in srgb, var(--surface) 92%, transparent);
     box-shadow: var(--shadow); color: var(--text2); padding: 7px 10px; font-size: 12px; }
   .tm-scale-note b { color: var(--text); font-family: var(--mono); }

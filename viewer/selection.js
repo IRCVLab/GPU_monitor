@@ -6,9 +6,12 @@
 
 var cleanupSelectionState = (typeof globalThis !== "undefined" && globalThis.cleanupSelectionState) || {
   serverId: null,
-  item: null,
+  items: [],
   revealDestructive: false,
 };
+if (!Array.isArray(cleanupSelectionState.items)) {
+  cleanupSelectionState.items = cleanupSelectionState.item ? [cleanupSelectionState.item] : [];
+}
 
 function htmlEscape(value) {
   if (typeof escapeHtml === "function") return escapeHtml(value);
@@ -321,23 +324,31 @@ function cleanupItemFromControl(input) {
   });
 }
 
-function currentCleanupPlan() {
+function currentCleanupPlans() {
   const ctx = currentCleanupContext();
-  if (!cleanupSelectionState.item || !ctx.snapshot) return null;
-  if (cleanupSelectionState.serverId && ctx.serverId && cleanupSelectionState.serverId !== ctx.serverId) return null;
-  return buildCleanupCommandPlan(ctx.snapshot, cleanupSelectionState.item, {
-    revealDestructive: cleanupSelectionState.revealDestructive,
-    freshness: cleanupSnapshotFreshness({ summary: ctx.summary }),
-    summary: ctx.summary,
-  });
+  if (!ctx.snapshot) return [];
+  if (cleanupSelectionState.serverId && ctx.serverId && cleanupSelectionState.serverId !== ctx.serverId) return [];
+  return cleanupItems().map(item => ({
+    item,
+    plan: buildCleanupCommandPlan(ctx.snapshot, item, {
+      revealDestructive: cleanupSelectionState.revealDestructive,
+      freshness: cleanupSnapshotFreshness({ summary: ctx.summary }),
+      summary: ctx.summary,
+    }),
+  })).filter(entry => entry.plan.accepted);
+}
+
+function currentCleanupPlan() {
+  const entries = currentCleanupPlans();
+  return entries.length === 1 ? entries[0].plan : null;
 }
 
 function cleanupItems() {
-  return cleanupSelectionState.item ? [cleanupSelectionState.item] : [];
+  return Array.isArray(cleanupSelectionState.items) ? cleanupSelectionState.items.slice() : [];
 }
 
 function isCleanupSelectedPath(path) {
-  return !!(cleanupSelectionState.item && cleanupSelectionState.item.path === path && cleanupSelectionState.serverId === currentCleanupServerId());
+  return cleanupSelectionState.serverId === currentCleanupServerId() && cleanupItems().some(item => item.path === path);
 }
 
 function setCleanupSelectedItem(item, selected) {
@@ -354,15 +365,16 @@ function setCleanupSelectedItem(item, selected) {
     owner: String(item.owner || ""),
     source: String(item.source || ""),
   };
-  const same = cleanupSelectionState.serverId === ctx.serverId &&
-    cleanupSelectionState.item &&
-    cleanupSelectionState.item.path === validation.path &&
-    cleanupSelectionState.item.kind === validation.kind;
+  if (cleanupSelectionState.serverId !== ctx.serverId) cleanupSelectionState.items = [];
+  const items = cleanupItems();
+  const existingIndex = items.findIndex(existing => existing.path === validation.path && existing.kind === validation.kind);
+  const same = existingIndex >= 0;
 
   if (selected === false) {
     if (same) {
       cleanupSelectionState.serverId = ctx.serverId;
-      cleanupSelectionState.item = null;
+      items.splice(existingIndex, 1);
+      cleanupSelectionState.items = items;
       cleanupSelectionState.revealDestructive = false;
       renderCleanupPanel();
     }
@@ -370,10 +382,11 @@ function setCleanupSelectedItem(item, selected) {
   }
 
   cleanupSelectionState.serverId = ctx.serverId;
-  cleanupSelectionState.item = nextItem;
-  cleanupSelectionState.revealDestructive = same && selected === true
-    ? cleanupSelectionState.revealDestructive
-    : false;
+  if (!same) {
+    items.push(nextItem);
+    cleanupSelectionState.items = items;
+    cleanupSelectionState.revealDestructive = false;
+  }
   renderCleanupPanel();
   return true;
 }
@@ -388,7 +401,7 @@ function toggleCleanupSelectedItem(item) {
 
 function resetCleanupSelectionState() {
   cleanupSelectionState.serverId = currentCleanupServerId();
-  cleanupSelectionState.item = null;
+  cleanupSelectionState.items = [];
   cleanupSelectionState.revealDestructive = false;
   renderCleanupPanel();
 }
@@ -411,8 +424,15 @@ function scrollCleanupPanelControlIntoView(target) {
 
 function renderCleanupPanel() {
   const panel = typeof document !== "undefined" ? document.getElementById("cleanupPanel") : null;
-  const plan = currentCleanupPlan();
-  if (!panel) return plan;
+  const entries = currentCleanupPlans();
+  const singlePlan = entries.length === 1 ? entries[0].plan : null;
+  const result = singlePlan || (entries.length ? {
+    accepted: true,
+    items: entries.map(entry => entry.item),
+    plans: entries.map(entry => entry.plan),
+    destructiveVisible: !!cleanupSelectionState.revealDestructive,
+  } : null);
+  if (!panel) return result;
 
   const title = document.getElementById("cleanupSummary");
   const warnings = document.getElementById("cleanupWarnings");
@@ -422,7 +442,7 @@ function renderCleanupPanel() {
   const dangerCommand = document.getElementById("cleanupDangerCommand");
   const clear = document.getElementById("cleanupClear");
 
-  const hasSelection = !!(plan && plan.accepted);
+  const hasSelection = entries.length > 0;
   panel.classList.toggle("show", hasSelection);
   panel.setAttribute("aria-hidden", hasSelection ? "false" : "true");
 
@@ -437,42 +457,63 @@ function renderCleanupPanel() {
     if (dangerCommand) dangerCommand.innerHTML = "";
     if (reveal) reveal.hidden = true;
     if (clear) clear.disabled = true;
-    return plan;
+    return result;
   }
 
-  if (title) title.textContent = cleanupSelectionSummary(plan, cleanupSelectionState.item);
-  if (warnings) warnings.innerHTML = plan.warnings.map(text => '<p class="cleanup-note">⚠ ' + htmlEscape(text) + "</p>").join("");
-  if (inspectList) inspectList.innerHTML = plan.inspectionCommands.map(entry => commandCardHtml(entry, "Copy inspection command:")).join("");
+  if (title) {
+    if (entries.length === 1) title.textContent = cleanupSelectionSummary(entries[0].plan, entries[0].item);
+    else {
+      const totalBytes = entries.reduce((sum, entry) => sum + (Number(entry.item.bytes) || 0), 0);
+      title.textContent = entries.length + " paths selected · " + cleanupBytesLabel(totalBytes);
+    }
+  }
+  if (warnings) {
+    const uniqueWarnings = [...new Set(entries.flatMap(entry => entry.plan.warnings))];
+    warnings.innerHTML = uniqueWarnings.map(text => '<p class="cleanup-note">⚠ ' + htmlEscape(text) + "</p>").join("");
+  }
+  if (inspectList) {
+    inspectList.innerHTML = entries.flatMap(({ item, plan }) => plan.inspectionCommands.map(command => commandCardHtml({
+      label: item.path + " · " + command.label,
+      command: command.command,
+    }, "Copy inspection command:"))).join("");
+  }
   if (clear) clear.disabled = false;
 
   if (reveal) {
     reveal.hidden = false;
-    reveal.disabled = plan.destructiveVisible;
-    reveal.textContent = plan.destructiveVisible ? "Removal command revealed" : "Reveal removal command";
+    reveal.disabled = !!cleanupSelectionState.revealDestructive;
+    reveal.textContent = cleanupSelectionState.revealDestructive
+      ? (entries.length === 1 ? "Removal command revealed" : "Removal commands revealed")
+      : (entries.length === 1 ? "Reveal removal command" : "Reveal removal commands");
   }
 
   if (dangerWarning) {
-    dangerWarning.hidden = !plan.destructiveVisible;
-    dangerWarning.textContent = plan.destructiveVisible
+    dangerWarning.hidden = !cleanupSelectionState.revealDestructive;
+    dangerWarning.textContent = cleanupSelectionState.revealDestructive
       ? "Danger: review the live path carefully. The browser only copies this command; it never runs it."
       : "";
   }
 
   if (dangerCommand) {
-    dangerCommand.innerHTML = plan.destructiveVisible
-      ? commandCardHtml(plan.destructiveCommand, "Copy removal command:")
+    dangerCommand.innerHTML = cleanupSelectionState.revealDestructive
+      ? entries.map(({ item, plan }) => commandCardHtml({
+          label: item.path + " · " + plan.destructiveCommand.label,
+          command: plan.destructiveCommand.command,
+        }, "Copy removal command:")).join("")
       : "";
   }
-  if (plan.destructiveVisible) {
+  if (cleanupSelectionState.revealDestructive) {
     scrollCleanupPanelControlIntoView(dangerCommand || dangerWarning || reveal);
   } else {
     scrollCleanupPanelControlIntoView(reveal);
   }
 
   if (typeof document !== "undefined" && document.dispatchEvent && typeof CustomEvent !== "undefined") {
-    document.dispatchEvent(new CustomEvent("cleanup-selection-rendered", { detail: { item: cleanupSelectionState.item, plan } }));
+    document.dispatchEvent(new CustomEvent("cleanup-selection-rendered", {
+      detail: { item: entries.length === 1 ? entries[0].item : null, items: entries.map(entry => entry.item), plan: result },
+    }));
   }
-  return plan;
+  return result;
 }
 
 async function writeClipboardText(text) {

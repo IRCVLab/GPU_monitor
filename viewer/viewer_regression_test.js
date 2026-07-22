@@ -1523,11 +1523,43 @@ function testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange() {
 
   assert.strictEqual(viewer.setCleanupSelectedItem({ path: '/data/two', kind: 'file', bytes: 20, source: 'top' }, true), true, 'changing to a different valid selection should be accepted');
   plan = viewer.renderCleanupPanel();
-  assert.strictEqual(plan.path, '/data/two');
-  assert.strictEqual(plan.destructiveVisible, false, 'changing the selected path must reset destructive reveal state');
+  assert.deepStrictEqual(Array.from(viewer.cleanupItems(), item => item.path), ['/data/one', '/data/two']);
+  assert.strictEqual(plan.destructiveVisible, false, 'adding another selected path must reset destructive reveal state');
 
   viewer.applyRouteState({ serverId: 'beta-2', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
   assert.strictEqual(viewer.document.getElementById('cleanupPanel').getAttribute('aria-hidden'), 'true', 'switching servers must hide the cleanup panel until a fresh selection is made');
+}
+
+function testCleanupSelectionKeepsMultipleTreemapPaths() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'alpha-1', display_name: 'alpha', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+  });
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.DATA = {
+    server_id: 'alpha-1',
+    selected_roots: [{ mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' }],
+    mounts: [{ mount_id: 'data', path: '/data', scan_root: '/data' }],
+  };
+
+  assert.strictEqual(viewer.toggleCleanupSelectedItem({ path: '/data/one', kind: 'directory', bytes: 10, source: 'treemap' }), true);
+  assert.strictEqual(viewer.toggleCleanupSelectedItem({ path: '/data/two', kind: 'file', bytes: 20, source: 'treemap' }), true);
+  assert.deepStrictEqual(Array.from(viewer.cleanupItems(), item => item.path), ['/data/one', '/data/two'], 'Ctrl/Command inspection must retain earlier paths');
+  assert.strictEqual(viewer.isCleanupSelectedPath('/data/one'), true);
+  assert.strictEqual(viewer.isCleanupSelectedPath('/data/two'), true);
+  assert.match(viewer.document.getElementById('cleanupSummary').textContent, /2 paths selected/, 'the cleanup panel must summarize a multi-selection');
+  assert.match(viewer.document.getElementById('cleanupInspectList').innerHTML, /\/data\/one/);
+  assert.match(viewer.document.getElementById('cleanupInspectList').innerHTML, /\/data\/two/);
+
+  assert.strictEqual(viewer.toggleCleanupSelectedItem({ path: '/data/one', kind: 'directory', bytes: 10, source: 'treemap' }), false, 'toggling one selected tile must remove only that tile');
+  assert.deepStrictEqual(Array.from(viewer.cleanupItems(), item => item.path), ['/data/two']);
+  assert.strictEqual(viewer.isCleanupSelectedPath('/data/one'), false);
+  assert.strictEqual(viewer.isCleanupSelectedPath('/data/two'), true);
 }
 
 function testTreemapHidesMicroTilesInsteadOfInflatingThem() {
@@ -1950,14 +1982,27 @@ function testThemeControlAndTileFirstDetailLayoutContract() {
   assert.match(css, /#treemap\s*\{[^}]*height:\s*calc\(100vh\s*-\s*225px\)/);
 }
 
-function testTreemapLegendOverlaysWithoutReducingTileViewport() {
+function testStorageMonitorBetaBadgeExplainsPreviewRisk() {
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  const titleStart = html.indexOf('<h1 class="brand-title">Storage Monitor</h1>');
+  const shellEnd = html.indexOf('</div>', titleStart);
+  const brandShell = html.slice(titleStart, shellEnd);
+  assert(titleStart >= 0, 'Storage Monitor title must remain visible');
+  assert.match(brandShell, /class="beta-badge"[^>]*>Beta<\/span>/, 'Beta badge must sit beside the Storage Monitor title');
+  assert.match(brandShell, /(?:title|aria-label)="[^"]*버그가 있을 수 있습니다[^"]*"/, 'the badge must warn that the beta can contain bugs');
+  assert.match(css, /\.beta-badge\s*\{[^}]*border-radius:\s*999px[^}]*font-size:\s*10px/);
+}
+
+function testTreemapLegendUsesDedicatedSpaceBelowTileViewport() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   const treemap = fs.readFileSync(path.join(__dirname, 'treemap.js'), 'utf8');
   assert.match(css, /#panel-treemap\.active\s*\{[^}]*position:\s*relative/);
-  assert.match(css, /#panel-treemap\s+\.legend\s*\{[^}]*position:\s*absolute[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/);
-  assert.match(css, /\.tm-scale-note\s*\{[^}]*bottom:\s*52px/, 'scale note must clear the overlaid legend rail');
-  assert.doesNotMatch(treemap, /const\s+legendH\s*=\s*legend\s*\?\s*legend\.offsetHeight/);
-  assert.match(treemap, /const\s+avail\s*=\s*main\.clientHeight\s*-\s*pad\s*-\s*toolbarH\s*-\s*12/);
+  assert.match(css, /#panel-treemap\s+\.legend\s*\{[^}]*position:\s*relative[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/);
+  assert.doesNotMatch(css, /#panel-treemap\s+\.legend\s*\{[^}]*position:\s*absolute/, 'legend must not cover bottom treemap tiles');
+  assert.match(treemap, /const\s+legendH\s*=\s*legend\s*\?\s*legend\.offsetHeight\s*:\s*0/);
+  assert.match(treemap, /const\s+avail\s*=\s*main\.clientHeight\s*-\s*pad\s*-\s*toolbarH\s*-\s*legendH\s*-\s*12/);
+  assert.ok(treemap.indexOf('renderTreemapLegend();') < treemap.indexOf('const H = sizeTreemap()'), 'legend must render before treemap height is measured');
 }
 
 async function main() {
@@ -1969,7 +2014,8 @@ async function main() {
   testTreemapThemePrefersSelectedRootClassOverOsPreference();
   testThemeModeCookieContractPreservesHistory();
   testThemeControlAndTileFirstDetailLayoutContract();
-  testTreemapLegendOverlaysWithoutReducingTileViewport();
+  testStorageMonitorBetaBadgeExplainsPreviewRisk();
+  testTreemapLegendUsesDedicatedSpaceBelowTileViewport();
   testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars();
   testSnapshotLoadFailureRendersAsVisibleException();
   testRouteNavigationAndBackShellContract();
@@ -2006,6 +2052,7 @@ async function main() {
   testDeleteCommandQuoting();
   testTreemapCleanupModeBindsCleanupRenderedListenerOnce();
   testCleanupSelectionLifecycleResetsRevealOnPathAndServerChange();
+  testCleanupSelectionKeepsMultipleTreemapPaths();
   testTreemapHidesMicroTilesInsteadOfInflatingThem();
   testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes();
   testTreemapGroupTilesStayBehindDescendants();
