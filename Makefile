@@ -4,10 +4,10 @@ SHELL := /bin/bash
 test: layout-test history-test
 
 layout-test:
-	python3.12 -m unittest tests.test_repository_layout -v
+	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_repository_layout -v
 
 history-test:
-	python3.12 -m unittest tests.test_history_inventory -v
+	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_history_inventory -v
 
 test-gpu:
 	cd apps/gpu-monitor/frontend && npm run check

@@ -176,6 +176,27 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertNotIn("pnpm", text)
         self.assertNotIn("yarn workspace", text)
 
+    def test_root_python_verification_recipes_suppress_bytecode_writes(self):
+        self.assertEqual(
+            ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_repository_layout -v"],
+            make_target_recipe("layout-test"),
+        )
+        self.assertEqual(
+            ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_history_inventory -v"],
+            make_target_recipe("history-test"),
+        )
+
+        root_python_recipes = {
+            target: recipe
+            for target in ("layout-test", "history-test")
+            for recipe in make_target_recipe(target)
+        }
+        self.assertTrue(root_python_recipes)
+        for target, recipe in root_python_recipes.items():
+            self.assertIn("PYTHONDONTWRITEBYTECODE=1", recipe, target)
+            self.assertNotIn("pytest", recipe, target)
+            self.assertNotIn("cacheprovider", recipe, target)
+
     def test_storage_make_targets_run_artifact_checks_in_disposable_clone(self):
         self.assertEqual(
             [
