@@ -1731,16 +1731,23 @@ function testTreemapDoesNotExposeTopLevelCleanupCandidates() {
   assert.ok(!home.children.some(c => c.className === 'tm-cleanup-badge'), 'top-level tile must not show selected-state badge');
 }
 
-function testTreemapScaleNoteExplainsHiddenTinyItemsBilingually() {
+function testTreemapScaleNoteStaysInLegendWithoutCoveringTiles() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.renderTreemapScaleNote, 'function', 'scale note renderer should be testable');
-  const el = new FakeElement('div');
+  const el = viewer.document.getElementById('treemap');
+  const legend = viewer.document.getElementById('treemapLegend');
   el._tmHiddenItems = { bytes: 1280, count: 39 };
   viewer.renderTreemapScaleNote(el);
-  const note = el.children.find(c => c.className === 'tm-scale-note');
-  assert.ok(note, 'scale note should be rendered when tiny items are hidden');
-  assert.ok(note.innerHTML.includes('too small to draw proportionally'), 'English note should explain why items are hidden');
-  assert.ok(note.innerHTML.includes('실제 비율'), 'Korean note should explain true-scale hiding');
+  assert.ok(!el.children.some(c => (c.className || '').includes('tm-scale-note')), 'tiny-item notice must never overlay treemap content');
+  const note = legend.children.find(c => (c.className || '').includes('tm-scale-note'));
+  assert.ok(note, 'tiny-item summary should be rendered in the dedicated legend rail');
+  assert.match(note.textContent, /39 tiny items/);
+  assert.ok(note.getAttribute('title').includes('too small to draw proportionally'), 'long English explanation should move to the tooltip');
+  assert.ok(note.getAttribute('title').includes('실제 비율'), 'long Korean explanation should move to the tooltip');
+
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  assert.match(css, /\.tm-scale-note\s*\{[^}]*position:\s*static/);
+  assert.doesNotMatch(css, /\.tm-scale-note\s*\{[^}]*position:\s*absolute/);
 }
 
 function testCleanupPanelResponsiveCssAndDangerListSemantics() {
@@ -2057,7 +2064,7 @@ async function main() {
   testTreemapTilesUseSelectionModeInsteadOfPerTileCheckboxes();
   testTreemapGroupTilesStayBehindDescendants();
   testTreemapDoesNotExposeTopLevelCleanupCandidates();
-  testTreemapScaleNoteExplainsHiddenTinyItemsBilingually();
+  testTreemapScaleNoteStaysInLegendWithoutCoveringTiles();
   testCleanupPanelResponsiveCssAndDangerListSemantics();
   testCleanupPanelRevealScrollsFocusedControlsIntoView();
   console.log('viewer regression tests passed');

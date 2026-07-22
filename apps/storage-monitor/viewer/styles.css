@@ -495,10 +495,8 @@
   .tm-crumb:hover { color: var(--accent); border-color: var(--accent); }
   .tm-sep { color: var(--text2); }
   .tm-note { position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%); text-align: center; color: var(--text2); }
-  .tm-scale-note { position: absolute; right: 10px; bottom: 10px; z-index: 4; max-width: min(430px, calc(100% - 20px));
-    border: 1px solid var(--separator); border-radius: 9px; background: color-mix(in srgb, var(--surface) 92%, transparent);
-    box-shadow: var(--shadow); color: var(--text2); padding: 7px 10px; font-size: 12px; }
-  .tm-scale-note b { color: var(--text); font-family: var(--mono); }
+  .tm-scale-note { position: static; flex: 0 0 auto; margin-left: auto; padding-left: 12px;
+    border-left: 1px solid var(--separator); color: var(--text2); font: 11px var(--mono); cursor: help; }
   /* rich hover tooltip */
   #tmtip { position: fixed; z-index: 9998; pointer-events: none; max-width: 420px; display: none;
     background: var(--surface); color: var(--text); border: 1px solid var(--separator);
