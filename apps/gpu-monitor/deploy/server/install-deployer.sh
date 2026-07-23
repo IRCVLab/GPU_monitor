@@ -242,7 +242,8 @@ for environment in dev live; do
   lock_root="$prefix/var/lock/gpu-monitor/$environment"
   mkdir -p "$ssh_dir" "$env_root"/{incoming,releases,tmp,generations} "$shared_root" "$lock_root"
   chmod 0755 "$home"
-  chmod 0700 "$ssh_dir" "$env_root/incoming" "$lock_root"
+  chmod 0755 "$ssh_dir"
+  chmod 0700 "$env_root/incoming" "$lock_root"
   chmod 0750 "$env_root"
   chmod 2700 "$env_root/tmp"
   chmod 2750 "$env_root/releases" "$env_root/generations"
@@ -273,7 +274,7 @@ write_authorized_key() {
   local path="$prefix/home/$user/.ssh/authorized_keys"
   local temporary="${path}.tmp"
   printf 'restrict,command="/usr/local/libexec/gpu-monitor-deploy-command %s" %s\n' "$environment" "$key" > "$temporary"
-  chmod 0600 "$temporary"
+  chmod 0644 "$temporary"
   mv "$temporary" "$path"
   if [[ "$dry_run" == false ]]; then chown root:root "$path"; fi
 }

@@ -1606,6 +1606,8 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   live_auth="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
   [[ -f "$dev_auth" ]] || fail "installer omitted dev identity key file"
   [[ ! -e "$live_auth" ]] || fail "installer created live key without explicit input"
+  assert_mode "$prefix/home/gpu-deploy-dev/.ssh" 0755
+  assert_mode "$dev_auth" 0644
   grep -Fq 'command="/usr/local/libexec/gpu-monitor-deploy-command dev"' "$dev_auth" ||
     fail "dev identity does not force the dev-only command"
   ! grep -Eq -- '--test-mode|environment=| live"' "$dev_auth" || fail "dev forced key can widen its environment"
