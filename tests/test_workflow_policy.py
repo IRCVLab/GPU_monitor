@@ -1095,6 +1095,9 @@ class WorkflowPolicyTest(unittest.TestCase):
             "redirect.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo > /tmp/auth.log"),
             "subshell.yml": self.guarded_workflow_run("run: $(python3.12 scripts/authorize_gpu_release.py --repo owner/repo)"),
             "background.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo &"),
+            "attached-background.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo& ./deploy.sh"),
+            "attached-double-background.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo&& ./deploy.sh"),
+            "leading-background.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo&"),
             "step-if.yml": self.guarded_workflow_run(
                 """
                 if: always()

@@ -701,9 +701,37 @@ def run_command_value(block: list[SourceLine]) -> str | None:
 
 
 def command_has_shell_control(value: str) -> bool:
-    if any(token in value for token in ("||", "&&", ";", "|", ">", "<", "$(", "`")):
-        return True
-    return any(word == "&" for word in shell_words(value))
+    in_single = False
+    in_double = False
+    escaped = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and not in_single:
+            escaped = True
+            index += 1
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            index += 1
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            index += 1
+            continue
+        if in_single or in_double:
+            index += 1
+            continue
+        if value.startswith("$(", index):
+            return True
+        if char in {"&", ";", "|", ">", "<", "`"}:
+            return True
+        index += 1
+    return False
 
 
 def run_executes_authorize_gpu_release(value: str) -> bool:
