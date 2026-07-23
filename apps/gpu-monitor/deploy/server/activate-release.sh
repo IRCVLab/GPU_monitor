@@ -677,19 +677,16 @@ PY
 
 publish_release() {
   local temporary=$1 release=$2
-  if [[ "$(/usr/bin/uname -s)" == Darwin ]]; then
-    # Darwin refuses to rename a directory whose owner-write bit is clear.
-    # The private tmp parent remains 2700 while this compatibility bit is set,
-    # and the release root is restored and verified before any pointer swap.
-    chmod 0750 "$temporary" || return 1
-    if ! mv "$temporary" "$release"; then
-      chmod 0550 "$temporary" 2>/dev/null || true
-      return 1
-    fi
-    chmod 0550 "$release" || return 1
-  else
-    mv "$temporary" "$release" || return 1
+  # Cross-parent directory renames update the candidate's ".." entry and
+  # therefore require owner write permission on the candidate on Linux and
+  # Darwin. The private tmp parent remains 2700 while this compatibility bit
+  # is set, and the release root is restored before any pointer swap.
+  chmod 0750 "$temporary" || return 1
+  if ! mv "$temporary" "$release"; then
+    chmod 0550 "$temporary" 2>/dev/null || true
+    return 1
   fi
+  chmod 0550 "$release" || return 1
   "$INTERNAL_PYTHON" - "$release" "$runtime_gid" <<'PY'
 import os, stat, sys
 path, expected_gid = sys.argv[1], int(sys.argv[2])

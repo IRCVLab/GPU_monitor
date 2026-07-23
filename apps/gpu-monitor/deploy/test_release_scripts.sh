@@ -1486,6 +1486,28 @@ PY
   log "candidates stage privately in tmp and publish only verified runtime-gid read-only inodes"
 }
 
+test_cross_parent_publish_restores_owner_write_on_every_platform() {
+  python3 - "$ACTIVATE_SCRIPT" <<'PY'
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+start = text.index("publish_release() {")
+end = text.index("\n}\n\nvalidate_existing_release()", start)
+body = text[start:end]
+
+assert 'if [[ "$(/usr/bin/uname -s)" == Darwin ]]' not in body, (
+    "cross-parent publication must not limit the owner-write workaround to Darwin"
+)
+chmod_writable = body.index('chmod 0750 "$temporary"')
+rename = body.index('mv "$temporary" "$release"')
+chmod_immutable = body.index('chmod 0550 "$release"')
+assert chmod_writable < rename < chmod_immutable, (
+    "publication must restore owner write before cross-parent rename and immutability afterward"
+)
+PY
+  log "cross-parent publication restores owner write on every supported platform"
+}
+
 run_release_metadata_verifier_failure_case() {
   local failure=$1 sha=$2 tmp prefix fakebin log_file digest python_wrapper alternate_gid=
   tmp=$(mktemp_dir "gpu-release-metadata-$failure")
@@ -1874,6 +1896,7 @@ run_test test_incoming_artifact_open_rejects_symlink_and_fifo_without_hanging
 run_test test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one
 run_test test_generation_pointer_model_and_failed_candidate_cleanup
 run_test test_candidate_stages_privately_in_tmp_and_publishes_verified_runtime_gid
+run_test test_cross_parent_publish_restores_owner_write_on_every_platform
 run_test test_metadata_verifier_python_failure_prevents_publish
 run_test test_nested_wrong_mode_prevents_publish
 run_test test_nested_wrong_gid_prevents_publish
