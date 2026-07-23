@@ -61,6 +61,13 @@ case "$action" in
     ;;
 esac
 
+if [[ "$test_mode" != true ]]; then
+  expected_user="gpu-deploy-$env_name"
+  effective_user=$(/usr/bin/id -un) || fail "unable to determine effective username"
+  [[ "$effective_user" == "$expected_user" ]] ||
+    fail "production activation requires effective user $expected_user"
+fi
+
 unset BASH_ENV ENV CDPATH GLOBIGNORE PREFIX GPU_MONITOR_ALLOWED_ENV \
   GPU_MONITOR_TEST_PATH GPU_MONITOR_MAX_UPLOAD_BYTES GPU_MONITOR_INTERNAL_PYTHON \
   GPU_MONITOR_MAX_ARCHIVE_FILES GPU_MONITOR_MAX_EXPANDED_BYTES \
@@ -117,9 +124,12 @@ if [[ "$test_mode" == true ]]; then
   validate_bound failed-count "$failed_max_count" 20
   IFS=: read -r -a path_parts <<< "$command_path"
   for part in "${path_parts[@]}"; do [[ "$part" == /* && -d "$part" ]] || fail "invalid test PATH"; done
+  test_timeout_command="${path_parts[0]}/timeout"
+  [[ -x "$test_timeout_command" ]] || test_timeout_command=
   IFS=$' \t\n'
 else
   [[ -x "$PRODUCTION_PYTHON" ]] || fail "required internal Python is unavailable"
+  test_timeout_command=
 fi
 
 INTERNAL_PYTHON=$internal_python
@@ -257,21 +267,27 @@ PY
 
 atomic_link() {
   local target=$1 link=$2 temporary="${2}.tmp.$$"
-  rm -f "$temporary"
-  ln -s "$target" "$temporary"
-  "$INTERNAL_PYTHON" - "$temporary" "$link" <<'PY'
+  rm -f "$temporary" || return 1
+  ln -s "$target" "$temporary" || return 1
+  if ! "$INTERNAL_PYTHON" - "$temporary" "$link" <<'PY'
 import os, sys
 os.replace(sys.argv[1], sys.argv[2])
 PY
-  fsync_directory "${link%/*}"
+  then
+    if ! rm -f "$temporary"; then
+      printf 'ERROR: failed to clean temporary pointer %s\n' "$temporary" >&2
+    fi
+    return 1
+  fi
+  fsync_directory "${link%/*}" || return 1
 }
 restore_link() {
   local target=$1 link=$2
   if [[ -n "$target" ]]; then
-    atomic_link "$target" "$link"
+    atomic_link "$target" "$link" || return 1
   else
-    rm -f "$link"
-    fsync_directory "${link%/*}"
+    rm -f "$link" || return 1
+    fsync_directory "${link%/*}" || return 1
   fi
 }
 release_target_from_link() {
@@ -298,29 +314,43 @@ PY
 current_target() { release_target_from_link "$base/current"; }
 previous_target() { release_target_from_link "$base/previous"; }
 ensure_root_generation_links() {
-  [[ -L "$base/current" && "$(readlink "$base/current")" == generations/active/current ]] || atomic_link generations/active/current "$base/current"
-  [[ -L "$base/previous" && "$(readlink "$base/previous")" == generations/active/previous ]] || atomic_link generations/active/previous "$base/previous"
+  if [[ ! -L "$base/current" || "$(readlink "$base/current")" != generations/active/current ]]; then
+    atomic_link generations/active/current "$base/current" || return 1
+  fi
+  if [[ ! -L "$base/previous" || "$(readlink "$base/previous")" != generations/active/previous ]]; then
+    atomic_link generations/active/previous "$base/previous" || return 1
+  fi
 }
 write_generation() {
   local gen_dir=$1 current=$2 previous=$3
-  mkdir -p "$gen_dir"
-  ln -s "../../$current" "$gen_dir/current"
-  if [[ -n "$previous" ]]; then ln -s "../../$previous" "$gen_dir/previous"; fi
-  fsync_directory "$gen_dir"
+  mkdir -p "$gen_dir" || return 1
+  chmod 0750 "$gen_dir" || return 1
+  ln -s "../../$current" "$gen_dir/current" || return 1
+  if [[ -n "$previous" ]]; then
+    ln -s "../../$previous" "$gen_dir/previous" || return 1
+  fi
+  fsync_directory "$gen_dir" || return 1
 }
 swap_generation() {
   local current=$1 previous=${2:-} gen_name gen_dir tmp_link
   gen_name="gen-$(date +%s)-$$-$RANDOM"
   gen_dir="$generations/$gen_name"
   tmp_link="$generations/active.tmp.$$"
-  write_generation "$gen_dir" "$current" "$previous"
-  ln -s "$gen_name" "$tmp_link"
-  "$INTERNAL_PYTHON" - "$tmp_link" "$generations/active" <<'PY'
+  write_generation "$gen_dir" "$current" "$previous" || return 1
+  rm -f "$tmp_link" || return 1
+  ln -s "$gen_name" "$tmp_link" || return 1
+  if ! "$INTERNAL_PYTHON" - "$tmp_link" "$generations/active" <<'PY'
 import os, sys
 os.replace(sys.argv[1], sys.argv[2])
 PY
-  fsync_directory "$generations"
-  ensure_root_generation_links
+  then
+    if ! rm -f "$tmp_link"; then
+      printf 'ERROR: failed to clean temporary generation pointer %s\n' "$tmp_link" >&2
+    fi
+    return 1
+  fi
+  fsync_directory "$generations" || return 1
+  ensure_root_generation_links || return 1
 }
 
 restart_units() {
@@ -424,7 +454,7 @@ destination = Path(destination_path); max_entries = int(max_entries); max_bytes 
 def reject(message):
     print("ERROR: " + message, file=sys.stderr); raise SystemExit(1)
 if destination.exists(): reject("temporary destination exists")
-destination.mkdir(parents=True)
+destination.mkdir(parents=True, mode=0o700)
 seen = {}; count = total = 0
 object_dir_fd = os.open(object_dir_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
 try:
@@ -488,17 +518,19 @@ PY
 }
 
 install_dependencies() {
-  local release=$1 timeout_command=
-  if command -v timeout >/dev/null 2>&1; then timeout_command=timeout; elif command -v gtimeout >/dev/null 2>&1; then timeout_command=gtimeout; fi
-  if [[ -n "$timeout_command" ]]; then
-    "$timeout_command" 300 python3 -m venv "$release/.venv"
-    [[ ! -x "$release/.venv/bin/python" ]] || "$timeout_command" 300 "$release/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir --requirement "$release/backend/requirements.txt"
-    (cd "$release/frontend" && "$timeout_command" 300 npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache "$release/.npm-cache")
+  local release=$1 timeout_command
+  if [[ "$test_mode" == true ]]; then
+    timeout_command=$test_timeout_command
   else
-    python3 -m venv "$release/.venv"
-    [[ ! -x "$release/.venv/bin/python" ]] || "$release/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir --requirement "$release/backend/requirements.txt"
-    (cd "$release/frontend" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache "$release/.npm-cache")
+    timeout_command=/usr/bin/timeout
   fi
+  [[ -n "$timeout_command" && "$timeout_command" == /* && -x "$timeout_command" ]] ||
+    fail "trusted dependency timeout is required and unavailable"
+  "$timeout_command" 300 python3 -m venv "$release/.venv"
+  [[ ! -x "$release/.venv/bin/python" ]] ||
+    "$timeout_command" 300 "$release/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir --requirement "$release/backend/requirements.txt"
+  (cd "$release/frontend" &&
+    "$timeout_command" 300 npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache "$release/.npm-cache")
   rm -rf "$release/.npm-cache"
 }
 
@@ -521,7 +553,17 @@ PY
 
 finalize_release_tree() {
   local release=$1
-  chmod -R u+rwX,go+rX "$release"
+  "$INTERNAL_PYTHON" - "$release" <<'PY'
+import os, stat, sys
+root = sys.argv[1]
+for current, dirs, files in os.walk(root):
+    os.chmod(current, 0o750)
+    for name in files:
+        path = os.path.join(current, name)
+        mode = os.lstat(path).st_mode
+        if stat.S_ISREG(mode):
+            os.chmod(path, 0o750 if mode & stat.S_IXUSR else 0o640)
+PY
   fsync_regular_files "$release"
   fsync_tree_bottom_up "$release"
 }
@@ -590,17 +632,35 @@ PY
 
 recover_snapshot() {
   local old_current=$1 old_previous=$2 failed_sha=${3:-} failed_digest=${4:-}
+  local recovery_error=
   if [[ -n "$old_current" ]]; then
-    swap_generation "$old_current" "$old_previous"
+    if ! swap_generation "$old_current" "$old_previous"; then
+      recovery_error=pointer_or_fsync_restore_failed
+    fi
   else
-    rm -f "$base/current" "$base/previous" "$generations/active"
-    fsync_directory "$base"; fsync_directory "$generations"
+    if ! rm -f "$base/current"; then recovery_error=current_pointer_remove_failed; fi
+    if ! rm -f "$base/previous"; then recovery_error="${recovery_error:+$recovery_error,}previous_pointer_remove_failed"; fi
+    if ! rm -f "$generations/active"; then recovery_error="${recovery_error:+$recovery_error,}active_generation_remove_failed"; fi
+    if ! fsync_directory "$base"; then recovery_error="${recovery_error:+$recovery_error,}base_fsync_failed"; fi
+    if ! fsync_directory "$generations"; then recovery_error="${recovery_error:+$recovery_error,}generation_fsync_failed"; fi
   fi
-  if restart_units && run_health; then
-    append_state rollback_succeeded "$failed_sha" "$failed_digest" restored
-  else
-    append_state rollback_failed "$failed_sha" "$failed_digest" recovery_failed
+  if [[ -z "$recovery_error" ]]; then
+    if ! restart_units; then
+      recovery_error=recovery_restart_failed
+    elif ! run_health; then
+      recovery_error=recovery_health_failed
+    fi
   fi
+  if [[ -z "$recovery_error" ]]; then
+    if append_state rollback_succeeded "$failed_sha" "$failed_digest" restored; then
+      return 0
+    fi
+    recovery_error=rollback_success_log_failed
+  fi
+  if ! append_state rollback_failed "$failed_sha" "$failed_digest" "$recovery_error"; then
+    printf 'ERROR: unable to durably record rollback_failed (%s)\n' "$recovery_error" >&2
+  fi
+  return 1
 }
 
 transition_pointers() {
@@ -616,18 +676,17 @@ do_activate() {
   old_current=$(current_target); old_previous=$(previous_target)
   if [[ ! -d "$release" ]]; then
     [[ -d "$object_dir" ]] || fail "incoming artifact is missing"
-    temporary="$tmp_root/release-${sha}.$$"
+    temporary="$releases/.release-${sha}.$$"
     rm -rf "$temporary"
     if ! (validate_and_extract "$object_dir" "$artifact_name" "$temporary" && install_dependencies "$temporary" && check_release_size_and_space "$temporary"); then
       chmod -R u+w "$temporary" 2>/dev/null || true; rm -rf "$temporary"
-      fsync_directory "$tmp_root"
+      fsync_directory "$releases"
       mark_failed_and_prune "$artifact"
       fail "release construction failed"
     fi
     finalize_release_tree "$temporary"
     mv "$temporary" "$release"
     constructed=true
-    fsync_directory "$tmp_root"
     fsync_directory "$releases"
     chmod -R a-w "$release"
     fsync_tree_bottom_up "$release"
@@ -635,9 +694,22 @@ do_activate() {
   else
     validate_existing_release "$release"
   fi
-  transition_pointers "releases/$sha" "$old_current"
+  if ! transition_pointers "releases/$sha" "$old_current"; then
+    if ! recover_snapshot "$old_current" "$old_previous" "$sha" "$digest"; then
+      printf 'ERROR: generation publish and recovery failed for %s\n' "$sha" >&2
+    fi
+    if [[ "$constructed" == true ]]; then
+      chmod -R u+w "$release" 2>/dev/null || true
+      rm -rf "$release"
+      fsync_directory "$releases"
+    fi
+    mark_failed_and_prune "$artifact"
+    return 1
+  fi
   if ! restart_units || ! run_health; then
-    recover_snapshot "$old_current" "$old_previous" "$sha" "$digest"
+    if ! recover_snapshot "$old_current" "$old_previous" "$sha" "$digest"; then
+      printf 'ERROR: activation rollback failed for %s\n' "$sha" >&2
+    fi
     if [[ "$constructed" == true ]]; then chmod -R u+w "$release" 2>/dev/null || true; rm -rf "$release"; fsync_directory "$releases"; fi
     mark_failed_and_prune "$artifact"
     return 1
@@ -656,9 +728,16 @@ do_rollback() {
   old_current=$(current_target); old_previous=$(previous_target)
   [[ -n "$old_current" && -d "$base/$old_current" ]] || fail "current release unavailable"
   [[ -n "$old_previous" && -d "$base/$old_previous" ]] || fail "no previous release"
-  swap_generation "$old_previous" "$old_current"
+  if ! swap_generation "$old_previous" "$old_current"; then
+    if ! recover_snapshot "$old_current" "$old_previous" "${old_previous##*/}" ""; then
+      printf 'ERROR: manual rollback pointer publish and recovery failed\n' >&2
+    fi
+    return 1
+  fi
   if ! restart_units || ! run_health; then
-    recover_snapshot "$old_current" "$old_previous" "${old_previous##*/}" ""
+    if ! recover_snapshot "$old_current" "$old_previous" "${old_previous##*/}" ""; then
+      printf 'ERROR: manual rollback recovery failed\n' >&2
+    fi
     return 1
   fi
   append_state manual_rollback "${old_previous##*/}" "" activated

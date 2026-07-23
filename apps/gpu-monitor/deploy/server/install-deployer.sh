@@ -26,17 +26,20 @@ done
 if [[ "$prefix" != / && "$dry_run" == false ]]; then
   fail "--prefix is supported only with --dry-run"
 fi
-if [[ -n "$live_key" && "$live_key" == "$dev_key" ]]; then
-  fail "dev and live public keys must be distinct"
-fi
 
-validate_key() {
+normalize_key() {
   local key=$1
   [[ "$key" != *$'\n'* && "$key" =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh.com)\ [A-Za-z0-9+/=]+(\ .*)?$ ]] ||
     fail "public key must be one plain Ed25519 key without options"
+  local key_type=${key%% *} remainder=${key#* } key_blob
+  key_blob=${remainder%% *}
+  printf '%s %s\n' "$key_type" "$key_blob"
 }
-validate_key "$dev_key"
-[[ -z "$live_key" ]] || validate_key "$live_key"
+dev_key=$(normalize_key "$dev_key")
+if [[ -n "$live_key" ]]; then
+  live_key=$(normalize_key "$live_key")
+  [[ "$live_key" != "$dev_key" ]] || fail "dev and live public key material must be distinct"
+fi
 
 canonical_prefix=$(/usr/bin/python3 - "$prefix" "$dry_run" "$(id -u)" <<'PY'
 import os, pathlib, sys
@@ -122,30 +125,63 @@ PY
 }
 
 
-merge_env() {
+rewrite_reserved_env() {
   local path=$1; shift
   mkdir -p "${path%/*}"
   /usr/bin/python3 - "$path" "$@" <<'PY'
 import os, sys
 path, required = sys.argv[1], sys.argv[2:]
+canonical = {}
+order = []
+for item in required:
+    key, value = item.split("=", 1)
+    key_bytes = key.encode("ascii")
+    canonical[key_bytes] = item.encode("ascii")
+    order.append(key_bytes)
 try:
-    with open(path, encoding="utf-8") as source: text = source.read()
+    with open(path, "rb") as source:
+        original = source.read()
 except FileNotFoundError:
-    text = ""
-keys = set()
-for line in text.splitlines():
-    if "=" in line and not line.lstrip().startswith("#"):
-        keys.add(line.split("=", 1)[0])
-missing = [item for item in required if item.split("=", 1)[0] not in keys]
+    original = b""
+seen = set()
+rewritten = []
+for line in original.splitlines(keepends=True):
+    body = line.rstrip(b"\r\n")
+    ending = line[len(body):]
+    key = body.split(b"=", 1)[0] if b"=" in body else None
+    if key not in canonical:
+        rewritten.append(line)
+        continue
+    if key in seen:
+        continue
+    seen.add(key)
+    rewritten.append(canonical[key] + ending)
+missing = [key for key in order if key not in seen]
 if missing:
-    if text and not text.endswith("\n"): text += "\n"
-    text += "\n".join(missing) + "\n"
-    temporary = path + ".tmp"
-    with open(temporary, "w", encoding="utf-8") as output: output.write(text)
-    os.chmod(temporary, 0o640)
-    os.replace(temporary, path)
-elif not os.path.exists(path):
-    open(path, "a").close()
+    if rewritten and not rewritten[-1].endswith((b"\n", b"\r")):
+        rewritten.append(b"\n")
+    rewritten.extend(canonical[key] + b"\n" for key in missing)
+updated = b"".join(rewritten)
+if updated != original or not os.path.exists(path):
+    temporary = path + ".tmp." + str(os.getpid())
+    fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o640)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(updated)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
 os.chmod(path, 0o640)
 PY
 }
@@ -160,7 +196,10 @@ for environment in dev live; do
   lock_root="$prefix/var/lock/gpu-monitor/$environment"
   mkdir -p "$ssh_dir" "$env_root"/{incoming,releases,tmp,generations} "$shared_root" "$lock_root"
   chmod 0755 "$home"
-  chmod 0700 "$ssh_dir" "$env_root" "$lock_root"
+  chmod 0700 "$ssh_dir" "$env_root/incoming" "$lock_root"
+  chmod 0750 "$env_root"
+  chmod 0700 "$env_root/tmp"
+  chmod 2750 "$env_root/releases" "$env_root/generations"
   chmod 0750 "$shared_root"
   : > "$lock_root/activation.lock"
   chmod 0600 "$lock_root/activation.lock"
@@ -168,7 +207,15 @@ for environment in dev live; do
     ensure_deploy_and_runtime_users "$environment"
     validate_identity_separation "$environment"
     chown -R root:root "$home"
-    chown -R "$deploy_user:$deploy_user" "$env_root" "$lock_root"
+    chown "$deploy_user:$runtime_user" "$env_root" "$env_root/releases" "$env_root/generations"
+    chown -R "$deploy_user:$runtime_user" "$env_root/releases" "$env_root/generations"
+    chown -R "$deploy_user:$deploy_user" "$env_root/incoming" "$env_root/tmp" "$lock_root"
+    [[ ! -e "$env_root/deployments.jsonl" ]] ||
+      chown "$deploy_user:$deploy_user" "$env_root/deployments.jsonl"
+    find "$env_root/releases" "$env_root/generations" -type d -exec chmod 2750 {} +
+    chmod 0750 "$env_root"
+    chmod 0700 "$env_root/incoming" "$env_root/tmp" "$lock_root"
+    [[ ! -e "$env_root/deployments.jsonl" ]] || chmod 0600 "$env_root/deployments.jsonl"
     chown -R "$runtime_user:$runtime_user" "$shared_root"
   fi
 done
@@ -195,9 +242,9 @@ done
 install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-dev" "$prefix/etc/sudoers.d/gpu-monitor-deploy-dev"
 install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-live" "$prefix/etc/sudoers.d/gpu-monitor-deploy-live"
 
-merge_env "$prefix/etc/gpu-monitor/dev.env" \
+rewrite_reserved_env "$prefix/etc/gpu-monitor/dev.env" \
   GPU_MONITOR_BACKEND_PORT=8101 PORT=5174 GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/dev
-merge_env "$prefix/etc/gpu-monitor/live.env" \
+rewrite_reserved_env "$prefix/etc/gpu-monitor/live.env" \
   GPU_MONITOR_BACKEND_PORT=8001 GPU_MONITOR_BRIDGE_PORT=8000 PORT=5173 GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live
 if [[ "$dry_run" == false ]]; then
   chown root:gpu-deploy-dev "$prefix/etc/gpu-monitor/dev.env"

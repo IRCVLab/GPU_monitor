@@ -43,6 +43,16 @@ assert_not_matches() {
   fi
 }
 
+assert_mode() {
+  local path=$1 expected=$2 actual
+  actual=$(python3 - "$path" <<'PY'
+import os, stat, sys
+print(f"{stat.S_IMODE(os.stat(sys.argv[1]).st_mode):04o}")
+PY
+)
+  [[ "$actual" == "$expected" ]] || fail "$path mode is $actual, expected $expected"
+}
+
 make_fixture_repo() {
   local fixture=$1
   mkdir -p "$fixture"
@@ -412,6 +422,12 @@ FAKE
 printf 'npm %s\\n' "\$*" >> '$log_file'
 exit 0
 FAKE
+  cat > "$fakebin/timeout" <<FAKE
+#!/usr/bin/env bash
+printf 'timeout %s\\n' "\$*" >> '$log_file'
+shift
+exec "\$@"
+FAKE
   cat > "$fakebin/flock" <<FAKE
 #!/usr/bin/env bash
 printf 'flock %s\\n' "\$1" >> '$log_file'
@@ -497,7 +513,7 @@ test_forced_command_rejects_open_grammar_and_env_crossing() {
 }
 
 test_production_mode_scrubs_hostile_environment_before_dispatch() {
-  local tmp fakebin marker hostile_prefix
+  local tmp fakebin marker hostile_prefix output_status
   tmp=$(mktemp_dir gpu-release-production-scrub)
   trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
   fakebin="$tmp/fakebin"
@@ -509,7 +525,7 @@ test_production_mode_scrubs_hostile_environment_before_dispatch() {
     chmod +x "$fakebin/$command_name"
   done
 
-  env -i \
+  if env -i \
     PATH="$fakebin" \
     PREFIX="$hostile_prefix" \
     GPU_MONITOR_TEST_PATH="$fakebin" \
@@ -517,13 +533,60 @@ test_production_mode_scrubs_hostile_environment_before_dispatch() {
     GPU_MONITOR_ALLOWED_ENV=live \
     GPU_MONITOR_INTERNAL_PYTHON="$fakebin/python3" \
     SSH_ORIGINAL_COMMAND="status dev" \
-    "$DEPLOY_COMMAND" dev > "$tmp/status.out"
+    "$DEPLOY_COMMAND" dev > "$tmp/status.out" 2> "$tmp/status.err"; then
+    output_status=0
+  else
+    output_status=$?
+  fi
 
-  grep -Fq '"state":"/srv/gpu-monitor/dev/deployments.jsonl"' "$tmp/status.out" ||
-    fail "production status did not use the hard-coded deployment root"
+  [[ "$output_status" -ne 0 ]] || fail "production forced command accepted a mismatched OS caller"
+  grep -Fq 'gpu-deploy-dev' "$tmp/status.err" ||
+    fail "production caller rejection did not name the required deploy identity"
   [[ ! -e "$marker" ]] || fail "hostile inherited PATH/internal Python altered production dispatch"
   [[ ! -e "$hostile_prefix" ]] || fail "hostile inherited PREFIX altered production root"
-  log "production forced-command mode scrubs hostile inherited overrides before dispatch"
+  log "production forced-command mode scrubs hostile overrides and binds the OS caller"
+}
+
+test_production_activator_rejects_mismatched_caller_before_root_mutation() {
+  local tmp environment before after
+  tmp=$(mktemp_dir gpu-release-production-caller)
+  trap 'rm -rf "$tmp"' RETURN
+  if [[ "$(id -un)" == gpu-deploy-dev ]]; then environment=live; else environment=dev; fi
+  before=$(python3 - "/srv/gpu-monitor/$environment" "/var/lock/gpu-monitor/$environment" <<'PY'
+import json, os, sys
+def snapshot(path):
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return [st.st_mode, st.st_uid, st.st_gid, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+print(json.dumps([snapshot(path) for path in sys.argv[1:]], separators=(",", ":")))
+PY
+)
+  if env -i PATH=/usr/bin:/bin "$ACTIVATE_SCRIPT" status "$environment" >"$tmp/out" 2>"$tmp/err"; then
+    fail "production activator accepted a mismatched effective username"
+  fi
+  grep -Fq "gpu-deploy-$environment" "$tmp/err" ||
+    fail "production activator caller rejection did not name the required identity"
+  after=$(python3 - "/srv/gpu-monitor/$environment" "/var/lock/gpu-monitor/$environment" <<'PY'
+import json, os, sys
+def snapshot(path):
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return [st.st_mode, st.st_uid, st.st_gid, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+print(json.dumps([snapshot(path) for path in sys.argv[1:]], separators=(",", ":")))
+PY
+)
+  [[ "$before" == "$after" ]] || fail "caller rejection mutated production deployment roots"
+
+  local prefix="$tmp/prefix"
+  env -i PREFIX="$prefix" PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH=/usr/bin:/bin \
+    "$ACTIVATE_SCRIPT" --test-mode "$environment" status >"$tmp/test-mode.out"
+  grep -Fq "\"environment\":\"$environment\"" "$tmp/test-mode.out" ||
+    fail "production caller binding leaked into isolated test mode"
+  log "production activator rejects caller mismatch before root mutation while test mode stays isolated"
 }
 
 test_upload_is_bounded_digest_verified_and_cleans_failures() {
@@ -827,6 +890,106 @@ test_transaction_restores_both_pointers_for_restart_health_and_manual_failures()
   log "activation and manual rollback restore exact pointer snapshots across unit/health/recovery failures"
 }
 
+test_recovery_pointer_and_fsync_failures_record_rollback_failed() {
+  local failure tmp prefix fakebin log_file marker python_wrapper sha1 sha2 sha3 digest1 digest2 digest3 state
+  for failure in generation-swap generation-fsync; do
+    tmp=$(mktemp_dir "gpu-release-recovery-$failure")
+    prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+    marker="$tmp/recovery-started"; python_wrapper="$tmp/injecting-python"
+    install_fake_server_commands "$fakebin" "$log_file" pass
+    printf '%s\n' "$failure" > "$python_wrapper.failure"
+    printf '%s\n' "$marker" > "$python_wrapper.marker"
+    printf '%s\n' "$prefix/srv/gpu-monitor/dev/generations" > "$python_wrapper.generations"
+    cat > "$python_wrapper" <<'PYWRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+real_python=/usr/bin/python3
+failure=$(cat "$0.failure")
+marker=$(cat "$0.marker")
+generations=$(cat "$0.generations")
+if [[ "${1:-}" != - ]]; then exec "$real_python" "$@"; fi
+script=$(mktemp "${TMPDIR:-/tmp}/gpu-monitor-python.XXXXXX")
+trap 'rm -f "$script"' EXIT
+/bin/cat > "$script"
+if [[ -e "$marker" ]]; then
+  if [[ "$failure" == generation-swap && "${3:-}" == "$generations/active" ]] &&
+      /usr/bin/grep -Fq 'os.replace(sys.argv[1], sys.argv[2])' "$script"; then
+    exit 91
+  fi
+  if [[ "$failure" == generation-fsync && "${2:-}" == "$generations" ]] &&
+      /usr/bin/grep -Fq 'os.fsync(fd)' "$script"; then
+    exit 92
+  fi
+fi
+exec "$real_python" "$script" "${@:2}"
+PYWRAPPER
+    chmod +x "$python_wrapper"
+    sha1=1212121212121212121212121212121212121212
+    sha2=2323232323232323232323232323232323232323
+    sha3=3434343434343434343434343434343434343434
+    mkdir -p "$tmp/a1" "$tmp/a2" "$tmp/a3"
+    make_release_artifact "$tmp/a1" "$sha1" one
+    make_release_artifact "$tmp/a2" "$sha2" two
+    make_release_artifact "$tmp/a3" "$sha3" three
+    digest1=$(cat "$tmp/a1/digest"); digest2=$(cat "$tmp/a2/digest"); digest3=$(cat "$tmp/a3/digest")
+    run_forced_command "$prefix" "upload dev $sha1 $digest1" "$tmp/a1/gpu-monitor-$sha1.tar.gz"
+    run_forced_command "$prefix" "activate dev $sha1 $digest1" /dev/null \
+      "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin GPU_MONITOR_INTERNAL_PYTHON=$python_wrapper"
+    run_forced_command "$prefix" "upload dev $sha2 $digest2" "$tmp/a2/gpu-monitor-$sha2.tar.gz"
+    run_forced_command "$prefix" "activate dev $sha2 $digest2" /dev/null \
+      "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin GPU_MONITOR_INTERNAL_PYTHON=$python_wrapper"
+    run_forced_command "$prefix" "upload dev $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz"
+    cat > "$fakebin/curl" <<FAKECURL
+#!/usr/bin/env bash
+touch '$marker'
+exit 22
+FAKECURL
+    chmod +x "$fakebin/curl"
+    if run_forced_command "$prefix" "activate dev $sha3 $digest3" /dev/null \
+      "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin GPU_MONITOR_INTERNAL_PYTHON=$python_wrapper" \
+      >"$tmp/activate.out" 2>"$tmp/activate.err"; then
+      fail "$failure recovery injection unexpectedly succeeded"
+    fi
+    state="$prefix/srv/gpu-monitor/dev/deployments.jsonl"
+    grep -Fq '"status":"rollback_failed"' "$state" ||
+      fail "$failure restoration error was not durably recorded as rollback_failed"
+    ! tail -1 "$state" | grep -Fq '"status":"rollback_succeeded"' ||
+      fail "$failure restoration error was falsely recorded as rollback_succeeded"
+    chmod -R u+w "$tmp" 2>/dev/null || true
+    rm -rf "$tmp"
+    trap - RETURN
+  done
+  log "generation swap and fsync restoration failures durably record rollback_failed"
+}
+
+test_dependency_install_requires_explicit_trusted_timeout() {
+  local tmp prefix fakebin log_file sha digest
+  tmp=$(mktemp_dir gpu-release-timeout-required)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  sha=4545454545454545454545454545454545454545
+  mkdir -p "$tmp/artifact"
+  make_release_artifact "$tmp/artifact" "$sha" timeout-required
+  digest=$(cat "$tmp/artifact/digest")
+  run_forced_command "$prefix" "upload dev $sha $digest" "$tmp/artifact/gpu-monitor-$sha.tar.gz"
+  rm -f "$fakebin/timeout"
+  : > "$log_file"
+  if run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+    "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" >"$tmp/activate.out" 2>"$tmp/activate.err"; then
+    fail "activation ran dependency installation without an explicit trusted timeout"
+  fi
+  ! grep -Eq '^(python3 .*venv|npm )' "$log_file" ||
+    fail "dependency command ran before missing timeout was rejected"
+  grep -Eiq 'timeout.*(required|unavailable|invalid)' "$tmp/activate.err" ||
+    fail "missing timeout rejection was not explicit"
+  grep -Fq 'timeout_command=/usr/bin/timeout' "$ACTIVATE_SCRIPT" ||
+    fail "production dependency installation does not use the fixed trusted timeout path"
+  ! grep -Eq 'command -v (g?timeout)|elif .*gtimeout|else[[:space:]]+python3 -m venv' "$ACTIVATE_SCRIPT" ||
+    fail "dependency installation still has an untrusted or unbounded timeout fallback"
+  log "dependency installation fails closed without an explicit trusted timeout"
+}
+
 test_incoming_content_addressing_quotas_and_success_cleanup() {
   local tmp prefix fakebin log_file sha1 sha2 sha3 digest1 digest2 digest3
   tmp=$(mktemp_dir gpu-release-incoming-control)
@@ -984,6 +1147,8 @@ test_generation_pointer_model_and_failed_candidate_cleanup() {
   first_active=$(readlink "$prefix/srv/gpu-monitor/dev/generations/active")
   [[ -L "$prefix/srv/gpu-monitor/dev/current" && "$(readlink "$prefix/srv/gpu-monitor/dev/current")" == generations/active/current ]] ||
     fail "root current is not resolved through the active generation"
+  assert_mode "$prefix/srv/gpu-monitor/dev/releases/$sha1" 0550
+  assert_mode "$prefix/srv/gpu-monitor/dev/generations/$first_active" 0750
   canon_prefix=$(cd "$prefix" && pwd -P)
   [[ "$(cd "$prefix/srv/gpu-monitor/dev/current" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha1" ]] ||
     fail "root current does not resolve to the active release"
@@ -1057,7 +1222,7 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/upgrade.out"
   cmp "$tmp/live-before" "$live_auth" || fail "omitted live key did not preserve existing live authorization"
   grep -Fxq 'OPERATOR_SECRET=preserve-me' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade destroyed operator secret"
-  grep -Fxq 'PORT=9999' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade overwrote operator port"
+  grep -Fxq 'PORT=5174' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to enforce reserved frontend port"
   grep -Fxq 'GPU_MONITOR_BACKEND_PORT=8101' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to merge missing required port"
   before=$(find "$prefix" -type f -exec shasum -a 256 {} \; -exec stat -f '%Lp %N' {} \; | LC_ALL=C sort)
   "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/repeat.out"
@@ -1097,6 +1262,93 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
     fail "installer accepted key options"
   fi
   log "installer provisions isolated operable identities and upgrades idempotently without bypasses"
+}
+
+test_installer_runtime_traversal_ports_and_key_material_contract() {
+  local tmp prefix dev_blob live_blob dev_key live_key dev_env live_env expected
+  tmp=$(mktemp_dir gpu-release-installer-final-gate)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/install"
+  dev_blob=$(printf 'dev-key-material' | base64 | tr -d '\n')
+  live_blob=$(printf 'live-key-material' | base64 | tr -d '\n')
+  dev_key="ssh-ed25519 $dev_blob first dev comment"
+  live_key="ssh-ed25519 $live_blob live comment"
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$dev_key" --live-public-key "$live_key" >"$tmp/install.out"
+
+  assert_mode "$prefix/srv/gpu-monitor/dev" 0750
+  assert_mode "$prefix/srv/gpu-monitor/dev/releases" 2750
+  assert_mode "$prefix/srv/gpu-monitor/dev/generations" 2750
+  assert_mode "$prefix/srv/gpu-monitor/dev/incoming" 0700
+  assert_mode "$prefix/srv/gpu-monitor/dev/tmp" 0700
+  assert_mode "$prefix/var/lock/gpu-monitor/dev" 0700
+  grep -Fq 'chown "$deploy_user:$runtime_user" "$env_root" "$env_root/releases" "$env_root/generations"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not assign runtime-group traversal only to the release path"
+  grep -Fq 'chown -R "$deploy_user:$deploy_user" "$env_root/incoming" "$env_root/tmp" "$lock_root"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not keep incoming, tmp, and locks deploy-only"
+  grep -Fq 'destination.mkdir(parents=True, mode=0o700)' "$ACTIVATE_SCRIPT" ||
+    fail "release candidate is runtime-traversable before final publication"
+
+  dev_env="$prefix/etc/gpu-monitor/dev.env"
+  cat > "$dev_env" <<'ENV'
+# operator comment stays exactly here
+SECRET_TOKEN=alpha=beta
+GPU_MONITOR_BACKEND_PORT=9999
+UNRELATED_PORT=1234
+GPU_MONITOR_BACKEND_PORT=9998
+PORT=9997
+# another comment
+PORT=9996
+ENV
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$dev_key" >"$tmp/rewrite.out"
+  expected="$tmp/expected-dev.env"
+  cat > "$expected" <<'ENV'
+# operator comment stays exactly here
+SECRET_TOKEN=alpha=beta
+GPU_MONITOR_BACKEND_PORT=8101
+UNRELATED_PORT=1234
+PORT=5174
+# another comment
+GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/dev
+ENV
+  cmp "$expected" "$dev_env" || fail "reserved port rewrite changed unrelated bytes or retained duplicates"
+  [[ "$(grep -c '^GPU_MONITOR_BACKEND_PORT=' "$dev_env")" == 1 ]] || fail "dev backend port was not deduplicated"
+  [[ "$(grep -c '^PORT=' "$dev_env")" == 1 ]] || fail "dev frontend port was not deduplicated"
+
+  live_env="$prefix/etc/gpu-monitor/live.env"
+  cat > "$live_env" <<'ENV'
+# live comment
+LIVE_SECRET=preserve-this
+GPU_MONITOR_BRIDGE_PORT=7000
+GPU_MONITOR_BACKEND_PORT=7001
+PORT=7002
+GPU_MONITOR_BRIDGE_PORT=7003
+GPU_MONITOR_BACKEND_PORT=7004
+PORT=7005
+ENV
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$dev_key" >"$tmp/live-rewrite.out"
+  expected="$tmp/expected-live.env"
+  cat > "$expected" <<'ENV'
+# live comment
+LIVE_SECRET=preserve-this
+GPU_MONITOR_BRIDGE_PORT=8000
+GPU_MONITOR_BACKEND_PORT=8001
+PORT=5173
+GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live
+ENV
+  cmp "$expected" "$live_env" || fail "live reserved port rewrite changed unrelated bytes or retained duplicates"
+  [[ "$(grep -c '^GPU_MONITOR_BACKEND_PORT=' "$live_env")" == 1 ]] || fail "live backend port was not deduplicated"
+  [[ "$(grep -c '^GPU_MONITOR_BRIDGE_PORT=' "$live_env")" == 1 ]] || fail "live bridge port was not deduplicated"
+  [[ "$(grep -c '^PORT=' "$live_env")" == 1 ]] || fail "live frontend port was not deduplicated"
+
+  grep -Fxq "restrict,command=\"/usr/local/libexec/gpu-monitor-deploy-command dev\" ssh-ed25519 $dev_blob" \
+    "$prefix/home/gpu-deploy-dev/.ssh/authorized_keys" ||
+    fail "authorized key was not normalized to key type and base64 blob"
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$tmp/same-material" \
+    --dev-public-key "ssh-ed25519 $dev_blob dev comment" \
+    --live-public-key "ssh-ed25519 $dev_blob different live comment" >"$tmp/same.out" 2>"$tmp/same.err"; then
+    fail "installer accepted identical dev/live key material with different comments"
+  fi
+  log "installer enforces runtime traversal, exact reserved ports, and normalized key separation"
 }
 
 test_archive_validation_retention_status_and_installer() {
@@ -1143,6 +1395,7 @@ PYBAD
 run_test test_server_scripts_exist_before_security_tests
 run_test test_forced_command_rejects_open_grammar_and_env_crossing
 run_test test_production_mode_scrubs_hostile_environment_before_dispatch
+run_test test_production_activator_rejects_mismatched_caller_before_root_mutation
 run_test test_upload_is_bounded_digest_verified_and_cleans_failures
 run_test test_activation_dev_live_boundaries_pointers_units_and_rollback
 run_test test_first_activation_failure_restores_absent_pointer_state
@@ -1153,10 +1406,13 @@ run_test test_directory_mutations_are_fsynced
 run_test test_isolated_identities_broker_and_descriptor_extraction_contract
 run_test test_restart_broker_exact_unit_allowlist
 run_test test_transaction_restores_both_pointers_for_restart_health_and_manual_failures
+run_test test_recovery_pointer_and_fsync_failures_record_rollback_failed
+run_test test_dependency_install_requires_explicit_trusted_timeout
 run_test test_incoming_content_addressing_quotas_and_success_cleanup
 run_test test_incoming_artifact_open_rejects_symlink_and_fifo_without_hanging
 run_test test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one
 run_test test_generation_pointer_model_and_failed_candidate_cleanup
 run_test test_retention_uses_latest_success_recency
 run_test test_installer_separate_users_prefix_upgrade_and_idempotency
+run_test test_installer_runtime_traversal_ports_and_key_material_contract
 run_test test_archive_validation_retention_status_and_installer
