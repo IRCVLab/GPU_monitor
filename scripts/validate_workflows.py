@@ -496,9 +496,11 @@ def is_deploy_job(job: JobBlock) -> bool:
     strong_signal = normalized_job_id in DEPLOYMENT_JOB_IDS or direct_job_value(job, "environment") is not None
     if strong_signal:
         return True
-    if normalized_job_id in NON_DEPLOYMENT_NAMES or normalized_name in NON_DEPLOYMENT_NAMES:
-        return False
-    return has_deployment_segment(job.job_id) or has_deployment_segment(name)
+    job_id_is_benign = normalized_job_id in NON_DEPLOYMENT_NAMES
+    name_is_benign = normalized_name in NON_DEPLOYMENT_NAMES
+    return (not job_id_is_benign and has_deployment_segment(job.job_id)) or (
+        not name_is_benign and has_deployment_segment(name)
+    )
 
 
 def normalized_condition(job: JobBlock) -> str:
@@ -699,7 +701,9 @@ def run_command_value(block: list[SourceLine]) -> str | None:
 
 
 def command_has_shell_control(value: str) -> bool:
-    return any(token in value for token in ("||", "&&", ";", "|", ">", "<", "$(", "`"))
+    if any(token in value for token in ("||", "&&", ";", "|", ">", "<", "$(", "`")):
+        return True
+    return any(word == "&" for word in shell_words(value))
 
 
 def run_executes_authorize_gpu_release(value: str) -> bool:
@@ -713,6 +717,13 @@ def run_executes_authorize_gpu_release(value: str) -> bool:
     return len(words) >= 2 and words[0] == "python3.12" and words[1] == "scripts/authorize_gpu_release.py"
 
 
+def continue_on_error_allows_authorization(value: str | None) -> bool:
+    if value is None or value == "":
+        return True
+    normalized = re.sub(r"\s+", "", unquote(value).lower())
+    return normalized in {"false", "${{false}}"}
+
+
 def has_authorization_step(job: JobBlock) -> bool:
     for block in step_blocks(job):
         command = run_command_value(block)
@@ -720,8 +731,7 @@ def has_authorization_step(job: JobBlock) -> bool:
             continue
         if step_property_value(block, "if") is not None:
             continue
-        continue_on_error = (step_property_value(block, "continue-on-error") or "").lower()
-        if continue_on_error in {"true", "${{true}}"}:
+        if not continue_on_error_allows_authorization(step_property_value(block, "continue-on-error")):
             continue
         working_directory = step_property_value(block, "working-directory")
         if working_directory not in {None, "", "."}:

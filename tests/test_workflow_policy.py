@@ -1094,6 +1094,7 @@ class WorkflowPolicyTest(unittest.TestCase):
             "pipe.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo | cat"),
             "redirect.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo > /tmp/auth.log"),
             "subshell.yml": self.guarded_workflow_run("run: $(python3.12 scripts/authorize_gpu_release.py --repo owner/repo)"),
+            "background.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo &"),
             "step-if.yml": self.guarded_workflow_run(
                 """
                 if: always()
@@ -1130,6 +1131,72 @@ class WorkflowPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+    def test_continue_on_error_must_be_explicitly_absent_or_false_for_authorization(self):
+        rejected_values = {
+            "yes.yml": "yes",
+            "on.yml": "on",
+            "one.yml": "1",
+            "spaced-true-expression.yml": "${{ true }}",
+            "dynamic-expression.yml": "${{ always() }}",
+            "unknown-expression.yml": "${{ github.ref == 'refs/heads/main' }}",
+            "arbitrary-word.yml": "maybe",
+        }
+        for filename, value in rejected_values.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(
+                    self.guarded_workflow_run(
+                        f"""
+                        continue-on-error: {value}
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo
+                        """
+                    ),
+                    "workflow-run-deploy-guard",
+                    "release-gpu",
+                    filename,
+                )
+
+        accepted_values = {
+            "false.yml": "false",
+            "false-expression.yml": "${{ false }}",
+        }
+        for filename, value in accepted_values.items():
+            with self.subTest(filename=filename):
+                result = self.run_validator(
+                    {
+                        filename: self.guarded_workflow_run(
+                            f"""
+                            continue-on-error: {value}
+                            run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo
+                            """
+                        )
+                    }
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_deployment_name_exceptions_are_field_local_only(self):
+        workflows = {
+            "job-id-deployer-display-release-notes.yml": ("gpu-deployer", "release-notes"),
+            "job-id-release-notes-display-deploy.yml": ("release-notes", "Deploy production"),
+            "job-id-activate-venv-display-deployment.yml": ("activate-venv", "deployment smoke"),
+        }
+        for filename, (job_id, display_name) in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(
+                    f"""
+                    on: push
+                    jobs:
+                      {job_id}:
+                        name: {display_name}
+                        runs-on: ubuntu-24.04
+                        steps:
+                          - run: true
+                    """,
+                    "deploy-main-guard",
+                    job_id,
+                    filename,
+                )
 
     def test_rejects_deployment_runners_except_exact_known_github_hosted_labels(self):
         workflows = {
