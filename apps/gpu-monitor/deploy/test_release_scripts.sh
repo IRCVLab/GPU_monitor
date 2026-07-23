@@ -306,16 +306,28 @@ kill_process_tree() {
 }
 
 run_test() {
-  local name=$1 timeout_seconds=${TEST_TIMEOUT_SECONDS:-120} marker
+  local name=$1 timeout_seconds=${TEST_TIMEOUT_SECONDS:-120} marker timer_file timer_pid
   if [[ -n "${TEST_FILTER:-}" && "$name" != *"$TEST_FILTER"* ]]; then
     return 0
   fi
   marker=$(mktemp "${TMPDIR:-/tmp}/gpu-release-test-timeout.${name}.XXXXXX")
   rm -f "$marker"
+  timer_file="${marker}.timer"
   ( "$name" ) &
   local pid=$!
   (
-    sleep "$timeout_seconds"
+    watchdog_timer=
+    cleanup_watchdog_timer() {
+      if [[ -n "$watchdog_timer" ]] && kill -0 "$watchdog_timer" 2>/dev/null; then
+        kill "$watchdog_timer" 2>/dev/null || true
+        wait "$watchdog_timer" 2>/dev/null || true
+      fi
+    }
+    trap 'cleanup_watchdog_timer; exit 0' TERM INT HUP
+    sleep "$timeout_seconds" &
+    watchdog_timer=$!
+    printf '%s\n' "$watchdog_timer" > "$timer_file"
+    wait "$watchdog_timer" || exit 0
     if kill -0 "$pid" 2>/dev/null; then
       printf 'FAIL: %s timed out after %ss\n' "$name" "$timeout_seconds" >&2
       : > "$marker"
@@ -328,11 +340,20 @@ run_test() {
   wait "$pid" || status=$?
   kill "$watchdog" 2>/dev/null || true
   wait "$watchdog" 2>/dev/null || true
+  if [[ -s "$timer_file" ]]; then
+    timer_pid=$(<"$timer_file")
+    if [[ "$timer_pid" =~ ^[0-9]+$ ]] && kill -0 "$timer_pid" 2>/dev/null; then
+      kill "$timer_pid" 2>/dev/null || true
+      wait "$timer_pid" 2>/dev/null || true
+      rm -f "$marker" "$timer_file"
+      fail "$name left its watchdog timer running"
+    fi
+  fi
   if [[ -e "$marker" ]]; then
-    rm -f "$marker"
+    rm -f "$marker" "$timer_file"
     fail "$name exceeded per-test timeout"
   fi
-  rm -f "$marker"
+  rm -f "$marker" "$timer_file"
   return "$status"
 }
 
@@ -414,12 +435,24 @@ FAKE
   cat > "$fakebin/python3" <<FAKE
 #!/usr/bin/env bash
 printf 'python3 %s\\n' "\$*" >> '$log_file'
-if [[ "\$*" == *' -m venv '* || "\$*" == *' venv '* ]]; then mkdir -p "\${@: -1}/bin"; touch "\${@: -1}/bin/python"; fi
+if [[ "\$*" == *' -m venv '* || "\$*" == *' venv '* ]]; then
+  mkdir -p "\${@: -1}/bin"
+  cat > "\${@: -1}/bin/python" <<'FAKEVENV'
+#!/usr/bin/env bash
+exit 0
+FAKEVENV
+  chmod +x "\${@: -1}/bin/python"
+fi
 exit 0
 FAKE
   cat > "$fakebin/npm" <<FAKE
 #!/usr/bin/env bash
 printf 'npm %s\\n' "\$*" >> '$log_file'
+exit 0
+FAKE
+  cat > "$fakebin/node" <<FAKE
+#!/usr/bin/env bash
+printf 'node %s\\n' "\$*" >> '$log_file'
 exit 0
 FAKE
   cat > "$fakebin/timeout" <<FAKE
@@ -955,11 +988,96 @@ FAKECURL
       fail "$failure restoration error was not durably recorded as rollback_failed"
     ! tail -1 "$state" | grep -Fq '"status":"rollback_succeeded"' ||
       fail "$failure restoration error was falsely recorded as rollback_succeeded"
+    [[ -d "$prefix/srv/gpu-monitor/dev/releases/$sha3" ]] ||
+      fail "$failure recovery deleted a candidate before recovery was proven successful"
+    if [[ "$failure" == generation-swap ]]; then
+      assert_symlink_target "$prefix/srv/gpu-monitor/dev/current" "releases/$sha3"
+    fi
     chmod -R u+w "$tmp" 2>/dev/null || true
     rm -rf "$tmp"
     trap - RETURN
   done
   log "generation swap and fsync restoration failures durably record rollback_failed"
+}
+
+run_dependency_failure_case() {
+  local failure=$1 sha=$2 tmp prefix fakebin log_file digest release
+  tmp=$(mktemp_dir "gpu-release-dependency-$failure")
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  mkdir -p "$tmp/artifact"
+  make_release_artifact "$tmp/artifact" "$sha" "$failure"
+  digest=$(cat "$tmp/artifact/digest")
+  run_forced_command "$prefix" "upload dev $sha $digest" "$tmp/artifact/gpu-monitor-$sha.tar.gz"
+  case "$failure" in
+    venv-timeout|pip-timeout|npm-timeout)
+      printf '%s\n' "$failure" > "$fakebin/timeout-failure"
+      cat > "$fakebin/timeout" <<FAKETIMEOUT
+#!/usr/bin/env bash
+printf 'timeout %s\\n' "\$*" >> '$log_file'
+failure=\$(cat '$fakebin/timeout-failure')
+shift
+case "\$failure:\$*" in
+  venv-timeout:*' -m venv '*) exit 91 ;;
+  pip-timeout:*' -m pip '*) exit 92 ;;
+  npm-timeout:*'/npm ci '*) exit 93 ;;
+esac
+exec "\$@"
+FAKETIMEOUT
+      chmod +x "$fakebin/timeout"
+      ;;
+    missing-venv)
+      cat > "$fakebin/python3" <<FAKEPYTHON
+#!/usr/bin/env bash
+printf 'python3 %s\\n' "\$*" >> '$log_file'
+exit 0
+FAKEPYTHON
+      chmod +x "$fakebin/python3"
+      ;;
+    missing-node)
+      rm -f "$fakebin/node"
+      ;;
+  esac
+  : > "$log_file"
+  if run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+    "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" >"$tmp/activate.out" 2>"$tmp/activate.err"; then
+    fail "$failure dependency failure was masked"
+  fi
+  release="$prefix/srv/gpu-monitor/dev/releases/$sha"
+  [[ ! -e "$release" ]] || fail "$failure dependency failure published a release"
+  [[ ! -e "$prefix/srv/gpu-monitor/dev/current" ]] ||
+    fail "$failure dependency failure changed current"
+  ! find "$prefix/srv/gpu-monitor/dev/tmp" -mindepth 1 -maxdepth 1 -name 'release-*' | grep -q . ||
+    fail "$failure dependency failure left a staging candidate"
+  trap - RETURN
+  chmod -R u+w "$tmp" 2>/dev/null || true
+  rm -rf "$tmp"
+}
+
+test_dependency_venv_timeout_failure_is_not_published() {
+  run_dependency_failure_case venv-timeout 5656565656565656565656565656565656565656
+  log "venv timeout failure is propagated and not published"
+}
+
+test_dependency_pip_timeout_failure_is_not_published() {
+  run_dependency_failure_case pip-timeout 6767676767676767676767676767676767676767
+  log "pip timeout failure is propagated and not published"
+}
+
+test_dependency_npm_timeout_failure_is_not_published() {
+  run_dependency_failure_case npm-timeout 7878787878787878787878787878787878787878
+  log "npm timeout failure is propagated and not published"
+}
+
+test_dependency_missing_venv_interpreter_is_not_published() {
+  run_dependency_failure_case missing-venv 8989898989898989898989898989898989898989
+  log "missing venv interpreter is rejected and not published"
+}
+
+test_dependency_missing_frontend_runtime_is_not_published() {
+  run_dependency_failure_case missing-node 9090909090909090909090909090909090909090
+  log "missing frontend runtime prerequisite is rejected and not published"
 }
 
 test_dependency_install_requires_explicit_trusted_timeout() {
@@ -1148,7 +1266,7 @@ test_generation_pointer_model_and_failed_candidate_cleanup() {
   [[ -L "$prefix/srv/gpu-monitor/dev/current" && "$(readlink "$prefix/srv/gpu-monitor/dev/current")" == generations/active/current ]] ||
     fail "root current is not resolved through the active generation"
   assert_mode "$prefix/srv/gpu-monitor/dev/releases/$sha1" 0550
-  assert_mode "$prefix/srv/gpu-monitor/dev/generations/$first_active" 0750
+  assert_mode "$prefix/srv/gpu-monitor/dev/generations/$first_active" 0550
   canon_prefix=$(cd "$prefix" && pwd -P)
   [[ "$(cd "$prefix/srv/gpu-monitor/dev/current" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha1" ]] ||
     fail "root current does not resolve to the active release"
@@ -1157,7 +1275,7 @@ test_generation_pointer_model_and_failed_candidate_cleanup() {
   [[ "$(readlink "$prefix/srv/gpu-monitor/dev/generations/active")" != "$first_active" ]] || fail "activation did not atomically swap a new generation"
   [[ "$(cd "$prefix/srv/gpu-monitor/dev/current" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha2" ]] || fail "current generation resolution is wrong"
   [[ "$(cd "$prefix/srv/gpu-monitor/dev/previous" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha1" ]] || fail "previous generation resolution is wrong"
-  rm -rf "$fakebin"; : > "$log_file"; install_fake_server_commands "$fakebin" "$log_file" fail pass
+  rm -rf "$fakebin"; : > "$log_file"; install_fake_server_commands "$fakebin" "$log_file" fail-first pass
   run_forced_command "$prefix" "upload dev $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz"
   if run_forced_command "$prefix" "activate dev $sha3 $digest3" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin"; then
     fail "failed health activation unexpectedly succeeded"
@@ -1166,6 +1284,78 @@ test_generation_pointer_model_and_failed_candidate_cleanup() {
   [[ "$(cd "$prefix/srv/gpu-monitor/dev/current" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha2" ]] || fail "failed activation changed current resolution"
   [[ "$(cd "$prefix/srv/gpu-monitor/dev/previous" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha1" ]] || fail "failed activation changed previous resolution"
   log "generation pointer swaps are atomic and failed inactive candidates are cleaned"
+}
+
+test_candidate_stages_privately_in_tmp_and_publishes_verified_runtime_gid() {
+  local tmp prefix fakebin log_file marker continue sha digest activation_pid candidate
+  tmp=$(mktemp_dir gpu-release-private-staging)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/install"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  marker="$tmp/dependency-started"; continue="$tmp/continue"
+  sha=9191919191919191919191919191919191919191
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" \
+    --dev-public-key 'ssh-ed25519 AAAAPRIVATESTAGINGKEY000000000000000000000000000000000000 private' \
+    >"$tmp/install.out"
+  assert_mode "$prefix/srv/gpu-monitor/dev/tmp" 2700
+  mkdir -p "$tmp/artifact"
+  make_release_artifact "$tmp/artifact" "$sha" private-staging
+  digest=$(cat "$tmp/artifact/digest")
+  run_forced_command "$prefix" "upload dev $sha $digest" "$tmp/artifact/gpu-monitor-$sha.tar.gz"
+  cat > "$fakebin/timeout" <<FAKETIMEOUT
+#!/usr/bin/env bash
+if [[ "\$*" == *' -m venv '* ]]; then
+  touch '$marker'
+  while [[ ! -e '$continue' ]]; do /bin/sleep 0.05; done
+fi
+shift
+exec "\$@"
+FAKETIMEOUT
+  chmod +x "$fakebin/timeout"
+  run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+    "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" >"$tmp/activate.out" 2>"$tmp/activate.err" &
+  activation_pid=$!
+  for _ in $(seq 1 100); do
+    [[ -e "$marker" ]] && break
+    /bin/sleep 0.05
+  done
+  [[ -e "$marker" ]] || fail "activation did not reach dependency staging"
+  candidate=$(find "$prefix/srv/gpu-monitor/dev/tmp" -mindepth 1 -maxdepth 1 -type d -name 'release-*' | head -1)
+  [[ -n "$candidate" ]] || fail "release candidate was not constructed under private tmp staging"
+  ! find "$prefix/srv/gpu-monitor/dev/releases" -mindepth 1 -maxdepth 1 -name '.release-*' | grep -q . ||
+    fail "release candidate was constructed under runtime-traversable releases"
+  python3 - "$candidate" "$prefix/srv/gpu-monitor/dev/tmp" <<'PY'
+import os, stat, sys
+candidate, staging = sys.argv[1:]
+candidate_stat = os.stat(candidate)
+staging_stat = os.stat(staging)
+mode = stat.S_IMODE(candidate_stat.st_mode)
+assert mode == 0o2700, oct(mode)
+assert candidate_stat.st_gid == staging_stat.st_gid, (candidate_stat.st_gid, staging_stat.st_gid)
+PY
+  touch "$continue"
+  if ! wait "$activation_pid"; then
+    cat "$tmp/activate.err" >&2
+    fail "private staging activation failed"
+  fi
+  python3 - "$prefix/srv/gpu-monitor/dev/releases/$sha" "$prefix/srv/gpu-monitor/dev/tmp" <<'PY'
+import os, stat, sys
+release, staging = sys.argv[1:]
+expected_gid = os.stat(staging).st_gid
+for current, dirs, files in os.walk(release):
+    st = os.lstat(current)
+    assert st.st_gid == expected_gid, (current, st.st_gid, expected_gid)
+    assert stat.S_IMODE(st.st_mode) == 0o550, (current, oct(stat.S_IMODE(st.st_mode)))
+    for name in files:
+        path = os.path.join(current, name)
+        st = os.lstat(path)
+        assert st.st_gid == expected_gid, (path, st.st_gid, expected_gid)
+        if stat.S_ISREG(st.st_mode):
+            assert stat.S_IMODE(st.st_mode) in (0o440, 0o550), (path, oct(stat.S_IMODE(st.st_mode)))
+PY
+  ! find "$prefix/srv/gpu-monitor/dev/tmp" -mindepth 1 -maxdepth 1 -name 'release-*' | grep -q . ||
+    fail "successful activation left a staging candidate"
+  log "candidates stage privately in tmp and publish only verified runtime-gid read-only inodes"
 }
 
 test_retention_uses_latest_success_recency() {
@@ -1279,14 +1469,16 @@ test_installer_runtime_traversal_ports_and_key_material_contract() {
   assert_mode "$prefix/srv/gpu-monitor/dev/releases" 2750
   assert_mode "$prefix/srv/gpu-monitor/dev/generations" 2750
   assert_mode "$prefix/srv/gpu-monitor/dev/incoming" 0700
-  assert_mode "$prefix/srv/gpu-monitor/dev/tmp" 0700
+  assert_mode "$prefix/srv/gpu-monitor/dev/tmp" 2700
   assert_mode "$prefix/var/lock/gpu-monitor/dev" 0700
   grep -Fq 'chown "$deploy_user:$runtime_user" "$env_root" "$env_root/releases" "$env_root/generations"' "$INSTALLER_SCRIPT" ||
     fail "installer does not assign runtime-group traversal only to the release path"
-  grep -Fq 'chown -R "$deploy_user:$deploy_user" "$env_root/incoming" "$env_root/tmp" "$lock_root"' "$INSTALLER_SCRIPT" ||
-    fail "installer does not keep incoming, tmp, and locks deploy-only"
-  grep -Fq 'destination.mkdir(parents=True, mode=0o700)' "$ACTIVATE_SCRIPT" ||
-    fail "release candidate is runtime-traversable before final publication"
+  grep -Fq 'chown -R "$deploy_user:$runtime_user" "$env_root/releases" "$env_root/generations" "$env_root/tmp"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not deliberately preserve the runtime gid through private tmp staging"
+  grep -Fq 'chown -R "$deploy_user:$deploy_user" "$env_root/incoming" "$lock_root"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not keep incoming and locks deploy-only"
+  grep -Fq 'destination.mkdir(parents=True, mode=0o2700)' "$ACTIVATE_SCRIPT" ||
+    fail "release staging root does not preserve private setgid semantics"
 
   dev_env="$prefix/etc/gpu-monitor/dev.env"
   cat > "$dev_env" <<'ENV'
@@ -1351,6 +1543,60 @@ ENV
   log "installer enforces runtime traversal, exact reserved ports, and normalized key separation"
 }
 
+test_installer_reconciles_published_modes_without_exposing_hidden_candidates() {
+  local tmp prefix key release generation hidden
+  tmp=$(mktemp_dir gpu-release-installer-reconcile)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/install"
+  key='ssh-ed25519 AAAARECONCILEKEY0000000000000000000000000000000000000 reconcile'
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" >"$tmp/first.out"
+  release="$prefix/srv/gpu-monitor/dev/releases/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  generation="$prefix/srv/gpu-monitor/dev/generations/gen-existing"
+  hidden="$prefix/srv/gpu-monitor/dev/releases/.release-stale"
+  mkdir -p "$release/sub" "$generation" "$hidden/sub"
+  printf 'published\n' >"$release/sub/file"
+  printf 'hidden\n' >"$hidden/sub/file"
+  chmod 0770 "$release" "$release/sub" "$generation" "$hidden" "$hidden/sub"
+  chmod 0660 "$release/sub/file" "$hidden/sub/file"
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" >"$tmp/reinstall.out"
+  assert_mode "$prefix/srv/gpu-monitor/dev/releases" 2750
+  assert_mode "$prefix/srv/gpu-monitor/dev/generations" 2750
+  assert_mode "$release" 0550
+  assert_mode "$release/sub" 0550
+  assert_mode "$release/sub/file" 0440
+  assert_mode "$generation" 0550
+  assert_mode "$hidden" 0700
+  assert_mode "$hidden/sub" 0700
+  assert_mode "$hidden/sub/file" 0600
+  ! grep -Fq 'find "$env_root/releases" "$env_root/generations" -type d -exec chmod 2750' "$INSTALLER_SCRIPT" ||
+    fail "installer still recursively makes immutable release/generation directories writable"
+  log "reinstall preserves writable parents while reconciling published and hidden trees safely"
+}
+
+test_omitted_live_key_blocks_conflicting_dev_rotation_before_mutation() {
+  local tmp prefix dev_blob live_blob dev_key live_key dev_auth live_auth
+  tmp=$(mktemp_dir gpu-release-key-rotation)
+  trap 'rm -rf "$tmp"' RETURN
+  prefix="$tmp/install"
+  dev_blob=$(printf 'rotation-dev' | base64 | tr -d '\n')
+  live_blob=$(printf 'rotation-live' | base64 | tr -d '\n')
+  dev_key="ssh-ed25519 $dev_blob old dev"
+  live_key="ssh-ed25519 $live_blob installed live"
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$dev_key" --live-public-key "$live_key" >"$tmp/first.out"
+  dev_auth="$prefix/home/gpu-deploy-dev/.ssh/authorized_keys"
+  live_auth="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
+  cp "$dev_auth" "$tmp/dev-before"
+  cp "$live_auth" "$tmp/live-before"
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" \
+    --dev-public-key "ssh-ed25519 $live_blob proposed dev with different comment" \
+    >"$tmp/rotate.out" 2>"$tmp/rotate.err"; then
+    fail "omitted live key allowed dev rotation to installed live key material"
+  fi
+  cmp "$tmp/dev-before" "$dev_auth" || fail "conflicting dev rotation mutated dev authorization before rejection"
+  cmp "$tmp/live-before" "$live_auth" || fail "conflicting dev rotation mutated live authorization"
+  log "omitted live authorization participates in normalized key separation before mutation"
+}
+
 test_archive_validation_retention_status_and_installer() {
   local tmp prefix fakebin log_file sha digest
   tmp=$(mktemp_dir gpu-release-security-retention)
@@ -1408,11 +1654,19 @@ run_test test_restart_broker_exact_unit_allowlist
 run_test test_transaction_restores_both_pointers_for_restart_health_and_manual_failures
 run_test test_recovery_pointer_and_fsync_failures_record_rollback_failed
 run_test test_dependency_install_requires_explicit_trusted_timeout
+run_test test_dependency_venv_timeout_failure_is_not_published
+run_test test_dependency_pip_timeout_failure_is_not_published
+run_test test_dependency_npm_timeout_failure_is_not_published
+run_test test_dependency_missing_venv_interpreter_is_not_published
+run_test test_dependency_missing_frontend_runtime_is_not_published
 run_test test_incoming_content_addressing_quotas_and_success_cleanup
 run_test test_incoming_artifact_open_rejects_symlink_and_fifo_without_hanging
 run_test test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one
 run_test test_generation_pointer_model_and_failed_candidate_cleanup
+run_test test_candidate_stages_privately_in_tmp_and_publishes_verified_runtime_gid
 run_test test_retention_uses_latest_success_recency
 run_test test_installer_separate_users_prefix_upgrade_and_idempotency
 run_test test_installer_runtime_traversal_ports_and_key_material_contract
+run_test test_installer_reconciles_published_modes_without_exposing_hidden_candidates
+run_test test_omitted_live_key_blocks_conflicting_dev_rotation_before_mutation
 run_test test_archive_validation_retention_status_and_installer

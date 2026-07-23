@@ -71,6 +71,17 @@ if [[ "$dry_run" == false && "$(id -u)" -ne 0 ]]; then
   fail "real installation requires root"
 fi
 
+installed_live_authorization="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
+if [[ -z "$live_key" && -f "$installed_live_authorization" ]]; then
+  installed_live_line=$(<"$installed_live_authorization")
+  installed_live_prefix='restrict,command="/usr/local/libexec/gpu-monitor-deploy-command live" '
+  [[ "$installed_live_line" == "$installed_live_prefix"* ]] ||
+    fail "installed live authorized key has unexpected format"
+  installed_live_key=$(normalize_key "${installed_live_line#"$installed_live_prefix"}")
+  [[ "$installed_live_key" != "$dev_key" ]] ||
+    fail "dev and installed live public key material must be distinct"
+fi
+
 script_dir=${BASH_SOURCE[0]%/*}
 [[ "$script_dir" != "${BASH_SOURCE[0]}" ]] || script_dir=.
 script_dir=$(cd -- "$script_dir" && /bin/pwd -P)
@@ -186,6 +197,37 @@ os.chmod(path, 0o640)
 PY
 }
 
+reconcile_deployment_trees() {
+  local releases_root=$1 generations_root=$2
+  /usr/bin/python3 - "$releases_root" "$generations_root" <<'PY'
+import os, pathlib, stat, sys
+releases, generations = map(pathlib.Path, sys.argv[1:])
+
+def reconcile_tree(root, directory_mode, file_mode, executable_mode):
+    if not root.is_dir():
+        return
+    for current, dirs, files in os.walk(root, followlinks=False):
+        os.chmod(current, directory_mode)
+        for name in files:
+            path = pathlib.Path(current) / name
+            mode = path.lstat().st_mode
+            if stat.S_ISREG(mode):
+                os.chmod(path, executable_mode if mode & stat.S_IXUSR else file_mode)
+
+for child in releases.iterdir():
+    if not child.is_dir() or child.is_symlink():
+        continue
+    if child.name.startswith(".release-"):
+        reconcile_tree(child, 0o700, 0o600, 0o700)
+    else:
+        reconcile_tree(child, 0o550, 0o440, 0o550)
+
+for child in generations.iterdir():
+    if child.is_dir() and not child.is_symlink():
+        reconcile_tree(child, 0o550, 0o440, 0o550)
+PY
+}
+
 for environment in dev live; do
   deploy_user="gpu-deploy-$environment"
   runtime_user="gpu-monitor-$environment"
@@ -198,7 +240,7 @@ for environment in dev live; do
   chmod 0755 "$home"
   chmod 0700 "$ssh_dir" "$env_root/incoming" "$lock_root"
   chmod 0750 "$env_root"
-  chmod 0700 "$env_root/tmp"
+  chmod 2700 "$env_root/tmp"
   chmod 2750 "$env_root/releases" "$env_root/generations"
   chmod 0750 "$shared_root"
   : > "$lock_root/activation.lock"
@@ -208,16 +250,18 @@ for environment in dev live; do
     validate_identity_separation "$environment"
     chown -R root:root "$home"
     chown "$deploy_user:$runtime_user" "$env_root" "$env_root/releases" "$env_root/generations"
-    chown -R "$deploy_user:$runtime_user" "$env_root/releases" "$env_root/generations"
-    chown -R "$deploy_user:$deploy_user" "$env_root/incoming" "$env_root/tmp" "$lock_root"
+    chown -R "$deploy_user:$runtime_user" "$env_root/releases" "$env_root/generations" "$env_root/tmp"
+    chown -R "$deploy_user:$deploy_user" "$env_root/incoming" "$lock_root"
     [[ ! -e "$env_root/deployments.jsonl" ]] ||
       chown "$deploy_user:$deploy_user" "$env_root/deployments.jsonl"
-    find "$env_root/releases" "$env_root/generations" -type d -exec chmod 2750 {} +
     chmod 0750 "$env_root"
-    chmod 0700 "$env_root/incoming" "$env_root/tmp" "$lock_root"
+    chmod 2700 "$env_root/tmp"
+    chmod 2750 "$env_root/releases" "$env_root/generations"
+    chmod 0700 "$env_root/incoming" "$lock_root"
     [[ ! -e "$env_root/deployments.jsonl" ]] || chmod 0600 "$env_root/deployments.jsonl"
     chown -R "$runtime_user:$runtime_user" "$shared_root"
   fi
+  reconcile_deployment_trees "$env_root/releases" "$env_root/generations"
 done
 
 write_authorized_key() {

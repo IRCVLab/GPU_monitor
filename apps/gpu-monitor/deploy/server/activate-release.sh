@@ -124,11 +124,13 @@ if [[ "$test_mode" == true ]]; then
   validate_bound failed-count "$failed_max_count" 20
   IFS=: read -r -a path_parts <<< "$command_path"
   for part in "${path_parts[@]}"; do [[ "$part" == /* && -d "$part" ]] || fail "invalid test PATH"; done
-  test_timeout_command="${path_parts[0]}/timeout"
+  test_tool_dir=${path_parts[0]}
+  test_timeout_command="$test_tool_dir/timeout"
   [[ -x "$test_timeout_command" ]] || test_timeout_command=
   IFS=$' \t\n'
 else
   [[ -x "$PRODUCTION_PYTHON" ]] || fail "required internal Python is unavailable"
+  test_tool_dir=
   test_timeout_command=
 fi
 
@@ -161,6 +163,26 @@ case "$action" in
     ;;
   status-inner) ;;
   *) mkdir -p "$releases" "$incoming" "$tmp_root" "$generations" "$lock_dir" ;;
+esac
+
+case "$action" in
+  activate|activate-inner)
+    if [[ "$test_mode" == true ]]; then
+      runtime_gid=$("$INTERNAL_PYTHON" - "$tmp_root" <<'PY'
+import os, sys
+print(os.stat(sys.argv[1]).st_gid)
+PY
+)
+    else
+      runtime_gid=$("$INTERNAL_PYTHON" - "$env_name" <<'PY'
+import grp, sys
+print(grp.getgrnam("gpu-monitor-" + sys.argv[1]).gr_gid)
+PY
+)
+    fi
+    [[ "$runtime_gid" =~ ^[0-9]+$ ]] || fail "unable to determine runtime gid"
+    ;;
+  *) runtime_gid=0 ;;
 esac
 
 fsync_directory() {
@@ -324,11 +346,12 @@ ensure_root_generation_links() {
 write_generation() {
   local gen_dir=$1 current=$2 previous=$3
   mkdir -p "$gen_dir" || return 1
-  chmod 0750 "$gen_dir" || return 1
+  chmod 0700 "$gen_dir" || return 1
   ln -s "../../$current" "$gen_dir/current" || return 1
   if [[ -n "$previous" ]]; then
     ln -s "../../$previous" "$gen_dir/previous" || return 1
   fi
+  chmod 0550 "$gen_dir" || return 1
   fsync_directory "$gen_dir" || return 1
 }
 swap_generation() {
@@ -453,8 +476,18 @@ object_dir_path, artifact_name, destination_path, sha, expected, max_entries, ma
 destination = Path(destination_path); max_entries = int(max_entries); max_bytes = int(max_bytes)
 def reject(message):
     print("ERROR: " + message, file=sys.stderr); raise SystemExit(1)
+def make_staging_directory(path):
+    path.mkdir(parents=True, exist_ok=True, mode=0o2700)
+    cursor = path
+    while cursor != destination.parent:
+        if cursor.is_dir():
+            os.chmod(cursor, 0o2700)
+        if cursor == destination:
+            break
+        cursor = cursor.parent
 if destination.exists(): reject("temporary destination exists")
-destination.mkdir(parents=True, mode=0o700)
+destination.mkdir(parents=True, mode=0o2700)
+os.chmod(destination, 0o2700)
 seen = {}; count = total = 0
 object_dir_fd = os.open(object_dir_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
 try:
@@ -490,12 +523,11 @@ with artifact_file:
             relative = Path(*path.parts[1:])
             output = destination / relative
             if member.isdir():
-                output.mkdir(parents=True, exist_ok=True)
-                os.chmod(output, member.mode & 0o777)
+                make_staging_directory(output)
                 continue
             total += member.size
             if total > max_bytes: reject("archive expanded size exceeds bound")
-            output.parent.mkdir(parents=True, exist_ok=True)
+            make_staging_directory(output.parent)
             source = archive.extractfile(member)
             if source is None: reject("regular file has no data")
             written = 0
@@ -518,20 +550,34 @@ PY
 }
 
 install_dependencies() {
-  local release=$1 timeout_command
+  local release=$1 timeout_command python_command npm_command node_command
   if [[ "$test_mode" == true ]]; then
     timeout_command=$test_timeout_command
+    python_command="$test_tool_dir/python3"
+    npm_command="$test_tool_dir/npm"
+    node_command="$test_tool_dir/node"
   else
     timeout_command=/usr/bin/timeout
+    python_command=/usr/bin/python3
+    npm_command=/usr/bin/npm
+    node_command=/usr/bin/node
   fi
   [[ -n "$timeout_command" && "$timeout_command" == /* && -x "$timeout_command" ]] ||
-    fail "trusted dependency timeout is required and unavailable"
-  "$timeout_command" 300 python3 -m venv "$release/.venv"
-  [[ ! -x "$release/.venv/bin/python" ]] ||
-    "$timeout_command" 300 "$release/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir --requirement "$release/backend/requirements.txt"
+    { printf 'ERROR: trusted dependency timeout is required and unavailable\n' >&2; return 1; }
+  [[ -x "$python_command" ]] ||
+    { printf 'ERROR: trusted Python runtime is unavailable\n' >&2; return 1; }
+  [[ -x "$npm_command" && -x "$node_command" ]] ||
+    { printf 'ERROR: frontend npm/node runtime prerequisites are unavailable\n' >&2; return 1; }
+  "$timeout_command" 300 "$python_command" -m venv "$release/.venv" || return 1
+  [[ -x "$release/.venv/bin/python" ]] ||
+    { printf 'ERROR: venv interpreter was not created\n' >&2; return 1; }
+  "$timeout_command" 300 "$release/.venv/bin/python" -m pip install \
+    --disable-pip-version-check --no-cache-dir --requirement "$release/backend/requirements.txt" || return 1
   (cd "$release/frontend" &&
-    "$timeout_command" 300 npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache "$release/.npm-cache")
-  rm -rf "$release/.npm-cache"
+    "$timeout_command" 300 "$npm_command" ci --omit=dev --ignore-scripts --no-audit --no-fund \
+      --cache "$release/.npm-cache") || return 1
+  rm -rf "$release/.npm-cache" || return 1
+  return 0
 }
 
 check_release_size_and_space() {
@@ -553,19 +599,65 @@ PY
 
 finalize_release_tree() {
   local release=$1
-  "$INTERNAL_PYTHON" - "$release" <<'PY'
+  "$INTERNAL_PYTHON" - "$release" "$runtime_gid" <<'PY'
 import os, stat, sys
-root = sys.argv[1]
+root, expected_gid = sys.argv[1], int(sys.argv[2])
 for current, dirs, files in os.walk(root):
-    os.chmod(current, 0o750)
+    current_stat = os.lstat(current)
+    if current_stat.st_gid != expected_gid:
+        print(f"ERROR: staging gid mismatch: {current}", file=sys.stderr)
+        raise SystemExit(1)
+    os.chmod(current, 0o550)
+    for name in dirs:
+        path = os.path.join(current, name)
+        if os.lstat(path).st_gid != expected_gid:
+            print(f"ERROR: staging gid mismatch: {path}", file=sys.stderr)
+            raise SystemExit(1)
     for name in files:
         path = os.path.join(current, name)
         mode = os.lstat(path).st_mode
+        if os.lstat(path).st_gid != expected_gid:
+            print(f"ERROR: staging gid mismatch: {path}", file=sys.stderr)
+            raise SystemExit(1)
         if stat.S_ISREG(mode):
-            os.chmod(path, 0o750 if mode & stat.S_IXUSR else 0o640)
+            os.chmod(path, 0o550 if mode & stat.S_IXUSR else 0o440)
+for current, dirs, files in os.walk(root):
+    if stat.S_IMODE(os.lstat(current).st_mode) != 0o550:
+        raise SystemExit(f"ERROR: final directory mode mismatch: {current}")
+    for name in files:
+        path = os.path.join(current, name)
+        mode = os.lstat(path).st_mode
+        if stat.S_ISREG(mode) and stat.S_IMODE(mode) not in (0o440, 0o550):
+            raise SystemExit(f"ERROR: final file mode mismatch: {path}")
 PY
-  fsync_regular_files "$release"
-  fsync_tree_bottom_up "$release"
+  fsync_regular_files "$release" || return 1
+  fsync_tree_bottom_up "$release" || return 1
+  return 0
+}
+
+publish_release() {
+  local temporary=$1 release=$2
+  if [[ "$(/usr/bin/uname -s)" == Darwin ]]; then
+    # Darwin refuses to rename a directory whose owner-write bit is clear.
+    # The private tmp parent remains 2700 while this compatibility bit is set,
+    # and the release root is restored and verified before any pointer swap.
+    chmod 0750 "$temporary" || return 1
+    if ! mv "$temporary" "$release"; then
+      chmod 0550 "$temporary" 2>/dev/null || true
+      return 1
+    fi
+    chmod 0550 "$release" || return 1
+  else
+    mv "$temporary" "$release" || return 1
+  fi
+  "$INTERNAL_PYTHON" - "$release" "$runtime_gid" <<'PY'
+import os, stat, sys
+path, expected_gid = sys.argv[1], int(sys.argv[2])
+metadata = os.lstat(path)
+if metadata.st_gid != expected_gid or stat.S_IMODE(metadata.st_mode) != 0o550:
+    print("ERROR: published release root metadata mismatch", file=sys.stderr)
+    raise SystemExit(1)
+PY
 }
 
 validate_existing_release() {
@@ -630,6 +722,28 @@ PY
   fsync_directory "$incoming"
 }
 
+snapshot_targets_match() {
+  local expected_current=$1 expected_previous=$2 actual_current actual_previous
+  actual_current=$(current_target)
+  actual_previous=$(previous_target)
+  [[ "$actual_current" == "$expected_current" && "$actual_previous" == "$expected_previous" ]]
+}
+
+candidate_is_unreferenced() {
+  local candidate=$1 actual_current actual_previous
+  actual_current=$(current_target)
+  actual_previous=$(previous_target)
+  [[ "$actual_current" != "$candidate" && "$actual_previous" != "$candidate" ]]
+}
+
+remove_tree_and_fsync() {
+  local tree=$1 parent=$2
+  [[ -e "$tree" ]] || return 0
+  chmod -R u+w "$tree" 2>/dev/null || return 1
+  rm -rf "$tree" || return 1
+  fsync_directory "$parent" || return 1
+}
+
 recover_snapshot() {
   local old_current=$1 old_previous=$2 failed_sha=${3:-} failed_digest=${4:-}
   local recovery_error=
@@ -643,6 +757,9 @@ recover_snapshot() {
     if ! rm -f "$generations/active"; then recovery_error="${recovery_error:+$recovery_error,}active_generation_remove_failed"; fi
     if ! fsync_directory "$base"; then recovery_error="${recovery_error:+$recovery_error,}base_fsync_failed"; fi
     if ! fsync_directory "$generations"; then recovery_error="${recovery_error:+$recovery_error,}generation_fsync_failed"; fi
+  fi
+  if [[ -z "$recovery_error" ]] && ! snapshot_targets_match "$old_current" "$old_previous"; then
+    recovery_error=pointer_restore_verification_failed
   fi
   if [[ -z "$recovery_error" ]]; then
     if ! restart_units; then
@@ -672,45 +789,68 @@ transition_pointers() {
 
 do_activate() {
   local object_dir="$incoming/$sha" artifact="$incoming/$sha/$digest.tar.gz" artifact_name="$digest.tar.gz" release="$releases/$sha"
-  local temporary old_current old_previous constructed=false
+  local temporary old_current old_previous constructed=false recovery_succeeded=false
   old_current=$(current_target); old_previous=$(previous_target)
   if [[ ! -d "$release" ]]; then
     [[ -d "$object_dir" ]] || fail "incoming artifact is missing"
-    temporary="$releases/.release-${sha}.$$"
+    temporary="$tmp_root/release-${sha}.$$"
     rm -rf "$temporary"
-    if ! (validate_and_extract "$object_dir" "$artifact_name" "$temporary" && install_dependencies "$temporary" && check_release_size_and_space "$temporary"); then
-      chmod -R u+w "$temporary" 2>/dev/null || true; rm -rf "$temporary"
-      fsync_directory "$releases"
+    if ! (validate_and_extract "$object_dir" "$artifact_name" "$temporary" &&
+      install_dependencies "$temporary" &&
+      check_release_size_and_space "$temporary" &&
+      finalize_release_tree "$temporary"); then
+      if ! remove_tree_and_fsync "$temporary" "$tmp_root"; then
+        printf 'ERROR: failed to clean rejected release staging tree %s\n' "$temporary" >&2
+      fi
       mark_failed_and_prune "$artifact"
       fail "release construction failed"
     fi
-    finalize_release_tree "$temporary"
-    mv "$temporary" "$release"
+    if ! publish_release "$temporary" "$release"; then
+      remove_tree_and_fsync "$temporary" "$tmp_root" ||
+        printf 'ERROR: failed to clean unpublished staging tree %s\n' "$temporary" >&2
+      remove_tree_and_fsync "$release" "$releases" ||
+        printf 'ERROR: failed to clean invalid unpublished release %s\n' "$release" >&2
+      fail "release publication rename failed"
+    fi
     constructed=true
-    fsync_directory "$releases"
-    chmod -R a-w "$release"
-    fsync_tree_bottom_up "$release"
-    fsync_directory "$releases"
+    fsync_directory "$tmp_root" || fail "staging parent fsync failed after publication"
+    fsync_directory "$releases" || fail "release parent fsync failed after publication"
   else
     validate_existing_release "$release"
   fi
   if ! transition_pointers "releases/$sha" "$old_current"; then
-    if ! recover_snapshot "$old_current" "$old_previous" "$sha" "$digest"; then
+    recovery_succeeded=false
+    if recover_snapshot "$old_current" "$old_previous" "$sha" "$digest"; then
+      recovery_succeeded=true
+    else
       printf 'ERROR: generation publish and recovery failed for %s\n' "$sha" >&2
     fi
-    if [[ "$constructed" == true ]]; then
-      chmod -R u+w "$release" 2>/dev/null || true
-      rm -rf "$release"
-      fsync_directory "$releases"
+    if [[ "$constructed" == true && "$recovery_succeeded" == true ]]; then
+      if candidate_is_unreferenced "releases/$sha"; then
+        remove_tree_and_fsync "$release" "$releases" ||
+          printf 'ERROR: failed to remove unreferenced candidate %s\n' "$sha" >&2
+      else
+        printf 'ERROR: recovered pointers still reference candidate %s; preserving release\n' "$sha" >&2
+      fi
     fi
     mark_failed_and_prune "$artifact"
     return 1
   fi
   if ! restart_units || ! run_health; then
-    if ! recover_snapshot "$old_current" "$old_previous" "$sha" "$digest"; then
+    recovery_succeeded=false
+    if recover_snapshot "$old_current" "$old_previous" "$sha" "$digest"; then
+      recovery_succeeded=true
+    else
       printf 'ERROR: activation rollback failed for %s\n' "$sha" >&2
     fi
-    if [[ "$constructed" == true ]]; then chmod -R u+w "$release" 2>/dev/null || true; rm -rf "$release"; fsync_directory "$releases"; fi
+    if [[ "$constructed" == true && "$recovery_succeeded" == true ]]; then
+      if candidate_is_unreferenced "releases/$sha"; then
+        remove_tree_and_fsync "$release" "$releases" ||
+          printf 'ERROR: failed to remove unreferenced candidate %s\n' "$sha" >&2
+      else
+        printf 'ERROR: recovered pointers still reference candidate %s; preserving release\n' "$sha" >&2
+      fi
+    fi
     mark_failed_and_prune "$artifact"
     return 1
   fi
