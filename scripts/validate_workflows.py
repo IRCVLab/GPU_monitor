@@ -573,6 +573,188 @@ def has_completed_ci_workflow_run_trigger(lines: list[SourceLine]) -> bool:
     )
 
 
+def top_level_block(lines: list[SourceLine], key: str) -> list[SourceLine]:
+    for index, line in enumerate(lines):
+        parsed = key_value(line.text)
+        if parsed and line.indent == 0 and parsed[0] == key and not parsed[1]:
+            block = [line]
+            for child in lines[index + 1 :]:
+                if child.indent <= line.indent:
+                    break
+                block.append(child)
+            return block
+    return []
+
+
+
+
+def workflow_dispatch_input_names(lines: list[SourceLine]) -> set[str]:
+    event = top_level_event_block(lines, "workflow_dispatch")
+    if event is None:
+        return set()
+    event_index, event_line = event
+    in_inputs = False
+    inputs_indent: int | None = None
+    names: set[str] = set()
+    for line in lines[event_index + 1 :]:
+        if line.indent <= event_line.indent:
+            break
+        parsed = key_value(line.text)
+        if parsed and parsed[0] == "inputs":
+            in_inputs = True
+            inputs_indent = line.indent
+            continue
+        if in_inputs and inputs_indent is not None:
+            if line.indent <= inputs_indent:
+                break
+            if parsed and line.indent == inputs_indent + 2:
+                names.add(parsed[0])
+    return names
+
+
+def has_workflow_dispatch_pr_number_input(lines: list[SourceLine]) -> bool:
+    event = top_level_event_block(lines, "workflow_dispatch")
+    if event is None:
+        return False
+    event_index, event_line = event
+    for line in lines[event_index + 1 :]:
+        if line.indent <= event_line.indent:
+            break
+        parsed = key_value(line.text)
+        if parsed and parsed[0] == "pr_number":
+            return True
+    return False
+
+
+def has_top_level_concurrency(lines: list[SourceLine], *, group: str, cancel_in_progress: str) -> bool:
+    block = top_level_block(lines, "concurrency")
+    if not block:
+        return False
+    found_group = False
+    found_cancel = False
+    for line in block[1:]:
+        parsed = key_value(line.text)
+        if not parsed:
+            continue
+        key, value = parsed
+        if key == "group" and unquote(value) == group:
+            found_group = True
+        if key == "cancel-in-progress" and unquote(value).lower() == cancel_in_progress:
+            found_cancel = True
+    return found_group and found_cancel
+
+
+def job_text(job: JobBlock) -> str:
+    return "\n".join(line.text for line in job.lines)
+
+
+def workflow_text_from_lines(lines: list[SourceLine]) -> str:
+    return "\n".join(line.text for line in lines)
+
+
+def workflow_mentions_storage(lines: list[SourceLine]) -> bool:
+    return "storage" in workflow_text_from_lines(lines).lower()
+
+
+def has_gpu_dev_dispatch_guard(lines: list[SourceLine], job: JobBlock, events: set[str], runner_labels: set[str]) -> bool:
+    text = job_text(job)
+    required_snippets = (
+        "pulls/",
+        "github.repository",
+        "head.repo.full_name",
+        "head.sha",
+        "state",
+        "open",
+        "ci/required",
+        "check-runs",
+        "steps.resolve.outputs.sha",
+        "StrictHostKeyChecking=yes",
+        "UserKnownHostsFile",
+        "IdentitiesOnly=yes",
+        "GPU_DEPLOY_HOST",
+        "GPU_DEPLOY_USER",
+        "upload dev $sha $digest",
+        "activate dev $sha $digest",
+        "status dev",
+    )
+    validation_snippets = (
+        "^[1-9][0-9]*$",
+        "^[0-9a-f]{40}$",
+        "^[0-9a-f]{64}$",
+        "GPU_DEPLOY_PORT",
+        "target",
+    )
+    return (
+        "workflow_dispatch" in events
+        and not ({"push", "pull_request", "pull_request_target", "workflow_run"} & events)
+        and direct_job_value(job, "environment") == "gpu-dev"
+        and runner_labels == {"ubuntu-24.04"}
+        and workflow_dispatch_input_names(lines) == {"pr_number"}
+        and has_workflow_dispatch_pr_number_input(lines)
+        and has_top_level_concurrency(lines, group="gpu-dev", cancel_in_progress="true")
+        and all(snippet in text for snippet in required_snippets)
+        and all(snippet in text for snippet in validation_snippets)
+        and not workflow_mentions_storage(lines)
+    )
+
+
+def has_workflow_run_head_sha_authorization(job: JobBlock) -> bool:
+    for block in step_blocks(job):
+        command = run_command_value(block)
+        if command is None or not run_executes_authorize_gpu_release(command):
+            continue
+        if "github.event.workflow_run.head_sha" not in command and "github.event_path" not in command:
+            continue
+        return True
+    return False
+
+
+def has_split_live_authorization(lines: list[SourceLine], jobs: list[JobBlock], deploy_job: JobBlock) -> bool:
+    needed = set(direct_job_values(deploy_job, "needs"))
+    if needed != {"authorize"}:
+        return False
+    auth_jobs = [job for job in jobs if job.job_id == "authorize"]
+    if len(auth_jobs) != 1:
+        return False
+    for auth_job in auth_jobs:
+        runner_labels = {label.lower() for label in direct_job_values(auth_job, "runs-on")}
+        if runner_labels != {"ubuntu-24.04"}:
+            continue
+        if direct_job_value(auth_job, "environment") is not None:
+            continue
+        if job_references_secrets(auth_job):
+            continue
+        if not has_workflow_run_provenance_guard(auth_job):
+            continue
+        if has_authorization_step(auth_job) and has_workflow_run_head_sha_authorization(auth_job):
+            return True
+    return False
+
+
+def live_deploy_job_uses_forced_protocol(job: JobBlock) -> bool:
+    text = job_text(job)
+    return all(
+        snippet in text
+        for snippet in (
+            "github.event.workflow_run.head_sha",
+            "upload live $sha $digest",
+            "activate live $sha $digest",
+            "status live",
+            "StrictHostKeyChecking=yes",
+            "UserKnownHostsFile",
+            "IdentitiesOnly=yes",
+            "GPU_DEPLOY_HOST",
+            "GPU_DEPLOY_USER",
+            "^[0-9a-f]{40}$",
+            "^[0-9a-f]{64}$",
+            "GPU_DEPLOY_PORT",
+            "GPU_DEPLOY_HOST",
+            "GPU_DEPLOY_USER",
+            "target",
+        )
+    )
+
+
 def split_top_level_conjunction(expression: str) -> list[str] | None:
     if "||" in expression:
         return None
@@ -881,7 +1063,8 @@ def validate_workflow(path: Path) -> list[Violation]:
     workflow_has_pr_secrets = is_pull_request_workflow and top_level_references_secrets(lines)
     if workflow_has_pr_secrets:
         violations.append(Violation(path, "pr-secrets", "pull_request workflows must not reference GitHub secrets"))
-    for job in find_jobs(lines):
+    jobs = find_jobs(lines)
+    for job in jobs:
         job_indent = job.lines[0].indent
         violations.extend(permission_write_violations(path, job.lines[1:], owner_indent=direct_child_indent(job.lines, job_indent) or job_indent + 2, job=job.job_id))
 
@@ -912,6 +1095,20 @@ def validate_workflow(path: Path) -> list[Violation]:
                 )
 
         deploy_job = is_deploy_job(job)
+        is_workflow_dispatch_dev_deploy = deploy_job and "workflow_dispatch" in events
+        if deploy_job and workflow_mentions_storage(lines):
+            violations.append(
+                Violation(path, "gpu-deploy-storage-coupling", "GPU deployment workflows must not reference Storage paths or services", job.job_id)
+            )
+        if is_workflow_dispatch_dev_deploy and not has_gpu_dev_dispatch_guard(lines, job, events, runner_labels):
+            violations.append(
+                Violation(
+                    path,
+                    "workflow-dispatch-dev-deploy-guard",
+                    "workflow_dispatch GPU development deployments must select an open same-repo PR, require ci/required on its exact head SHA, use gpu-dev concurrency/environment, and use the forced SSH protocol",
+                    job.job_id,
+                )
+            )
         if is_pull_request_workflow and job_references_secrets(job) and not workflow_has_pr_secrets:
             violations.append(
                 Violation(path, "pr-secrets", "pull_request jobs must not reference GitHub secrets", job.job_id)
@@ -931,17 +1128,22 @@ def validate_workflow(path: Path) -> list[Violation]:
         if deploy_job and "workflow_run" in events:
             if not (
                 has_completed_ci_workflow_run_trigger(lines)
+                and has_top_level_concurrency(lines, group="gpu-live", cancel_in_progress="false")
                 and has_workflow_run_provenance_guard(job)
-                and has_authorization_step(job)
+                and direct_job_value(job, "environment") == "gpu-live"
+                and has_split_live_authorization(lines, jobs, job)
+                and live_deploy_job_uses_forced_protocol(job)
             ):
                 violations.append(
                     Violation(
                         path,
                         "workflow-run-deploy-guard",
-                        "workflow_run deployment jobs must require completed ci on main push from the same repo, success, and authorization",
+                        "workflow_run deployment jobs must require completed ci on main push from the same repo, success, separate non-secret authorization, gpu-live concurrency/environment, and forced SSH deployment",
                         job.job_id,
                     )
                 )
+        elif is_workflow_dispatch_dev_deploy:
+            pass
         elif deploy_job and not has_main_guard(job):
             violations.append(
                 Violation(path, "deploy-main-guard", "deploy jobs must have a main-branch if guard", job.job_id)

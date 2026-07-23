@@ -107,3 +107,50 @@ Without `--check-host`, the checker reports server reachability as `UNKNOWN`, ex
 
 - `CODEOWNERS` live fetch treats only `HTTP 404` as absence. Authentication, authorization, rate-limit, malformed response, and 5xx failures are `UNKNOWN` and fail closed.
 - The checker copies supplied metadata dictionaries before deriving fields so caller-owned fixtures and API payloads are not mutated by evaluation.
+
+## Task 6 GPU deployment workflows
+
+Two GitHub-hosted deployment lanes are available for the GPU monitor. Both lanes build the immutable GPU release artifact from the exact SHA being deployed and send only the closed forced-command protocol to the server:
+
+```text
+upload <dev|live> <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+activate <dev|live> <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+status <dev|live>
+```
+
+The workflows validate the PR number, SHA, digest, host, user, port, and final `user@host` target before invoking SSH. SSH runs with `BatchMode=yes`, `StrictHostKeyChecking=yes`, an environment-scoped `UserKnownHostsFile`, `IdentitiesOnly=yes`, the environment-scoped key, and the validated port. The checkout ref, build SHA, upload SHA, activation SHA, and status SHA source are the same resolved SHA for each lane.
+
+Configure these exact GitHub environment secrets on both `gpu-dev` and `gpu-live` as appropriate:
+
+```text
+GPU_DEPLOY_HOST
+GPU_DEPLOY_PORT
+GPU_DEPLOY_USER
+GPU_DEPLOY_SSH_KEY
+GPU_DEPLOY_KNOWN_HOSTS
+```
+
+`GPU_DEPLOY_KNOWN_HOSTS` must contain the expected host key line for `GPU_DEPLOY_HOST`/`GPU_DEPLOY_PORT`. Do not store these values in repository files, logs, artifacts, or comments.
+
+### Shared development deployment (`gpu-dev`)
+
+`.github/workflows/deploy-gpu-dev.yml` is `workflow_dispatch` only and accepts exactly one input: `pr_number`. Operators dispatch it from GitHub Actions with the open same-repository pull request number to test on the shared development environment.
+
+The workflow resolves the selected PR through the GitHub API, requires that it is open, requires that `head.repo.full_name` exactly matches `github.repository`, resolves the exact PR `head.sha`, and requires a successful completed `ci/required` check run for that same SHA. It then checks out `steps.resolve.outputs.sha`, builds that SHA, and deploys that SHA to `environment: gpu-dev` with `concurrency.group: gpu-dev` and `cancel-in-progress: true`; a newer development deployment can cancel a superseded one.
+
+### Live deployment (`gpu-live`)
+
+`.github/workflows/deploy-gpu-live.yml` runs only from a completed `ci` `workflow_run` for `main`. The live deploy job is guarded by the exact provenance expression requiring a push event, `main` branch, successful CI conclusion, and the same repository. Direct pushes may run CI, but live authorization still requires `scripts/authorize_gpu_release.py` to authorize the final SHA from GitHub provenance; direct pushes without the required merged-PR/review/check evidence are denied.
+
+Live authorization and secret access are separate jobs. The `authorize` job has no deployment environment and no deployment secrets; it uses repository checkout and the GitHub token context only as needed to run `python3.12 scripts/authorize_gpu_release.py`. The secret-bearing deploy job has `needs: authorize`, `environment: gpu-live`, `concurrency.group: gpu-live`, and `cancel-in-progress: false`, so an in-progress live deployment is never cancelled by a newer run. It checks out `github.event.workflow_run.head_sha`, builds that exact SHA, and deploys only that SHA.
+
+### Status and rollback
+
+Each successful deployment records remote `status dev` or `status live` through the forced-command wrapper. For manual inspection, use the matching deploy identity and forced command configured on the server. Rollback remains environment-local:
+
+```text
+rollback dev
+rollback live
+```
+
+A development rollback must not target live, and a live rollback must not target development. The server-side forced command enforces the lane boundary.

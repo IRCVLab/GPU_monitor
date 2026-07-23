@@ -1,0 +1,137 @@
+name: deploy-gpu-dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository pull request number to deploy to gpu-dev
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: gpu-dev
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy selected PR head to gpu-dev
+    runs-on: ubuntu-24.04
+    environment: gpu-dev
+    steps:
+      - name: Resolve open same-repo PR head SHA and ci/required
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr_number="$PR_NUMBER"
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || { echo "invalid pr_number" >&2; exit 1; }
+
+          pr_json=$(gh api "repos/${REPOSITORY}/pulls/$pr_number")
+          state=$(python3.12 -c 'import json,sys; print(json.load(sys.stdin)["state"])' <<<"$pr_json")
+          [[ "$state" == open ]] || { echo "PR state is not open" >&2; exit 1; }
+
+          head_repo=$(python3.12 -c 'import json,sys; print(json.load(sys.stdin)["head"]["repo"]["full_name"])' <<<"$pr_json")
+          [[ "$head_repo" == "$GITHUB_REPOSITORY" ]] || { echo "PR head.repo.full_name is not this repository" >&2; exit 1; }
+
+          sha=$(python3.12 -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])' <<<"$pr_json")
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "head.sha is not a 40-character lowercase SHA" >&2; exit 1; }
+
+          checks_json=$(gh api "repos/${REPOSITORY}/commits/$sha/check-runs")
+          CHECKS_JSON="$checks_json" python3.12 - "$sha" <<'PY'
+          import json
+          import os
+          import sys
+          sha = sys.argv[1]
+          payload = json.loads(os.environ["CHECKS_JSON"])
+          matches = [
+              check for check in payload.get("check_runs", [])
+              if check.get("name") == "ci/required"
+              and check.get("head_sha") == sha
+              and check.get("status") == "completed"
+              and check.get("conclusion") == "success"
+          ]
+          if not matches:
+              raise SystemExit("ci/required is not successful for PR head SHA")
+          PY
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+
+      - name: Build release artifact
+        id: build
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          sha="$SHA"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid SHA" >&2; exit 1; }
+          release_dir=$(mktemp -d)
+          apps/gpu-monitor/deploy/build-release.sh --sha "$sha" --output-dir "$release_dir"
+          artifact="$release_dir/gpu-monitor-$sha.tar.gz"
+          [[ -f "$artifact" ]] || { echo "release artifact missing" >&2; exit 1; }
+          digest=$(python3.12 - "$artifact" <<'PY'
+          import hashlib
+          import sys
+          path = sys.argv[1]
+          h = hashlib.sha256()
+          with open(path, "rb") as handle:
+              for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                  h.update(chunk)
+          print(h.hexdigest())
+          PY
+          )
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid digest" >&2; exit 1; }
+          printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy over forced SSH protocol
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARTIFACT: ${{ steps.build.outputs.artifact }}
+          GPU_DEPLOY_HOST: ${{ secrets.GPU_DEPLOY_HOST }}
+          GPU_DEPLOY_PORT: ${{ secrets.GPU_DEPLOY_PORT }}
+          GPU_DEPLOY_USER: ${{ secrets.GPU_DEPLOY_USER }}
+          GPU_DEPLOY_SSH_KEY: ${{ secrets.GPU_DEPLOY_SSH_KEY }}
+          GPU_DEPLOY_KNOWN_HOSTS: ${{ secrets.GPU_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          sha="$SHA"
+          digest="$DIGEST"
+          artifact="$ARTIFACT"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid SHA" >&2; exit 1; }
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid digest" >&2; exit 1; }
+          [[ -f "$artifact" ]] || { echo "artifact missing" >&2; exit 1; }
+          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid host" >&2; exit 1; }
+          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid user" >&2; exit 1; }
+          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]] && (( GPU_DEPLOY_PORT >= 1 && GPU_DEPLOY_PORT <= 65535 )) || { echo "invalid port" >&2; exit 1; }
+          target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
+          [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] || { echo "invalid target" >&2; exit 1; }
+
+          key_file=$(mktemp)
+          known_hosts=$(mktemp)
+          cleanup() { rm -f "$key_file" "$known_hosts"; }
+          trap cleanup EXIT
+          printf '%s\n' "$GPU_DEPLOY_SSH_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          printf '%s\n' "$GPU_DEPLOY_KNOWN_HOSTS" > "$known_hosts"
+          [[ -s "$known_hosts" ]] || { echo "known_hosts is empty" >&2; exit 1; }
+          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
+
+          ssh "${ssh_opts[@]}" "$target" "upload dev $sha $digest" < "$artifact"
+          ssh "${ssh_opts[@]}" "$target" "activate dev $sha $digest"
+          ssh "${ssh_opts[@]}" "$target" "status dev"

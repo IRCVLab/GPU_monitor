@@ -110,3 +110,21 @@ The scanner uses Linux-specific `SYS_getdents64` behavior. On non-Linux hosts, t
 ## History and migration evidence
 
 `docs/history-migration.md` records redacted migration evidence and points to ignored local machine-readable artifacts under the planning worktree. Those artifacts are for verification and audit, not for publication, and must not include secrets.
+
+## GPU deployment workflow operation
+
+Development deployments are manual. In GitHub Actions, run `deploy-gpu-dev` with the `workflow_dispatch` input `pr_number` set to an open same-repository pull request. The workflow deploys only the exact PR head SHA after `ci/required` has succeeded for that SHA. It uses the `gpu-dev` environment and cancels older in-progress development deployments.
+
+Live deployments are automatic only after the `ci` workflow completes successfully for `main`. The live workflow first runs a non-secret `authorize` job, then a separate `gpu-live` deployment job with `needs: authorize`. The live job never cancels an in-progress live deployment. Direct pushes to `main` may run CI, but they are denied for live deployment unless the authorization script can prove the required merged-PR, approval, and `ci/required` evidence for the final SHA.
+
+Both workflows require these exact environment secrets on their GitHub deployment environment:
+
+```text
+GPU_DEPLOY_HOST
+GPU_DEPLOY_PORT
+GPU_DEPLOY_USER
+GPU_DEPLOY_SSH_KEY
+GPU_DEPLOY_KNOWN_HOSTS
+```
+
+The workflows validate `pr_number`, SHA, artifact digest, port, host, user, and `user@host` target before SSH. SSH uses strict known-host checking with the environment-provided known hosts file. Remote commands are limited to `upload`, `activate`, and `status` for the selected lane; rollback is a deliberate operator action through `rollback dev` or `rollback live` on the server-side forced-command interface.

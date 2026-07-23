@@ -575,6 +575,206 @@ class WorkflowPolicyTest(unittest.TestCase):
                 self.assert_policy_violation(body, "unsupported-runs-on-mapping", "integration", filename)
 
 
+    def test_accepts_gated_gpu_dev_workflow_dispatch_deployment(self):
+        result = self.run_validator(
+            {
+                "deploy-gpu-dev.yml": f"""
+                on:
+                  workflow_dispatch:
+                    inputs:
+                      pr_number:
+                        required: true
+                permissions: read-all
+                concurrency:
+                  group: gpu-dev
+                  cancel-in-progress: true
+                jobs:
+                  deploy:
+                    runs-on: ubuntu-24.04
+                    environment: gpu-dev
+                    steps:
+                      - name: Resolve open same-repo PR head SHA and ci/required
+                        run: |
+                          pr_number="${{{{ github.event.inputs.pr_number }}}}"
+                          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
+                          pr_json=$(gh api "repos/${{{{ github.repository }}}}/pulls/$pr_number")
+                          state=$(python3.12 -c 'print("state open")')
+                          [[ "$state" == open ]]
+                          head_repo=$(python3.12 -c 'print("head.repo.full_name")')
+                          [[ "$head_repo" == "$GITHUB_REPOSITORY" ]]
+                          sha=$(python3.12 -c 'print("head.sha 0123456789abcdef0123456789abcdef01234567")')
+                          [[ "$sha" =~ ^[0-9a-f]{{40}}$ ]]
+                          gh api "repos/${{{{ github.repository }}}}/commits/$sha/check-runs" --jq '.check_runs[] | select(.name == "ci/required" and .status == "completed" and .conclusion == "success")'
+                      - uses: actions/checkout@{PINNED_SHA}
+                        with:
+                          ref: ${{{{ steps.resolve.outputs.sha }}}}
+                      - name: Deploy over forced SSH protocol
+                        env:
+                          GPU_DEPLOY_HOST: ${{{{ secrets.GPU_DEPLOY_HOST }}}}
+                          GPU_DEPLOY_PORT: ${{{{ secrets.GPU_DEPLOY_PORT }}}}
+                          GPU_DEPLOY_USER: ${{{{ secrets.GPU_DEPLOY_USER }}}}
+                        run: |
+                          digest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+                          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
+                          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
+                          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
+                          target="gpu-deploy-dev@example.invalid"
+                          [[ "$digest" =~ ^[0-9a-f]{{64}}$ ]]
+                          [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]]
+                          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
+                          ssh "${{ssh_opts[@]}}" "$target" "upload dev $sha $digest" < "$artifact"
+                          ssh "${{ssh_opts[@]}}" "$target" "activate dev $sha $digest"
+                          ssh "${{ssh_opts[@]}}" "$target" "status dev"
+                """
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_gpu_dev_workflow_dispatch_bypasses(self):
+        workflows = {
+            "missing-pr-input.yml": """
+                on:
+                  workflow_dispatch:
+                jobs:
+                  deploy:
+                    runs-on: ubuntu-24.04
+                    environment: gpu-dev
+                    steps:
+                      - run: gh api repos/${{ github.repository }}/pulls/1
+                      - run: ci/required
+                      - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
+            """,
+            "missing-ci-required.yml": """
+                on:
+                  workflow_dispatch:
+                    inputs:
+                      pr_number:
+                        required: true
+                jobs:
+                  deploy:
+                    runs-on: ubuntu-24.04
+                    environment: gpu-dev
+                    steps:
+                      - run: gh api repos/${{ github.repository }}/pulls/$pr_number
+                      - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
+            """,
+            "wrong-environment.yml": """
+                on:
+                  workflow_dispatch:
+                    inputs:
+                      pr_number:
+                        required: true
+                concurrency:
+                  group: gpu-live
+                  cancel-in-progress: false
+                jobs:
+                  deploy:
+                    runs-on: ubuntu-24.04
+                    environment: gpu-live
+                    steps:
+                      - run: gh api repos/${{ github.repository }}/pulls/$pr_number && ci/required
+                      - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
+            """,
+            "mutable-runner.yml": """
+                on:
+                  workflow_dispatch:
+                    inputs:
+                      pr_number:
+                        required: true
+                concurrency:
+                  group: gpu-dev
+                  cancel-in-progress: true
+                jobs:
+                  deploy:
+                    runs-on: ubuntu-latest
+                    environment: gpu-dev
+                    steps:
+                      - run: gh api repos/${{ github.repository }}/pulls/$pr_number && ci/required
+                      - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "workflow-dispatch-dev-deploy-guard", "deploy", filename)
+
+    def test_rejects_live_deployments_without_separate_non_secret_authorization_job(self):
+        workflows = {
+            "same-job-auth.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567"),
+            "auth-job-has-secret.yml": f"""
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  authorize:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-24.04
+                    env:
+                      TOKEN: ${{{{ secrets.GPU_DEPLOY_HOST }}}}
+                    steps:
+                      - run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+                  deploy:
+                    needs: authorize
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-24.04
+                    environment: gpu-live
+                    steps:
+                      - run: ./deploy.sh
+            """,
+            "deploy-missing-needs.yml": f"""
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  authorize:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-24.04
+                    steps:
+                      - run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+                  deploy:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-24.04
+                    environment: gpu-live
+                    steps:
+                      - run: ./deploy.sh
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "workflow-run-deploy-guard", filename=filename)
+
+    def test_rejects_gpu_deployment_workflows_with_storage_coupling(self):
+        for filename, event in (("dev-storage.yml", "workflow_dispatch"), ("live-storage.yml", "workflow_run")):
+            with self.subTest(filename=filename):
+                if event == "workflow_dispatch":
+                    body = """
+                    on:
+                      workflow_dispatch:
+                        inputs:
+                          pr_number:
+                            required: true
+                    concurrency:
+                      group: gpu-dev
+                      cancel-in-progress: true
+                    jobs:
+                      deploy:
+                        runs-on: ubuntu-24.04
+                        environment: gpu-dev
+                        steps:
+                          - run: gh api repos/${{ github.repository }}/pulls/$pr_number && ci/required
+                          - run: echo storage-monitor
+                          - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
+                    """
+                    rule = "workflow-dispatch-dev-deploy-guard"
+                    job = "deploy"
+                else:
+                    body = self.split_authorized_live_workflow(extra_deploy_step="- run: echo storage-monitor")
+                    rule = "gpu-deploy-storage-coupling"
+                    job = None
+                self.assert_policy_violation(body, rule, job, filename)
+
     def test_rejects_environment_bearing_release_named_job_without_deploy_token(self):
         self.assert_policy_violation(
             """
@@ -748,29 +948,59 @@ class WorkflowPolicyTest(unittest.TestCase):
         )
 
     def test_accepts_sha_pinned_authorized_workflow_run_live_deployment(self):
-        result = self.run_validator(
-            {
-                "gpu-live.yml": f"""
-                on:
-                  workflow_run:
-                    workflows: [ci]
-                    types: [completed]
-                permissions: read-all
-                jobs:
-                  release-gpu:
-                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
-                    runs-on: ubuntu-24.04
-                    environment: gpu-live
-                    steps:
-                      - uses: actions/checkout@{PINNED_SHA}
-                      - name: Authorize deployment
-                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
-                      - run: ./deploy.sh
-                """
-            }
-        )
+        result = self.run_validator({"gpu-live.yml": self.split_authorized_live_workflow()})
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+
+
+    def split_authorized_live_workflow(self, *, extra_deploy_step: str = "", auth_continue: str | None = None) -> str:
+        extra = textwrap.indent(textwrap.dedent(extra_deploy_step).strip("\n"), "                      ") if extra_deploy_step else ""
+        if extra:
+            extra = "\n" + extra
+        continue_line = f"\n                    continue-on-error: {auth_continue}" if auth_continue else ""
+        return f"""
+            on:
+              workflow_run:
+                workflows: [ci]
+                types: [completed]
+            permissions: read-all
+            concurrency:
+              group: gpu-live
+              cancel-in-progress: false
+            jobs:
+              authorize:
+                if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                runs-on: ubuntu-24.04
+                steps:
+                  - uses: actions/checkout@{PINNED_SHA}
+                  - name: Authorize deployment{continue_line}
+                    run: python3.12 scripts/authorize_gpu_release.py --repository ${{{{ github.repository }}}} --workflow-run-file ${{{{ github.event_path }}}} --live --required-check ci/required
+              deploy:
+                needs: authorize
+                if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                runs-on: ubuntu-24.04
+                environment: gpu-live
+                steps:
+                  - uses: actions/checkout@{PINNED_SHA}
+                    with:
+                      ref: ${{{{ github.event.workflow_run.head_sha }}}}
+                  - run: |
+                      sha="${{{{ github.event.workflow_run.head_sha }}}}"
+                      digest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+                      target="gpu-deploy-live@example.invalid"
+                      [[ "$sha" =~ ^[0-9a-f]{{40}}$ ]]
+                      [[ "$digest" =~ ^[0-9a-f]{{64}}$ ]]
+                      [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
+                      [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
+                      [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
+                      [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]]
+                      ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
+                      ssh "${{ssh_opts[@]}}" "$target" "upload live $sha $digest" < "$artifact"
+                      ssh "${{ssh_opts[@]}}" "$target" "activate live $sha $digest"
+                      ssh "${{ssh_opts[@]}}" "$target" "status live"{extra}
+        """
 
 
 
@@ -1122,18 +1352,10 @@ class WorkflowPolicyTest(unittest.TestCase):
                 self.assert_policy_violation(body, "workflow-run-deploy-guard", "release-gpu", filename)
 
     def test_accepts_safe_multiline_authorization_run_block(self):
-        result = self.run_validator(
-            {
-                "gpu-live.yml": self.guarded_workflow_run(
-                    """
-                    run: |
-                      python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
-                    """
-                )
-            }
-        )
+        result = self.run_validator({"gpu-live.yml": self.split_authorized_live_workflow()})
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 
     def test_continue_on_error_must_be_explicitly_absent_or_false_for_authorization(self):
@@ -1167,14 +1389,7 @@ class WorkflowPolicyTest(unittest.TestCase):
         for filename, value in accepted_values.items():
             with self.subTest(filename=filename):
                 result = self.run_validator(
-                    {
-                        filename: self.guarded_workflow_run(
-                            f"""
-                            continue-on-error: {value}
-                            run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo
-                            """
-                        )
-                    }
+                    {filename: self.split_authorized_live_workflow(auth_continue=value)}
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
