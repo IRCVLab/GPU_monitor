@@ -12,7 +12,6 @@ from pathlib import Path
 PINNED_ACTION_RE = re.compile(r"@[0-9a-f]{40}$")
 PRODUCTION_LABELS = {"prod", "production", "prd", "prod-runner"}
 
-POLICY_SENSITIVE_KEYS = {"on", "permissions", "runs-on"}
 YAML_TOKEN_BOUNDARIES = set(" \t[{,:")
 
 
@@ -46,8 +45,25 @@ def without_quoted_strings_and_comments(value: str) -> str:
     return "".join(chars).rstrip()
 
 
+def without_github_expressions(value: str) -> str:
+    """Blank GitHub expression bodies so policy token scanning allows normal ${{ }} syntax."""
+    chars = list(value)
+    index = 0
+    while index < len(chars):
+        if value.startswith("${{", index):
+            end = value.find("}}", index + 3)
+            if end == -1:
+                break
+            for expr_index in range(index, end + 2):
+                chars[expr_index] = " "
+            index = end + 2
+            continue
+        index += 1
+    return "".join(chars)
+
+
 def has_unquoted_yaml_anchor_or_alias(value: str) -> bool:
-    text = without_quoted_strings_and_comments(value)
+    text = without_github_expressions(without_quoted_strings_and_comments(value))
     for index, char in enumerate(text):
         if char not in {"&", "*"}:
             continue
@@ -60,7 +76,7 @@ def has_unquoted_yaml_anchor_or_alias(value: str) -> bool:
 
 
 def has_unquoted_yaml_tag(value: str) -> bool:
-    text = without_quoted_strings_and_comments(value)
+    text = without_github_expressions(without_quoted_strings_and_comments(value))
     for index, char in enumerate(text):
         if char != "!":
             continue
@@ -194,18 +210,16 @@ def job_for_line(jobs: list[JobBlock], line_number: int) -> str | None:
     return None
 
 
-def is_policy_sensitive_line(lines: list[SourceLine], index: int) -> bool:
-    line = lines[index]
+def is_run_scalar_line(line: SourceLine) -> bool:
     parsed = key_value(line.text)
-    if parsed and parsed[0] in POLICY_SENSITIVE_KEYS:
-        return True
-    if line.text.startswith("-"):
-        for parent in reversed(lines[:index]):
-            if parent.indent >= line.indent:
-                continue
-            parent_parsed = key_value(parent.text)
-            return parent_parsed is not None and parent_parsed[0] in POLICY_SENSITIVE_KEYS
-    return False
+    return parsed is not None and parsed[0] == "run"
+
+
+def is_block_scalar_start(line: SourceLine) -> bool:
+    parsed = key_value(line.text)
+    if parsed is None:
+        return False
+    return parsed[0] == "run" and strip_comment(parsed[1]).strip() in {"|", ">", "|-", ">-", "|+", ">+"}
 
 
 def unsupported_yaml_violations(path: Path, lines: list[SourceLine]) -> list[Violation]:
@@ -213,13 +227,24 @@ def unsupported_yaml_violations(path: Path, lines: list[SourceLine]) -> list[Vio
         return [Violation(path, "unsupported-yaml", "workflow file is empty")]
     violations: list[Violation] = []
     jobs = find_jobs(lines)
-    for index, line in enumerate(lines):
+    run_block_indent: int | None = None
+    for line in lines:
+        if run_block_indent is not None:
+            if line.indent > run_block_indent:
+                continue
+            run_block_indent = None
+
         if line.indent == 0 and line.text.startswith("-"):
             violations.append(Violation(path, "unsupported-yaml", f"top-level list item at line {line.number} is not supported"))
         if not line.text.startswith("-") and ":" not in line.text:
             violations.append(Violation(path, "unsupported-yaml", f"line {line.number} is not a supported key/value mapping"))
-        if not is_policy_sensitive_line(lines, index):
+
+        if is_block_scalar_start(line):
+            run_block_indent = line.indent
             continue
+        if is_run_scalar_line(line):
+            continue
+
         job = job_for_line(jobs, line.number)
         if yaml_anchor_or_alias(line.text):
             violations.append(

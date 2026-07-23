@@ -276,6 +276,96 @@ class WorkflowPolicyTest(unittest.TestCase):
                 job = "integration" if "runs-on" in filename else None
                 self.assert_policy_violation(body, "unsupported-yaml-anchor-alias", job, filename)
 
+
+    def test_rejects_fail_closed_yaml_tokens_across_semantic_structure(self):
+        workflows = {
+            "cross-field-alias-event-key.yml": """
+                x-event: &prt pull_request_target
+                on:
+                  *prt:
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "block-permission-anchored-value.yml": """
+                on: push
+                permissions:
+                  contents: &perm write
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "block-permission-tagged-value.yml": """
+                on: push
+                permissions:
+                  contents: !!str write
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "alias-key.yml": """
+                on: push
+                *aliased-key: value
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "tagged-key.yml": """
+                on: push
+                !tagged-key: value
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+        }
+        expected_rules = {
+            "block-permission-tagged-value.yml": "unsupported-yaml-tag",
+            "tagged-key.yml": "unsupported-yaml-tag",
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(
+                    body,
+                    expected_rules.get(filename, "unsupported-yaml-anchor-alias"),
+                    filename=filename,
+                )
+
+    def test_accepts_github_expressions_shell_tokens_and_quoted_yaml_tokens(self):
+        result = self.run_validator(
+            {
+                "expressions-and-shell.yml": f"""
+                on: push
+                permissions: read-all
+                jobs:
+                  test:
+                    if: ${{{{ !cancelled() && github.ref != 'refs/heads/release/*' }}}}
+                    runs-on: ubuntu-latest
+                    env:
+                      QUOTED_ANCHOR: "&anchor *alias !tag !!str"
+                      SINGLE_QUOTED: '*literal !literal &literal'
+                    steps:
+                      - name: "quoted *alias !tag &anchor"
+                        run: echo !important && printf '%s\\n' src/* "&quoted" '*quoted' !!not-yaml
+                      - run: |
+                          echo & shell background is allowed inside run blocks
+                          printf '%s\\n' !negated src/* *glob
+                      - uses: actions/checkout@{PINNED_SHA}
+                """
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rejects_inline_runs_on_mapping_with_trailing_comment(self):
         self.assert_policy_violation(
             """
