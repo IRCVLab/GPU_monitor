@@ -21,3 +21,32 @@ Runtime secrets and data (`.env`, databases, virtualenvs, `node_modules`, caches
 ## Task 5 handoff note
 
 The manifest is emitted beside the tarball rather than embedded inside it. Embedding the final artifact SHA-256 inside the tarball would create a checksum cycle, so server-side upload/activation should transport and verify the external `release-manifest.json` with the tarball and checksum file, or define a separate non-circular in-artifact provenance file in Task 5.
+
+## Server-side forced deployment boundary
+
+Task 5 adds the server-side forced command and activation scripts under `apps/gpu-monitor/deploy/server/`. Install them on the target host with a development key, and optionally a distinct live key:
+
+```bash
+sudo apps/gpu-monitor/deploy/server/install-deployer.sh \
+  --dev-public-key "$(cat /path/to/dev_deploy.pub)" \
+  --live-public-key "$(cat /path/to/live_deploy.pub)"
+```
+
+For unprivileged validation or packaging, use `--dry-run --prefix <dir>`. Real installs require root, create the dedicated nologin `gpu-deploy` user, lay out `/srv/gpu-monitor/{dev,live}`, `/etc/gpu-monitor/{dev,live}.env`, and install systemd templates without starting or enabling any service. The installer binds keys to explicit forced-command environments (`gpu-monitor-deploy-command dev` or `gpu-monitor-deploy-command live`), so a development key cannot request live commands.
+
+The forced command accepts only these `SSH_ORIGINAL_COMMAND` forms:
+
+```text
+upload dev <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+upload live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+activate dev <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+activate live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+status dev
+status live
+rollback dev
+rollback live
+```
+
+Uploads stream from SSH stdin into environment-local incoming storage, are bounded to 512 MiB by default, and are kept only after SHA-256 verification. Activation validates archive structure defensively, reconstructs the release manifest from the validated command arguments plus recomputed digest, extracts into a temporary release, installs locked runtime dependencies there, atomically publishes an immutable `releases/<sha>` directory, and updates `current`/`previous` symlinks under the selected environment root.
+
+Development activation restarts only backend/frontend units and checks ports `8101` and `5174`. Live activation restarts backend/frontend/bridge units and checks ports `8001`, `5173`, and `8000`; Task 5 installs templates only and does not start or replace live services during installation. Each environment uses a separate flock file and durable JSONL deployment state, rolls back and rechecks on failed health, and retains the latest three successful releases without deleting the release targeted by `current` or `previous`.

@@ -1,0 +1,14 @@
+[Unit]
+Description=GPU Monitor frontend (%i)
+After=network.target
+
+[Service]
+Type=simple
+User=gpu-deploy
+WorkingDirectory=/srv/gpu-monitor/%i/current/frontend
+EnvironmentFile=/etc/gpu-monitor/%i.env
+ExecStart=/usr/bin/npm run start -- --host 127.0.0.1
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

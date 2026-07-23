@@ -1,0 +1,14 @@
+[Unit]
+Description=GPU Monitor live bridge (%i)
+After=network.target
+
+[Service]
+Type=simple
+User=gpu-deploy
+WorkingDirectory=/srv/gpu-monitor/%i/current/backend
+EnvironmentFile=/etc/gpu-monitor/%i.env
+ExecStart=/srv/gpu-monitor/%i/current/.venv/bin/python /srv/gpu-monitor/%i/current/backend/bridge.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
