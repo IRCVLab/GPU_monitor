@@ -74,6 +74,7 @@ DOCUMENTATION_RULE = PathRule(
         "apps/gpu-monitor/docs/",
         "apps/gpu-monitor/feature/",
         "apps/storage-monitor/docs/",
+        "apps/storage-monitor/feature/",
     ),
     exact=("README.md", "CONTRIBUTING.md", "SECURITY.md"),
     suffixes=(".md",),
@@ -123,7 +124,10 @@ def classify_paths(paths: Sequence[str]) -> dict[str, bool]:
     decisions = {key: False for key in DECISION_KEYS}
 
     for path in normalized_paths:
+        documentation_only = matches_rule(path, DOCUMENTATION_RULE)
         for rule in PATH_RULES:
+            if documentation_only and rule.decision in {"gpu", "storage_dashboard", "storage_agent"}:
+                continue
             if matches_rule(path, rule):
                 decisions[rule.decision] = True
 
@@ -175,6 +179,12 @@ def build_payload(paths: Sequence[str]) -> dict[str, bool]:
     return classify_paths(normalized_paths)
 
 
+def error_message(exc: BaseException) -> str:
+    if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+        return exc.stderr.strip()
+    return str(exc)
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -193,7 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         paths = read_paths_file(args.paths_file) if args.paths_file else read_git_range(args.base, args.head)
         payload = build_payload(paths)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
-        print(str(exc), file=sys.stderr)
+        print(error_message(exc), file=sys.stderr)
         return 2
 
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))

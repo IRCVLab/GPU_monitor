@@ -68,6 +68,44 @@ class CiImpactTest(unittest.TestCase):
             documentation=True,
         )
 
+    def test_gpu_app_local_documentation_paths_do_not_require_apps(self):
+        self.assert_decisions(
+            (
+                "apps/gpu-monitor/README.md",
+                "apps/gpu-monitor/docs/README.md",
+                "apps/gpu-monitor/feature/README.md",
+            ),
+            documentation=True,
+        )
+
+    def test_storage_app_local_documentation_paths_do_not_require_apps(self):
+        self.assert_decisions(
+            (
+                "apps/storage-monitor/README.md",
+                "apps/storage-monitor/docs/README.md",
+                "apps/storage-monitor/feature/README.md",
+            ),
+            documentation=True,
+        )
+
+    def test_storage_feature_readme_without_extension_is_documentation_only(self):
+        self.assert_decisions(
+            ("apps/storage-monitor/feature/README",),
+            documentation=True,
+        )
+
+    def test_app_local_documentation_keeps_apps_required_when_code_changes_too(self):
+        self.assert_decisions(
+            (
+                "apps/gpu-monitor/feature/README.md",
+                "apps/storage-monitor/docs/README.md",
+                "apps/storage-monitor/viewer/app.js",
+            ),
+            documentation=True,
+            storage_dashboard=True,
+            apps_required=True,
+        )
+
     def test_shared_root_change_sets_both_application_decisions(self):
         self.assert_decisions(
             ("Makefile",),
@@ -139,6 +177,13 @@ class CiImpactTest(unittest.TestCase):
                     result = self.run_script("--paths-file", str(paths_file))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("invalid repository-relative path", result.stderr)
+
+    def test_git_range_failure_reports_git_stderr(self):
+        result = self.run_script("--base", "missing-base", "--head", "missing-head")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("fatal:", result.stderr)
+        self.assertNotIn("returned non-zero exit status", result.stderr)
 
     def test_writes_lowercase_github_outputs(self):
         with tempfile.TemporaryDirectory() as tempdir:
