@@ -160,9 +160,32 @@ def read_paths_file(paths_file: str) -> list[str]:
         return handle.read().splitlines()
 
 
-def read_git_range(base: str, head: str) -> list[str]:
+def read_tracked_paths() -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--name-status", "--find-renames", base, head],
+        ["git", "ls-files"],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result.stdout.splitlines()
+
+
+def merge_base(base: str, head: str) -> str:
+    result = subprocess.run(
+        ["git", "merge-base", base, head],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result.stdout.strip()
+
+
+def read_git_range(base: str, head: str, *, use_merge_base: bool = False) -> list[str]:
+    diff_base = merge_base(base, head) if use_merge_base else base
+    result = subprocess.run(
+        ["git", "diff", "--name-status", "--find-renames", diff_base, head],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
@@ -206,18 +229,40 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     source.add_argument("--paths-file", help="newline-delimited repository-relative changed paths")
     source.add_argument("--base", help="base Git revision for changed-path discovery")
     parser.add_argument("--head", help="head Git revision for changed-path discovery")
+    parser.add_argument(
+        "--merge-base",
+        action="store_true",
+        help="diff the merge-base of --base/--head against --head instead of diffing --base directly",
+    )
+    parser.add_argument(
+        "--fallback-to-all-tracked",
+        action="store_true",
+        help="classify every tracked path if Git range discovery fails",
+    )
     args = parser.parse_args(argv)
     if args.head and not args.base:
         parser.error("--head requires --base")
     if args.base and not args.head:
         parser.error("--base and --head must be supplied together")
+    if args.merge_base and not args.base:
+        parser.error("--merge-base requires --base and --head")
+    if args.fallback_to_all_tracked and not args.base:
+        parser.error("--fallback-to-all-tracked requires --base and --head")
     return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        paths = read_paths_file(args.paths_file) if args.paths_file else read_git_range(args.base, args.head)
+        if args.paths_file:
+            paths = read_paths_file(args.paths_file)
+        else:
+            try:
+                paths = read_git_range(args.base, args.head, use_merge_base=args.merge_base)
+            except subprocess.CalledProcessError:
+                if not args.fallback_to_all_tracked:
+                    raise
+                paths = read_tracked_paths()
         payload = build_payload(paths)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(error_message(exc), file=sys.stderr)

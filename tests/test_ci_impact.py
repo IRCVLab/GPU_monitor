@@ -305,6 +305,55 @@ class CiImpactTest(unittest.TestCase):
         self.assertTrue(payload["storage_dashboard"])
         self.assertTrue(payload["storage_agent"])
 
+    def test_git_range_can_diff_merge_base_to_head_after_base_advances(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = Path(tempdir) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "--initial-branch=main"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (repo / "README.md").write_text("initial\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (repo / "apps/gpu-monitor/backend").mkdir(parents=True)
+            (repo / "apps/gpu-monitor/backend/feature.py").write_text("gpu change\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "feature gpu"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+
+            subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (repo / "apps/storage-monitor/viewer").mkdir(parents=True)
+            (repo / "apps/storage-monitor/viewer/base-only.js").write_text("base advancement\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base storage"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            advanced_base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+
+            result = subprocess.run(
+                ["python3.12", str(SCRIPT), "--base", advanced_base, "--head", head, "--merge-base"],
+                cwd=repo,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["gpu"])
+        self.assertFalse(payload["storage_dashboard"], payload)
+
+    def test_git_range_failure_can_fallback_to_all_tracked_paths(self):
+        result = self.run_script("--base", "missing-base", "--head", "HEAD", "--fallback-to-all-tracked")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["gpu"])
+        self.assertTrue(payload["storage_dashboard"])
+        self.assertTrue(payload["storage_agent"])
+        self.assertTrue(payload["shared"])
+        self.assertTrue(payload["workflow"])
+        self.assertTrue(payload["documentation"])
+        self.assertTrue(payload["apps_required"])
+
 
 if __name__ == "__main__":
     unittest.main()

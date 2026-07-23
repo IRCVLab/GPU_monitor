@@ -282,12 +282,29 @@ class RepositoryLayoutTest(unittest.TestCase):
             "name: ci/storage",
             "if: always()",
             "needs: [impact, repository, gpu, storage]",
+            "needs.impact.outputs.gpu",
+            "needs.impact.outputs.storage_dashboard",
+            "needs.impact.outputs.storage_agent",
             "needs.gpu.result",
             "needs.storage.result",
+            "expected=${{ needs.impact.outputs.gpu }}",
+            "expected_storage=$([[ '${{ needs.impact.outputs.storage_dashboard }}' == 'true' || '${{ needs.impact.outputs.storage_agent }}' == 'true' ]]",
+            "if [ \"${expected}\" = true ] && [ \"${actual}\" != success ]; then",
+            "if [ \"${expected}\" = false ] && [ \"${actual}\" != skipped ]; then",
+            "--merge-base",
+            "--fallback-to-all-tracked",
+            "git ls-files > /tmp/ci-all-paths.txt",
+            "node-version: '22.14.0'",
+            "python-version: '3.12.10'",
+            "pytest==8.4.1",
         ):
             self.assertIn(required_text, content)
 
         self.assertNotIn("self-hosted", content)
+        self.assertNotIn("python -m pip install --upgrade pip", content)
+        self.assertNotIn("python-version: '3.12'", content)
+        self.assertNotIn("node-version: '20'", content)
+        self.assertNotIn("run: python3.12 -m pip install pytest\n", content)
 
     def test_tracked_files_exclude_generated_runtime_and_local_environment_data(self):
         disallowed = [path for path in tracked_paths() if is_disallowed_tracked_path(path)]

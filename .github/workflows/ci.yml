@@ -30,7 +30,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: '3.12'
+          python-version: '3.12.10'
       - name: Classify changed paths
         id: classify
         run: |
@@ -61,8 +61,10 @@ jobs:
           if [[ "${base}" =~ ^0+$ ]]; then
             git ls-files > /tmp/ci-all-paths.txt
             python3.12 scripts/ci_impact.py --paths-file /tmp/ci-all-paths.txt
+          elif [[ "${{ github.event_name }}" == pull_request ]]; then
+            python3.12 scripts/ci_impact.py --base "${base}" --head "${head}" --merge-base
           else
-            python3.12 scripts/ci_impact.py --base "${base}" --head "${head}"
+            python3.12 scripts/ci_impact.py --base "${base}" --head "${head}" --fallback-to-all-tracked
           fi
 
   repository:
@@ -75,7 +77,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: '3.12'
+          python-version: '3.12.10'
       - name: Run repository tests
         run: make test
       - name: Run diff check
@@ -94,11 +96,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: '3.12'
+          python-version: '3.12.10'
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '20'
+          node-version: '22.14.0'
           cache: npm
           cache-dependency-path: apps/gpu-monitor/frontend/package-lock.json
       - name: Install frontend dependencies
@@ -114,7 +116,6 @@ jobs:
         run: |
           python3.12 -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip
           python -m pip install -r backend/requirements.txt
         working-directory: apps/gpu-monitor
       - name: Test backend
@@ -134,9 +135,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: '3.12'
+          python-version: '3.12.10'
       - name: Install pytest
-        run: python3.12 -m pip install pytest
+        run: python3.12 -m pip install pytest==8.4.1
       - name: Run Linux storage verification
         run: make test-storage
 
@@ -154,19 +155,34 @@ jobs:
           gpu="${{ needs.gpu.result }}"
           storage="${{ needs.storage.result }}"
 
-          if [ "${impact}" != success ]; then
-            printf 'impact job result was %s\n' "${impact}" >&2
-            exit 1
-          fi
-          if [ "${repository}" != success ]; then
-            printf 'repository job result was %s\n' "${repository}" >&2
-            exit 1
-          fi
-          case "${gpu}" in
-            success|skipped) ;;
-            *) printf 'gpu job result was %s\n' "${gpu}" >&2; exit 1 ;;
-          esac
-          case "${storage}" in
-            success|skipped) ;;
-            *) printf 'storage job result was %s\n' "${storage}" >&2; exit 1 ;;
-          esac
+          check_required() {
+            local job="$1"
+            local actual="$2"
+            if [ "${actual}" != success ]; then
+              printf '%s job result was %s\n' "${job}" "${actual}" >&2
+              exit 1
+            fi
+          }
+
+          check_conditional() {
+            local job="$1"
+            local expected="$2"
+            local actual="$3"
+            if [ "${expected}" = true ] && [ "${actual}" != success ]; then
+              printf '%s classifier output was true but job result was %s\n' "${job}" "${actual}" >&2
+              exit 1
+            fi
+            if [ "${expected}" = false ] && [ "${actual}" != skipped ]; then
+              printf '%s classifier output was false but job result was %s\n' "${job}" "${actual}" >&2
+              exit 1
+            fi
+          }
+
+          check_required impact "${impact}"
+          check_required repository "${repository}"
+
+          expected=${{ needs.impact.outputs.gpu }}
+          check_conditional gpu "${expected}" "${gpu}"
+
+          expected_storage=$([[ '${{ needs.impact.outputs.storage_dashboard }}' == 'true' || '${{ needs.impact.outputs.storage_agent }}' == 'true' ]] && printf true || printf false)
+          check_conditional storage "${expected_storage}" "${storage}"
