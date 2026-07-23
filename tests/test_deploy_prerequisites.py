@@ -36,7 +36,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                 "defaultBranchRef": {"name": "main"},
                 "branchProtectionRule": None,
                 "codeowners": {"present": True, "reviewRequired": False},
-                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
                 "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
             }
         )
@@ -61,7 +61,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
-                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
                 "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
             }
         )
@@ -88,7 +88,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
-                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
                 "serverReachability": {"status": "blocked", "evidence": "ssh timed out"},
             },
             "--require-host-for-cutover",
@@ -181,7 +181,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
             "repository": {"nameWithOwner": "IRCVLab/GPU_monitor", "isPrivate": True},
             "defaultBranchRef": {"name": "main"},
             "codeowners": {"present": True, "reviewRequired": True},
-            "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+            "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
             "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
         }
         for status_shape in (
@@ -215,7 +215,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
-                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
                 "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
             }
         )
@@ -236,7 +236,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                             "requiresCodeOwnerReviews": codeowner_required,
                         },
                         "codeowners": {"present": True, "reviewRequired": codeowner_required},
-                        "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+                        "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
                         "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
                     }
                 )
@@ -354,7 +354,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                         "defaultBranchRef": {"name": "main"},
                         "branchProtectionRule": rule,
                         "codeowners": {"present": True, "reviewRequired": True},
-                        "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+                        "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
                         "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
                     }
                 )
@@ -374,7 +374,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                 "adminBypassAllowed": False,
             },
             "codeowners": {"present": True, "reviewRequired": True},
-            "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+            "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
             "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
         }
 
@@ -487,13 +487,13 @@ class DeployPrerequisitesTest(unittest.TestCase):
 
         self.assertEqual(calls, ["repos/IRCVLab/GPU_monitor/actions/runners", "orgs/IRCVLab/actions/runners"])
         self.assertEqual([item["name"] for item in runner["runners"]], ["repo-prod", "org-prod"])
-        self.assertEqual(check_deploy_prerequisites.runner_check({"runnerAvailability": runner})["status"], "READY")
+        self.assertEqual(check_deploy_prerequisites.runner_check({"runnerAvailability": runner})["status"], "UNKNOWN")
 
     def test_enumerated_no_runner_is_blocked_not_ready(self):
         result = check_deploy_prerequisites.runner_check({"runnerAvailability": {"runners": []}})
 
         self.assertEqual(result["status"], "BLOCKED")
-        self.assertIn("no eligible online runner", result["evidence"])
+        self.assertIn("no repository-scoped runner", result["evidence"])
 
     def test_live_runner_permission_uncertainty_is_unknown(self):
         def fake_api(path):
@@ -524,6 +524,102 @@ class DeployPrerequisitesTest(unittest.TestCase):
 
         self.assertEqual(report["checks"]["runner_availability"]["status"], "UNKNOWN")
         self.assertIn("no eligible online runner", report["checks"]["runner_availability"]["evidence"])
+
+
+    def test_org_scoped_online_runner_without_repo_eligibility_is_unknown_not_ready(self):
+        metadata = self.ready_metadata()
+        metadata["runnerAvailability"] = {
+            "runners": [
+                {"name": "org-prod", "status": "online", "scope": "org"},
+            ],
+            "evidence": "repo runners enumerated: 0; org runners enumerated: 1",
+        }
+
+        report = check_deploy_prerequisites.evaluate_metadata(metadata)
+
+        self.assertEqual(report["checks"]["runner_availability"]["status"], "UNKNOWN")
+        self.assertEqual(report["overall"], "UNKNOWN")
+        self.assertIn("repository-scoped", report["checks"]["runner_availability"]["evidence"])
+
+
+    def test_online_runner_with_explicit_repository_eligibility_is_ready(self):
+        metadata = self.ready_metadata()
+        metadata["runnerAvailability"] = {
+            "runners": [
+                {"name": "org-prod", "status": "online", "scope": "org", "repositoryEligible": True},
+            ],
+            "evidence": "runner group membership explicitly includes this repository",
+        }
+
+        report = check_deploy_prerequisites.evaluate_metadata(metadata)
+
+        self.assertEqual(report["checks"]["runner_availability"]["status"], "READY")
+        self.assertEqual(report["overall"], "READY")
+
+    def test_repo_scoped_online_runner_is_ready_even_when_org_enumeration_is_forbidden(self):
+        calls = []
+
+        def fake_api(path):
+            calls.append(path)
+            if path == "repos/IRCVLab/GPU_monitor/actions/runners":
+                return {"runners": [{"name": "repo-prod", "status": "online"}]}
+            if path == "orgs/IRCVLab/actions/runners":
+                raise check_deploy_prerequisites.GhApiError(path, 1, "Resource not accessible by integration (HTTP 403)")
+            self.fail(f"unexpected API path {path}")
+
+        original = check_deploy_prerequisites.run_gh_api
+        try:
+            check_deploy_prerequisites.run_gh_api = fake_api
+            runner = check_deploy_prerequisites.fetch_runner_availability("IRCVLab/GPU_monitor")
+        finally:
+            check_deploy_prerequisites.run_gh_api = original
+
+        self.assertEqual(calls, ["repos/IRCVLab/GPU_monitor/actions/runners", "orgs/IRCVLab/actions/runners"])
+        self.assertIn("org runner enumeration unavailable", runner["evidence"])
+        self.assertEqual(check_deploy_prerequisites.runner_check({"runnerAvailability": runner})["status"], "READY")
+
+    def test_live_org_online_runner_does_not_make_repo_runner_readiness_ready(self):
+        def fake_api(path):
+            if path == "repos/IRCVLab/GPU_monitor/actions/runners":
+                return {"runners": []}
+            if path == "orgs/IRCVLab/actions/runners":
+                return {"runners": [{"name": "org-prod", "status": "online"}]}
+            self.fail(f"unexpected API path {path}")
+
+        original = check_deploy_prerequisites.run_gh_api
+        try:
+            check_deploy_prerequisites.run_gh_api = fake_api
+            runner = check_deploy_prerequisites.fetch_runner_availability("IRCVLab/GPU_monitor")
+        finally:
+            check_deploy_prerequisites.run_gh_api = original
+
+        result = check_deploy_prerequisites.runner_check({"runnerAvailability": runner})
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertIn("repository-scoped", result["evidence"])
+
+    def test_live_zero_or_offline_repo_runners_are_not_ready(self):
+        for repo_runners, expected_status, evidence_text in (
+            ([], "BLOCKED", "no repository-scoped runner"),
+            ([{"name": "repo-prod", "status": "offline"}], "BLOCKED", "offline"),
+        ):
+            with self.subTest(repo_runners=repo_runners):
+                def fake_api(path):
+                    if path == "repos/IRCVLab/GPU_monitor/actions/runners":
+                        return {"runners": repo_runners}
+                    if path == "orgs/IRCVLab/actions/runners":
+                        return {"runners": []}
+                    self.fail(f"unexpected API path {path}")
+
+                original = check_deploy_prerequisites.run_gh_api
+                try:
+                    check_deploy_prerequisites.run_gh_api = fake_api
+                    runner = check_deploy_prerequisites.fetch_runner_availability("IRCVLab/GPU_monitor")
+                finally:
+                    check_deploy_prerequisites.run_gh_api = original
+
+                result = check_deploy_prerequisites.runner_check({"runnerAvailability": runner})
+                self.assertEqual(result["status"], expected_status)
+                self.assertIn(evidence_text, result["evidence"])
 
     def test_fetch_codeowners_only_404_is_absent_auth_errors_fail_closed(self):
         calls = []

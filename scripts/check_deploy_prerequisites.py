@@ -136,25 +136,48 @@ def codeowner_check(metadata: dict[str, Any]) -> dict[str, str]:
         return check(BLOCKED, "main protection does not require CODEOWNER review")
     return check(READY, "CODEOWNERS exists and main requires code-owner review")
 
+def runner_has_repository_eligibility(runner: dict[str, Any]) -> bool:
+    """Return True only for evidence that the runner may run jobs for this repository."""
+    return runner.get("scope") == "repo" or runner.get("repositoryEligible") is True
+
+
 def runner_check(metadata: dict[str, Any]) -> dict[str, str]:
     runner = metadata.get("runnerAvailability") or {}
     runners = runner.get("runners")
     if isinstance(runners, list):
-        online = [
+        online_repo_eligible = [
             item
             for item in runners
             if isinstance(item, dict)
             and str(item.get("status", "")).lower() == "online"
             and item.get("eligible", True) is not False
+            and runner_has_repository_eligibility(item)
         ]
         offline = [item for item in runners if isinstance(item, dict) and str(item.get("status", "")).lower() == "offline"]
-        if online:
-            names = ", ".join(str(item.get("name", "unnamed")) for item in online)
-            return check(READY, f"online eligible runner(s) available: {names}")
+        online_advisory = [
+            item
+            for item in runners
+            if isinstance(item, dict)
+            and str(item.get("status", "")).lower() == "online"
+            and not runner_has_repository_eligibility(item)
+        ]
+        evidence = runner.get("evidence") or "runner enumeration inspected"
+        if online_repo_eligible:
+            names = ", ".join(str(item.get("name", "unnamed")) for item in online_repo_eligible)
+            return check(READY, f"online repository-scoped runner(s) available: {names}; {evidence}")
+        if online_advisory:
+            names = ", ".join(str(item.get("name", "unnamed")) for item in online_advisory)
+            return check(
+                UNKNOWN,
+                f"online org/advisory runner(s) are not repository-scoped eligibility evidence: {names}; {evidence}",
+            )
+        status = normalize_status(runner.get("status"))
+        if "status" in runner and status == UNKNOWN:
+            return check(UNKNOWN, evidence)
         if offline:
             names = ", ".join(str(item.get("name", "unnamed")) for item in offline)
-            return check(BLOCKED, f"runner(s) are offline: {names}")
-        return check(BLOCKED, "no eligible online runner found in enumerated repo/org runners")
+            return check(BLOCKED, f"runner(s) are offline and no repository-scoped runner is online: {names}; {evidence}")
+        return check(BLOCKED, f"no repository-scoped runner is online; {evidence}")
 
     status = normalize_status(runner.get("status"))
     evidence = runner.get("evidence") or "runner availability not inspected"
@@ -338,10 +361,18 @@ def fetch_runner_availability(repo: str) -> dict[str, Any]:
         org_payload = run_gh_api(f"orgs/{owner}/actions/runners")
     except GhApiError as exc:
         failure = classify_gh_api_failure(exc.path, exc.returncode, exc.stderr)
-        return {"status": failure["status"], "evidence": f"{'; '.join(evidence)}; {failure['evidence']}"}
+        return {
+            "runners": runners,
+            "status": failure["status"],
+            "evidence": f"{'; '.join(evidence)}; org runner enumeration unavailable: {failure['evidence']}",
+        }
     org_runners = org_payload.get("runners")
     if not isinstance(org_runners, list):
-        return {"status": "unknown", "evidence": f"{'; '.join(evidence)}; org runner API response did not include runners list"}
+        return {
+            "runners": runners,
+            "status": "unknown",
+            "evidence": f"{'; '.join(evidence)}; org runner API response did not include runners list",
+        }
     for item in org_runners:
         if isinstance(item, dict):
             runner = copy.deepcopy(item)

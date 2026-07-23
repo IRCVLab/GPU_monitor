@@ -12,7 +12,7 @@ Required live check:
 python3.12 scripts/check_deploy_prerequisites.py --repo IRCVLab/GPU_monitor
 ```
 
-Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; `READY` requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. If runner enumeration cannot read the repo/org runner APIs, `runner_availability` must be `UNKNOWN`, not treated as accepted.
+Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; `READY` requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. If runner enumeration cannot read the repository runner API, `runner_availability` must be `UNKNOWN`, not treated as accepted; org runner and runner-group evidence is advisory unless it explicitly proves this repository is eligible.
 
 ## Required `main` protection before runner registration
 
@@ -31,7 +31,7 @@ A protected `main` with `ci/required`, at least one approving review, code-owner
 
 ## Why the production runner is not installed yet
 
-The production runner is intentionally not installed because a self-hosted runner connected before branch protection and CODEOWNER enforcement would create a deployment path that is stronger than the repository's review controls. Runner installation may start only after the checker reports `READY` for protected `main`, CODEOWNER enforcement, and runner availability. Runner availability is based on actual repo/org runner enumeration and requires at least one online eligible runner; runner-group API readability or permission to inspect runner groups alone is not sufficient for `READY`. Permission or API uncertainty remains `UNKNOWN`.
+The production runner is intentionally not installed because a self-hosted runner connected before branch protection and CODEOWNER enforcement would create a deployment path that is stronger than the repository's review controls. Runner installation may start only after the checker reports `READY` for protected `main`, CODEOWNER enforcement, and runner availability. Runner availability is based on actual repository runner enumeration and requires at least one online repository-scoped runner returned by `repos/{repo}/actions/runners`, unless separate evidence explicitly proves repository eligibility. Online org-scoped runners and runner groups are advisory/`UNKNOWN` because a runner group may exclude this repository; runner-group API readability or permission to inspect runner groups alone is not sufficient for `READY`. If the repository runner API already returned an online repository-scoped runner, that `READY` evidence is preserved even when org runner enumeration is unavailable (for example HTTP 403). Permission or API uncertainty without repository-scoped online runner evidence remains `UNKNOWN`.
 
 Pull-request CI must continue to use GitHub-hosted runners. Production labels such as `prod`, `production`, `prd`, or `prod-runner` are reserved for deployment jobs and remain denied for normal PR jobs by workflow policy validation.
 
