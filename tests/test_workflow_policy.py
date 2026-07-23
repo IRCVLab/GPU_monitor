@@ -1227,6 +1227,10 @@ class WorkflowPolicyTest(unittest.TestCase):
         for filename, extra_ssh in {
             "dev-extra-rollback.yml": 'ssh "${ssh_opts[@]}" "$target" "rollback dev"',
             "dev-extra-uptime.yml": 'ssh "${ssh_opts[@]}" "$target" uptime',
+            "dev-extra-command-ssh.yml": 'command ssh "${ssh_opts[@]}" "$target" uptime',
+            "dev-extra-env-ssh.yml": 'env ssh "${ssh_opts[@]}" "$target" uptime',
+            "dev-extra-tab-ssh.yml": 'ssh	"${ssh_opts[@]}" "$target" uptime',
+            "dev-extra-env-assignment-ssh.yml": 'LC_ALL=C ssh "${ssh_opts[@]}" "$target" uptime',
         }.items():
             workflow = Path(".github/workflows/deploy-gpu-dev.yml").read_text(encoding="utf-8")
             workflow = workflow.replace('ssh "${ssh_opts[@]}" "$target" "status dev"', 'ssh "${ssh_opts[@]}" "$target" "status dev"\n          ' + extra_ssh)
@@ -1237,6 +1241,10 @@ class WorkflowPolicyTest(unittest.TestCase):
         for filename, extra_ssh in {
             "live-extra-rollback.yml": 'ssh "${ssh_opts[@]}" "$target" "rollback live"',
             "live-extra-uptime.yml": 'ssh "${ssh_opts[@]}" "$target" uptime',
+            "live-extra-command-ssh.yml": 'command ssh "${ssh_opts[@]}" "$target" uptime',
+            "live-extra-env-ssh.yml": 'env ssh "${ssh_opts[@]}" "$target" uptime',
+            "live-extra-tab-ssh.yml": 'ssh	"${ssh_opts[@]}" "$target" uptime',
+            "live-extra-env-assignment-ssh.yml": 'LC_ALL=C ssh "${ssh_opts[@]}" "$target" uptime',
         }.items():
             workflow = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
             workflow = workflow.replace('ssh "${ssh_opts[@]}" "$target" "status live"', 'ssh "${ssh_opts[@]}" "$target" "status live"\n          ' + extra_ssh)
