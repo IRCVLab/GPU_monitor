@@ -1,13 +1,25 @@
 SHELL := /bin/bash
-.PHONY: test layout-test history-test test-gpu build-gpu test-storage verify diff-check
+.PHONY: test layout-test history-test impact-test policy-test test-gpu build-gpu test-storage verify diff-check
 
 test: layout-test history-test
+	$(MAKE) impact-test
+	$(MAKE) policy-test
 
 layout-test:
 	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_repository_layout -v
 
 history-test:
 	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_history_inventory -v
+
+impact-test:
+	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_ci_impact -v
+
+policy-test:
+	@if [ -f tests/test_workflow_policy.py ]; then \
+		PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_workflow_policy -v; \
+	else \
+		printf '%s\n' 'SKIP: tests/test_workflow_policy.py is introduced by CI foundation Task 2.'; \
+	fi
 
 test-gpu:
 	cd apps/gpu-monitor/frontend && npm run check
