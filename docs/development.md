@@ -16,6 +16,10 @@ The foundation migration intentionally enables local validation and documentatio
 - The GPU runtime scripts manage tmux sessions and ports; do not run them during ordinary repository verification.
 - Storage agent/dashboard install and deploy scripts are operational tools; ordinary verification uses their dry-run and contract tests, not live installs.
 
+## Pull request CI
+
+GitHub Actions runs on pull requests, pushes to `main`, and manual dispatch. Every pull request reports `ci/required`; path-aware GPU and Storage jobs run only when their application paths or shared workflow inputs change, so documentation-only changes skip the app suites. Pushes to feature branches do not deploy or run the production path. Production deployment remains intentionally disabled until repository protection is available.
+
 ## Root verification
 
 Run the full supported foundation check from the repository root:

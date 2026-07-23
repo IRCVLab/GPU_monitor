@@ -52,6 +52,10 @@ STORAGE_VIZ_PORT=8088 \
 python3 viewer/serve.py
 ```
 
+## Continuous integration
+
+Pull requests receive one branch-protection-friendly required check named `ci/required`. The workflow also classifies changed paths so documentation-only changes skip GPU and Storage application suites while still running repository contract validation. Pushes to feature branches do not deploy because CI only runs on pull requests, pushes to `main`, or manual dispatch. Production deployment is intentionally disabled until repository protection is available.
+
 ## Repository rules
 
 - Keep generated, collected, runtime, cache, database, browser-output, virtual-environment, and dependency-install data out of Git.

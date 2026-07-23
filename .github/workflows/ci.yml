@@ -1,0 +1,172 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  impact:
+    name: ci/impact
+    runs-on: ubuntu-24.04
+    outputs:
+      gpu: ${{ steps.classify.outputs.gpu }}
+      storage_dashboard: ${{ steps.classify.outputs.storage_dashboard }}
+      storage_agent: ${{ steps.classify.outputs.storage_agent }}
+      shared: ${{ steps.classify.outputs.shared }}
+      workflow: ${{ steps.classify.outputs.workflow }}
+      documentation: ${{ steps.classify.outputs.documentation }}
+      apps_required: ${{ steps.classify.outputs.apps_required }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Classify changed paths
+        id: classify
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            pull_request)
+              base="${{ github.event.pull_request.base.sha }}"
+              head="${{ github.event.pull_request.head.sha }}"
+              ;;
+            push)
+              base="${{ github.event.before }}"
+              head="${{ github.sha }}"
+              ;;
+            workflow_dispatch)
+              head="${{ github.sha }}"
+              if git rev-parse "${head}^" >/dev/null 2>&1; then
+                base="${head}^"
+              else
+                base="${head}"
+              fi
+              ;;
+            *)
+              printf 'Unsupported event: %s\n' "${{ github.event_name }}" >&2
+              exit 2
+              ;;
+          esac
+
+          if [[ "${base}" =~ ^0+$ ]]; then
+            git ls-files > /tmp/ci-all-paths.txt
+            python3.12 scripts/ci_impact.py --paths-file /tmp/ci-all-paths.txt
+          else
+            python3.12 scripts/ci_impact.py --base "${base}" --head "${head}"
+          fi
+
+  repository:
+    name: ci/repository
+    runs-on: ubuntu-24.04
+    needs: impact
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Run repository tests
+        run: make test
+      - name: Run diff check
+        run: make diff-check
+      - name: Validate workflows
+        run: python3.12 scripts/validate_workflows.py .github/workflows
+
+  gpu:
+    name: ci/gpu
+    runs-on: ubuntu-24.04
+    needs: impact
+    if: needs.impact.outputs.gpu == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/gpu-monitor/frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: apps/gpu-monitor/frontend
+      - name: Check frontend
+        run: npm run check
+        working-directory: apps/gpu-monitor/frontend
+      - name: Build frontend
+        run: npm run build
+        working-directory: apps/gpu-monitor/frontend
+      - name: Install backend dependencies
+        run: |
+          python3.12 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+        working-directory: apps/gpu-monitor
+      - name: Test backend
+        run: |
+          . .venv/bin/activate
+          SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password python -m unittest discover -s backend/tests -v
+        working-directory: apps/gpu-monitor
+
+  storage:
+    name: ci/storage
+    runs-on: ubuntu-24.04
+    needs: impact
+    if: needs.impact.outputs.storage_dashboard == 'true' || needs.impact.outputs.storage_agent == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: python3.12 -m pip install pytest
+      - name: Run Linux storage verification
+        run: make test-storage
+
+  required:
+    name: ci/required
+    runs-on: ubuntu-24.04
+    needs: [impact, repository, gpu, storage]
+    if: always()
+    steps:
+      - name: Require successful mandatory and intentional conditional results
+        run: |
+          set -euo pipefail
+          impact="${{ needs.impact.result }}"
+          repository="${{ needs.repository.result }}"
+          gpu="${{ needs.gpu.result }}"
+          storage="${{ needs.storage.result }}"
+
+          if [ "${impact}" != success ]; then
+            printf 'impact job result was %s\n' "${impact}" >&2
+            exit 1
+          fi
+          if [ "${repository}" != success ]; then
+            printf 'repository job result was %s\n' "${repository}" >&2
+            exit 1
+          fi
+          case "${gpu}" in
+            success|skipped) ;;
+            *) printf 'gpu job result was %s\n' "${gpu}" >&2; exit 1 ;;
+          esac
+          case "${storage}" in
+            success|skipped) ;;
+            *) printf 'storage job result was %s\n' "${storage}" >&2; exit 1 ;;
+          esac

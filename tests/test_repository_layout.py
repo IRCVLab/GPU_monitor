@@ -63,6 +63,9 @@ BROWSER_OUTPUT_SUFFIXES = {
 }
 
 
+def workflow_text(path: str = ".github/workflows/ci.yml") -> str:
+    return Path(path).read_text(encoding="utf-8")
+
 def makefile_text() -> str:
     return Path("Makefile").read_text()
 
@@ -251,6 +254,40 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertIn('STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data"', content)
         self.assertIn("python3 viewer/serve.py", content)
         self.assertNotIn("Run the local sample dashboard from the repository root:", content)
+
+    def test_ci_workflow_contract_defines_required_path_aware_validation(self):
+        path = Path(".github/workflows/ci.yml")
+        self.assertTrue(path.is_file(), "missing GitHub Actions CI workflow")
+        content = workflow_text()
+
+        self.assertNotIn("pull_request_target", content)
+        self.assertIn("pull_request:", content)
+        self.assertIn("push:", content)
+        self.assertIn("workflow_dispatch:", content)
+        self.assertIn("contents: read", content)
+        self.assertIn("fetch-depth: 0", content)
+        self.assertIn("scripts/ci_impact.py", content)
+        self.assertIn("scripts/validate_workflows.py .github/workflows", content)
+
+        for action in (
+            "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+            "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+        ):
+            self.assertIn(action, content)
+
+        for required_text in (
+            "name: ci/required",
+            "name: ci/gpu",
+            "name: ci/storage",
+            "if: always()",
+            "needs: [impact, repository, gpu, storage]",
+            "needs.gpu.result",
+            "needs.storage.result",
+        ):
+            self.assertIn(required_text, content)
+
+        self.assertNotIn("self-hosted", content)
 
     def test_tracked_files_exclude_generated_runtime_and_local_environment_data(self):
         disallowed = [path for path in tracked_paths() if is_disallowed_tracked_path(path)]
