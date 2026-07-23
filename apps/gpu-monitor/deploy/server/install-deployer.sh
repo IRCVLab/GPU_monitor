@@ -5,7 +5,7 @@ export PATH
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
-  printf 'Usage: %s [--dry-run] [--prefix ABSOLUTE] --dev-public-key KEY [--live-public-key KEY]\n' "$0" >&2
+  printf 'Usage: %s [--dry-run] [--prefix ABSOLUTE] --dev-public-key KEY [--live-public-key KEY] [--node-prefix ABSOLUTE]\n' "$0" >&2
   exit 2
 }
 
@@ -13,12 +13,14 @@ dry_run=false
 prefix=/
 dev_key=
 live_key=
+node_prefix=
 while (($#)); do
   case "$1" in
     --dry-run) dry_run=true; shift ;;
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
     --dev-public-key) [[ $# -ge 2 ]] || usage; dev_key=$2; shift 2 ;;
     --live-public-key) [[ $# -ge 2 ]] || usage; live_key=$2; shift 2 ;;
+    --node-prefix) [[ $# -ge 2 ]] || usage; node_prefix=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -69,6 +71,105 @@ prefix=$canonical_prefix
 
 if [[ "$dry_run" == false && "$(id -u)" -ne 0 ]]; then
   fail "real installation requires root"
+fi
+
+validate_node_prefix() {
+  /usr/bin/python3 - "$1" <<'PY'
+import hashlib, os, pathlib, re, stat, subprocess, sys
+
+raw = sys.argv[1]
+root = pathlib.Path(raw)
+
+def reject(message):
+    print("ERROR: " + message, file=sys.stderr)
+    raise SystemExit(1)
+
+if "\n" in raw or not root.is_absolute() or os.path.normpath(raw) != raw:
+    reject("node prefix must be one canonical absolute path")
+try:
+    resolved = root.resolve(strict=True)
+except OSError as error:
+    reject(f"node prefix is unavailable: {error}")
+if str(resolved) != raw or not resolved.is_dir():
+    reject("node prefix must be a canonical directory without a symlinked root")
+
+for path in resolved.rglob("*"):
+    if not path.is_symlink():
+        continue
+    target_text = os.readlink(path)
+    if os.path.isabs(target_text):
+        reject(f"node prefix contains an absolute symlink: {path}")
+    try:
+        target = path.resolve(strict=True)
+        target.relative_to(resolved)
+    except (OSError, ValueError):
+        reject(f"node prefix symlink escapes or is broken: {path}")
+
+node = resolved / "bin" / "node"
+npm_cli = resolved / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
+if not node.is_file() or node.is_symlink() or not os.access(node, os.X_OK):
+    reject("node prefix bin/node must be one executable regular file")
+if not npm_cli.is_file() or npm_cli.is_symlink():
+    reject("node prefix must include npm's regular npm-cli.js")
+
+try:
+    completed = subprocess.run(
+        [str(node), "--version"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+    )
+except (OSError, subprocess.SubprocessError) as error:
+    reject(f"unable to execute node --version: {error}")
+match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)\s*", completed.stdout)
+if not match:
+    reject("node --version returned an unsupported value")
+version = tuple(map(int, match.groups()))
+if version < (18, 13, 0):
+    reject("Node runtime is too old; version 18.13.0 or newer is required")
+
+digest = hashlib.sha256()
+for path in (node, npm_cli):
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+print(f"v{version[0]}.{version[1]}.{version[2]}-{digest.hexdigest()[:12]}")
+PY
+}
+
+install_node_runtime() {
+  local source=$1 runtime_id=$2
+  local runtime_parent="$prefix/opt/gpu-monitor/node-runtimes"
+  local runtime="$runtime_parent/$runtime_id"
+  local temporary="$runtime_parent/.install-$runtime_id.$$"
+  local active="$prefix/opt/gpu-monitor/node"
+  local next="$prefix/opt/gpu-monitor/.node.next.$$"
+  mkdir -p "$runtime_parent"
+  if [[ ! -d "$runtime" ]]; then
+    rm -rf "$temporary"
+    mkdir "$temporary"
+    cp -a "$source/." "$temporary/"
+    if [[ "$dry_run" == false ]]; then chown -R root:root "$temporary"; fi
+    mv "$temporary" "$runtime"
+  fi
+  if [[ -e "$active" && ! -L "$active" ]]; then
+    fail "managed Node target exists and is not an installer-owned symlink"
+  fi
+  ln -s "node-runtimes/$runtime_id" "$next"
+  /usr/bin/python3 - "$next" "$active" <<'PY'
+import os, sys
+os.replace(sys.argv[1], sys.argv[2])
+PY
+}
+
+managed_node="$prefix/opt/gpu-monitor/node"
+if [[ -n "$node_prefix" ]]; then
+  node_runtime_id=$(validate_node_prefix "$node_prefix") || exit 1
+  install_node_runtime "$node_prefix" "$node_runtime_id"
+elif [[ "$dry_run" == false && ! -x "$managed_node/bin/node" ]]; then
+  fail "--node-prefix is required until a managed Node runtime is installed"
 fi
 
 installed_live_authorization="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"

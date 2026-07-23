@@ -29,8 +29,25 @@ Task 5 adds the server-side forced command and activation scripts under `apps/gp
 ```bash
 sudo apps/gpu-monitor/deploy/server/install-deployer.sh \
   --dev-public-key "$(cat /path/to/dev_deploy.pub)" \
+  --node-prefix /path/to/clean/node-prefix \
   --live-public-key "$(cat /path/to/live_deploy.pub)"
 ```
+
+`--node-prefix` must name a canonical, self-contained Node prefix with an executable
+`bin/node` at version 18.13.0 or newer and
+`lib/node_modules/npm/bin/npm-cli.js`. The installer copies that prefix into a
+versioned, root-owned directory under `/opt/gpu-monitor/node-runtimes/` and
+atomically points `/opt/gpu-monitor/node` at it. Runtime services and activation
+therefore use one coherent Node/npm pair without depending on an operator home,
+NVM shell initialization, or the host distribution's `/usr/bin/node`. A real
+first install requires `--node-prefix`; later idempotent reinstalls may omit it
+while the managed runtime exists. The installer does not replace `/usr/bin/node`
+or start any service.
+
+When an NVM installation contains unrelated global packages, construct a clean
+prefix containing only `bin/node`, the relative `bin/npm` launcher, and
+`lib/node_modules/npm` before passing it to the installer. This avoids copying
+operator tools into the service runtime.
 
 The server-side threat model assumes reviewed team repository code is trusted once it is accepted for deployment. Task 5 prevents accidental cross-environment deployment, SSH forced-command argument crossover, and Unix/filesystem/process privilege crossover between deployment state and runtime services. It is not a hostile multi-tenant loopback-isolation project: the installer does not add network namespaces or firewall rules, and the service templates keep normal loopback binding behavior.
 
@@ -69,7 +86,7 @@ rollback dev
 rollback live
 ```
 
-Uploads stream from SSH stdin into environment-local incoming storage, are bounded to 512 MiB by default, and are kept only after SHA-256 verification. Activation opens the uploaded artifact through the incoming directory file descriptor with `O_NOFOLLOW`/`O_CLOEXEC`, rejects symlinks/FIFOs/non-regular files, validates archive structure defensively from the same opened descriptor used for hashing, reconstructs the release manifest from the validated command arguments plus recomputed digest, and extracts into a private `tmp/release-*` candidate that runtime cannot traverse. Locked runtime dependency construction is bounded and fail-closed: production requires trusted absolute timeout, Python, pip-through-the-created-venv, npm, and Node prerequisites; every timeout, venv, pip, npm, or cleanup failure rejects the candidate without publication. Activation then checks expanded size/free-space limits, verifies every candidate inode has the expected runtime GID, applies and verifies read-only published modes, fsyncs every regular file and directory bottom-up, atomically publishes `releases/<sha>`, fsyncs both staging and release parents, and only then performs the pointer swap.
+Uploads stream from SSH stdin into environment-local incoming storage, are bounded to 512 MiB by default, and are kept only after SHA-256 verification. Activation opens the uploaded artifact through the incoming directory file descriptor with `O_NOFOLLOW`/`O_CLOEXEC`, rejects symlinks/FIFOs/non-regular files, validates archive structure defensively from the same opened descriptor used for hashing, reconstructs the release manifest from the validated command arguments plus recomputed digest, and extracts into a private `tmp/release-*` candidate that runtime cannot traverse. Locked runtime dependency construction is bounded and fail-closed: production requires trusted absolute timeout, Python, pip-through-the-created-venv, and the installer-managed Node/npm runtime; every timeout, venv, pip, npm, or cleanup failure rejects the candidate without publication. Activation then checks expanded size/free-space limits, verifies every candidate inode has the expected runtime GID, applies and verifies read-only published modes, fsyncs every regular file and directory bottom-up, atomically publishes `releases/<sha>`, fsyncs both staging and release parents, and only then performs the pointer swap.
 
 `current` and `previous` remain visible at the environment root for services and operators, but they resolve through a single atomically-swapped generation symlink so activation and manual rollback snapshot both pointers and publish them as one generation. Status, upload, activation, and rollback all take the environment flock. If restart, health, pointer, filesystem, or fsync recovery fails, the JSONL state records truthful `rollback_succeeded` or `rollback_failed` information instead of suppressing recovery errors.
 

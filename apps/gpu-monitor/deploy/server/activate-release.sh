@@ -562,32 +562,47 @@ PY
 }
 
 install_dependencies() {
-  local release=$1 timeout_command python_command npm_command node_command
+  local release=$1 timeout_command python_command npm_command node_command npm_cli
   if [[ "$test_mode" == true ]]; then
     timeout_command=$test_timeout_command
     python_command="$test_tool_dir/python3"
     npm_command="$test_tool_dir/npm"
     node_command="$test_tool_dir/node"
+    npm_cli=
   else
     timeout_command=/usr/bin/timeout
     python_command=/usr/bin/python3
-    npm_command=/usr/bin/npm
-    node_command=/usr/bin/node
+    npm_command=
+    node_command=/opt/gpu-monitor/node/bin/node
+    npm_cli=/opt/gpu-monitor/node/lib/node_modules/npm/bin/npm-cli.js
   fi
   [[ -n "$timeout_command" && "$timeout_command" == /* && -x "$timeout_command" ]] ||
     { printf 'ERROR: trusted dependency timeout is required and unavailable\n' >&2; return 1; }
   [[ -x "$python_command" ]] ||
     { printf 'ERROR: trusted Python runtime is unavailable\n' >&2; return 1; }
-  [[ -x "$npm_command" && -x "$node_command" ]] ||
-    { printf 'ERROR: frontend npm/node runtime prerequisites are unavailable\n' >&2; return 1; }
+  [[ -x "$node_command" ]] ||
+    { printf 'ERROR: managed frontend Node runtime is unavailable\n' >&2; return 1; }
+  if [[ "$test_mode" == true ]]; then
+    [[ -x "$npm_command" ]] ||
+      { printf 'ERROR: frontend npm test runtime is unavailable\n' >&2; return 1; }
+  else
+    [[ -f "$npm_cli" && ! -L "$npm_cli" ]] ||
+      { printf 'ERROR: managed frontend npm runtime is unavailable\n' >&2; return 1; }
+  fi
   "$timeout_command" 300 "$python_command" -m venv "$release/.venv" || return 1
   [[ -x "$release/.venv/bin/python" ]] ||
     { printf 'ERROR: venv interpreter was not created\n' >&2; return 1; }
   "$timeout_command" 300 "$release/.venv/bin/python" -m pip install \
     --disable-pip-version-check --no-cache-dir --requirement "$release/backend/requirements.txt" || return 1
-  (cd "$release/frontend" &&
-    "$timeout_command" 300 "$npm_command" ci --omit=dev --ignore-scripts --no-audit --no-fund \
-      --cache "$release/.npm-cache") || return 1
+  if [[ "$test_mode" == true ]]; then
+    (cd "$release/frontend" &&
+      "$timeout_command" 300 "$npm_command" ci --omit=dev --ignore-scripts --no-audit --no-fund \
+        --cache "$release/.npm-cache") || return 1
+  else
+    (cd "$release/frontend" &&
+      "$timeout_command" 300 "$node_command" "$npm_cli" ci --omit=dev --ignore-scripts --no-audit --no-fund \
+        --cache "$release/.npm-cache") || return 1
+  fi
   rm -rf "$release/.npm-cache" || return 1
   return 0
 }

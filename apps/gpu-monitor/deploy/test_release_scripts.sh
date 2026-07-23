@@ -918,8 +918,10 @@ PY
     fail "backend unit does not run the real FastAPI module through uvicorn with configured port"
   grep -Fq -- '-m uvicorn backend.slack_bridge:app --host 127.0.0.1 --port ${GPU_MONITOR_BRIDGE_PORT}' "$bridge_unit" ||
     fail "bridge unit does not run the real FastAPI bridge module through uvicorn with configured port"
-  grep -Fq 'ExecStart=/usr/bin/node /srv/gpu-monitor/%i/current/frontend/build/index.js' "$frontend_unit" ||
-    fail "frontend unit does not run the built adapter-node entrypoint"
+  grep -Fq 'ExecStart=/opt/gpu-monitor/node/bin/node /srv/gpu-monitor/%i/current/frontend/build/index.js' "$frontend_unit" ||
+    fail "frontend unit does not run the built adapter-node entrypoint with the managed Node runtime"
+  ! grep -Fq '/usr/bin/node' "$frontend_unit" ||
+    fail "frontend unit still depends on the host distribution Node runtime"
   grep -Fq 'Environment=HOST=127.0.0.1' "$frontend_unit" ||
     fail "frontend unit does not bind adapter-node to loopback"
   log "systemd units match the real backend modules and built Svelte adapter-node runtime"
@@ -1805,6 +1807,65 @@ test_installer_reconciles_published_modes_without_exposing_hidden_candidates() {
   log "reinstall preserves writable parents while reconciling published and hidden trees safely"
 }
 
+test_installer_materializes_and_validates_managed_node_runtime() {
+  local tmp prefix key node_prefix old_node_prefix first_target
+  tmp=$(mktemp_dir gpu-release-installer-node)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/install"
+  key='ssh-ed25519 AAAANODERUNTIMEKEY0000000000000000000000000000000000000 node'
+  node_prefix="$tmp/node-v24"
+  old_node_prefix="$tmp/node-v12"
+
+  mkdir -p "$node_prefix/bin" "$node_prefix/lib/node_modules/npm/bin"
+  cat > "$node_prefix/bin/node" <<'NODE'
+#!/usr/bin/env sh
+if [ "${1:-}" = --version ]; then printf 'v24.14.0\n'; exit 0; fi
+exit 0
+NODE
+  chmod 0755 "$node_prefix/bin/node"
+  printf 'console.log("npm fixture")\n' > "$node_prefix/lib/node_modules/npm/bin/npm-cli.js"
+  ln -s ../lib/node_modules/npm/bin/npm-cli.js "$node_prefix/bin/npm"
+
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" \
+    --dev-public-key "$key" --node-prefix "$node_prefix" >"$tmp/install.out"
+  [[ -x "$prefix/opt/gpu-monitor/node/bin/node" ]] ||
+    fail "installer did not materialize the managed Node executable"
+  [[ -f "$prefix/opt/gpu-monitor/node/lib/node_modules/npm/bin/npm-cli.js" ]] ||
+    fail "installer did not materialize the coherent npm runtime"
+  [[ -L "$prefix/opt/gpu-monitor/node/bin/npm" ]] ||
+    fail "installer did not preserve the relative npm launcher symlink"
+  first_target=$(readlink "$prefix/opt/gpu-monitor/node")
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" \
+    --dev-public-key "$key" --node-prefix "$node_prefix" >"$tmp/reinstall.out"
+  [[ -L "$prefix/opt/gpu-monitor/node" ]] ||
+    fail "managed Node pointer stopped being a symlink after idempotent reinstall"
+  [[ "$(readlink "$prefix/opt/gpu-monitor/node")" == "$first_target" ]] ||
+    fail "idempotent reinstall changed the managed Node runtime target"
+  ! find "$prefix/opt/gpu-monitor/node-runtimes" -name '.node.next.*' | grep -q . ||
+    fail "idempotent reinstall moved the next-pointer inside the active runtime"
+  grep -Fq 'node_command=/opt/gpu-monitor/node/bin/node' "$ACTIVATE_SCRIPT" ||
+    fail "production activation does not use the managed Node executable"
+  grep -Fq 'npm_cli=/opt/gpu-monitor/node/lib/node_modules/npm/bin/npm-cli.js' "$ACTIVATE_SCRIPT" ||
+    fail "production activation does not use npm from the managed Node prefix"
+
+  mkdir -p "$old_node_prefix/bin" "$old_node_prefix/lib/node_modules/npm/bin"
+  cat > "$old_node_prefix/bin/node" <<'NODE'
+#!/usr/bin/env sh
+if [ "${1:-}" = --version ]; then printf 'v12.22.9\n'; exit 0; fi
+exit 0
+NODE
+  chmod 0755 "$old_node_prefix/bin/node"
+  printf 'console.log("old npm fixture")\n' > "$old_node_prefix/lib/node_modules/npm/bin/npm-cli.js"
+  ln -s ../lib/node_modules/npm/bin/npm-cli.js "$old_node_prefix/bin/npm"
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$tmp/old-install" \
+    --dev-public-key "$key" --node-prefix "$old_node_prefix" >"$tmp/old.out" 2>"$tmp/old.err"; then
+    fail "installer accepted the incident Node v12 runtime"
+  fi
+  grep -Eiq 'node.*(18|version|old|minimum)' "$tmp/old.err" ||
+    fail "old Node rejection did not explain the minimum runtime requirement"
+  log "installer materializes a coherent managed Node runtime and rejects Node 12"
+}
+
 test_omitted_live_key_blocks_conflicting_dev_rotation_before_mutation() {
   local tmp prefix dev_blob live_blob dev_key live_key dev_auth live_auth
   tmp=$(mktemp_dir gpu-release-key-rotation)
@@ -1904,5 +1965,6 @@ run_test test_retention_uses_latest_success_recency
 run_test test_installer_separate_users_prefix_upgrade_and_idempotency
 run_test test_installer_runtime_traversal_ports_and_key_material_contract
 run_test test_installer_reconciles_published_modes_without_exposing_hidden_candidates
+run_test test_installer_materializes_and_validates_managed_node_runtime
 run_test test_omitted_live_key_blocks_conflicting_dev_rotation_before_mutation
 run_test test_archive_validation_retention_status_and_installer
