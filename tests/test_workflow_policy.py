@@ -606,7 +606,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                           [[ "$head_repo" == "$GITHUB_REPOSITORY" ]]
                           sha=$(python3.12 -c 'print("head.sha 0123456789abcdef0123456789abcdef01234567")')
                           [[ "$sha" =~ ^[0-9a-f]{{40}}$ ]]
-                          gh api --paginate "repos/${{{{ github.repository }}}}/commits/$sha/check-runs"
+                          gh api --paginate --slurp "repos/${{{{ github.repository }}}}/commits/$sha/check-runs"
                           completed_at id latest status conclusion
                           ci/required
                       - uses: actions/checkout@{PINNED_SHA}
@@ -814,6 +814,46 @@ class WorkflowPolicyTest(unittest.TestCase):
                           head.repo.full_name
                           head.sha
                           gh api "repos/${{ github.repository }}/commits/$sha/check-runs"
+                          completed_at id latest status conclusion ci/required
+                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
+                        with:
+                          ref: ${{ steps.resolve.outputs.sha }}
+                      - run: |
+                          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+                          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+                          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
+                          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
+                          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
+                          target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
+                          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
+                          ssh "${ssh_opts[@]}" "$target" "upload dev $sha $digest" < "$artifact"
+                          ssh "${ssh_opts[@]}" "$target" "activate dev $sha $digest"
+                          ssh "${ssh_opts[@]}" "$target" "status dev"
+            """,
+            "missing-slurp-check-runs.yml": """
+                on:
+                  workflow_dispatch:
+                    inputs:
+                      pr_number:
+                        required: true
+                concurrency:
+                  group: gpu-dev
+                  cancel-in-progress: true
+                jobs:
+                  deploy:
+                    runs-on: ubuntu-24.04
+                    environment: gpu-dev
+                    steps:
+                      - name: Resolve PR
+                        run: |
+                          pr_number="${{ github.event.inputs.pr_number }}"
+                          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
+                          pr_json=$(gh api "repos/${{ github.repository }}/pulls/$pr_number")
+                          state open
+                          base.repo.full_name
+                          head.repo.full_name
+                          head.sha
+                          gh api --paginate "repos/${{ github.repository }}/commits/$sha/check-runs"
                           completed_at id latest status conclusion ci/required
                       - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
                         with:

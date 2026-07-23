@@ -669,6 +669,7 @@ def has_gpu_dev_dispatch_guard(lines: list[SourceLine], job: JobBlock, events: s
         "ci/required",
         "check-runs",
         "--paginate",
+        "--slurp",
         "completed_at",
         "id",
         "latest",
