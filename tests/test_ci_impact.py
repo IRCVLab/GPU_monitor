@@ -168,13 +168,16 @@ class CiImpactTest(unittest.TestCase):
             },
         )
 
-    def test_rejects_absolute_and_parent_traversal_paths(self):
+    def test_rejects_absolute_parent_traversal_and_drive_qualified_paths(self):
         for bad_path in (
             "/tmp/file",
             "../outside",
             "docs/../Makefile",
             r"docs\..\Makefile",
             r"\tmp\file",
+            r"C:\tmp\file",
+            "C:/tmp/file",
+            "C:relative",
         ):
             with self.subTest(bad_path=bad_path):
                 with tempfile.TemporaryDirectory() as tempdir:
@@ -183,6 +186,9 @@ class CiImpactTest(unittest.TestCase):
                     result = self.run_script("--paths-file", str(paths_file))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("invalid repository-relative path", result.stderr)
+
+    def test_colon_in_repository_relative_name_is_allowed_when_not_drive_qualified(self):
+        self.assert_decisions(("docs/api:v1.md",), documentation=True)
 
     def test_bare_app_directory_paths_match_application_prefixes(self):
         self.assert_decisions(

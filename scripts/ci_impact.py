@@ -8,6 +8,7 @@ import json
 import os
 import posixpath
 import subprocess
+from pathlib import PureWindowsPath
 import sys
 from typing import NamedTuple, Sequence
 
@@ -94,6 +95,8 @@ def normalize_path(path: str) -> str:
     raw = path.strip()
     if not raw:
         raise ValueError("empty path")
+    if PureWindowsPath(raw).drive:
+        raise ValueError(f"invalid repository-relative path: {path}")
     slash_normalized = raw.replace("\\", "/")
     normalized = posixpath.normpath(slash_normalized)
     if normalized == ".":
