@@ -139,6 +139,49 @@ class WorkflowPolicyTest(unittest.TestCase):
             "permissions-write-all",
         )
 
+    def test_rejects_anchor_and_alias_in_policy_sensitive_top_level_fields(self):
+        workflows = {
+            "anchored-on.yml": """
+                on: &events [pull_request_target]
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "aliased-on.yml": """
+                x-events: &events [pull_request_target]
+                on: *events
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "anchored-permissions.yml": """
+                on: push
+                permissions: &perms write-all
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "aliased-permissions.yml": """
+                x-perms: &perms write-all
+                on: push
+                permissions: *perms
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "unsupported-yaml-anchor-alias", filename=filename)
+
     def test_rejects_per_scope_write_permissions_at_top_and_job_level(self):
         result = self.run_validator(
             {
@@ -221,6 +264,50 @@ class WorkflowPolicyTest(unittest.TestCase):
                     "integration",
                 )
 
+    def test_rejects_anchor_and_alias_in_job_level_policy_sensitive_fields(self):
+        workflows = {
+            "anchored-runs-on.yml": """
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on: &runner [self-hosted, linux]
+                    steps:
+                      - run: true
+            """,
+            "aliased-runs-on.yml": """
+                x-runner: &runner [self-hosted, linux]
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on: *runner
+                    steps:
+                      - run: true
+            """,
+            "anchored-job-permissions.yml": """
+                on: push
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    permissions: &perms write-all
+                    steps:
+                      - run: true
+            """,
+            "aliased-job-permissions.yml": """
+                x-perms: &perms write-all
+                on: push
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    permissions: *perms
+                    steps:
+                      - run: true
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                job = "integration" if "runs-on" in filename else "test"
+                self.assert_policy_violation(body, "unsupported-yaml-anchor-alias", job, filename)
+
     def test_rejects_pull_request_jobs_using_matrix_runners_as_ambiguous(self):
         self.assert_policy_violation(
             """
@@ -237,6 +324,38 @@ class WorkflowPolicyTest(unittest.TestCase):
             "pr-runner-ambiguous",
             "integration",
         )
+
+    def test_rejects_runs_on_mapping_forms_as_unsupported(self):
+        workflows = {
+            "inline-key.yml": """
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on: {labels/self-hosted}
+                    steps:
+                      - run: true
+            """,
+            "inline-value.yml": """
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on: {labels: [self-hosted, linux]}
+                    steps:
+                      - run: true
+            """,
+            "block.yml": """
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on:
+                      labels: [self-hosted, linux]
+                    steps:
+                      - run: true
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "unsupported-runs-on-mapping", "integration", filename)
 
     def test_rejects_deploy_jobs_without_exact_job_level_main_branch_guard(self):
         for condition in (

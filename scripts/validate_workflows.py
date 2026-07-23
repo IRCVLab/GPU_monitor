@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PINNED_ACTION_RE = re.compile(r"@[0-9a-f]{40}$")
+YAML_ANCHOR_ALIAS_RE = re.compile(r"(^|[\s\[:,{])[&*][A-Za-z0-9_-]+($|[\s,\]}])")
 PRODUCTION_LABELS = {"prod", "production", "prd", "prod-runner"}
 
 
@@ -120,16 +121,36 @@ def child_list(lines: list[SourceLine], start_index: int, parent_indent: int) ->
     return values
 
 
+def yaml_anchor_or_alias(value: str) -> bool:
+    return YAML_ANCHOR_ALIAS_RE.search(strip_comment(value)) is not None
+
+
+def job_for_line(jobs: list[JobBlock], line_number: int) -> str | None:
+    for job in jobs:
+        if any(line.number == line_number for line in job.lines):
+            return job.job_id
+    return None
+
+
 def unsupported_yaml_violations(path: Path, lines: list[SourceLine]) -> list[Violation]:
     if not lines:
         return [Violation(path, "unsupported-yaml", "workflow file is empty")]
     violations: list[Violation] = []
+    jobs = find_jobs(lines)
     for line in lines:
         if line.indent == 0 and line.text.startswith("-"):
             violations.append(Violation(path, "unsupported-yaml", f"top-level list item at line {line.number} is not supported"))
         if not line.text.startswith("-") and ":" not in line.text:
             violations.append(Violation(path, "unsupported-yaml", f"line {line.number} is not a supported key/value mapping"))
-    jobs = find_jobs(lines)
+        if yaml_anchor_or_alias(line.text):
+            violations.append(
+                Violation(
+                    path,
+                    "unsupported-yaml-anchor-alias",
+                    f"YAML anchors and aliases are not supported at line {line.number}",
+                    job_for_line(jobs, line.number),
+                )
+            )
     if not jobs:
         violations.append(Violation(path, "unsupported-yaml", "workflow must contain at least one jobs entry"))
     return violations
@@ -227,6 +248,36 @@ def direct_job_values(job: JobBlock, key: str) -> list[str]:
     return []
 
 
+def direct_job_line(job: JobBlock, key: str) -> tuple[SourceLine, str] | None:
+    if not job.lines:
+        return None
+    job_indent = job.lines[0].indent
+    for line in job.lines[1:]:
+        parsed = key_value(line.text)
+        if parsed and line.indent == job_indent + 2 and parsed[0] == key:
+            return line, unquote(parsed[1])
+    return None
+
+
+def has_runs_on_mapping(job: JobBlock) -> bool:
+    runs_on = direct_job_line(job, "runs-on")
+    if runs_on is None:
+        return False
+    line, value = runs_on
+    if value.startswith("{") and value.endswith("}"):
+        return True
+    if value:
+        return False
+    for child in job.lines:
+        if child.number <= line.number:
+            continue
+        if child.indent <= line.indent:
+            break
+        if not child.text.startswith("-") and key_value(child.text):
+            return True
+    return False
+
+
 def uses_values(job: JobBlock) -> list[str]:
     values: list[str] = []
     for line in job.lines[1:]:
@@ -316,6 +367,10 @@ def validate_workflow(path: Path) -> list[Violation]:
                 )
 
         runner_labels = {label.lower() for label in direct_job_values(job, "runs-on")}
+        if has_runs_on_mapping(job):
+            violations.append(
+                Violation(path, "unsupported-runs-on-mapping", "runs-on mapping forms are not supported", job.job_id)
+            )
         if is_pull_request_workflow:
             if any("${{" in label or "matrix." in label for label in runner_labels):
                 violations.append(
