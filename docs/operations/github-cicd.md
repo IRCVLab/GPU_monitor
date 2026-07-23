@@ -154,3 +154,15 @@ rollback live
 ```
 
 A development rollback must not target live, and a live rollback must not target development. The server-side forced command enforces the lane boundary.
+
+## Development-slot rehearsal evidence
+
+Rehearsal date: 2026-07-24 KST.
+
+- Preserved live baseline: `f2ea62f5ba4dc6a791bf0faf3fee4153e83462ce` on the existing live checkout, with ports `5173`, `8001`, and `8000` healthy.
+- Preserved Storage isolation: `storage-viz-dashboard.service` remained active and port `8088` remained healthy.
+- Managed development activation: `4caf92ff9fea2eff7047d89e5f9a5eb7cd15b751` activated successfully in `/srv/gpu-monitor/dev`.
+- Browser-facing verification: frontend `/`, proxied `/api/health`, proxied `/api/servers`, and the end-to-end `/ws/metrics` upgrade health check passed through port `5174`; the backend remained loopback-only on `8101`.
+- Service ownership: `gpu-monitor-backend@dev.service` and `gpu-monitor-frontend@dev.service` are active, and the legacy development tmux sessions are absent.
+- A first activation attempt exposed a systemd symlink-entrypoint defect. The release failed health and the legacy tmux development service was restored before the corrected candidate was activated. Regression coverage now executes `server.mjs` through a `current` directory symlink.
+- Rollback rehearsal is pending a second proxy-capable documentation-only candidate; the legacy `7fbacc2ef3ce3e2e13197e9620dd2ecc92e622f9` release predates `server.mjs` and is not a valid rollback target for the updated frontend unit.
