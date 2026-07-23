@@ -339,6 +339,19 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertIn("DIFF_CHECK_HEAD", recipe)
         self.assertIn('git diff --check "$$base" "$$head"', recipe)
 
+    def test_gpu_release_policy_documents_trusted_team_sha_contract(self):
+        workflow_design = Path(
+            "docs/superpowers/specs/2026-07-23-development-release-workflow-design.md"
+        ).read_text(encoding="utf-8")
+        github_cicd = Path("docs/operations/github-cicd.md").read_text(encoding="utf-8")
+
+        self.assertIn("PR head SHA", workflow_design)
+        self.assertIn("main SHA", workflow_design)
+        self.assertIn("direct push", workflow_design.lower())
+        self.assertIn("GitHub-hosted", github_cicd)
+        self.assertIn("forced-command", github_cicd)
+        self.assertIn("Storage agents remain manual", github_cicd)
+
 
 if __name__ == "__main__":
     unittest.main()

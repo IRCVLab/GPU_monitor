@@ -14,6 +14,10 @@ current GitHub plan does not provide enforceable branch protection for this
 private repository, so repository policy and deployment checks must temporarily
 compensate for the missing protection.
 
+Verified server inventory from 2026-07-23 records the live GPU release at
+`f2ea62f` and the development GPU candidate at `64c4b83`. SSH access works,
+and the current GPU development and live runtimes are isolated tmux stacks.
+
 The repository is a monorepo with two independently deployable products:
 
 - `apps/gpu-monitor`
@@ -28,7 +32,8 @@ refs until archive-branch cleanup is completed.
 - Keep day-to-day development simple for a small internal team.
 - Make local clones the source of code changes.
 - Use the shared development server only for integration validation.
-- Deploy exactly the commit that was validated.
+- Validate the pull-request head on the shared development server, then deploy
+  the separately validated resulting `main` commit.
 - Make a successful reviewed `main` commit the GPU live-release source.
 - Keep GPU and Storage deployment and rollback independent.
 - Remove archive branches from the normal branch list without losing history.
@@ -142,32 +147,32 @@ integration.
 
 ## GPU release flow
 
-The intended GPU flow is:
+The intended GPU SHA contract is:
 
 ```text
-local feature branch
-  -> pull request
-  -> CI success
-  -> deploy exact PR SHA to shared dev
-  -> integration validation
-  -> merge to main
-  -> main CI success
-  -> build immutable GPU artifact
-  -> atomically deploy that main SHA to live
+PR head SHA -> CI -> shared dev validation
+GitHub merge -> resulting main SHA -> fresh ci/required
+merged-PR provenance + effective approval verification
+build and deploy the exact successful main SHA
 ```
 
 Once this workflow is implemented, no separate human production approval is
 required after the reviewed merge and successful `main` CI. The merge is the
-release authorization point.
+release authorization point, while post-merge CI validates the final release
+identity. Same-tree or same-SHA equivalence between the PR head and resulting
+`main` commit is not assumed. Live cutover remains delayed until the
+GitHub-hosted deployment workflow builds an immutable artifact from that exact
+successful main SHA and atomically activates it on the server.
 
 Because branch protection is not currently enforceable, the production
 workflow must additionally verify:
 
 1. The event targets `main`.
-2. `ci/required` succeeded for the exact SHA.
-3. The SHA is associated with a merged pull request targeting `main`.
-4. The artifact SHA matches the deployed source SHA.
-5. The live deployment uses an application-local release directory.
+2. `ci/required` succeeded freshly for the exact resulting main SHA.
+3. The main SHA is associated with a merged pull request targeting `main`.
+4. The merged pull request has effective approval from a teammate.
+5. The artifact SHA matches the deployed source SHA.
+6. The live deployment uses an application-local release directory.
 
 A direct push to `main` may run CI, but it must not satisfy the merged-PR
 deployment condition.
@@ -183,7 +188,7 @@ current -> releases/gpu/<commit-sha>/
 
 Deployment order:
 
-1. Build from the reviewed SHA.
+1. Build from the exact successful main SHA.
 2. Upload to a new release directory.
 3. Validate checksums and configuration.
 4. Run application-local pre-activation checks.
@@ -239,7 +244,9 @@ Before implementing deployment:
 - Contributors can develop and test locally without using the shared server.
 - The shared dev server runs only committed, identifiable SHAs.
 - PR CI blocks integration by team policy.
-- The exact SHA validated on dev is the SHA merged to `main`.
+- The PR head SHA validated on dev may differ from the resulting main SHA.
+- The reviewed merge authorizes release, and fresh `main` CI validates the
+  final release identity before deployment.
 - Successful `main` CI can automatically deploy GPU live without another manual
   approval.
 - Direct pushes to `main` cannot trigger live deployment.

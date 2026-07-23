@@ -1,10 +1,10 @@
 # GitHub CI/CD bootstrap guard
 
-This repository is ready to publish source and pull-request CI, but production deployment remains deliberately guarded. The guardrail is `scripts/check_deploy_prerequisites.py`, a read-only checker that reports `READY`, `BLOCKED`, or `UNKNOWN` for repository protection, CODEOWNER enforcement, runner availability, and server reachability. It never changes GitHub settings, registers runners, copies artifacts, restarts services, or writes to the production server; malformed metadata fails closed and never falls back to live inspection.
+This repository is ready to publish source, pull-request CI, and the trusted-team GPU deployment workflow, but live cutover remains deliberately delayed until the workflow and server-side release path are implemented and verified. The guardrail is `scripts/check_deploy_prerequisites.py`, a read-only checker that reports `READY`, `BLOCKED`, or `UNKNOWN` for repository protection, CODEOWNER enforcement, runner availability, and server reachability. It never changes GitHub settings, registers runners, copies artifacts, restarts services, or writes to the production server; malformed metadata fails closed and never falls back to live inspection.
 
-## Current blocker
+## Current private-plan limitation
 
-`IRCVLab/GPU_monitor` is a private repository on the current GitHub plan, and `main` branch protection is unavailable/not configured for that private-plan state. Until `main` has branch protection, deployment bootstrap is blocked even though source publication and pull-request CI files can be prepared locally.
+`IRCVLab/GPU_monitor` is a private repository on the current GitHub plan, and `main` branch protection is unavailable/not configured for that private-plan state. That limitation remains explicit: the compensating checks below are not equivalent to branch protection against a malicious authorized writer. They prevent accidental direct-push deployment inside the trusted team model, where only authorized team members have write access.
 
 Required live check:
 
@@ -14,11 +14,11 @@ python3.12 scripts/check_deploy_prerequisites.py --repo IRCVLab/GPU_monitor
 
 The default process exit status is the production `cutover` status, so missing or blocked server reachability can never produce exit `0`. Use `--stage runner` only when evaluating runner-registration readiness. `--stage publication` reports protected-CI readiness; it is not a gate for the repository's first source-only push.
 
-Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; `READY` requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. If runner enumeration cannot read the repository runner API, `runner_availability` must be `UNKNOWN`, not treated as accepted; org runner and runner-group evidence is advisory unless it explicitly proves this repository is eligible.
+Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; full branch-protection readiness still requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. Runner enumeration is advisory for historical self-hosted planning only; pull-request and deployment workflows use GitHub-hosted runners.
 
-## Required `main` protection before runner registration
+## Desired `main` protection when the plan allows it
 
-Before registering or authorizing any production runner, configure `main` with all of these settings:
+When the GitHub plan allows enforceable branch protection, configure `main` with all of these settings:
 
 1. Require pull request before merging.
 2. Require at least one approving review.
@@ -29,13 +29,13 @@ Before registering or authorizing any production runner, configure `main` with a
 7. Disable force pushes.
 8. Keep `.github/CODEOWNERS`, `.github/workflows/`, deployment controls, prerequisite checker, and operation docs operator-owned.
 
-A protected `main` with `ci/required`, at least one approving review, code-owner review, explicit administrator enforcement, explicit no force pushes, and explicit no administrator bypass is `READY` for runner-registration planning. If any of those fields are unavailable from metadata or the API contract, the checker reports `UNKNOWN` and exits nonzero. Any `UNKNOWN` prerequisite exits nonzero and is never treated as `READY`. It is not the same as production cutover approval.
+A protected `main` with `ci/required`, at least one approving review, code-owner review, explicit administrator enforcement, explicit no force pushes, and explicit no administrator bypass is `READY` for protected-main planning. If any of those fields are unavailable from metadata or the API contract, the checker reports `UNKNOWN` and exits nonzero. Any `UNKNOWN` prerequisite exits nonzero and is never treated as `READY`. It is not the same as production cutover approval.
 
-## Why the production runner is not installed yet
+## Runner and deployment credential policy
 
-The production runner is intentionally not installed because a self-hosted runner connected before branch protection and CODEOWNER enforcement would create a deployment path that is stronger than the repository's review controls. Runner installation may start only after the checker reports `READY` for protected `main`, CODEOWNER enforcement, and runner availability. Runner availability is based on actual repository runner enumeration and requires at least one online repository-scoped runner returned by `repos/{repo}/actions/runners`, unless separate evidence explicitly proves repository eligibility. Online org-scoped runners and runner groups are advisory/`UNKNOWN` because a runner group may exclude this repository; runner-group API readability or permission to inspect runner groups alone is not sufficient for `READY`. If the repository runner API already returned an online repository-scoped runner, that `READY` evidence is preserved even when org runner enumeration is unavailable (for example HTTP 403). Permission or API uncertainty without repository-scoped online runner evidence remains `UNKNOWN`.
+Pull-request and deployment workflows use GitHub-hosted runners. The deployment credential is environment-scoped and accepted by a server-side forced-command wrapper that cannot execute arbitrary repository-provided shell. Self-hosted production runners remain disabled while branch protection is unavailable.
 
-Pull-request CI must continue to use GitHub-hosted runners. Production labels such as `prod`, `production`, `prd`, or `prod-runner` are reserved for deployment jobs and remain denied for normal PR jobs by workflow policy validation.
+The trusted-team deployment workflow must verify merged-PR provenance, effective approval, and a fresh successful `ci/required` result for the resulting `main` SHA before it builds or deploys. A direct push to `main` may run CI, but it must not satisfy the deployment condition. Production labels such as `prod`, `production`, `prd`, or `prod-runner` remain denied because production jobs do not use self-hosted runners.
 
 ## Initial publication commands
 
@@ -51,22 +51,22 @@ The first publication is source-only and does not require the deployment checker
 git push origin HEAD
 ```
 
-Do not register a self-hosted runner, create deployment secrets, restart services, or write to the server as part of source publication.
+Do not register a self-hosted runner, create deployment secrets, restart services, or write to the server as part of source publication. Environment-scoped deployment credentials are created only as part of the reviewed deployment workflow and must target the server-side forced-command wrapper.
 
 ## Action and secret policy
 
 - GitHub Actions must use least-privilege permissions; `write-all` is not allowed.
 - Third-party and first-party `uses:` actions must be pinned to full lowercase 40-character SHAs.
 - `pull_request_target` is not allowed for repository CI.
-- Pull-request jobs must not run on self-hosted or dynamically selected production runners.
-- Production secrets must not be created until branch protection, CODEOWNER review, runner authorization, and cutover authority are all documented.
+- Pull-request and deployment jobs must not run on self-hosted or dynamically selected production runners.
+- Production deployment secrets must be environment-scoped and accepted only by the server-side forced-command wrapper.
 - Store secret values only in GitHub or server secret stores; never commit them or include them in runbooks, logs, or reports.
 
 ## Phase 4 artifact and release expectations
 
 Phase 4 deployment must use immutable artifacts and atomic release activation:
 
-1. Build each application artifact from a reviewed commit SHA.
+1. Build each application artifact from the exact successful main SHA after merged-PR provenance, effective approval, and fresh `ci/required` verification.
 2. Name or address artifacts by commit SHA/content digest.
 3. Upload artifacts without modifying the active release.
 4. Validate checksums and application-local smoke checks.
@@ -83,9 +83,9 @@ Rollback must be product-local:
 - Storage dashboard: restore the previous Storage dashboard release pointer and restart only dashboard services.
 - Shared repository governance changes are not a runtime rollback mechanism.
 
-## Storage agent rollout remains manual/tagged
+## Storage agents remain manual/tagged
 
-The Storage agent rollout remains manual and tagged. It must not auto-deploy from `main`. Operator rollout requires an explicit reviewed tag or manual dispatch, host allowlisting, exact artifact identity, and a rollback note for every target host.
+Storage agents remain manual and tagged. They must not auto-deploy from `main`. Operator rollout requires an explicit reviewed tag or manual dispatch, host allowlisting, exact artifact identity, and a rollback note for every target host.
 
 ## Server reachability and SSH timeout
 

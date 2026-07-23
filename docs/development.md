@@ -5,20 +5,22 @@ This repository is a hybrid monorepo for two independently deployable monitoring
 - `apps/gpu-monitor` — GPU Monitor frontend, FastAPI backend, Slack bridge, and GPU-specific scripts.
 - `apps/storage-monitor` — Storage Monitor viewer, collector, scanner, agent, and deployment templates.
 
-The foundation migration intentionally enables local validation and documentation only. It does not enable deployment, register runners, restart live services, or change production ports.
+The foundation migration enabled local validation and documentation. The trusted-team GPU release workflow is documented separately and, once implemented, uses GitHub-hosted deployment jobs plus a server-side forced-command wrapper for live release activation. It does not register self-hosted production runners, restart live services during ordinary verification, or change production ports.
 
 ## Safety rules
 
 - Work in application-local directories unless a root-level contract requires otherwise.
 - Do not commit real `.env` files, local databases, scan output, runtime snapshots, `node_modules`, virtual environments, build output, cache directories, tmux state, or machine-specific configuration.
 - Root documentation-only changes do not deploy applications.
-- Deployment planning, CI registration, runner setup, and service installation are separate future plans.
+- Deployment planning, CI registration, and service installation are separate reviewed changes; self-hosted production runners remain disabled while branch protection is unavailable.
 - The GPU runtime scripts manage tmux sessions and ports; do not run them during ordinary repository verification.
 - Storage agent/dashboard install and deploy scripts are operational tools; ordinary verification uses their dry-run and contract tests, not live installs.
 
 ## Pull request CI
 
-GitHub Actions runs on pull requests, pushes to `main`, and manual dispatch. Every pull request reports `ci/required`; path-aware GPU and Storage jobs run only when their application paths or shared workflow inputs change, so documentation-only changes skip the app suites. Pushes to feature branches do not deploy or run the production path. Production deployment remains intentionally disabled until repository protection is available.
+GitHub Actions runs on pull requests, pushes to `main`, and manual dispatch. Every pull request reports `ci/required`; path-aware GPU and Storage jobs run only when their application paths or shared workflow inputs change, so documentation-only changes skip the app suites. Pushes to feature branches do not deploy or run the production path. GPU release automation validates a PR head SHA on the shared development server, then treats the reviewed GitHub merge as release authorization and requires fresh `ci/required` success for the resulting main SHA before any delayed live cutover deploys that exact main SHA.
+
+Because the private GitHub plan does not currently provide enforceable branch protection, the compensating deployment checks are not equivalent to branch protection against a malicious authorized writer. They prevent accidental direct-push deployment inside the trusted team model.
 
 ## Root verification
 
