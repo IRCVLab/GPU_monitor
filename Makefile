@@ -1,11 +1,12 @@
 SHELL := /bin/bash
-.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test test-gpu build-gpu test-storage verify diff-check
+.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-script-test build-gpu-release test-gpu build-gpu test-storage verify diff-check
 
 test: layout-test history-test
 	$(MAKE) impact-test
 	$(MAKE) policy-test
 	$(MAKE) deploy-readiness-test
 	$(MAKE) release-auth-test
+	$(MAKE) release-script-test
 
 layout-test:
 	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_repository_layout -v
@@ -25,6 +26,12 @@ deploy-readiness-test:
 
 release-auth-test:
 	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_authorize_gpu_release -v
+
+release-script-test:
+	bash apps/gpu-monitor/deploy/test_release_scripts.sh
+
+build-gpu-release:
+	apps/gpu-monitor/deploy/build-release.sh --sha "$$(git rev-parse HEAD)" --output-dir "$${OUTPUT_DIR:-apps/gpu-monitor/dist/releases}"
 
 test-gpu:
 	cd apps/gpu-monitor/frontend && npm run check
