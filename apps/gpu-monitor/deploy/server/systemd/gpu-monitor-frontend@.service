@@ -4,7 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=gpu-deploy
+User=gpu-deploy-%i
+Group=gpu-deploy-%i
 WorkingDirectory=/srv/gpu-monitor/%i/current/frontend
 EnvironmentFile=/etc/gpu-monitor/%i.env
 Environment=HOST=127.0.0.1

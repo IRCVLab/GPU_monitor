@@ -298,6 +298,9 @@ DEPLOY_COMMAND="$SERVER_DIR/gpu-monitor-deploy-command"
 ACTIVATE_SCRIPT="$SERVER_DIR/activate-release.sh"
 HEALTH_SCRIPT="$SERVER_DIR/health-check.sh"
 INSTALLER_SCRIPT="$SERVER_DIR/install-deployer.sh"
+RESTART_BROKER="$SERVER_DIR/gpu-monitor-restart-broker"
+DEV_SUDOERS="$SERVER_DIR/sudoers/gpu-monitor-deploy-dev"
+LIVE_SUDOERS="$SERVER_DIR/sudoers/gpu-monitor-deploy-live"
 
 assert_symlink_target() {
   local link=$1 expected=$2 actual
@@ -321,17 +324,32 @@ make_release_artifact() {
 }
 
 install_fake_server_commands() {
-  local fakebin=$1 log_file=$2 health_mode=${3:-pass}
+  local fakebin=$1 log_file=$2 health_mode=${3:-pass} restart_mode=${4:-pass}
   mkdir -p "$fakebin"
+  printf '%s\n' "$restart_mode" > "$fakebin/restart-mode"
+  printf '0\n' > "$fakebin/restart-count"
+  printf '0\n' > "$fakebin/health-count"
   cat > "$fakebin/systemctl" <<FAKE
 #!/usr/bin/env bash
 printf 'systemctl %s\\n' "\$*" >> '$log_file'
+count=\$((\$(cat '$fakebin/restart-count') + 1))
+printf '%s\\n' "\$count" > '$fakebin/restart-count'
+mode=\$(cat '$fakebin/restart-mode')
+case "\$mode" in
+  fail-all) exit 1 ;;
+  backend-first) [[ "\$count" == 1 && "\$*" == *backend* ]] && exit 1 ;;
+  frontend-first) [[ "\$count" == 2 && "\$*" == *frontend* ]] && exit 1 ;;
+  bridge-first) [[ "\$count" == 3 && "\$*" == *bridge* ]] && exit 1 ;;
+esac
 exit 0
 FAKE
   cat > "$fakebin/curl" <<FAKE
 #!/usr/bin/env bash
 printf 'curl %s\\n' "\$*" >> '$log_file'
-if [[ '$health_mode' == fail ]]; then exit 22; fi
+count=\$((\$(cat '$fakebin/health-count') + 1))
+printf '%s\\n' "\$count" > '$fakebin/health-count'
+if [[ '$health_mode' == fail || '$health_mode' == fail-all ]]; then exit 22; fi
+if [[ '$health_mode' == fail-first && "\$count" == 1 ]]; then exit 22; fi
 exit 0
 FAKE
   cat > "$fakebin/python3" <<FAKE
@@ -348,6 +366,13 @@ FAKE
   cat > "$fakebin/flock" <<FAKE
 #!/usr/bin/env bash
 printf 'flock %s\\n' "\$1" >> '$log_file'
+shift
+exec "\$@"
+FAKE
+  cat > "$fakebin/sudo" <<FAKE
+#!/usr/bin/env bash
+printf 'sudo %s\\n' "\$*" >> '$log_file'
+[[ "\${1:-}" == -n ]] || exit 93
 shift
 exec "\$@"
 FAKE
@@ -377,6 +402,8 @@ test_server_scripts_exist_before_security_tests() {
   [[ -x "$ACTIVATE_SCRIPT" ]] || fail "server activation script is missing or not executable"
   [[ -x "$HEALTH_SCRIPT" ]] || fail "server health-check script is missing or not executable"
   [[ -x "$INSTALLER_SCRIPT" ]] || fail "server installer script is missing or not executable"
+  [[ -x "$RESTART_BROKER" ]] || fail "root-owned exact restart broker is missing or not executable"
+  [[ -f "$DEV_SUDOERS" && -f "$LIVE_SUDOERS" ]] || fail "separate exact sudoers allowlists are missing"
   log "server scripts exist"
 }
 
@@ -460,10 +487,10 @@ test_upload_is_bounded_digest_verified_and_cleans_failures() {
   if run_forced_command "$prefix" "upload dev $sha $bad_digest" "$artifact" >/"$tmp/bad.out" 2>/"$tmp/bad.err"; then
     fail "upload accepted mismatched digest"
   fi
-  [[ ! -e "$prefix/srv/gpu-monitor/dev/incoming/$sha.tar.gz" ]] || fail "bad upload left incoming artifact"
+  [[ ! -e "$prefix/srv/gpu-monitor/dev/incoming/$sha/$bad_digest.tar.gz" ]] || fail "bad upload left incoming artifact"
 
   run_forced_command "$prefix" "upload dev $sha $digest" "$artifact" >/"$tmp/good.out" 2>/"$tmp/good.err"
-  [[ -s "$prefix/srv/gpu-monitor/dev/incoming/$sha.tar.gz" ]] || fail "verified upload did not persist incoming artifact"
+  [[ -s "$prefix/srv/gpu-monitor/dev/incoming/$sha/$digest.tar.gz" ]] || fail "verified upload did not persist incoming artifact"
 
   sha=2222222222222222222222222222222222222222
   make_release_artifact "$tmp/artifact" "$sha" oversize
@@ -472,7 +499,7 @@ test_upload_is_bounded_digest_verified_and_cleans_failures() {
   if run_forced_command "$prefix" "upload dev $sha $digest" "$artifact" "GPU_MONITOR_MAX_UPLOAD_BYTES=1" dev >/"$tmp/large.out" 2>/"$tmp/large.err"; then
     fail "upload accepted artifact over configured size bound"
   fi
-  [[ ! -e "$prefix/srv/gpu-monitor/dev/incoming/$sha.tar.gz" ]] || fail "oversized upload left incoming artifact"
+  [[ ! -e "$prefix/srv/gpu-monitor/dev/incoming/$sha/$digest.tar.gz" ]] || fail "oversized upload left incoming artifact"
 
   for invalid_bound in 0 -1 536870913 not-a-number; do
     if run_forced_command "$prefix" "upload dev $sha $digest" "$artifact" "GPU_MONITOR_MAX_UPLOAD_BYTES=$invalid_bound" dev >/"$tmp/bound.out" 2>/"$tmp/bound.err"; then
@@ -522,9 +549,8 @@ test_activation_dev_live_boundaries_pointers_units_and_rollback() {
   mkdir -p "$tmp/conflicting"
   make_release_artifact "$tmp/conflicting" "$sha1" conflicting
   conflicting_digest=$(cat "$tmp/conflicting/digest")
-  run_forced_command "$prefix" "upload dev $sha1 $conflicting_digest" "$tmp/conflicting/gpu-monitor-$sha1.tar.gz"
-  if run_forced_command "$prefix" "activate dev $sha1 $conflicting_digest" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" dev >/"$tmp/conflicting.out" 2>/"$tmp/conflicting.err"; then
-    fail "activation reused an existing SHA for a conflicting artifact digest"
+  if run_forced_command "$prefix" "upload dev $sha1 $conflicting_digest" "$tmp/conflicting/gpu-monitor-$sha1.tar.gz" >/"$tmp/conflicting.out" 2>/"$tmp/conflicting.err"; then
+    fail "upload reused an existing SHA for a conflicting artifact digest"
   fi
   after=$(find "$prefix/srv/gpu-monitor/dev/releases/$sha1" -type f -print -exec shasum -a 256 {} \; | LC_ALL=C sort)
   [[ "$before" == "$after" ]] || fail "conflicting activation mutated existing immutable release"
@@ -536,12 +562,12 @@ test_activation_dev_live_boundaries_pointers_units_and_rollback() {
   make_release_artifact "$tmp/a3" "$sha3" three
   digest3=$(cat "$tmp/a3/digest")
   run_forced_command "$prefix" "upload dev $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz"
-  rm -rf "$fakebin"; : > "$log_file"; install_fake_server_commands "$fakebin" "$log_file" fail
+  rm -rf "$fakebin"; : > "$log_file"; install_fake_server_commands "$fakebin" "$log_file" fail-first
   if run_forced_command "$prefix" "activate dev $sha3 $digest3" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" dev >/"$tmp/act-fail.out" 2>/"$tmp/act-fail.err"; then
     fail "activation succeeded despite failing health"
   fi
   assert_symlink_target "$prefix/srv/gpu-monitor/dev/current" "releases/$sha1"
-  grep -q '"status":"rollback"' "$prefix/srv/gpu-monitor/dev/deployments.jsonl" || fail "rollback state was not recorded"
+  grep -q '"status":"rollback_succeeded"' "$prefix/srv/gpu-monitor/dev/deployments.jsonl" || fail "rollback state was not recorded"
   log "activation isolates envs, uses atomic pointers/units/flocks, and rolls back on failed health"
 }
 
@@ -552,7 +578,7 @@ test_first_activation_failure_restores_absent_pointer_state() {
   prefix="$tmp/prefix"
   fakebin="$tmp/fakebin"
   log_file="$tmp/commands.log"
-  install_fake_server_commands "$fakebin" "$log_file" fail
+  install_fake_server_commands "$fakebin" "$log_file" fail-first
   sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
   mkdir -p "$tmp/artifact"
   make_release_artifact "$tmp/artifact" "$sha" first
@@ -620,14 +646,320 @@ PY
 
 test_state_appends_use_crash_durable_writer() {
   grep -Fq 'os.fsync' "$ACTIVATE_SCRIPT" || fail "deployment state writer does not fsync JSONL appends"
+  grep -Fq 'os.O_DIRECTORY' "$ACTIVATE_SCRIPT" || fail "first deployment state creation does not fsync its parent directory"
   if grep -Eq 'json_line .*>>.*state' "$ACTIVATE_SCRIPT"; then
     fail "deployment state still uses non-durable shell redirection"
   fi
   log "deployment JSONL state appends use the crash-durable writer"
 }
 
+
+test_directory_mutations_are_fsynced() {
+  grep -Fq 'fsync_directory()' "$ACTIVATE_SCRIPT" || fail "activation script has no reusable directory fsync primitive"
+  for needle in \
+    'fsync_directory "$base"' \
+    'fsync_directory "$releases"' \
+    'fsync_directory "$incoming"' \
+    'fsync_directory "$tmp_root"' \
+    'fsync_directory "${link%/*}"'; do
+    grep -Fq "$needle" "$ACTIVATE_SCRIPT" || fail "directory mutation is not durably fsynced: $needle"
+  done
+  log "directory mutations are fsynced after atomic publish, cleanup, and pointer changes"
+}
+
+test_isolated_identities_broker_and_descriptor_extraction_contract() {
+  ! grep -Fq 'gpu-deploy' "$SERVER_DIR/systemd/gpu-monitor-backend@.service" ||
+    grep -Fq 'User=gpu-deploy-%i' "$SERVER_DIR/systemd/gpu-monitor-backend@.service" ||
+    fail "backend service does not select the environment-specific deploy identity"
+  for unit in "$SERVER_DIR"/systemd/*.service; do
+    grep -Fq 'User=gpu-deploy-%i' "$unit" || fail "$unit does not use environment-specific service user"
+    grep -Fq 'Group=gpu-deploy-%i' "$unit" || fail "$unit does not use environment-specific service group"
+  done
+  grep -Fxq 'gpu-deploy-dev ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker dev' "$DEV_SUDOERS" ||
+    fail "dev sudoers is not the exact dev-only broker allowlist"
+  grep -Fxq 'gpu-deploy-live ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker live' "$LIVE_SUDOERS" ||
+    fail "live sudoers is not the exact live-only broker allowlist"
+  ! grep -Fq ' live' "$DEV_SUDOERS" || fail "dev sudoers grants a live restart capability"
+  ! grep -Fq ' dev' "$LIVE_SUDOERS" || fail "live sudoers grants a dev restart capability"
+  grep -Fq '/usr/bin/sudo -n "$restart_broker" "$env"' "$ACTIVATE_SCRIPT" ||
+    fail "production activation does not call only sudo -n and the exact broker"
+  ! grep -Eq 'getmembers|extractall|tarfile\.open\([^f]' "$ACTIVATE_SCRIPT" ||
+    fail "archive implementation uses bulk enumeration/extraction or pathname reopen"
+  grep -Fq 'tarfile.open(fileobj=artifact_file, mode="r|gz")' "$ACTIVATE_SCRIPT" ||
+    fail "archive extraction is not streamed from the already-hashed descriptor"
+  log "isolated service identities, exact broker allowlists, and descriptor-bound extraction are contractual"
+}
+
+test_restart_broker_exact_unit_allowlist() {
+  local tmp fakebin log_file
+  tmp=$(mktemp_dir gpu-release-broker)
+  trap 'rm -rf "$tmp"' RETURN
+  fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+
+  env -i PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    "$RESTART_BROKER" --test-mode dev
+  grep -Fq 'gpu-monitor-backend@dev.service' "$log_file" || fail "dev broker omitted backend"
+  grep -Fq 'gpu-monitor-frontend@dev.service' "$log_file" || fail "dev broker omitted frontend"
+  ! grep -Eq 'bridge|@live' "$log_file" || fail "dev broker widened into bridge/live"
+
+  : > "$log_file"; printf '0\n' > "$fakebin/restart-count"
+  env -i PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    "$RESTART_BROKER" --test-mode live
+  grep -Fq 'gpu-monitor-bridge@live.service' "$log_file" || fail "live broker omitted bridge"
+  if "$RESTART_BROKER" dev live > "$tmp/bad.out" 2> "$tmp/bad.err"; then
+    fail "broker accepted a widened command shape"
+  fi
+  log "restart broker maps exact environments to exact selected units"
+}
+
+test_transaction_restores_both_pointers_for_restart_health_and_manual_failures() {
+  local case_name env_name restart_mode health_mode expected_status tmp prefix fakebin log_file
+  local sha1 sha2 sha3 digest1 digest2 digest3
+  for case_name in backend frontend bridge health recovery manual; do
+    tmp=$(mktemp_dir "gpu-release-transaction-$case_name")
+    prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+    env_name=dev; restart_mode=pass; health_mode=pass; expected_status=rollback_succeeded
+    [[ "$case_name" == backend ]] && restart_mode=backend-first
+    [[ "$case_name" == frontend ]] && restart_mode=frontend-first
+    [[ "$case_name" == bridge ]] && { env_name=live; restart_mode=bridge-first; }
+    [[ "$case_name" == health ]] && health_mode=fail-first
+    [[ "$case_name" == recovery ]] && { restart_mode=fail-all; expected_status=rollback_failed; }
+    [[ "$case_name" == manual ]] && restart_mode=frontend-first
+    install_fake_server_commands "$fakebin" "$log_file" pass
+    sha1=1111111111111111111111111111111111111111
+    sha2=2222222222222222222222222222222222222222
+    sha3=3333333333333333333333333333333333333333
+    mkdir -p "$tmp/a1" "$tmp/a2" "$tmp/a3"
+    make_release_artifact "$tmp/a1" "$sha1" one
+    make_release_artifact "$tmp/a2" "$sha2" two
+    make_release_artifact "$tmp/a3" "$sha3" three
+    digest1=$(cat "$tmp/a1/digest"); digest2=$(cat "$tmp/a2/digest"); digest3=$(cat "$tmp/a3/digest")
+    run_forced_command "$prefix" "upload $env_name $sha1 $digest1" "$tmp/a1/gpu-monitor-$sha1.tar.gz" "" "$env_name"
+    run_forced_command "$prefix" "activate $env_name $sha1 $digest1" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" "$env_name"
+    run_forced_command "$prefix" "upload $env_name $sha2 $digest2" "$tmp/a2/gpu-monitor-$sha2.tar.gz" "" "$env_name"
+    run_forced_command "$prefix" "activate $env_name $sha2 $digest2" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" "$env_name"
+    assert_symlink_target "$prefix/srv/gpu-monitor/$env_name/current" "releases/$sha2"
+    assert_symlink_target "$prefix/srv/gpu-monitor/$env_name/previous" "releases/$sha1"
+
+    rm -rf "$fakebin"; : > "$log_file"
+    install_fake_server_commands "$fakebin" "$log_file" "$health_mode" "$restart_mode"
+    if [[ "$case_name" == manual ]]; then
+      if run_forced_command "$prefix" "rollback $env_name" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" "$env_name"; then
+        fail "manual rollback succeeded despite injected restart failure"
+      fi
+    else
+      run_forced_command "$prefix" "upload $env_name $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz" "" "$env_name"
+      if run_forced_command "$prefix" "activate $env_name $sha3 $digest3" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" "$env_name"; then
+        fail "$case_name activation succeeded despite injected failure"
+      fi
+    fi
+    assert_symlink_target "$prefix/srv/gpu-monitor/$env_name/current" "releases/$sha2"
+    assert_symlink_target "$prefix/srv/gpu-monitor/$env_name/previous" "releases/$sha1"
+    grep -Fq "\"status\":\"$expected_status\"" "$prefix/srv/gpu-monitor/$env_name/deployments.jsonl" ||
+      fail "$case_name did not durably record $expected_status"
+    [[ "$(grep -c '^sudo -n ' "$log_file")" -ge 2 ]] || fail "$case_name did not attempt guarded candidate and recovery restarts"
+    chmod -R u+w "$tmp" 2>/dev/null || true
+    rm -rf "$tmp"
+    trap - RETURN
+  done
+  log "activation and manual rollback restore exact pointer snapshots across unit/health/recovery failures"
+}
+
+test_incoming_content_addressing_quotas_and_success_cleanup() {
+  local tmp prefix fakebin log_file sha1 sha2 sha3 digest1 digest2 digest3
+  tmp=$(mktemp_dir gpu-release-incoming-control)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  sha1=4444444444444444444444444444444444444444
+  sha2=5555555555555555555555555555555555555555
+  sha3=6666666666666666666666666666666666666666
+  mkdir -p "$tmp/a1" "$tmp/a2" "$tmp/a3"
+  make_release_artifact "$tmp/a1" "$sha1" one
+  make_release_artifact "$tmp/a2" "$sha2" two
+  make_release_artifact "$tmp/a3" "$sha3" three
+  digest1=$(cat "$tmp/a1/digest"); digest2=$(cat "$tmp/a2/digest"); digest3=$(cat "$tmp/a3/digest")
+  local quota_env='GPU_MONITOR_MAX_INCOMING_COUNT=2 GPU_MONITOR_MAX_INCOMING_BYTES=1073741824'
+  run_forced_command "$prefix" "upload dev $sha1 $digest1" "$tmp/a1/gpu-monitor-$sha1.tar.gz" "$quota_env"
+  run_forced_command "$prefix" "upload dev $sha1 $digest1" "$tmp/a1/gpu-monitor-$sha1.tar.gz" "$quota_env"
+  [[ "$(find "$prefix/srv/gpu-monitor/dev/incoming" -name '*.tar.gz' | wc -l | tr -d ' ')" == 1 ]] ||
+    fail "repeated identical upload consumed additional quota"
+  run_forced_command "$prefix" "upload dev $sha2 $digest2" "$tmp/a2/gpu-monitor-$sha2.tar.gz" "$quota_env"
+  if run_forced_command "$prefix" "upload dev $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz" "$quota_env"; then
+    fail "dev incoming count quota accepted count limit + 1"
+  fi
+  run_forced_command "$prefix" "upload live $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz" "$quota_env" live ||
+    fail "dev quota incorrectly consumed live quota"
+  mkdir -p "$prefix/srv/gpu-monitor/dev/tmp"
+  touch -t 200001010000 "$prefix/srv/gpu-monitor/dev/tmp/upload-stale"
+  run_forced_command "$prefix" "activate dev $sha1 $digest1" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin GPU_MONITOR_UPLOAD_TEMP_MAX_AGE=1" dev
+  [[ ! -e "$prefix/srv/gpu-monitor/dev/incoming/$sha1/$digest1.tar.gz" ]] ||
+    fail "successful activation did not consume its incoming object"
+  [[ ! -e "$prefix/srv/gpu-monitor/dev/tmp/upload-stale" ]] || fail "stale upload temp was not pruned under lock"
+  log "incoming artifacts are content-addressed, quota-isolated, idempotent, pruned, and consumed"
+}
+
+test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one() {
+  local tmp prefix fakebin log_file kind index sha artifact digest bound
+  tmp=$(mktemp_dir gpu-release-archive-types)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  index=10
+  for kind in symlink hardlink fifo char block duplicate parent-file child-file; do
+    sha=$(printf '%040d' "$index"); index=$((index + 1))
+    artifact="$tmp/$sha.tar.gz"
+    python3 - "$artifact" "$kind" <<'PY'
+import io, tarfile, sys
+path, kind = sys.argv[1:]
+with tarfile.open(path, "w:gz") as tar:
+    for name in ("gpu-monitor", "gpu-monitor/backend"):
+        item = tarfile.TarInfo(name); item.type = tarfile.DIRTYPE; tar.addfile(item)
+    if kind == "duplicate":
+        for data in (b"a", b"b"):
+            item = tarfile.TarInfo("gpu-monitor/backend/main.py"); item.size = len(data)
+            tar.addfile(item, io.BytesIO(data))
+    elif kind == "parent-file":
+        data = b"x"; item = tarfile.TarInfo("gpu-monitor/frontend"); item.size = len(data)
+        tar.addfile(item, io.BytesIO(data))
+        child = tarfile.TarInfo("gpu-monitor/frontend/build"); child.type = tarfile.DIRTYPE; tar.addfile(child)
+    elif kind == "child-file":
+        data = b"x"; item = tarfile.TarInfo("gpu-monitor/frontend/build/index.js"); item.size = len(data)
+        tar.addfile(item, io.BytesIO(data))
+        parent = tarfile.TarInfo("gpu-monitor/frontend"); parent.size = len(data)
+        tar.addfile(parent, io.BytesIO(data))
+    else:
+        item = tarfile.TarInfo("gpu-monitor/backend/unsafe")
+        item.type = {"symlink": tarfile.SYMTYPE, "hardlink": tarfile.LNKTYPE,
+                     "fifo": tarfile.FIFOTYPE, "char": tarfile.CHRTYPE,
+                     "block": tarfile.BLKTYPE}[kind]
+        item.linkname = "gpu-monitor/backend/main.py"
+        tar.addfile(item)
+PY
+    digest=$(sha256_file "$artifact" | awk '{print $1}')
+    run_forced_command "$prefix" "upload dev $sha $digest" "$artifact"
+    if run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+      "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" dev > "$tmp/$kind.out" 2> "$tmp/$kind.err"; then
+      fail "archive accepted forbidden $kind entry/conflict"
+    fi
+  done
+
+  sha=9999999999999999999999999999999999999999
+  mkdir -p "$tmp/valid"
+  make_release_artifact "$tmp/valid" "$sha" limits
+  artifact="$tmp/valid/gpu-monitor-$sha.tar.gz"; digest=$(cat "$tmp/valid/digest")
+  bound=$(tar -tzf "$artifact" | wc -l | tr -d ' ')
+  run_forced_command "$prefix" "upload dev $sha $digest" "$artifact"
+  if run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+    "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin GPU_MONITOR_MAX_ARCHIVE_FILES=$((bound - 1))" dev; then
+    fail "archive accepted entry count limit + 1"
+  fi
+  chmod -R u+w "$prefix/srv/gpu-monitor/dev" 2>/dev/null || true
+  rm -rf "$prefix/srv/gpu-monitor/dev/releases/$sha"
+  bound=$(python3 - "$artifact" <<'PY'
+import sys, tarfile
+with tarfile.open(sys.argv[1]) as archive:
+    print(sum(item.size for item in archive if item.isfile()))
+PY
+)
+  if run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+    "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin GPU_MONITOR_MAX_EXPANDED_BYTES=$((bound - 1))" dev; then
+    fail "archive accepted expanded-byte limit + 1"
+  fi
+  log "archive rejects every non-file/directory type, path conflicts, duplicates, and both limit+1 cases"
+}
+
+test_retention_uses_latest_success_recency() {
+  local tmp prefix fakebin log_file sha digest label
+  tmp=$(mktemp_dir gpu-release-retention-recency)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  for label in A B C D A; do
+    case "$label" in
+      A) sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
+      B) sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
+      C) sha=cccccccccccccccccccccccccccccccccccccccc ;;
+      D) sha=dddddddddddddddddddddddddddddddddddddddd ;;
+    esac
+    if [[ ! -d "$tmp/$label" ]]; then
+      mkdir -p "$tmp/$label"; make_release_artifact "$tmp/$label" "$sha" "$label"
+    fi
+    digest=$(cat "$tmp/$label/digest")
+    if [[ ! -d "$prefix/srv/gpu-monitor/dev/releases/$sha" ]]; then
+      run_forced_command "$prefix" "upload dev $sha $digest" "$tmp/$label/gpu-monitor-$sha.tar.gz"
+    fi
+    run_forced_command "$prefix" "activate dev $sha $digest" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin"
+  done
+  [[ ! -d "$prefix/srv/gpu-monitor/dev/releases/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ]] ||
+    fail "latest-success retention kept stale B"
+  for sha in cccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddd aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; do
+    [[ -d "$prefix/srv/gpu-monitor/dev/releases/$sha" ]] || fail "latest-success retention removed $sha"
+  done
+  log "retention sequence A,B,C,D,A keeps C,D,A plus active pointer invariants"
+}
+
+test_installer_separate_users_prefix_upgrade_and_idempotency() {
+  local tmp prefix key livekey dev_auth live_auth before after hostile_key
+  tmp=$(mktemp_dir gpu-release-installer-isolation)
+  tmp=$(cd "$tmp" && pwd -P)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/install"
+  key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDEVKEYONLY00000000000000000000000000000000000 dev@example'
+  livekey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILIVEKEYONLY000000000000000000000000000000000 live@example'
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/first.out"
+  dev_auth="$prefix/home/gpu-deploy-dev/.ssh/authorized_keys"
+  live_auth="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
+  [[ -f "$dev_auth" ]] || fail "installer omitted dev identity key file"
+  [[ ! -e "$live_auth" ]] || fail "installer created live key without explicit input"
+  grep -Fq 'command="/usr/local/libexec/gpu-monitor-deploy-command dev"' "$dev_auth" ||
+    fail "dev identity does not force the dev-only command"
+  ! grep -Eq -- '--test-mode|environment=| live"' "$dev_auth" || fail "dev forced key can widen its environment"
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" --live-public-key "$livekey" > "$tmp/live.out"
+  grep -Fq 'command="/usr/local/libexec/gpu-monitor-deploy-command live"' "$live_auth" ||
+    fail "live identity does not force the live-only command"
+  cp "$live_auth" "$tmp/live-before"
+  printf '\nOPERATOR_SECRET=preserve-me\nPORT=9999\n' >> "$prefix/etc/gpu-monitor/dev.env"
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/upgrade.out"
+  cmp "$tmp/live-before" "$live_auth" || fail "omitted live key did not preserve existing live authorization"
+  grep -Fxq 'OPERATOR_SECRET=preserve-me' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade destroyed operator secret"
+  grep -Fxq 'PORT=9999' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade overwrote operator port"
+  grep -Fxq 'GPU_MONITOR_BACKEND_PORT=8101' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to merge missing required port"
+  before=$(find "$prefix" -type f -exec shasum -a 256 {} \; -exec stat -f '%Lp %N' {} \; | LC_ALL=C sort)
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/repeat.out"
+  after=$(find "$prefix" -type f -exec shasum -a 256 {} \; -exec stat -f '%Lp %N' {} \; | LC_ALL=C sort)
+  [[ "$before" == "$after" ]] || fail "repeat install was not byte/mode idempotent"
+  [[ -d "$prefix/var/lock/gpu-monitor/dev" && -d "$prefix/var/lock/gpu-monitor/live" ]] ||
+    fail "installer omitted isolated lock paths"
+  [[ -f "$prefix/etc/sudoers.d/gpu-monitor-deploy-dev" && -f "$prefix/etc/sudoers.d/gpu-monitor-deploy-live" ]] ||
+    fail "installer omitted restart authorization"
+  ! grep -Fq nologin "$INSTALLER_SCRIPT" || fail "installer still creates a nologin SSH account"
+  grep -Fq '/usr/sbin/usermod -L "$user"' "$INSTALLER_SCRIPT" || fail "installer does not password-lock deploy users"
+  grep -Fq 'getent passwd "$user"' "$INSTALLER_SCRIPT" || fail "installer does not validate existing users"
+  ! grep -Fq -- '--test-mode-force-non-root' "$INSTALLER_SCRIPT" || fail "installer ships a root-gate bypass"
+
+  for invalid in / /tmp/.. relative $'/tmp/new\nline'; do
+    if "$INSTALLER_SCRIPT" --dry-run --prefix "$invalid" --dev-public-key "$key" > "$tmp/invalid.out" 2> "$tmp/invalid.err"; then
+      fail "installer accepted non-canonical/unsafe prefix: $invalid"
+    fi
+  done
+  ln -s / "$tmp/root-link"
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$tmp/root-link" --dev-public-key "$key"; then
+    fail "installer accepted symlink-to-root prefix"
+  fi
+  if [[ "$(id -u)" -ne 0 ]] && "$INSTALLER_SCRIPT" --prefix "$tmp/non-root" --dev-public-key "$key"; then
+    fail "non-dry-run install did not require root"
+  fi
+  hostile_key='environment="PREFIX=/tmp/widened" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHOSTILE hostile@example'
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$tmp/hostile" --dev-public-key "$hostile_key"; then
+    fail "installer accepted key options"
+  fi
+  log "installer provisions isolated operable identities and upgrades idempotently without bypasses"
+}
+
 test_archive_validation_retention_status_and_installer() {
-  local tmp prefix fakebin log_file sha digest key livekey install_prefix
+  local tmp prefix fakebin log_file sha digest
   tmp=$(mktemp_dir gpu-release-security-retention)
   trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
   prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
@@ -664,43 +996,7 @@ PYBAD
   run_forced_command "$prefix" "status dev" >/"$tmp/status.out"
   grep -q '"environment":"dev"' "$tmp/status.out" || fail "status did not emit environment JSON"
 
-  key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDEVKEYONLY00000000000000000000000000000000000 dev@example'
-  livekey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILIVEKEYONLY000000000000000000000000000000000 live@example'
-  install_prefix="$tmp/install"
-  "$INSTALLER_SCRIPT" --dry-run --prefix "$install_prefix" --dev-public-key "$key" >/"$tmp/install-dev.out"
-  [[ -f "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" ]] || fail "installer did not create authorized_keys in prefix"
-  grep -Fq 'restrict,command="/usr/local/libexec/gpu-monitor-deploy-command dev"' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" || fail "installer did not write dev forced command restriction"
-  ! grep -Fq -- '--test-mode' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" || fail "installer exposed test mode through authorized_keys"
-  ! grep -Fq 'environment=' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" || fail "installer authorized_keys permits environment injection"
-  grep -Fq 'DEVKEYONLY' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" || fail "installer did not install dev key"
-  ! grep -Fq 'LIVEKEYONLY' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" || fail "installer installed live key without explicit live key input"
-  "$INSTALLER_SCRIPT" --dry-run --prefix "$install_prefix" --dev-public-key "$key" --live-public-key "$livekey" >/"$tmp/install-live.out"
-  grep -Fq 'restrict,command="/usr/local/libexec/gpu-monitor-deploy-command live"' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" || fail "installer did not write live forced command restriction"
-  grep -Fq 'LIVEKEYONLY' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" || fail "installer did not install explicit live key"
-  [[ "$(stat -f '%Lp' "$install_prefix/home/gpu-deploy/.ssh" 2>/dev/null || stat -c '%a' "$install_prefix/home/gpu-deploy/.ssh")" == 700 ]] ||
-    fail "installer did not set .ssh mode 0700"
-  [[ "$(stat -f '%Lp' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys" 2>/dev/null || stat -c '%a' "$install_prefix/home/gpu-deploy/.ssh/authorized_keys")" == 600 ]] ||
-    fail "installer did not set authorized_keys mode 0600"
-  grep -Fxq 'GPU_MONITOR_BACKEND_PORT=8101' "$install_prefix/etc/gpu-monitor/dev.env" ||
-    fail "installer did not configure dev backend port"
-  grep -Fxq 'PORT=5174' "$install_prefix/etc/gpu-monitor/dev.env" ||
-    fail "installer did not configure dev frontend port"
-  grep -Fxq 'GPU_MONITOR_BACKEND_PORT=8001' "$install_prefix/etc/gpu-monitor/live.env" ||
-    fail "installer did not configure live backend port"
-  grep -Fxq 'GPU_MONITOR_BRIDGE_PORT=8000' "$install_prefix/etc/gpu-monitor/live.env" ||
-    fail "installer did not configure live bridge port"
-  grep -Fxq 'PORT=5173' "$install_prefix/etc/gpu-monitor/live.env" ||
-    fail "installer did not configure live frontend port"
-  if "$INSTALLER_SCRIPT" --test-mode-force-non-root --prefix "$tmp/non-root-install" --dev-public-key "$key" > "$tmp/non-root.out" 2> "$tmp/non-root.err"; then
-    fail "non-dry-run prefix install bypassed the root requirement"
-  fi
-  [[ ! -e "$tmp/non-root-install" ]] || fail "failed non-root install wrote files before the root gate"
-  hostile_key='environment="PREFIX=/tmp/widened" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHOSTILE hostile@example'
-  if "$INSTALLER_SCRIPT" --dry-run --prefix "$tmp/hostile-key-install" --dev-public-key "$hostile_key" > "$tmp/hostile-key.out" 2> "$tmp/hostile-key.err"; then
-    fail "installer accepted a public-key input containing authorized_keys options"
-  fi
-  ! grep -Eiq 'systemctl (enable|start)' "$tmp/install-dev.out" "$tmp/install-live.out" || fail "installer attempted to start/enable services"
-  log "archive validation, retention, status, and installer contract are enforced"
+  log "archive validation, retention, and status contract are enforced"
 }
 
 test_server_scripts_exist_before_security_tests
@@ -712,4 +1008,12 @@ test_first_activation_failure_restores_absent_pointer_state
 test_health_test_overrides_are_positive_and_bounded
 test_systemd_units_match_real_runtime_entrypoints
 test_state_appends_use_crash_durable_writer
+test_directory_mutations_are_fsynced
+test_isolated_identities_broker_and_descriptor_extraction_contract
+test_restart_broker_exact_unit_allowlist
+test_transaction_restores_both_pointers_for_restart_health_and_manual_failures
+test_incoming_content_addressing_quotas_and_success_cleanup
+test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one
+test_retention_uses_latest_success_recency
+test_installer_separate_users_prefix_upgrade_and_idempotency
 test_archive_validation_retention_status_and_installer

@@ -4,7 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=gpu-deploy
+User=gpu-deploy-%i
+Group=gpu-deploy-%i
 WorkingDirectory=/srv/gpu-monitor/%i/current
 EnvironmentFile=/etc/gpu-monitor/%i.env
 ExecStart=/srv/gpu-monitor/%i/current/.venv/bin/python -m uvicorn backend.slack_bridge:app --host 127.0.0.1 --port ${GPU_MONITOR_BRIDGE_PORT}

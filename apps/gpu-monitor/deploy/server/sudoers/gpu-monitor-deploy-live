@@ -1,0 +1,1 @@
+gpu-deploy-live ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker live

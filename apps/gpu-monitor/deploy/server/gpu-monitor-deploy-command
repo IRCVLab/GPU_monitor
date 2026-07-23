@@ -8,10 +8,6 @@ PRODUCTION_PYTHON=/usr/bin/python3
 PRODUCTION_UPLOAD_LIMIT=536870912
 test_mode=false
 
-test_max_archive_files=""
-test_max_expanded_bytes=""
-test_health_retries=""
-test_health_sleep_seconds=""
 case "$#:${1:-}" in
   1:dev|1:live)
     allowed_env=$1
@@ -32,39 +28,37 @@ case "$#:${1:-}" in
     test_max_expanded_bytes=${GPU_MONITOR_MAX_EXPANDED_BYTES:-}
     test_health_retries=${GPU_MONITOR_HEALTH_RETRIES:-}
     test_health_sleep_seconds=${GPU_MONITOR_HEALTH_SLEEP_SECONDS:-}
+    test_max_incoming_count=${GPU_MONITOR_MAX_INCOMING_COUNT:-}
+    test_max_incoming_bytes=${GPU_MONITOR_MAX_INCOMING_BYTES:-}
+    test_temp_max_age=${GPU_MONITOR_UPLOAD_TEMP_MAX_AGE:-}
+    test_failed_max_count=${GPU_MONITOR_FAILED_ARTIFACT_MAX_COUNT:-}
     ;;
-  *)
-    fail "usage: gpu-monitor-deploy-command <dev|live> | --test-mode <dev|live>"
-    ;;
+  *) fail "usage: gpu-monitor-deploy-command <dev|live> | --test-mode <dev|live>" ;;
 esac
 
-# Capture only the SSH protocol input after the argv boundary is known. Test
-# overrides above are unreachable from installed authorized_keys entries.
 original=${SSH_ORIGINAL_COMMAND:-}
-unset \
-  BASH_ENV ENV CDPATH GLOBIGNORE \
-  PREFIX GPU_MONITOR_ALLOWED_ENV GPU_MONITOR_TEST_PATH \
-  GPU_MONITOR_MAX_UPLOAD_BYTES GPU_MONITOR_INTERNAL_PYTHON \
+unset BASH_ENV ENV CDPATH GLOBIGNORE PREFIX GPU_MONITOR_ALLOWED_ENV \
+  GPU_MONITOR_TEST_PATH GPU_MONITOR_MAX_UPLOAD_BYTES GPU_MONITOR_INTERNAL_PYTHON \
   GPU_MONITOR_MAX_ARCHIVE_FILES GPU_MONITOR_MAX_EXPANDED_BYTES \
   GPU_MONITOR_HEALTH_RETRIES GPU_MONITOR_HEALTH_SLEEP_SECONDS \
+  GPU_MONITOR_MAX_INCOMING_COUNT GPU_MONITOR_MAX_INCOMING_BYTES \
+  GPU_MONITOR_UPLOAD_TEMP_MAX_AGE GPU_MONITOR_FAILED_ARTIFACT_MAX_COUNT \
   PYTHONHOME PYTHONPATH PYTHONSTARTUP NODE_OPTIONS
 IFS=$' \t\n'
 PATH=$command_path
 export PATH
 
+validate_bound() {
+  local name=$1 value=$2 maximum=$3
+  [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= maximum )) ||
+    fail "$name must be between 1 and $maximum"
+}
 if [[ "$test_mode" == true ]]; then
-  [[ "$prefix" == /* && "$prefix" != / && "$prefix" != *$'\n'* ]] ||
-    fail "test PREFIX must be an absolute non-root path"
-  [[ "$internal_python" == /* && -x "$internal_python" ]] ||
-    fail "test internal Python must be an executable absolute path"
-  [[ "$max_upload" =~ ^[0-9]+$ ]] &&
-    (( max_upload >= 1 && max_upload <= PRODUCTION_UPLOAD_LIMIT )) ||
-    fail "test upload bound must be between 1 and 536870912"
-  IFS=: read -r -a test_path_parts <<< "$command_path"
-  for test_path_part in "${test_path_parts[@]}"; do
-    [[ "$test_path_part" == /* && -d "$test_path_part" ]] ||
-      fail "test PATH entries must be existing absolute directories"
-  done
+  [[ "$prefix" == /* && "$prefix" != / && "$prefix" != *$'\n'* ]] || fail "invalid test PREFIX"
+  [[ "$internal_python" == /* && -x "$internal_python" ]] || fail "invalid test Python"
+  validate_bound "test upload bound" "$max_upload" "$PRODUCTION_UPLOAD_LIMIT"
+  IFS=: read -r -a path_parts <<< "$command_path"
+  for part in "${path_parts[@]}"; do [[ "$part" == /* && -d "$part" ]] || fail "invalid test PATH"; done
   IFS=$' \t\n'
 else
   [[ -x "$PRODUCTION_PYTHON" ]] || fail "required internal Python is unavailable"
@@ -75,18 +69,11 @@ script_dir=${BASH_SOURCE[0]%/*}
 script_dir=$(cd -- "$script_dir" && /bin/pwd -P)
 
 [[ -n "$original" ]] || fail "missing SSH_ORIGINAL_COMMAND"
-cmd=""
-env_name=""
-sha=""
-digest=""
+cmd= env_name= sha= digest=
 if [[ "$original" =~ ^(upload|activate)\ (dev|live)\ ([0-9a-f]{40})\ ([0-9a-f]{64})$ ]]; then
-  cmd=${BASH_REMATCH[1]}
-  env_name=${BASH_REMATCH[2]}
-  sha=${BASH_REMATCH[3]}
-  digest=${BASH_REMATCH[4]}
+  cmd=${BASH_REMATCH[1]}; env_name=${BASH_REMATCH[2]}; sha=${BASH_REMATCH[3]}; digest=${BASH_REMATCH[4]}
 elif [[ "$original" =~ ^(status|rollback)\ (dev|live)$ ]]; then
-  cmd=${BASH_REMATCH[1]}
-  env_name=${BASH_REMATCH[2]}
+  cmd=${BASH_REMATCH[1]}; env_name=${BASH_REMATCH[2]}
 else
   fail "rejected SSH_ORIGINAL_COMMAND"
 fi
@@ -94,82 +81,22 @@ fi
 
 child_env=(/usr/bin/env -i "PATH=$PATH")
 if [[ "$test_mode" == true ]]; then
-  child_env+=(
-    "PREFIX=$prefix"
-    "GPU_MONITOR_TEST_PATH=$PATH"
-    "GPU_MONITOR_INTERNAL_PYTHON=$internal_python"
-    "GPU_MONITOR_MAX_UPLOAD_BYTES=$max_upload"
-  )
-  [[ -z "$test_max_archive_files" ]] ||
-    child_env+=("GPU_MONITOR_MAX_ARCHIVE_FILES=$test_max_archive_files")
-  [[ -z "$test_max_expanded_bytes" ]] ||
-    child_env+=("GPU_MONITOR_MAX_EXPANDED_BYTES=$test_max_expanded_bytes")
-  [[ -z "$test_health_retries" ]] ||
-    child_env+=("GPU_MONITOR_HEALTH_RETRIES=$test_health_retries")
-  [[ -z "$test_health_sleep_seconds" ]] ||
-    child_env+=("GPU_MONITOR_HEALTH_SLEEP_SECONDS=$test_health_sleep_seconds")
+  child_env+=("PREFIX=$prefix" "GPU_MONITOR_TEST_PATH=$PATH"
+    "GPU_MONITOR_INTERNAL_PYTHON=$internal_python" "GPU_MONITOR_MAX_UPLOAD_BYTES=$max_upload")
+  for pair in \
+    "GPU_MONITOR_MAX_ARCHIVE_FILES:${test_max_archive_files:-}" \
+    "GPU_MONITOR_MAX_EXPANDED_BYTES:${test_max_expanded_bytes:-}" \
+    "GPU_MONITOR_HEALTH_RETRIES:${test_health_retries:-}" \
+    "GPU_MONITOR_HEALTH_SLEEP_SECONDS:${test_health_sleep_seconds:-}" \
+    "GPU_MONITOR_MAX_INCOMING_COUNT:${test_max_incoming_count:-}" \
+    "GPU_MONITOR_MAX_INCOMING_BYTES:${test_max_incoming_bytes:-}" \
+    "GPU_MONITOR_UPLOAD_TEMP_MAX_AGE:${test_temp_max_age:-}" \
+    "GPU_MONITOR_FAILED_ARTIFACT_MAX_COUNT:${test_failed_max_count:-}"; do
+    name=${pair%%:*}; value=${pair#*:}; [[ -z "$value" ]] || child_env+=("$name=$value")
+  done
 fi
 
-case "$cmd:$env_name" in
-  upload:dev|upload:live)
-    root="${prefix}/srv/gpu-monitor/${env_name}"
-    /bin/mkdir -p "$root/incoming" "$root/tmp"
-    tmp="$root/tmp/upload-${sha}.$$"
-    final="$root/incoming/$sha.tar.gz"
-    /bin/rm -f "$tmp"
-    if ! "${child_env[@]}" "$internal_python" -c 'import hashlib, os, sys
-path, expected, max_bytes = sys.argv[1], sys.argv[2], int(sys.argv[3])
-h = hashlib.sha256()
-total = 0
-try:
-    with open(path, "xb") as out:
-        while True:
-            chunk = sys.stdin.buffer.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_bytes:
-                raise SystemExit(2)
-            h.update(chunk)
-            out.write(chunk)
-        out.flush()
-        os.fsync(out.fileno())
-except BaseException:
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-    raise
-if h.hexdigest() != expected:
-    os.unlink(path)
-    raise SystemExit(3)
-' "$tmp" "$digest" "$max_upload"
-    then
-      /bin/rm -f "$tmp"
-      fail "upload failed size or digest verification"
-    fi
-    /bin/mv -f "$tmp" "$final"
-    printf '{"environment":"%s","sha":"%s","sha256":"%s","status":"uploaded"}\n' "$env_name" "$sha" "$digest"
-    ;;
-  activate:dev|activate:live)
-    if [[ "$test_mode" == true ]]; then
-      exec "${child_env[@]}" "$script_dir/activate-release.sh" --test-mode "$env_name" activate "$sha" "$digest"
-    fi
-    exec "${child_env[@]}" "$script_dir/activate-release.sh" activate "$env_name" "$sha" "$digest"
-    ;;
-  status:dev|status:live)
-    if [[ "$test_mode" == true ]]; then
-      exec "${child_env[@]}" "$script_dir/activate-release.sh" --test-mode "$env_name" status
-    fi
-    exec "${child_env[@]}" "$script_dir/activate-release.sh" status "$env_name"
-    ;;
-  rollback:dev|rollback:live)
-    if [[ "$test_mode" == true ]]; then
-      exec "${child_env[@]}" "$script_dir/activate-release.sh" --test-mode "$env_name" rollback
-    fi
-    exec "${child_env[@]}" "$script_dir/activate-release.sh" rollback "$env_name"
-    ;;
-  *)
-    fail "rejected SSH_ORIGINAL_COMMAND"
-    ;;
-esac
+if [[ "$test_mode" == true ]]; then
+  exec "${child_env[@]}" "$script_dir/activate-release.sh" --test-mode "$env_name" "$cmd" ${sha:+"$sha"} ${digest:+"$digest"}
+fi
+exec "${child_env[@]}" "$script_dir/activate-release.sh" "$cmd" "$env_name" ${sha:+"$sha"} ${digest:+"$digest"}

@@ -1,0 +1,37 @@
+#!/bin/bash -p
+set -euo pipefail
+
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+PRODUCTION_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+test_mode=false
+
+case "$#:${1:-}" in
+  1:dev|1:live)
+    environment=$1
+    command_path=$PRODUCTION_PATH
+    systemctl_command=/usr/bin/systemctl
+    ;;
+  2:--test-mode)
+    case "$2" in dev|live) ;; *) fail "invalid test environment" ;; esac
+    test_mode=true
+    environment=$2
+    command_path=${GPU_MONITOR_TEST_PATH:-$PRODUCTION_PATH}
+    systemctl_command=systemctl
+    ;;
+  *) fail "usage: gpu-monitor-restart-broker <dev|live>" ;;
+esac
+
+unset BASH_ENV ENV CDPATH GLOBIGNORE GPU_MONITOR_TEST_PATH PYTHONHOME PYTHONPATH NODE_OPTIONS
+PATH=$command_path
+export PATH
+
+if [[ "$test_mode" == true ]]; then
+  IFS=: read -r -a path_parts <<< "$PATH"
+  for part in "${path_parts[@]}"; do [[ "$part" == /* && -d "$part" ]] || fail "invalid test PATH"; done
+fi
+
+"$systemctl_command" restart "gpu-monitor-backend@${environment}.service"
+"$systemctl_command" restart "gpu-monitor-frontend@${environment}.service"
+if [[ "$environment" == live ]]; then
+  "$systemctl_command" restart "gpu-monitor-bridge@live.service"
+fi

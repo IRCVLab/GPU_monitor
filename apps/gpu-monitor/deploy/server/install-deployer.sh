@@ -1,135 +1,173 @@
 #!/bin/bash -p
 set -euo pipefail
 
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export PATH
-
-usage() {
-  cat >&2 <<'USAGE'
-Usage: install-deployer.sh [--dry-run] [--prefix <dir>] --dev-public-key <key> [--live-public-key <key>]
-USAGE
-}
-
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+usage() {
+  printf 'Usage: %s [--dry-run] [--prefix ABSOLUTE] --dev-public-key KEY [--live-public-key KEY]\n' "$0" >&2
+  exit 2
+}
 
 dry_run=false
-force_non_root=false
-prefix=""
-dev_key=""
-live_key=""
+prefix=/
+dev_key=
+live_key=
 while (($#)); do
   case "$1" in
-    --dry-run)
-      dry_run=true
-      shift
-      ;;
-    --prefix)
-      [[ $# -ge 2 ]] || fail "--prefix requires value"
-      prefix=$2
-      shift 2
-      ;;
-    --dev-public-key)
-      [[ $# -ge 2 ]] || fail "--dev-public-key requires value"
-      dev_key=$2
-      shift 2
-      ;;
-    --live-public-key)
-      [[ $# -ge 2 ]] || fail "--live-public-key requires value"
-      live_key=$2
-      shift 2
-      ;;
-    --test-mode-force-non-root)
-      force_non_root=true
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      usage
-      fail "unknown argument: $1"
-      ;;
+    --dry-run) dry_run=true; shift ;;
+    --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
+    --dev-public-key) [[ $# -ge 2 ]] || usage; dev_key=$2; shift 2 ;;
+    --live-public-key) [[ $# -ge 2 ]] || usage; live_key=$2; shift 2 ;;
+    *) usage ;;
   esac
 done
-
 [[ -n "$dev_key" ]] || fail "--dev-public-key is required"
-[[ "$prefix" != *$'\n'* ]] || fail "--prefix must not contain a newline"
-if [[ -n "$prefix" ]]; then
-  [[ "$prefix" == /* && "$prefix" != / ]] || fail "--prefix must be an absolute non-root path"
-fi
-if [[ "$dry_run" == true && -z "$prefix" ]]; then
-  fail "--dry-run requires --prefix"
-fi
-if [[ "$dry_run" == false ]]; then
-  if [[ "$force_non_root" == true ]] || [[ "$(/usr/bin/id -u)" -ne 0 ]]; then
-    fail "non-dry-run installation requires root even when --prefix is used"
-  fi
-fi
 
-validate_public_key() {
-  local key_name=$1 key_value=$2
-  [[ "$key_value" != *$'\n'* && "$key_value" != *$'\r'* ]] ||
-    fail "$key_name must be one public key line"
-  [[ "$key_value" =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh.com|ecdsa-sha2-nistp256|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa)[[:space:]]+[A-Za-z0-9+/]+={0,3}([[:space:]][^[:cntrl:]]*)?$ ]] ||
-    fail "$key_name must start with a supported key type and cannot contain authorized_keys options"
+validate_key() {
+  local key=$1
+  [[ "$key" != *$'\n'* && "$key" =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh.com)\ [A-Za-z0-9+/=]+(\ .*)?$ ]] ||
+    fail "public key must be one plain Ed25519 key without options"
 }
+validate_key "$dev_key"
+[[ -z "$live_key" ]] || validate_key "$live_key"
 
-validate_public_key "development public key" "$dev_key"
-if [[ -n "$live_key" ]]; then
-  validate_public_key "live public key" "$live_key"
+canonical_prefix=$(/usr/bin/python3 - "$prefix" "$dry_run" "$(id -u)" <<'PY'
+import os, pathlib, sys
+raw, dry, uid = sys.argv[1], sys.argv[2] == "true", int(sys.argv[3])
+def reject(message):
+    print("ERROR: " + message, file=sys.stderr); raise SystemExit(1)
+if "\n" in raw or not raw.startswith("/"): reject("prefix must be absolute and single-line")
+if os.path.normpath(raw) != raw or (raw == "/" and dry): reject("prefix must be canonical and non-root")
+path = pathlib.Path(raw)
+cursor = pathlib.Path("/")
+for part in path.parts[1:]:
+    cursor = cursor / part
+    if cursor.is_symlink(): reject("prefix must not contain symlinks")
+existing = path
+while not existing.exists():
+    if existing.parent == existing: reject("no existing prefix ancestor")
+    existing = existing.parent
+resolved = path.resolve(strict=False)
+if str(resolved) != raw or (str(resolved) == "/" and dry): reject("prefix alias is forbidden")
+owner = existing.stat().st_uid
+required_owner = uid if dry else 0
+if owner != required_owner: reject("prefix root is not owned by installer identity")
+print(raw)
+PY
+) || exit 1
+prefix=$canonical_prefix
+
+if [[ "$dry_run" == false && "$(id -u)" -ne 0 ]]; then
+  fail "real installation requires root"
 fi
 
-root=$prefix
-libexec="$root/usr/local/libexec"
-systemd="$root/etc/systemd/system"
-etc="$root/etc/gpu-monitor"
-home="$root/home/gpu-deploy"
-srv="$root/srv/gpu-monitor"
 script_dir=${BASH_SOURCE[0]%/*}
 [[ "$script_dir" != "${BASH_SOURCE[0]}" ]] || script_dir=.
 script_dir=$(cd -- "$script_dir" && /bin/pwd -P)
 
-if [[ "$dry_run" == false ]] && ! /usr/bin/id gpu-deploy >/dev/null 2>&1; then
-  /usr/sbin/useradd --system --home-dir /home/gpu-deploy --shell /usr/sbin/nologin gpu-deploy
-fi
-
-install -d -m 0755 "$libexec" "$systemd" "$etc"
-install -d -m 0750 \
-  "$home" "$srv/dev" "$srv/dev/releases" "$srv/dev/incoming" \
-  "$srv/live" "$srv/live/releases" "$srv/live/incoming"
-install -d -m 0700 "$home/.ssh"
-
-install_env_file() {
-  local path=$1 contents=$2
-  if [[ ! -e "$path" ]]; then
-    printf '%s' "$contents" > "$path"
-    chmod 0640 "$path"
-  fi
+install_file() {
+  local mode=$1 source=$2 destination=$3
+  mkdir -p "${destination%/*}"
+  /usr/bin/install -m "$mode" "$source" "$destination"
 }
 
-install_env_file "$etc/dev.env" $'GPU_MONITOR_BACKEND_PORT=8101\nPORT=5174\n'
-install_env_file "$etc/live.env" $'GPU_MONITOR_BACKEND_PORT=8001\nGPU_MONITOR_BRIDGE_PORT=8000\nPORT=5173\n'
+ensure_group_and_user() {
+  local environment=$1 user="gpu-deploy-$1" home="/home/gpu-deploy-$1"
+  local group_record passwd_record actual_home actual_shell actual_gid expected_gid
+  if group_record=$(getent group "$user"); then
+    expected_gid=${group_record#*:*:}; expected_gid=${expected_gid%%:*}
+  else
+    /usr/sbin/groupadd --system "$user"
+    group_record=$(getent group "$user")
+    expected_gid=${group_record#*:*:}; expected_gid=${expected_gid%%:*}
+  fi
+  if passwd_record=$(getent passwd "$user"); then
+    IFS=: read -r _ _ _ actual_gid _ actual_home actual_shell <<< "$passwd_record"
+    [[ "$actual_home" == "$home" ]] || fail "existing $user has unexpected home"
+    [[ "$actual_shell" == /bin/sh ]] || fail "existing $user has unexpected shell"
+    [[ "$actual_gid" == "$expected_gid" ]] || fail "existing $user has unexpected primary group"
+  else
+    /usr/sbin/useradd --system --gid "$user" --home-dir "$home" --shell /bin/sh "$user"
+  fi
+  /usr/sbin/usermod -L "$user"
+}
 
-install -m 0755 "$script_dir/gpu-monitor-deploy-command" "$libexec/gpu-monitor-deploy-command"
-install -m 0755 "$script_dir/activate-release.sh" "$libexec/activate-release.sh"
-install -m 0755 "$script_dir/health-check.sh" "$libexec/health-check.sh"
-for unit in "$script_dir"/systemd/*.service; do
-  install -m 0644 "$unit" "$systemd/"
+merge_env() {
+  local path=$1; shift
+  mkdir -p "${path%/*}"
+  /usr/bin/python3 - "$path" "$@" <<'PY'
+import os, sys
+path, required = sys.argv[1], sys.argv[2:]
+try:
+    with open(path, encoding="utf-8") as source: text = source.read()
+except FileNotFoundError:
+    text = ""
+keys = set()
+for line in text.splitlines():
+    if "=" in line and not line.lstrip().startswith("#"):
+        keys.add(line.split("=", 1)[0])
+missing = [item for item in required if item.split("=", 1)[0] not in keys]
+if missing:
+    if text and not text.endswith("\n"): text += "\n"
+    text += "\n".join(missing) + "\n"
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as output: output.write(text)
+    os.chmod(temporary, 0o640)
+    os.replace(temporary, path)
+elif not os.path.exists(path):
+    open(path, "a").close()
+os.chmod(path, 0o640)
+PY
+}
+
+for environment in dev live; do
+  user="gpu-deploy-$environment"
+  home="$prefix/home/$user"
+  ssh_dir="$home/.ssh"
+  env_root="$prefix/srv/gpu-monitor/$environment"
+  lock_root="$prefix/var/lock/gpu-monitor/$environment"
+  mkdir -p "$ssh_dir" "$env_root"/{incoming,releases,tmp} "$lock_root"
+  chmod 0755 "$home"
+  chmod 0700 "$ssh_dir" "$env_root" "$lock_root"
+  : > "$lock_root/activation.lock"
+  chmod 0600 "$lock_root/activation.lock"
+  if [[ "$dry_run" == false ]]; then
+    ensure_group_and_user "$environment"
+    chown -R root:root "$home"
+    chown -R "$user:$user" "$env_root" "$lock_root"
+  fi
 done
 
-key_options='no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding'
-{
-  printf 'restrict,command="/usr/local/libexec/gpu-monitor-deploy-command dev",%s %s\n' "$key_options" "$dev_key"
-  if [[ -n "$live_key" ]]; then
-    printf 'restrict,command="/usr/local/libexec/gpu-monitor-deploy-command live",%s %s\n' "$key_options" "$live_key"
-  fi
-} > "$home/.ssh/authorized_keys"
-chmod 0600 "$home/.ssh/authorized_keys"
+write_authorized_key() {
+  local environment=$1 key=$2 user="gpu-deploy-$1"
+  local path="$prefix/home/$user/.ssh/authorized_keys"
+  local temporary="${path}.tmp"
+  printf 'restrict,command="/usr/local/libexec/gpu-monitor-deploy-command %s" %s\n' "$environment" "$key" > "$temporary"
+  chmod 0600 "$temporary"
+  mv "$temporary" "$path"
+  if [[ "$dry_run" == false ]]; then chown root:root "$path"; fi
+}
+write_authorized_key dev "$dev_key"
+[[ -z "$live_key" ]] || write_authorized_key live "$live_key"
 
+install_file 0755 "$script_dir/gpu-monitor-deploy-command" "$prefix/usr/local/libexec/gpu-monitor-deploy-command"
+install_file 0755 "$script_dir/activate-release.sh" "$prefix/usr/local/libexec/activate-release.sh"
+install_file 0755 "$script_dir/health-check.sh" "$prefix/usr/local/libexec/health-check.sh"
+install_file 0755 "$script_dir/gpu-monitor-restart-broker" "$prefix/usr/local/libexec/gpu-monitor-restart-broker"
+for unit in "$script_dir"/systemd/*.service; do
+  install_file 0644 "$unit" "$prefix/etc/systemd/system/${unit##*/}"
+done
+install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-dev" "$prefix/etc/sudoers.d/gpu-monitor-deploy-dev"
+install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-live" "$prefix/etc/sudoers.d/gpu-monitor-deploy-live"
+
+merge_env "$prefix/etc/gpu-monitor/dev.env" \
+  GPU_MONITOR_BACKEND_PORT=8101 PORT=5174
+merge_env "$prefix/etc/gpu-monitor/live.env" \
+  GPU_MONITOR_BACKEND_PORT=8001 GPU_MONITOR_BRIDGE_PORT=8000 PORT=5173
 if [[ "$dry_run" == false ]]; then
-  chown -R gpu-deploy:gpu-deploy "$home" "$srv"
-  chown root:root "$etc/dev.env" "$etc/live.env"
+  chown root:gpu-deploy-dev "$prefix/etc/gpu-monitor/dev.env"
+  chown root:gpu-deploy-live "$prefix/etc/gpu-monitor/live.env"
+  chmod 0640 "$prefix/etc/gpu-monitor/"*.env
+  chown root:root "$prefix/etc/sudoers.d/gpu-monitor-deploy-"*
 fi
 
-printf 'installed gpu-monitor deployer files under %s\n' "${root:-/}"
+printf 'Installed isolated GPU deploy boundaries under %s (dry-run=%s); no services enabled or started.\n' "$prefix" "$dry_run"
