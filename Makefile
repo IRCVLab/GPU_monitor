@@ -15,11 +15,8 @@ impact-test:
 	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_ci_impact -v
 
 policy-test:
-	@if [ -f tests/test_workflow_policy.py ]; then \
-		PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_workflow_policy -v; \
-	else \
-		printf '%s\n' 'SKIP: tests/test_workflow_policy.py is introduced by CI foundation Task 2.'; \
-	fi
+	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_workflow_policy -v
+	python3.12 scripts/validate_workflows.py .github/workflows
 
 test-gpu:
 	cd apps/gpu-monitor/frontend && npm run check
