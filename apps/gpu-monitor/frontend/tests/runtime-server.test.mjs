@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -52,6 +55,56 @@ async function request(port, path) {
 		req.on('error', reject);
 	});
 }
+
+test('the runtime starts when systemd invokes it through the current symlink', async () => {
+	const temporary = mkdtempSync(join(tmpdir(), 'gpu-monitor-runtime-link-'));
+	const current = join(temporary, 'current');
+	symlinkSync(dirname(runtimeServerPath), current, 'dir');
+	const reservation = http.createServer();
+	const port = await listen(reservation);
+	await close(reservation);
+	const child = spawn(process.execPath, [join(current, 'server.mjs')], {
+		env: {
+			...process.env,
+			HOST: '127.0.0.1',
+			PORT: String(port),
+			MONITORING_API_TARGET: 'http://127.0.0.1:1'
+		},
+		stdio: ['ignore', 'pipe', 'pipe']
+	});
+
+	try {
+		await new Promise((resolve, reject) => {
+			let stdout = '';
+			let stderr = '';
+			const timeout = setTimeout(() => {
+				reject(new Error(`runtime did not listen through symlink: ${stderr}`));
+			}, 3000);
+			child.stdout.on('data', (chunk) => {
+				stdout += chunk.toString('utf8');
+				if (stdout.includes(`127.0.0.1:${port}`)) {
+					clearTimeout(timeout);
+					resolve();
+				}
+			});
+			child.stderr.on('data', (chunk) => {
+				stderr += chunk.toString('utf8');
+			});
+			child.once('exit', (code) => {
+				clearTimeout(timeout);
+				reject(new Error(`runtime exited before listening (code ${code}): ${stderr}`));
+			});
+		});
+		const response = await request(port, '/');
+		assert.equal(response.statusCode, 200);
+	} finally {
+		if (child.exitCode === null) {
+			child.kill('SIGTERM');
+			await new Promise((resolve) => child.once('exit', resolve));
+		}
+		rmSync(temporary, { recursive: true, force: true });
+	}
+});
 
 test('the production proxy accepts IPv4 and IPv6 loopback targets only', async () => {
 	const createMonitoringServer = await loadRuntimeServer();

@@ -1,5 +1,6 @@
 import http from 'node:http';
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const HOP_BY_HOP_HEADERS = new Set([
 	'connection',
@@ -224,9 +225,15 @@ async function start() {
 	});
 }
 
-const isEntryPoint =
-	typeof process.argv[1] === 'string' &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
+let isEntryPoint = false;
+if (typeof process.argv[1] === 'string') {
+	try {
+		isEntryPoint =
+			realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+	} catch {
+		isEntryPoint = false;
+	}
+}
 
 if (isEntryPoint) {
 	start().catch((error) => {
