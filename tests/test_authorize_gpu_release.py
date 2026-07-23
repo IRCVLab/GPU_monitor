@@ -1,6 +1,9 @@
+import json
+import subprocess
 import unittest
+from unittest.mock import patch
 
-from scripts.authorize_gpu_release import authorize_release
+from scripts.authorize_gpu_release import authorize_release, fetch_live_inputs
 
 
 REPOSITORY = "IRCVLab/GPU_monitor"
@@ -45,10 +48,12 @@ class AuthorizeGpuReleaseTest(unittest.TestCase):
 
     def required_check(self, **overrides):
         data = {
+            "id": 1001,
             "name": "ci/required",
             "head_sha": FINAL_SHA,
             "status": "completed",
             "conclusion": "success",
+            "completed_at": "2026-07-23T00:04:00Z",
         }
         data.update(overrides)
         return data
@@ -134,6 +139,135 @@ class AuthorizeGpuReleaseTest(unittest.TestCase):
 
         self.assertIs(authorization.authorized, False)
         self.assertEqual(authorization.reason, "ambiguous_merged_main_pr")
+
+
+    def test_rejects_malformed_merge_evidence(self):
+        malformed_values = ("", False, {}, 0)
+        for merged_at in malformed_values:
+            with self.subTest(merged_at=merged_at):
+                authorization = self.authorize(pull_requests=[self.pull_request(merged_at=merged_at)])
+
+                self.assertIs(authorization.authorized, False)
+                self.assertEqual(authorization.reason, "malformed_input")
+
+    def test_accepts_explicit_true_merge_evidence_without_merged_timestamp(self):
+        authorization = self.authorize(pull_requests=[self.pull_request(merged_at=None, merged=True)])
+
+        self.assertIs(authorization.authorized, True)
+        self.assertEqual(authorization.reason, "authorized")
+
+    def test_live_reviews_include_later_page_changes_requested(self):
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            calls.append(argv)
+            path = argv[-1]
+            if path.endswith(f"/commits/{FINAL_SHA}/pulls"):
+                payload = [[self.pull_request()]]
+            elif path.endswith(f"/commits/{FINAL_SHA}/check-runs"):
+                payload = [{"check_runs": [self.required_check()]}]
+            elif path.endswith("/pulls/42/reviews"):
+                payload = [
+                    [self.approval(id=1, submitted_at="2026-07-23T00:01:00Z", state="APPROVED")],
+                    [self.approval(id=2, submitted_at="2026-07-23T00:02:00Z", state="CHANGES_REQUESTED")],
+                    [self.approval(id=3, submitted_at="2026-07-23T00:03:00Z", state="DISMISSED")],
+                ]
+            else:
+                self.fail(f"unexpected gh path {path}")
+            return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+
+        with patch("scripts.authorize_gpu_release.subprocess.run", fake_run):
+            pulls, reviews, checks = fetch_live_inputs(REPOSITORY, self.workflow_run())
+
+        authorization = self.authorize(pull_requests=pulls, reviews=reviews, check_runs=checks)
+
+        self.assertEqual(len(reviews), 3)
+        self.assertIs(authorization.authorized, False)
+        self.assertEqual(authorization.reason, "missing_non_author_approval")
+        self.assertTrue(all("--paginate" in argv and "--slurp" in argv for argv in calls))
+        self.assertTrue(all(argv[0:2] == ["gh", "api"] for argv in calls))
+
+    def test_live_pulls_include_second_merged_pr_on_later_page(self):
+        def fake_run(argv, **_kwargs):
+            path = argv[-1]
+            if path.endswith(f"/commits/{FINAL_SHA}/pulls"):
+                payload = [[self.pull_request(number=42)], [self.pull_request(number=43, user={"login": "other-author"})]]
+            elif path.endswith(f"/commits/{FINAL_SHA}/check-runs"):
+                payload = [{"check_runs": [self.required_check()]}]
+            else:
+                self.fail(f"unexpected gh path {path}")
+            return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+
+        with patch("scripts.authorize_gpu_release.subprocess.run", fake_run):
+            pulls, reviews, checks = fetch_live_inputs(REPOSITORY, self.workflow_run())
+
+        authorization = self.authorize(pull_requests=pulls, reviews=reviews, check_runs=checks)
+
+        self.assertEqual(len(pulls), 2)
+        self.assertEqual(reviews, [])
+        self.assertIs(authorization.authorized, False)
+        self.assertEqual(authorization.reason, "ambiguous_merged_main_pr")
+
+    def test_duplicate_required_checks_use_latest_completed_run(self):
+        old_success = self.required_check(id=1, completed_at="2026-07-23T00:01:00Z", conclusion="success")
+        new_failure = self.required_check(id=2, completed_at="2026-07-23T00:02:00Z", conclusion="failure")
+
+        authorization = self.authorize(check_runs=[old_success, new_failure])
+
+        self.assertIs(authorization.authorized, False)
+        self.assertEqual(authorization.reason, "required_check_not_successful")
+
+    def test_duplicate_required_checks_with_malformed_order_fail_closed(self):
+        missing_completed_at = self.required_check(id=1, completed_at=None)
+        valid_success = self.required_check(id=2, completed_at="2026-07-23T00:02:00Z")
+
+        authorization = self.authorize(check_runs=[missing_completed_at, valid_success])
+
+        self.assertIs(authorization.authorized, False)
+        self.assertEqual(authorization.reason, "malformed_input")
+
+    def test_author_reviewer_identity_is_case_insensitive(self):
+        authorization = self.authorize(
+            pull_requests=[self.pull_request(user={"login": "Author"})],
+            reviews=[self.approval(user={"login": "author"})],
+        )
+
+        self.assertIs(authorization.authorized, False)
+        self.assertEqual(authorization.reason, "missing_non_author_approval")
+
+    def test_per_reviewer_latest_review_key_is_case_insensitive(self):
+        authorization = self.authorize(
+            reviews=[
+                self.approval(id=1, submitted_at="2026-07-23T00:01:00Z", user={"login": "Reviewer"}),
+                self.approval(id=2, submitted_at="2026-07-23T00:02:00Z", user={"login": "reviewer"}, state="DISMISSED"),
+            ]
+        )
+
+        self.assertIs(authorization.authorized, False)
+        self.assertEqual(authorization.reason, "missing_non_author_approval")
+
+    def test_rejects_invalid_final_sha_and_repository_before_live_paths(self):
+        for workflow_run, repository in (
+            (self.workflow_run(head_sha="F" * 40), REPOSITORY),
+            (self.workflow_run(head_sha="f" * 39), REPOSITORY),
+            (self.workflow_run(), "IRCVLab"),
+            (self.workflow_run(), "IRCVLab/GPU_monitor/extra"),
+        ):
+            with self.subTest(workflow_run=workflow_run, repository=repository):
+                authorization = authorize_release(
+                    workflow_run,
+                    [self.pull_request()],
+                    [self.approval()],
+                    [self.required_check()],
+                    repository=repository,
+                )
+                self.assertIs(authorization.authorized, False)
+                self.assertEqual(authorization.reason, "malformed_input")
+
+                with patch("scripts.authorize_gpu_release.subprocess.run") as run:
+                    with self.assertRaises(ValueError):
+                        fetch_live_inputs(repository, workflow_run)
+                    run.assert_not_called()
 
     def test_rejects_workflow_run_from_different_repository(self):
         authorization = self.authorize(workflow_run=self.workflow_run(head_repository={"full_name": "IRCVLab/fork"}))

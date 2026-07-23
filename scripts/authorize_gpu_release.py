@@ -6,10 +6,14 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,10 @@ class Authorization:
     pr_number: int | None
     reason: str
     reviewer: str | None
+
+
+class MalformedInput(ValueError):
+    pass
 
 
 def denied(reason: str, sha: str = "", pr_number: int | None = None, reviewer: str | None = None) -> Authorization:
@@ -46,22 +54,52 @@ def int_field(mapping: dict[str, object], *keys: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def validate_repository(repository: str) -> None:
+    if not isinstance(repository, str) or REPOSITORY_RE.fullmatch(repository) is None:
+        raise MalformedInput("repository must be OWNER/REPO")
+
+
+def validate_sha(sha: str) -> None:
+    if SHA_RE.fullmatch(sha) is None:
+        raise MalformedInput("sha must be exactly 40 lowercase hex characters")
+
+
 def normalize_login(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value.casefold()
+    return None
+
+
+def display_login(value: object) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
 
 
+def has_valid_merge_evidence(pull_request: dict[str, object]) -> bool:
+    if "merged_at" in pull_request:
+        merged_at = pull_request.get("merged_at")
+        if isinstance(merged_at, str) and merged_at:
+            return True
+        if merged_at is not None:
+            raise MalformedInput("merged_at must be a non-empty string timestamp")
+    merged = pull_request.get("merged")
+    if merged is True:
+        return True
+    if "merged" in pull_request and merged not in (None, False):
+        raise MalformedInput("merged must be boolean true when used as merge evidence")
+    return False
+
+
 def is_merged_main_pr(pull_request: dict[str, object]) -> bool:
-    return (
-        string_field(pull_request, "base", "ref") == "main"
-        and (pull_request.get("merged_at") is not None or pull_request.get("merged") is True)
-    )
+    return string_field(pull_request, "base", "ref") == "main" and has_valid_merge_evidence(pull_request)
 
 
 def review_order(review: dict[str, object]) -> tuple[str, int]:
-    submitted_at = string_field(review, "submitted_at") or string_field(review, "submittedAt") or ""
-    review_id = int_field(review, "id") or 0
+    submitted_at = string_field(review, "submitted_at") or string_field(review, "submittedAt")
+    review_id = int_field(review, "id")
+    if submitted_at is None or review_id is None:
+        raise MalformedInput("review ordering fields must be present")
     return submitted_at, review_id
 
 
@@ -78,17 +116,41 @@ def latest_effective_reviews(reviews: list[dict[str, object]]) -> dict[str, dict
     return latest
 
 
-def successful_required_check(check_runs: list[dict[str, object]], *, sha: str, required_check: str) -> bool:
-    for check_run in check_runs:
-        if string_field(check_run, "name") != required_check:
-            continue
-        if string_field(check_run, "head_sha") != sha:
-            continue
-        if string_field(check_run, "status") != "completed":
-            continue
-        if string_field(check_run, "conclusion") == "success":
-            return True
-    return False
+def matching_required_checks(check_runs: list[dict[str, object]], *, sha: str, required_check: str) -> list[dict[str, object]]:
+    return [
+        check_run
+        for check_run in check_runs
+        if string_field(check_run, "name") == required_check and string_field(check_run, "head_sha") == sha
+    ]
+
+
+def latest_required_check(check_runs: list[dict[str, object]], *, sha: str, required_check: str) -> dict[str, object] | None:
+    matches = matching_required_checks(check_runs, sha=sha, required_check=required_check)
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    ordered: list[tuple[str, int, dict[str, object]]] = []
+    seen_keys: set[tuple[str, int]] = set()
+    for check_run in matches:
+        completed_at = string_field(check_run, "completed_at")
+        check_id = int_field(check_run, "id")
+        if completed_at is None or check_id is None:
+            raise MalformedInput("duplicate required checks must have completed_at and numeric id")
+        key = (completed_at, check_id)
+        if key in seen_keys:
+            raise MalformedInput("duplicate required checks have ambiguous ordering")
+        seen_keys.add(key)
+        ordered.append((completed_at, check_id, check_run))
+    return max(ordered, key=lambda item: (item[0], item[1]))[2]
+
+
+def required_check_is_successful(check_runs: list[dict[str, object]], *, sha: str, required_check: str) -> bool:
+    check_run = latest_required_check(check_runs, sha=sha, required_check=required_check)
+    if check_run is None:
+        return False
+    return string_field(check_run, "status") == "completed" and string_field(check_run, "conclusion") == "success"
 
 
 def authorize_release(
@@ -101,6 +163,7 @@ def authorize_release(
     required_check: str = "ci/required",
 ) -> Authorization:
     try:
+        validate_repository(repository)
         if not isinstance(workflow_run, dict):
             return denied("malformed_input")
         if not isinstance(pull_requests, list) or not isinstance(reviews, list) or not isinstance(check_runs, list):
@@ -109,6 +172,7 @@ def authorize_release(
             return denied("malformed_input")
 
         sha = string_field(workflow_run, "head_sha") or ""
+        validate_sha(sha)
         if string_field(workflow_run, "event") != "push":
             return denied("workflow_event_not_push", sha)
         if string_field(workflow_run, "head_branch") != "main":
@@ -119,8 +183,6 @@ def authorize_release(
             return denied("workflow_status_not_completed", sha)
         if string_field(workflow_run, "head_repository", "full_name") != repository:
             return denied("workflow_repository_mismatch", sha)
-        if not sha:
-            return denied("malformed_input")
 
         merged_main_prs = [pull_request for pull_request in pull_requests if is_merged_main_pr(pull_request)]
         if not merged_main_prs:
@@ -142,15 +204,17 @@ def authorize_release(
             review = effective_reviews[login]
             state = (string_field(review, "state") or "").upper()
             if state == "APPROVED" and login != author:
-                reviewer = login
+                reviewer = display_login(nested(review, "user", "login")) or display_login(review.get("author"))
                 break
         if reviewer is None:
             return denied("missing_non_author_approval", sha, pr_number)
 
-        if not successful_required_check(check_runs, sha=sha, required_check=required_check):
+        if not required_check_is_successful(check_runs, sha=sha, required_check=required_check):
             return denied("required_check_not_successful", sha, pr_number, reviewer)
 
         return Authorization(True, sha, pr_number, "authorized", reviewer)
+    except MalformedInput:
+        return denied("malformed_input")
     except Exception:
         return denied("malformed_input")
 
@@ -168,6 +232,26 @@ def list_payload(value: Any, key: str) -> list[dict[str, object]]:
     return value
 
 
+def flatten_list_pages(value: Any, key: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ValueError(f"paginated {key} payload must be a list of pages")
+    flattened: list[dict[str, object]] = []
+    for page in value:
+        flattened.extend(list_payload(page, key))
+    return flattened
+
+
+def flatten_object_pages(value: Any, key: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ValueError(f"paginated {key} payload must be a list of pages")
+    flattened: list[dict[str, object]] = []
+    for page in value:
+        if not isinstance(page, dict):
+            raise ValueError(f"paginated {key} page must be an object")
+        flattened.extend(list_payload(page, key))
+    return flattened
+
+
 def workflow_payload(value: Any) -> dict[str, object]:
     if isinstance(value, dict) and isinstance(value.get("workflow_run"), dict):
         value = value["workflow_run"]
@@ -176,9 +260,9 @@ def workflow_payload(value: Any) -> dict[str, object]:
     return value
 
 
-def gh_api(path: str) -> Any:
+def gh_api_paginated(path: str) -> Any:
     result = subprocess.run(
-        ["gh", "api", "-H", "Accept: application/vnd.github+json", path],
+        ["gh", "api", "--paginate", "--slurp", "-H", "Accept: application/vnd.github+json", path],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -189,17 +273,19 @@ def gh_api(path: str) -> Any:
 
 
 def fetch_live_inputs(repository: str, workflow_run: dict[str, object]) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
-    sha = string_field(workflow_run, "head_sha")
+    validate_repository(repository)
+    sha = string_field(workflow_run, "head_sha") if isinstance(workflow_run, dict) else None
     if sha is None:
         raise ValueError("workflow run is missing head_sha")
-    pulls = list_payload(gh_api(f"/repos/{repository}/commits/{sha}/pulls"), "pulls")
-    checks = list_payload(gh_api(f"/repos/{repository}/commits/{sha}/check-runs"), "check_runs")
+    validate_sha(sha)
+    pulls = flatten_list_pages(gh_api_paginated(f"/repos/{repository}/commits/{sha}/pulls"), "pulls")
+    checks = flatten_object_pages(gh_api_paginated(f"/repos/{repository}/commits/{sha}/check-runs"), "check_runs")
     merged_main_prs = [pull_request for pull_request in pulls if is_merged_main_pr(pull_request)]
     reviews: list[dict[str, object]] = []
     if len(merged_main_prs) == 1:
         pr_number = int_field(merged_main_prs[0], "number")
         if pr_number is not None:
-            reviews = list_payload(gh_api(f"/repos/{repository}/pulls/{pr_number}/reviews"), "reviews")
+            reviews = flatten_list_pages(gh_api_paginated(f"/repos/{repository}/pulls/{pr_number}/reviews"), "reviews")
     return pulls, reviews, checks
 
 
