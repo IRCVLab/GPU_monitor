@@ -40,3 +40,21 @@ Status: DONE
 
 ### Addendum: block runs-on mappings
 - Added RED/GREEN coverage for block-style `runs-on:` mappings with child `labels: [self-hosted, linux]`; this now fails closed under `unsupported-runs-on-mapping` alongside inline mapping forms.
+
+## Second Task 2 security hardening
+
+Status: DONE
+
+### Red evidence
+- `PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_workflow_policy -v` failed after adding regressions: tagged `on`/`runs-on` syntax returned `OK`, broader YAML names such as `&ev.ents` and aliases such as `*runner.prod` returned `OK`, and a `run:` shell line containing `&ev.ents *runner !!seq` was falsely rejected by the old global anchor/alias regex.
+
+### Green evidence
+- `PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_workflow_policy -v` passed: 24 tests.
+- `make test` passed, including layout, history, impact, policy tests, and workflow directory validation.
+- `make policy-test` passed: 24 workflow-policy tests plus `OK: workflow policy validated 0 workflow file(s); directory missing`.
+- `make diff-check` passed.
+
+### Fix summary
+- Replaced global anchor/alias regex scanning with quote/comment-aware YAML token detection scoped to policy-sensitive workflow syntax (`on`, `permissions`, `runs-on`) and child list values under those keys.
+- Added fail-closed `unsupported-yaml-tag` violations for unquoted YAML tag tokens in policy-sensitive syntax, covering `!!seq` and `!!map` bypass attempts.
+- Preserved accepted fixtures and avoided false positives for quoted strings and ordinary `run:` shell glob/text content.

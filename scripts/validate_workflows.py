@@ -10,8 +10,66 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PINNED_ACTION_RE = re.compile(r"@[0-9a-f]{40}$")
-YAML_ANCHOR_ALIAS_RE = re.compile(r"(^|[\s\[:,{])[&*][A-Za-z0-9_-]+($|[\s,\]}])")
 PRODUCTION_LABELS = {"prod", "production", "prd", "prod-runner"}
+
+POLICY_SENSITIVE_KEYS = {"on", "permissions", "runs-on"}
+YAML_TOKEN_BOUNDARIES = set(" \t[{,:")
+
+
+def without_quoted_strings_and_comments(value: str) -> str:
+    chars: list[str] = []
+    in_single = False
+    in_double = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "'" and not in_double:
+            chars.append(" ")
+            if in_single and index + 1 < len(value) and value[index + 1] == "'":
+                chars.append(" ")
+                index += 2
+                continue
+            in_single = not in_single
+        elif char == '"' and not in_single:
+            chars.append(" ")
+            if in_double and index > 0 and value[index - 1] == "\\":
+                pass
+            else:
+                in_double = not in_double
+        elif char == "#" and not in_single and not in_double and (index == 0 or value[index - 1].isspace()):
+            break
+        elif in_single or in_double:
+            chars.append(" ")
+        else:
+            chars.append(char)
+        index += 1
+    return "".join(chars).rstrip()
+
+
+def has_unquoted_yaml_anchor_or_alias(value: str) -> bool:
+    text = without_quoted_strings_and_comments(value)
+    for index, char in enumerate(text):
+        if char not in {"&", "*"}:
+            continue
+        if index > 0 and text[index - 1] not in YAML_TOKEN_BOUNDARIES:
+            continue
+        if index + 1 >= len(text) or text[index + 1].isspace():
+            continue
+        return True
+    return False
+
+
+def has_unquoted_yaml_tag(value: str) -> bool:
+    text = without_quoted_strings_and_comments(value)
+    for index, char in enumerate(text):
+        if char != "!":
+            continue
+        if index > 0 and text[index - 1] not in YAML_TOKEN_BOUNDARIES:
+            continue
+        if index + 1 >= len(text) or text[index + 1].isspace():
+            continue
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -122,7 +180,11 @@ def child_list(lines: list[SourceLine], start_index: int, parent_indent: int) ->
 
 
 def yaml_anchor_or_alias(value: str) -> bool:
-    return YAML_ANCHOR_ALIAS_RE.search(strip_comment(value)) is not None
+    return has_unquoted_yaml_anchor_or_alias(value)
+
+
+def yaml_tag(value: str) -> bool:
+    return has_unquoted_yaml_tag(value)
 
 
 def job_for_line(jobs: list[JobBlock], line_number: int) -> str | None:
@@ -132,23 +194,49 @@ def job_for_line(jobs: list[JobBlock], line_number: int) -> str | None:
     return None
 
 
+def is_policy_sensitive_line(lines: list[SourceLine], index: int) -> bool:
+    line = lines[index]
+    parsed = key_value(line.text)
+    if parsed and parsed[0] in POLICY_SENSITIVE_KEYS:
+        return True
+    if line.text.startswith("-"):
+        for parent in reversed(lines[:index]):
+            if parent.indent >= line.indent:
+                continue
+            parent_parsed = key_value(parent.text)
+            return parent_parsed is not None and parent_parsed[0] in POLICY_SENSITIVE_KEYS
+    return False
+
+
 def unsupported_yaml_violations(path: Path, lines: list[SourceLine]) -> list[Violation]:
     if not lines:
         return [Violation(path, "unsupported-yaml", "workflow file is empty")]
     violations: list[Violation] = []
     jobs = find_jobs(lines)
-    for line in lines:
+    for index, line in enumerate(lines):
         if line.indent == 0 and line.text.startswith("-"):
             violations.append(Violation(path, "unsupported-yaml", f"top-level list item at line {line.number} is not supported"))
         if not line.text.startswith("-") and ":" not in line.text:
             violations.append(Violation(path, "unsupported-yaml", f"line {line.number} is not a supported key/value mapping"))
+        if not is_policy_sensitive_line(lines, index):
+            continue
+        job = job_for_line(jobs, line.number)
         if yaml_anchor_or_alias(line.text):
             violations.append(
                 Violation(
                     path,
                     "unsupported-yaml-anchor-alias",
                     f"YAML anchors and aliases are not supported at line {line.number}",
-                    job_for_line(jobs, line.number),
+                    job,
+                )
+            )
+        if yaml_tag(line.text):
+            violations.append(
+                Violation(
+                    path,
+                    "unsupported-yaml-tag",
+                    f"YAML tags are not supported at line {line.number}",
+                    job,
                 )
             )
     if not jobs:

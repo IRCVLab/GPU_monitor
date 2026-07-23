@@ -182,6 +182,133 @@ class WorkflowPolicyTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assert_policy_violation(body, "unsupported-yaml-anchor-alias", filename=filename)
 
+    def test_rejects_yaml_tags_in_policy_sensitive_workflow_syntax(self):
+        workflows = {
+            "tagged-on.yml": """
+                on: !!seq [pull_request_target]
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "tagged-runs-on-seq.yml": """
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on: !!seq [self-hosted, linux]
+                    steps:
+                      - run: true
+            """,
+            "tagged-runs-on-map.yml": """
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on: !!map {labels: [self-hosted, linux]}
+                    steps:
+                      - run: true
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                job = "integration" if "runs-on" in filename else None
+                self.assert_policy_violation(body, "unsupported-yaml-tag", job, filename)
+
+    def test_rejects_broader_yaml_anchor_names_and_adjacent_flow_delimiters(self):
+        workflows = {
+            "anchored-on-dot.yml": """
+                on: &ev.ents [pull_request_target]
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "anchored-on-flow.yml": """
+                on: &ev[pull_request_target]
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "aliased-permissions-dot.yml": """
+                x-perms: &perms.prod write-all
+                on: push
+                permissions: *perms.prod
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "aliased-permissions-flow.yml": """
+                x-perms: &perms[write-all]
+                on: push
+                permissions: *perms
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "aliased-runs-on-dot.yml": """
+                x-runner: &runner.prod [self-hosted, linux]
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on: *runner.prod
+                    steps:
+                      - run: true
+            """,
+            "aliased-runs-on-flow.yml": """
+                x-runner: &runner[self-hosted, linux]
+                on: pull_request
+                jobs:
+                  integration:
+                    runs-on: *runner
+                    steps:
+                      - run: true
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                job = "integration" if "runs-on" in filename else None
+                self.assert_policy_violation(body, "unsupported-yaml-anchor-alias", job, filename)
+
+    def test_rejects_inline_runs_on_mapping_with_trailing_comment(self):
+        self.assert_policy_violation(
+            """
+            on: pull_request
+            jobs:
+              integration:
+                runs-on: {labels: self-hosted} # comment
+                steps:
+                  - run: true
+            """,
+            "unsupported-runs-on-mapping",
+            "integration",
+        )
+
+    def test_yaml_token_detection_ignores_quoted_strings_and_run_globs(self):
+        result = self.run_validator(
+            {
+                "quoted-and-run.yml": f"""
+                on: push
+                permissions: read-all
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo 'literal &ev.ents *runner !!seq [not-yaml]' && ls src/* || true
+                      - run: echo "{{labels: self-hosted}} # not a yaml comment"
+                      - uses: actions/checkout@{PINNED_SHA}
+                """
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rejects_per_scope_write_permissions_at_top_and_job_level(self):
         result = self.run_validator(
             {
