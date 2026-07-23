@@ -169,7 +169,13 @@ class CiImpactTest(unittest.TestCase):
         )
 
     def test_rejects_absolute_and_parent_traversal_paths(self):
-        for bad_path in ("/tmp/file", "../outside", "docs/../Makefile"):
+        for bad_path in (
+            "/tmp/file",
+            "../outside",
+            "docs/../Makefile",
+            r"docs\..\Makefile",
+            r"\tmp\file",
+        ):
             with self.subTest(bad_path=bad_path):
                 with tempfile.TemporaryDirectory() as tempdir:
                     paths_file = Path(tempdir) / "paths.txt"
@@ -177,6 +183,45 @@ class CiImpactTest(unittest.TestCase):
                     result = self.run_script("--paths-file", str(paths_file))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("invalid repository-relative path", result.stderr)
+
+    def test_bare_app_directory_paths_match_application_prefixes(self):
+        self.assert_decisions(
+            ("apps/gpu-monitor/",),
+            gpu=True,
+            apps_required=True,
+        )
+        self.assert_decisions(
+            ("apps/storage-monitor/viewer/",),
+            storage_dashboard=True,
+            apps_required=True,
+        )
+        self.assert_decisions(
+            ("apps/storage-monitor/agent/",),
+            storage_agent=True,
+            apps_required=True,
+        )
+
+    def test_base_without_head_is_rejected_by_argument_validation(self):
+        result = self.run_script("--base", "HEAD~1")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--base and --head must be supplied together", result.stderr)
+
+    def test_paths_file_with_head_is_rejected_by_argument_validation(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            paths_file = Path(tempdir) / "paths.txt"
+            paths_file.write_text("apps/gpu-monitor/backend/main.py\n", encoding="utf-8")
+
+            result = self.run_script("--paths-file", str(paths_file), "--head", "HEAD")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--head requires --base", result.stderr)
+
+    def test_no_source_is_rejected_by_argument_validation(self):
+        result = self.run_script()
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("one of the arguments --paths-file --base is required", result.stderr)
 
     def test_git_range_failure_reports_git_stderr(self):
         result = self.run_script("--base", "missing-base", "--head", "missing-head")

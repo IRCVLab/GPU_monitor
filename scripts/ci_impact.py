@@ -94,10 +94,17 @@ def normalize_path(path: str) -> str:
     raw = path.strip()
     if not raw:
         raise ValueError("empty path")
-    normalized = posixpath.normpath(raw.replace("\\", "/"))
+    slash_normalized = raw.replace("\\", "/")
+    normalized = posixpath.normpath(slash_normalized)
     if normalized == ".":
         raise ValueError("empty path")
-    if raw.startswith("/") or normalized.startswith("../") or normalized == ".." or "/../" in f"/{raw}/":
+    if (
+        slash_normalized.startswith("/")
+        or any(part == ".." for part in slash_normalized.split("/"))
+        or normalized.startswith("/")
+        or normalized.startswith("../")
+        or normalized == ".."
+    ):
         raise ValueError(f"invalid repository-relative path: {path}")
     return normalized[2:] if normalized.startswith("./") else normalized
 
@@ -111,10 +118,15 @@ def normalize_paths(paths: Sequence[str]) -> list[str]:
     return sorted(normalized_paths)
 
 
+def matches_prefix(path: str, prefix: str) -> bool:
+    normalized_prefix = prefix.rstrip("/")
+    return path == normalized_prefix or path.startswith(_with_slash(normalized_prefix))
+
+
 def matches_rule(path: str, rule: PathRule) -> bool:
     return (
         path in rule.exact
-        or any(path.startswith(_with_slash(prefix)) for prefix in rule.prefixes)
+        or any(matches_prefix(path, prefix) for prefix in rule.prefixes)
         or any(path.endswith(suffix) for suffix in rule.suffixes)
     )
 
@@ -192,7 +204,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     source.add_argument("--base", help="base Git revision for changed-path discovery")
     parser.add_argument("--head", help="head Git revision for changed-path discovery")
     args = parser.parse_args(argv)
-    if bool(args.base) != bool(args.head):
+    if args.head and not args.base:
+        parser.error("--head requires --base")
+    if args.base and not args.head:
         parser.error("--base and --head must be supplied together")
     return args
 
