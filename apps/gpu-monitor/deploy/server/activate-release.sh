@@ -469,25 +469,32 @@ PY
 
 validate_and_extract() {
   local object_dir=$1 artifact_name=$2 destination=$3
-  "$INTERNAL_PYTHON" - "$object_dir" "$artifact_name" "$destination" "$sha" "$digest" "$max_archive_files" "$max_expanded_bytes" <<'PY'
+  "$INTERNAL_PYTHON" - "$object_dir" "$artifact_name" "$destination" "$sha" "$digest" "$max_archive_files" "$max_expanded_bytes" "$runtime_gid" <<'PY'
 import hashlib, json, os, shutil, stat, sys, tarfile
 from pathlib import Path, PurePosixPath
-object_dir_path, artifact_name, destination_path, sha, expected, max_entries, max_bytes = sys.argv[1:]
-destination = Path(destination_path); max_entries = int(max_entries); max_bytes = int(max_bytes)
+object_dir_path, artifact_name, destination_path, sha, expected, max_entries, max_bytes, expected_gid = sys.argv[1:]
+destination = Path(destination_path); max_entries = int(max_entries); max_bytes = int(max_bytes); expected_gid = int(expected_gid)
 def reject(message):
     print("ERROR: " + message, file=sys.stderr); raise SystemExit(1)
 def make_staging_directory(path):
-    path.mkdir(parents=True, exist_ok=True, mode=0o2700)
-    cursor = path
-    while cursor != destination.parent:
-        if cursor.is_dir():
-            os.chmod(cursor, 0o2700)
-        if cursor == destination:
-            break
-        cursor = cursor.parent
+    try:
+        relative = path.relative_to(destination)
+    except ValueError:
+        reject("staging directory escaped destination")
+    cursor = destination
+    for part in relative.parts:
+        cursor /= part
+        try:
+            os.mkdir(cursor, 0o2700)
+        except FileExistsError:
+            if not cursor.is_dir(): reject("staging path is not a directory")
+        os.chmod(cursor, 0o2700)
+        if os.lstat(cursor).st_gid != expected_gid:
+            reject("staging directory did not inherit runtime group")
 if destination.exists(): reject("temporary destination exists")
 destination.mkdir(parents=True, mode=0o2700)
 os.chmod(destination, 0o2700)
+if os.lstat(destination).st_gid != expected_gid: reject("temporary destination did not inherit runtime group")
 seen = {}; count = total = 0
 object_dir_fd = os.open(object_dir_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
 try:
