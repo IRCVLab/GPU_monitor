@@ -6,7 +6,9 @@ SOURCE_ROOT=$(cd "$SCRIPT_DIR/../../.." && pwd)
 BUILD_SCRIPT="$SOURCE_ROOT/apps/gpu-monitor/deploy/build-release.sh"
 
 mktemp_dir() {
-  mktemp -d "${TMPDIR:-/tmp}/$1.XXXXXX"
+  local created
+  created=$(mktemp -d "${TMPDIR:-/tmp}/$1.XXXXXX")
+  (cd "$created" && pwd -P)
 }
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -284,14 +286,54 @@ FAKENPM
   log "failed build leaves no partial outputs and script works from any CWD"
 }
 
-test_missing_builder_fails
-test_rejects_dirty_source
-test_rejects_invalid_and_non_head_sha
-test_rejects_untracked_nonignored_sources_before_build
-test_build_does_not_mutate_checkout_node_modules_or_build
-test_post_temp_output_failure_cleans_tmp_outputs
-test_build_outputs_contract
-test_failed_build_leaves_no_partial_outputs_and_works_from_any_cwd
+kill_process_tree() {
+  local root=$1 child
+  while read -r child; do
+    [[ -n "$child" ]] || continue
+    kill_process_tree "$child"
+  done < <(ps -axo pid=,ppid= | awk -v p="$root" '$2 == p {print $1}')
+  kill -TERM "$root" 2>/dev/null || true
+}
+
+run_test() {
+  local name=$1 timeout_seconds=${TEST_TIMEOUT_SECONDS:-120} marker
+  if [[ -n "${TEST_FILTER:-}" && "$name" != *"$TEST_FILTER"* ]]; then
+    return 0
+  fi
+  marker=$(mktemp "${TMPDIR:-/tmp}/gpu-release-test-timeout.${name}.XXXXXX")
+  rm -f "$marker"
+  ( "$name" ) &
+  local pid=$!
+  (
+    sleep "$timeout_seconds"
+    if kill -0 "$pid" 2>/dev/null; then
+      printf 'FAIL: %s timed out after %ss\n' "$name" "$timeout_seconds" >&2
+      : > "$marker"
+      kill_process_tree "$pid"
+      sleep 1
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  ) &
+  local watchdog=$! status=0
+  wait "$pid" || status=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  if [[ -e "$marker" ]]; then
+    rm -f "$marker"
+    fail "$name exceeded per-test timeout"
+  fi
+  rm -f "$marker"
+  return "$status"
+}
+
+run_test test_missing_builder_fails
+run_test test_rejects_dirty_source
+run_test test_rejects_invalid_and_non_head_sha
+run_test test_rejects_untracked_nonignored_sources_before_build
+run_test test_build_does_not_mutate_checkout_node_modules_or_build
+run_test test_post_temp_output_failure_cleans_tmp_outputs
+run_test test_build_outputs_contract
+run_test test_failed_build_leaves_no_partial_outputs_and_works_from_any_cwd
 
 SERVER_DIR="$SOURCE_ROOT/apps/gpu-monitor/deploy/server"
 DEPLOY_COMMAND="$SERVER_DIR/gpu-monitor-deploy-command"
@@ -303,10 +345,17 @@ DEV_SUDOERS="$SERVER_DIR/sudoers/gpu-monitor-deploy-dev"
 LIVE_SUDOERS="$SERVER_DIR/sudoers/gpu-monitor-deploy-live"
 
 assert_symlink_target() {
-  local link=$1 expected=$2 actual
+  local link=$1 expected=$2 actual resolved base
   [[ -L "$link" ]] || fail "$link is not a symlink"
   actual=$(readlink "$link")
-  [[ "$actual" == "$expected" ]] || fail "$link points to $actual, expected $expected"
+  if [[ "$actual" == "$expected" ]]; then return 0; fi
+  base=$(cd "${link%/*}" && pwd -P)
+  if [[ "$expected" == releases/* && -e "$link" ]]; then
+    resolved=$(cd "$link" && pwd -P)
+    [[ "$resolved" == "$base/$expected" ]] || fail "$link resolves to $resolved, expected $base/$expected (readlink $actual)"
+    return 0
+  fi
+  fail "$link points to $actual, expected $expected"
 }
 
 make_release_artifact() {
@@ -439,6 +488,11 @@ test_forced_command_rejects_open_grammar_and_env_crossing() {
   if env -i PREFIX="$prefix" PATH="/usr/bin:/bin" SSH_ORIGINAL_COMMAND="status live" "$DEPLOY_COMMAND" dev >/"$tmp/argv-cross.out" 2>/"$tmp/argv-cross.err"; then
     fail "dev forced-command argv boundary accepted live status"
   fi
+  mkdir -p "$tmp/real-prefix"
+  ln -s "$tmp/real-prefix" "$tmp/prefix-link"
+  if run_forced_command "$tmp/prefix-link" "status dev" /dev/null "" dev >"$tmp/symlink-prefix.out" 2>"$tmp/symlink-prefix.err"; then
+    fail "test-mode forced command accepted a symlink PREFIX"
+  fi
   log "forced-command grammar and env authorization reject unsafe requests"
 }
 
@@ -529,6 +583,9 @@ test_activation_dev_live_boundaries_pointers_units_and_rollback() {
   grep -q 'gpu-monitor-frontend@dev' "$log_file" || fail "dev frontend unit was not restarted"
   ! grep -q 'gpu-monitor-bridge@dev\|gpu-monitor-.*@live' "$log_file" || fail "dev activation touched bridge or live units"
   grep -q "flock .*dev" "$log_file" || fail "dev env-specific flock was not used"
+  : > "$log_file"
+  run_forced_command "$prefix" "status dev" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" dev >/"$tmp/status-dev.out" 2>/"$tmp/status-dev.err"
+  grep -q "flock .*dev" "$log_file" || fail "status did not use the dev env-specific flock"
 
   run_forced_command "$prefix" "upload live $sha2 $digest2" "$tmp/a2/gpu-monitor-$sha2.tar.gz" "" live
   run_forced_command "$prefix" "activate live $sha2 $digest2" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" live >/"$tmp/act-live.out" 2>/"$tmp/act-live.err"
@@ -661,19 +718,20 @@ test_directory_mutations_are_fsynced() {
     'fsync_directory "$releases"' \
     'fsync_directory "$incoming"' \
     'fsync_directory "$tmp_root"' \
-    'fsync_directory "${link%/*}"'; do
+    'fsync_tree_bottom_up "$release"' \
+    'fsync_regular_files "$release"' \
+    'fsync_directory "$generations"'; do
     grep -Fq "$needle" "$ACTIVATE_SCRIPT" || fail "directory mutation is not durably fsynced: $needle"
   done
-  log "directory mutations are fsynced after atomic publish, cleanup, and pointer changes"
+  log "release contents and directory mutations are fsynced before atomic publication and pointer changes"
 }
 
 test_isolated_identities_broker_and_descriptor_extraction_contract() {
-  ! grep -Fq 'gpu-deploy' "$SERVER_DIR/systemd/gpu-monitor-backend@.service" ||
-    grep -Fq 'User=gpu-deploy-%i' "$SERVER_DIR/systemd/gpu-monitor-backend@.service" ||
-    fail "backend service does not select the environment-specific deploy identity"
   for unit in "$SERVER_DIR"/systemd/*.service; do
-    grep -Fq 'User=gpu-deploy-%i' "$unit" || fail "$unit does not use environment-specific service user"
-    grep -Fq 'Group=gpu-deploy-%i' "$unit" || fail "$unit does not use environment-specific service group"
+    grep -Fq 'User=gpu-monitor-%i' "$unit" || fail "$unit does not use environment-specific runtime user"
+    grep -Fq 'Group=gpu-monitor-%i' "$unit" || fail "$unit does not use environment-specific runtime group"
+    grep -Fq 'ProtectProc=invisible' "$unit" || fail "$unit does not hide unrelated processes where systemd supports it"
+    ! grep -Fq 'gpu-deploy-%i' "$unit" || fail "$unit still runs services as deploy identity"
   done
   grep -Fxq 'gpu-deploy-dev ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker dev' "$DEV_SUDOERS" ||
     fail "dev sudoers is not the exact dev-only broker allowlist"
@@ -685,9 +743,12 @@ test_isolated_identities_broker_and_descriptor_extraction_contract() {
     fail "production activation does not call only sudo -n and the exact broker"
   ! grep -Eq 'getmembers|extractall|tarfile\.open\([^f]' "$ACTIVATE_SCRIPT" ||
     fail "archive implementation uses bulk enumeration/extraction or pathname reopen"
+  grep -Fq 'dir_fd=object_dir_fd' "$ACTIVATE_SCRIPT" || fail "incoming artifact is not opened relative to incoming dirfd"
+  grep -Fq 'O_NOFOLLOW' "$ACTIVATE_SCRIPT" || fail "incoming artifact open is not no-follow"
+  grep -Fq 'stat.S_ISREG' "$ACTIVATE_SCRIPT" || fail "incoming artifact fd is not regular-file checked"
   grep -Fq 'tarfile.open(fileobj=artifact_file, mode="r|gz")' "$ACTIVATE_SCRIPT" ||
     fail "archive extraction is not streamed from the already-hashed descriptor"
-  log "isolated service identities, exact broker allowlists, and descriptor-bound extraction are contractual"
+  log "isolated runtime identities, exact broker allowlists, and dirfd descriptor-bound extraction are contractual"
 }
 
 test_restart_broker_exact_unit_allowlist() {
@@ -800,6 +861,40 @@ test_incoming_content_addressing_quotas_and_success_cleanup() {
   log "incoming artifacts are content-addressed, quota-isolated, idempotent, pruned, and consumed"
 }
 
+
+test_incoming_artifact_open_rejects_symlink_and_fifo_without_hanging() {
+  local tmp prefix fakebin log_file sha digest artifact incoming_object
+  tmp=$(mktemp_dir gpu-release-incoming-open)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  sha=abababababababababababababababababababab
+  mkdir -p "$tmp/artifact"
+  make_release_artifact "$tmp/artifact" "$sha" incoming-open
+  artifact="$tmp/artifact/gpu-monitor-$sha.tar.gz"
+  digest=$(cat "$tmp/artifact/digest")
+
+  run_forced_command "$prefix" "upload dev $sha $digest" "$artifact"
+  incoming_object="$prefix/srv/gpu-monitor/dev/incoming/$sha/$digest.tar.gz"
+  rm -f "$incoming_object"
+  ln -s /etc/passwd "$incoming_object"
+  if run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+    "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" dev > "$tmp/symlink.out" 2> "$tmp/symlink.err"; then
+    fail "activation followed an incoming symlink artifact"
+  fi
+
+  rm -f "$incoming_object"
+  if command -v mkfifo >/dev/null 2>&1; then
+    mkfifo "$incoming_object"
+    if TEST_TIMEOUT_SECONDS=5 run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+      "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" dev > "$tmp/fifo.out" 2> "$tmp/fifo.err"; then
+      fail "activation accepted an incoming FIFO artifact"
+    fi
+    grep -Eiq 'regular|fifo|artifact|failed|ERROR' "$tmp/fifo.err" || fail "FIFO rejection did not explain nonregular artifact"
+  fi
+  log "incoming artifact open rejects symlink and FIFO objects without blocking"
+}
+
 test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one() {
   local tmp prefix fakebin log_file kind index sha artifact digest bound
   tmp=$(mktemp_dir gpu-release-archive-types)
@@ -870,6 +965,44 @@ PY
   log "archive rejects every non-file/directory type, path conflicts, duplicates, and both limit+1 cases"
 }
 
+
+test_generation_pointer_model_and_failed_candidate_cleanup() {
+  local tmp prefix fakebin log_file sha1 sha2 sha3 digest1 digest2 digest3
+  tmp=$(mktemp_dir gpu-release-generation-model)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  sha1=7777777777777777777777777777777777777777
+  sha2=8888888888888888888888888888888888888888
+  sha3=9999999999999999999999999999999999999998
+  mkdir -p "$tmp/a1" "$tmp/a2" "$tmp/a3"
+  make_release_artifact "$tmp/a1" "$sha1" one; digest1=$(cat "$tmp/a1/digest")
+  make_release_artifact "$tmp/a2" "$sha2" two; digest2=$(cat "$tmp/a2/digest")
+  make_release_artifact "$tmp/a3" "$sha3" three; digest3=$(cat "$tmp/a3/digest")
+  run_forced_command "$prefix" "upload dev $sha1 $digest1" "$tmp/a1/gpu-monitor-$sha1.tar.gz"
+  run_forced_command "$prefix" "activate dev $sha1 $digest1" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin"
+  first_active=$(readlink "$prefix/srv/gpu-monitor/dev/generations/active")
+  [[ -L "$prefix/srv/gpu-monitor/dev/current" && "$(readlink "$prefix/srv/gpu-monitor/dev/current")" == generations/active/current ]] ||
+    fail "root current is not resolved through the active generation"
+  canon_prefix=$(cd "$prefix" && pwd -P)
+  [[ "$(cd "$prefix/srv/gpu-monitor/dev/current" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha1" ]] ||
+    fail "root current does not resolve to the active release"
+  run_forced_command "$prefix" "upload dev $sha2 $digest2" "$tmp/a2/gpu-monitor-$sha2.tar.gz"
+  run_forced_command "$prefix" "activate dev $sha2 $digest2" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin"
+  [[ "$(readlink "$prefix/srv/gpu-monitor/dev/generations/active")" != "$first_active" ]] || fail "activation did not atomically swap a new generation"
+  [[ "$(cd "$prefix/srv/gpu-monitor/dev/current" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha2" ]] || fail "current generation resolution is wrong"
+  [[ "$(cd "$prefix/srv/gpu-monitor/dev/previous" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha1" ]] || fail "previous generation resolution is wrong"
+  rm -rf "$fakebin"; : > "$log_file"; install_fake_server_commands "$fakebin" "$log_file" fail pass
+  run_forced_command "$prefix" "upload dev $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz"
+  if run_forced_command "$prefix" "activate dev $sha3 $digest3" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin"; then
+    fail "failed health activation unexpectedly succeeded"
+  fi
+  [[ ! -d "$prefix/srv/gpu-monitor/dev/releases/$sha3" ]] || fail "failed inactive candidate release was not removed"
+  [[ "$(cd "$prefix/srv/gpu-monitor/dev/current" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha2" ]] || fail "failed activation changed current resolution"
+  [[ "$(cd "$prefix/srv/gpu-monitor/dev/previous" && pwd -P)" == "$canon_prefix/srv/gpu-monitor/dev/releases/$sha1" ]] || fail "failed activation changed previous resolution"
+  log "generation pointer swaps are atomic and failed inactive candidates are cleaned"
+}
+
 test_retention_uses_latest_success_recency() {
   local tmp prefix fakebin log_file sha digest label
   tmp=$(mktemp_dir gpu-release-retention-recency)
@@ -934,9 +1067,17 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
     fail "installer omitted isolated lock paths"
   [[ -f "$prefix/etc/sudoers.d/gpu-monitor-deploy-dev" && -f "$prefix/etc/sudoers.d/gpu-monitor-deploy-live" ]] ||
     fail "installer omitted restart authorization"
-  ! grep -Fq nologin "$INSTALLER_SCRIPT" || fail "installer still creates a nologin SSH account"
+  ! grep -Fq 'deploy_user" /usr/sbin/nologin' "$INSTALLER_SCRIPT" || fail "installer creates nologin deploy SSH accounts"
+  grep -Fq 'runtime_user" "/var/lib/gpu-monitor/$environment" /usr/sbin/nologin' "$INSTALLER_SCRIPT" || fail "installer does not make runtime users non-login"
   grep -Fq '/usr/sbin/usermod -L "$user"' "$INSTALLER_SCRIPT" || fail "installer does not password-lock deploy users"
-  grep -Fq 'getent passwd "$user"' "$INSTALLER_SCRIPT" || fail "installer does not validate existing users"
+  grep -Fq 'getent passwd "$user"' "$INSTALLER_SCRIPT" || fail "installer does not validate existing deploy users"
+  grep -Fq 'ensure_deploy_and_runtime_users' "$INSTALLER_SCRIPT" || fail "installer does not validate existing runtime users"
+  grep -Fq 'validate_identity_separation' "$INSTALLER_SCRIPT" || fail "installer does not validate deploy/runtime UID/GID separation"
+  grep -Fq 'GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/dev' "$prefix/etc/gpu-monitor/dev.env" || fail "installer omitted dev mutable shared dir"
+  grep -Fq 'GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live' "$prefix/etc/gpu-monitor/live.env" || fail "installer omitted live mutable shared dir"
+  grep -Fq 'visudo -cf' "$INSTALLER_SCRIPT" || fail "installer does not validate sudoers before install"
+  grep -Fq 'daemon-reload' "$INSTALLER_SCRIPT" || fail "installer does not reload systemd after unit install"
+  ! grep -Eq 'systemctl .*\b(start|enable)\b' "$INSTALLER_SCRIPT" || fail "installer starts or enables services"
   ! grep -Fq -- '--test-mode-force-non-root' "$INSTALLER_SCRIPT" || fail "installer ships a root-gate bypass"
 
   for invalid in / /tmp/.. relative $'/tmp/new\nline'; do
@@ -999,21 +1140,23 @@ PYBAD
   log "archive validation, retention, and status contract are enforced"
 }
 
-test_server_scripts_exist_before_security_tests
-test_forced_command_rejects_open_grammar_and_env_crossing
-test_production_mode_scrubs_hostile_environment_before_dispatch
-test_upload_is_bounded_digest_verified_and_cleans_failures
-test_activation_dev_live_boundaries_pointers_units_and_rollback
-test_first_activation_failure_restores_absent_pointer_state
-test_health_test_overrides_are_positive_and_bounded
-test_systemd_units_match_real_runtime_entrypoints
-test_state_appends_use_crash_durable_writer
-test_directory_mutations_are_fsynced
-test_isolated_identities_broker_and_descriptor_extraction_contract
-test_restart_broker_exact_unit_allowlist
-test_transaction_restores_both_pointers_for_restart_health_and_manual_failures
-test_incoming_content_addressing_quotas_and_success_cleanup
-test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one
-test_retention_uses_latest_success_recency
-test_installer_separate_users_prefix_upgrade_and_idempotency
-test_archive_validation_retention_status_and_installer
+run_test test_server_scripts_exist_before_security_tests
+run_test test_forced_command_rejects_open_grammar_and_env_crossing
+run_test test_production_mode_scrubs_hostile_environment_before_dispatch
+run_test test_upload_is_bounded_digest_verified_and_cleans_failures
+run_test test_activation_dev_live_boundaries_pointers_units_and_rollback
+run_test test_first_activation_failure_restores_absent_pointer_state
+run_test test_health_test_overrides_are_positive_and_bounded
+run_test test_systemd_units_match_real_runtime_entrypoints
+run_test test_state_appends_use_crash_durable_writer
+run_test test_directory_mutations_are_fsynced
+run_test test_isolated_identities_broker_and_descriptor_extraction_contract
+run_test test_restart_broker_exact_unit_allowlist
+run_test test_transaction_restores_both_pointers_for_restart_health_and_manual_failures
+run_test test_incoming_content_addressing_quotas_and_success_cleanup
+run_test test_incoming_artifact_open_rejects_symlink_and_fifo_without_hanging
+run_test test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one
+run_test test_generation_pointer_model_and_failed_candidate_cleanup
+run_test test_retention_uses_latest_success_recency
+run_test test_installer_separate_users_prefix_upgrade_and_idempotency
+run_test test_archive_validation_retention_status_and_installer

@@ -4,13 +4,14 @@ After=network.target
 
 [Service]
 Type=simple
-User=gpu-deploy-%i
-Group=gpu-deploy-%i
+User=gpu-monitor-%i
+Group=gpu-monitor-%i
 WorkingDirectory=/srv/gpu-monitor/%i/current/frontend
 EnvironmentFile=/etc/gpu-monitor/%i.env
 Environment=HOST=127.0.0.1
 ExecStart=/usr/bin/node /srv/gpu-monitor/%i/current/frontend/build/index.js
 Restart=on-failure
+ProtectProc=invisible
 
 [Install]
 WantedBy=multi-user.target

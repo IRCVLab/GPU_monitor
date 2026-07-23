@@ -1,5 +1,7 @@
 #!/bin/bash -p
 set -euo pipefail
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
@@ -21,6 +23,12 @@ while (($#)); do
   esac
 done
 [[ -n "$dev_key" ]] || fail "--dev-public-key is required"
+if [[ "$prefix" != / && "$dry_run" == false ]]; then
+  fail "--prefix is supported only with --dry-run"
+fi
+if [[ -n "$live_key" && "$live_key" == "$dev_key" ]]; then
+  fail "dev and live public keys must be distinct"
+fi
 
 validate_key() {
   local key=$1
@@ -70,9 +78,9 @@ install_file() {
   /usr/bin/install -m "$mode" "$source" "$destination"
 }
 
-ensure_group_and_user() {
-  local environment=$1 user="gpu-deploy-$1" home="/home/gpu-deploy-$1"
-  local group_record passwd_record actual_home actual_shell actual_gid expected_gid
+ensure_identity() {
+  local user=$1 home=$2 shell=$3 system_home=$4
+  local group_record passwd_record actual_uid actual_gid actual_home actual_shell expected_gid shadow_record
   if group_record=$(getent group "$user"); then
     expected_gid=${group_record#*:*:}; expected_gid=${expected_gid%%:*}
   else
@@ -81,15 +89,38 @@ ensure_group_and_user() {
     expected_gid=${group_record#*:*:}; expected_gid=${expected_gid%%:*}
   fi
   if passwd_record=$(getent passwd "$user"); then
-    IFS=: read -r _ _ _ actual_gid _ actual_home actual_shell <<< "$passwd_record"
+    IFS=: read -r _ _ actual_uid actual_gid _ actual_home actual_shell <<< "$passwd_record"
+    [[ "$actual_uid" != 0 && "$actual_gid" != 0 ]] || fail "existing $user has root uid/gid"
     [[ "$actual_home" == "$home" ]] || fail "existing $user has unexpected home"
-    [[ "$actual_shell" == /bin/sh ]] || fail "existing $user has unexpected shell"
+    [[ "$actual_shell" == "$shell" ]] || fail "existing $user has unexpected shell"
     [[ "$actual_gid" == "$expected_gid" ]] || fail "existing $user has unexpected primary group"
   else
-    /usr/sbin/useradd --system --gid "$user" --home-dir "$home" --shell /bin/sh "$user"
+    /usr/sbin/useradd --system --gid "$user" --home-dir "$home" --shell "$shell" "$user"
   fi
   /usr/sbin/usermod -L "$user"
 }
+
+ensure_deploy_and_runtime_users() {
+  local environment=$1 deploy_user="gpu-deploy-$1" runtime_user="gpu-monitor-$1"
+  ensure_identity "$deploy_user" "/home/$deploy_user" /bin/sh true
+  ensure_identity "$runtime_user" "/var/lib/gpu-monitor/$environment" /usr/sbin/nologin true
+}
+
+validate_identity_separation() {
+  local environment=$1 deploy_user="gpu-deploy-$1" runtime_user="gpu-monitor-$1"
+  /usr/bin/python3 - "$deploy_user" "$runtime_user" <<'PY'
+import grp, pwd, sys
+deploy, runtime = sys.argv[1:]
+d = pwd.getpwnam(deploy); r = pwd.getpwnam(runtime)
+if 0 in (d.pw_uid, d.pw_gid, r.pw_uid, r.pw_gid): raise SystemExit("ERROR: deploy/runtime ids must be nonzero")
+if d.pw_uid == r.pw_uid or d.pw_gid == r.pw_gid: raise SystemExit("ERROR: deploy/runtime ids must be distinct")
+for group in grp.getgrall():
+    members = set(group.gr_mem)
+    if deploy in members and runtime in members:
+        raise SystemExit("ERROR: deploy/runtime users share supplemental group " + group.gr_name)
+PY
+}
+
 
 merge_env() {
   local path=$1; shift
@@ -120,20 +151,25 @@ PY
 }
 
 for environment in dev live; do
-  user="gpu-deploy-$environment"
-  home="$prefix/home/$user"
+  deploy_user="gpu-deploy-$environment"
+  runtime_user="gpu-monitor-$environment"
+  home="$prefix/home/$deploy_user"
   ssh_dir="$home/.ssh"
   env_root="$prefix/srv/gpu-monitor/$environment"
+  shared_root="$prefix/var/lib/gpu-monitor/$environment"
   lock_root="$prefix/var/lock/gpu-monitor/$environment"
-  mkdir -p "$ssh_dir" "$env_root"/{incoming,releases,tmp} "$lock_root"
+  mkdir -p "$ssh_dir" "$env_root"/{incoming,releases,tmp,generations} "$shared_root" "$lock_root"
   chmod 0755 "$home"
   chmod 0700 "$ssh_dir" "$env_root" "$lock_root"
+  chmod 0750 "$shared_root"
   : > "$lock_root/activation.lock"
   chmod 0600 "$lock_root/activation.lock"
   if [[ "$dry_run" == false ]]; then
-    ensure_group_and_user "$environment"
+    ensure_deploy_and_runtime_users "$environment"
+    validate_identity_separation "$environment"
     chown -R root:root "$home"
-    chown -R "$user:$user" "$env_root" "$lock_root"
+    chown -R "$deploy_user:$deploy_user" "$env_root" "$lock_root"
+    chown -R "$runtime_user:$runtime_user" "$shared_root"
   fi
 done
 
@@ -160,14 +196,17 @@ install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-dev" "$prefix/etc/sudo
 install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-live" "$prefix/etc/sudoers.d/gpu-monitor-deploy-live"
 
 merge_env "$prefix/etc/gpu-monitor/dev.env" \
-  GPU_MONITOR_BACKEND_PORT=8101 PORT=5174
+  GPU_MONITOR_BACKEND_PORT=8101 PORT=5174 GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/dev
 merge_env "$prefix/etc/gpu-monitor/live.env" \
-  GPU_MONITOR_BACKEND_PORT=8001 GPU_MONITOR_BRIDGE_PORT=8000 PORT=5173
+  GPU_MONITOR_BACKEND_PORT=8001 GPU_MONITOR_BRIDGE_PORT=8000 PORT=5173 GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live
 if [[ "$dry_run" == false ]]; then
   chown root:gpu-deploy-dev "$prefix/etc/gpu-monitor/dev.env"
   chown root:gpu-deploy-live "$prefix/etc/gpu-monitor/live.env"
   chmod 0640 "$prefix/etc/gpu-monitor/"*.env
   chown root:root "$prefix/etc/sudoers.d/gpu-monitor-deploy-"*
+  /usr/sbin/visudo -cf "$prefix/etc/sudoers.d/gpu-monitor-deploy-dev"
+  /usr/sbin/visudo -cf "$prefix/etc/sudoers.d/gpu-monitor-deploy-live"
+  /usr/bin/systemctl daemon-reload
 fi
 
-printf 'Installed isolated GPU deploy boundaries under %s (dry-run=%s); no services enabled or started.\n' "$prefix" "$dry_run"
+printf 'Installed isolated GPU deploy/runtime boundaries under %s (dry-run=%s); no services enabled or started.\n' "$prefix" "$dry_run"

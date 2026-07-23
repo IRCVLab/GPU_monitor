@@ -31,7 +31,7 @@ if [[ "${1:-}" == --test-mode ]]; then
   temp_max_age=${GPU_MONITOR_UPLOAD_TEMP_MAX_AGE:-$PRODUCTION_TEMP_MAX_AGE}
   failed_max_count=${GPU_MONITOR_FAILED_ARTIFACT_MAX_COUNT:-$PRODUCTION_FAILED_MAX_COUNT}
   case "$action:$argument_count" in
-    status:3|rollback:3|rollback-inner:3|upload:5|upload-inner:5|activate:5|activate-inner:5) ;;
+    status:3|status-inner:3|rollback:3|rollback-inner:3|upload:5|upload-inner:5|activate:5|activate-inner:5) ;;
     *) fail "invalid test-mode arguments" ;;
   esac
 else
@@ -47,13 +47,13 @@ else
   temp_max_age=$PRODUCTION_TEMP_MAX_AGE
   failed_max_count=$PRODUCTION_FAILED_MAX_COUNT
   case "$action:$argument_count" in
-    status:2|rollback:2|rollback-inner:2|upload:4|upload-inner:4|activate:4|activate-inner:4) ;;
+    status:2|status-inner:2|rollback:2|rollback-inner:2|upload:4|upload-inner:4|activate:4|activate-inner:4) ;;
     *) fail "invalid production arguments" ;;
   esac
 fi
 
 case "$env_name" in dev|live) ;; *) fail "invalid environment" ;; esac
-case "$action" in status|upload|upload-inner|activate|activate-inner|rollback|rollback-inner) ;; *) fail "invalid action" ;; esac
+case "$action" in status|status-inner|upload|upload-inner|activate|activate-inner|rollback|rollback-inner) ;; *) fail "invalid action" ;; esac
 case "$action" in
   upload|upload-inner|activate|activate-inner)
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "invalid sha"
@@ -72,14 +72,40 @@ IFS=$' \t\n'
 PATH=$command_path
 export PATH
 
+validate_test_prefix() {
+  local raw=$1 py=$2
+  [[ "$raw" == /* && "$raw" != / && "$raw" != *$'\n'* ]] || return 1
+  "$py" - "$raw" <<'PY'
+import os, pathlib, sys
+raw = sys.argv[1]
+path = pathlib.Path(raw)
+if os.path.normpath(raw) != raw:
+    raise SystemExit(1)
+existing = path
+while not existing.exists():
+    if existing.parent == existing:
+        raise SystemExit(1)
+    existing = existing.parent
+if existing.stat().st_uid != os.getuid():
+    raise SystemExit(1)
+cursor = pathlib.Path('/')
+for part in path.parts[1:]:
+    cursor = cursor / part
+    if cursor.exists() and cursor.is_symlink():
+        raise SystemExit(1)
+if str(path.resolve(strict=False)) != raw:
+    raise SystemExit(1)
+PY
+}
+
 validate_bound() {
   local name=$1 value=$2 maximum=$3
   [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= maximum )) ||
     fail "$name must be a bounded positive integer"
 }
 if [[ "$test_mode" == true ]]; then
-  [[ "$prefix" == /* && "$prefix" != / && "$prefix" != *$'\n'* ]] || fail "invalid test PREFIX"
   [[ "$internal_python" == /* && -x "$internal_python" ]] || fail "invalid internal Python"
+  validate_test_prefix "$prefix" "$internal_python" || fail "invalid test PREFIX"
   validate_bound upload "$max_upload" "$PRODUCTION_MAX_UPLOAD_BYTES"
   validate_bound archive-files "$max_archive_files" "$PRODUCTION_MAX_ARCHIVE_FILES"
   validate_bound expanded-bytes "$max_expanded_bytes" "$PRODUCTION_MAX_EXPANDED_BYTES"
@@ -102,6 +128,7 @@ releases="$base/releases"
 incoming="$base/incoming"
 tmp_root="$base/tmp"
 state="$base/deployments.jsonl"
+generations="$base/generations"
 lock_dir="${prefix}/var/lock/gpu-monitor/$env_name"
 lock_file="$lock_dir/activation.lock"
 script_dir=${BASH_SOURCE[0]%/*}
@@ -116,9 +143,15 @@ else
   sudo_command=/usr/bin/sudo
 fi
 
-if [[ "$action" != status ]]; then
-  mkdir -p "$releases" "$incoming" "$tmp_root" "$lock_dir"
-fi
+case "$action" in
+  status)
+    if [[ "$test_mode" == true ]]; then
+      mkdir -p "$lock_dir"
+    fi
+    ;;
+  status-inner) ;;
+  *) mkdir -p "$releases" "$incoming" "$tmp_root" "$generations" "$lock_dir" ;;
+esac
 
 fsync_directory() {
   local directory=$1
@@ -136,13 +169,68 @@ finally:
 PY
 }
 
-if [[ "$action" != status ]]; then
-  fsync_directory "$base"
-  fsync_directory "$releases"
-  fsync_directory "$incoming"
-  fsync_directory "$tmp_root"
-  fsync_directory "$lock_dir"
-fi
+fsync_regular_files() {
+  local root=$1
+  [[ -d "$root" ]] || return 0
+  "$INTERNAL_PYTHON" - "$root" <<'PY'
+import os, sys
+root = sys.argv[1]
+for current, dirs, files in os.walk(root):
+    dirs.sort(); files.sort()
+    for name in files:
+        path = os.path.join(current, name)
+        try:
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+            try: os.fsync(fd)
+            finally: os.close(fd)
+        except FileNotFoundError:
+            pass
+PY
+}
+
+fsync_tree_bottom_up() {
+  local root=$1
+  [[ -d "$root" ]] || return 0
+  "$INTERNAL_PYTHON" - "$root" <<'PY'
+import os, sys
+root = sys.argv[1]
+for current, dirs, files in os.walk(root, topdown=False):
+    try:
+        fd = os.open(current, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    except FileNotFoundError:
+        pass
+PY
+}
+
+canonicalize_test_prefix() {
+  [[ "$test_mode" == true ]] || return 0
+  "$INTERNAL_PYTHON" - "$base" <<'PY'
+import os, pathlib, sys
+base = pathlib.Path(sys.argv[1])
+for path in (base, base.parent, base.parent.parent):
+    if path.exists() and path.is_symlink():
+        print("ERROR: test prefix root must be canonical and non-symlink", file=sys.stderr); raise SystemExit(1)
+PY
+}
+canonicalize_test_prefix
+
+case "$action" in
+  status)
+    fsync_directory "$lock_dir"
+    ;;
+  status-inner)
+    ;;
+  *)
+    fsync_directory "$base"
+    fsync_directory "$releases"
+    fsync_directory "$incoming"
+    fsync_directory "$tmp_root"
+    fsync_directory "$generations"
+    fsync_directory "$lock_dir"
+    ;;
+esac
 
 append_state() {
   local status_value=$1 release_sha=${2:-} release_digest=${3:-} message=${4:-}
@@ -186,8 +274,54 @@ restore_link() {
     fsync_directory "${link%/*}"
   fi
 }
-current_target() { [[ -L "$base/current" ]] && readlink "$base/current" || true; }
-previous_target() { [[ -L "$base/previous" ]] && readlink "$base/previous" || true; }
+release_target_from_link() {
+  local link=$1 resolved name
+  [[ -e "$link" || -L "$link" ]] || return 0
+  resolved=$("$INTERNAL_PYTHON" - "$link" "$releases" <<'PY'
+import os, pathlib, sys
+link, releases = map(pathlib.Path, sys.argv[1:])
+try:
+    resolved = link.resolve(strict=True)
+except FileNotFoundError:
+    raise SystemExit(0)
+try:
+    rel = resolved.relative_to(releases.resolve(strict=True))
+except Exception:
+    raise SystemExit(0)
+if len(rel.parts) == 1:
+    print("releases/" + rel.parts[0])
+PY
+)
+  if [[ -n "$resolved" ]]; then printf '%s\n' "$resolved"; fi
+  return 0
+}
+current_target() { release_target_from_link "$base/current"; }
+previous_target() { release_target_from_link "$base/previous"; }
+ensure_root_generation_links() {
+  [[ -L "$base/current" && "$(readlink "$base/current")" == generations/active/current ]] || atomic_link generations/active/current "$base/current"
+  [[ -L "$base/previous" && "$(readlink "$base/previous")" == generations/active/previous ]] || atomic_link generations/active/previous "$base/previous"
+}
+write_generation() {
+  local gen_dir=$1 current=$2 previous=$3
+  mkdir -p "$gen_dir"
+  ln -s "../../$current" "$gen_dir/current"
+  if [[ -n "$previous" ]]; then ln -s "../../$previous" "$gen_dir/previous"; fi
+  fsync_directory "$gen_dir"
+}
+swap_generation() {
+  local current=$1 previous=${2:-} gen_name gen_dir tmp_link
+  gen_name="gen-$(date +%s)-$$-$RANDOM"
+  gen_dir="$generations/$gen_name"
+  tmp_link="$generations/active.tmp.$$"
+  write_generation "$gen_dir" "$current" "$previous"
+  ln -s "$gen_name" "$tmp_link"
+  "$INTERNAL_PYTHON" - "$tmp_link" "$generations/active" <<'PY'
+import os, sys
+os.replace(sys.argv[1], sys.argv[2])
+PY
+  fsync_directory "$generations"
+  ensure_root_generation_links
+}
 
 restart_units() {
   local env=$env_name
@@ -281,18 +415,27 @@ PY
 }
 
 validate_and_extract() {
-  local artifact=$1 destination=$2
-  "$INTERNAL_PYTHON" - "$artifact" "$destination" "$sha" "$digest" "$max_archive_files" "$max_expanded_bytes" <<'PY'
+  local object_dir=$1 artifact_name=$2 destination=$3
+  "$INTERNAL_PYTHON" - "$object_dir" "$artifact_name" "$destination" "$sha" "$digest" "$max_archive_files" "$max_expanded_bytes" <<'PY'
 import hashlib, json, os, shutil, stat, sys, tarfile
 from pathlib import Path, PurePosixPath
-artifact_path, destination_path, sha, expected, max_entries, max_bytes = sys.argv[1:]
+object_dir_path, artifact_name, destination_path, sha, expected, max_entries, max_bytes = sys.argv[1:]
 destination = Path(destination_path); max_entries = int(max_entries); max_bytes = int(max_bytes)
 def reject(message):
     print("ERROR: " + message, file=sys.stderr); raise SystemExit(1)
 if destination.exists(): reject("temporary destination exists")
 destination.mkdir(parents=True)
 seen = {}; count = total = 0
-with open(artifact_path, "rb") as artifact_file:
+object_dir_fd = os.open(object_dir_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+try:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    artifact_fd = os.open(artifact_name, flags, dir_fd=object_dir_fd)
+    st = os.fstat(artifact_fd)
+    if not stat.S_ISREG(st.st_mode): reject("incoming artifact is not a regular file")
+    artifact_file = os.fdopen(artifact_fd, "rb")
+finally:
+    os.close(object_dir_fd)
+with artifact_file:
     hasher = hashlib.sha256()
     for chunk in iter(lambda: artifact_file.read(1024 * 1024), b""): hasher.update(chunk)
     if hasher.hexdigest() != expected: reject("artifact digest mismatch")
@@ -345,10 +488,42 @@ PY
 }
 
 install_dependencies() {
+  local release=$1 timeout_command=
+  if command -v timeout >/dev/null 2>&1; then timeout_command=timeout; elif command -v gtimeout >/dev/null 2>&1; then timeout_command=gtimeout; fi
+  if [[ -n "$timeout_command" ]]; then
+    "$timeout_command" 300 python3 -m venv "$release/.venv"
+    [[ ! -x "$release/.venv/bin/python" ]] || "$timeout_command" 300 "$release/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir --requirement "$release/backend/requirements.txt"
+    (cd "$release/frontend" && "$timeout_command" 300 npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache "$release/.npm-cache")
+  else
+    python3 -m venv "$release/.venv"
+    [[ ! -x "$release/.venv/bin/python" ]] || "$release/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir --requirement "$release/backend/requirements.txt"
+    (cd "$release/frontend" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache "$release/.npm-cache")
+  fi
+  rm -rf "$release/.npm-cache"
+}
+
+check_release_size_and_space() {
   local release=$1
-  python3 -m venv "$release/.venv"
-  [[ ! -x "$release/.venv/bin/python" ]] || "$release/.venv/bin/python" -m pip install --requirement "$release/backend/requirements.txt"
-  (cd "$release/frontend" && npm ci --omit=dev)
+  "$INTERNAL_PYTHON" - "$release" "$max_expanded_bytes" <<'PY'
+import os, shutil, sys
+root, maximum = sys.argv[1], int(sys.argv[2])
+total = 0
+for current, _, files in os.walk(root):
+    for name in files:
+        total += os.path.getsize(os.path.join(current, name))
+        if total > maximum:
+            print("ERROR: release tree exceeds byte bound", file=sys.stderr); raise SystemExit(1)
+free = shutil.disk_usage(os.path.dirname(root)).free
+if free < max(1048576, total // 10):
+    print("ERROR: insufficient free space after release construction", file=sys.stderr); raise SystemExit(1)
+PY
+}
+
+finalize_release_tree() {
+  local release=$1
+  chmod -R u+rwX,go+rX "$release"
+  fsync_regular_files "$release"
+  fsync_tree_bottom_up "$release"
 }
 
 validate_existing_release() {
@@ -388,13 +563,14 @@ PY
     [[ -n "$dir" ]] || continue
     name=${dir##*/}; preserve=false
     [[ "releases/$name" == "$current" || "releases/$name" == "$previous" ]] && preserve=true
-    while IFS= read -r item; do [[ "$item" == "$name" ]] && preserve=true; done <<< "$keep"
+    while IFS= read -r item; do if [[ "$item" == "$name" ]]; then preserve=true; fi; done <<< "$keep"
     if [[ "$preserve" == false ]]; then chmod -R u+w "$dir" 2>/dev/null || true; rm -rf "$dir"; fsync_directory "$releases"; fi
   done < <(find "$releases" -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort)
 }
 
 mark_failed_and_prune() {
   local artifact=$1
+  [[ -e "$artifact" ]] || return 0
   touch "${artifact}.failed"
   fsync_directory "${artifact%/*}"
   "$INTERNAL_PYTHON" - "$incoming" "$failed_max_count" <<'PY'
@@ -414,8 +590,12 @@ PY
 
 recover_snapshot() {
   local old_current=$1 old_previous=$2 failed_sha=${3:-} failed_digest=${4:-}
-  restore_link "$old_current" "$base/current"
-  restore_link "$old_previous" "$base/previous"
+  if [[ -n "$old_current" ]]; then
+    swap_generation "$old_current" "$old_previous"
+  else
+    rm -f "$base/current" "$base/previous" "$generations/active"
+    fsync_directory "$base"; fsync_directory "$generations"
+  fi
   if restart_units && run_health; then
     append_state rollback_succeeded "$failed_sha" "$failed_digest" restored
   else
@@ -425,34 +605,40 @@ recover_snapshot() {
 
 transition_pointers() {
   local candidate=$1 old_current=$2
-  [[ -z "$old_current" || "$old_current" == "$candidate" ]] || atomic_link "$old_current" "$base/previous"
-  atomic_link "$candidate" "$base/current"
+  local next_previous=
+  [[ -z "$old_current" || "$old_current" == "$candidate" ]] || next_previous=$old_current
+  swap_generation "$candidate" "$next_previous"
 }
 
 do_activate() {
-  local artifact="$incoming/$sha/$digest.tar.gz" release="$releases/$sha"
-  local temporary old_current old_previous
+  local object_dir="$incoming/$sha" artifact="$incoming/$sha/$digest.tar.gz" artifact_name="$digest.tar.gz" release="$releases/$sha"
+  local temporary old_current old_previous constructed=false
   old_current=$(current_target); old_previous=$(previous_target)
   if [[ ! -d "$release" ]]; then
-    [[ -f "$artifact" ]] || fail "incoming artifact is missing"
+    [[ -d "$object_dir" ]] || fail "incoming artifact is missing"
     temporary="$tmp_root/release-${sha}.$$"
     rm -rf "$temporary"
-    if ! (validate_and_extract "$artifact" "$temporary" && install_dependencies "$temporary"); then
+    if ! (validate_and_extract "$object_dir" "$artifact_name" "$temporary" && install_dependencies "$temporary" && check_release_size_and_space "$temporary"); then
       chmod -R u+w "$temporary" 2>/dev/null || true; rm -rf "$temporary"
       fsync_directory "$tmp_root"
       mark_failed_and_prune "$artifact"
       fail "release construction failed"
     fi
+    finalize_release_tree "$temporary"
     mv "$temporary" "$release"
+    constructed=true
     fsync_directory "$tmp_root"
     fsync_directory "$releases"
     chmod -R a-w "$release"
+    fsync_tree_bottom_up "$release"
+    fsync_directory "$releases"
   else
     validate_existing_release "$release"
   fi
   transition_pointers "releases/$sha" "$old_current"
   if ! restart_units || ! run_health; then
-    recover_snapshot "$old_current" "$old_previous" "$sha" "$digest" || true
+    recover_snapshot "$old_current" "$old_previous" "$sha" "$digest"
+    if [[ "$constructed" == true ]]; then chmod -R u+w "$release" 2>/dev/null || true; rm -rf "$release"; fsync_directory "$releases"; fi
     mark_failed_and_prune "$artifact"
     return 1
   fi
@@ -462,6 +648,7 @@ do_activate() {
   rmdir "$incoming/$sha" 2>/dev/null || true
   fsync_directory "$incoming"
   retain_successful_releases
+  return 0
 }
 
 do_rollback() {
@@ -469,13 +656,13 @@ do_rollback() {
   old_current=$(current_target); old_previous=$(previous_target)
   [[ -n "$old_current" && -d "$base/$old_current" ]] || fail "current release unavailable"
   [[ -n "$old_previous" && -d "$base/$old_previous" ]] || fail "no previous release"
-  atomic_link "$old_current" "$base/previous"
-  atomic_link "$old_previous" "$base/current"
+  swap_generation "$old_previous" "$old_current"
   if ! restart_units || ! run_health; then
-    recover_snapshot "$old_current" "$old_previous" "${old_previous##*/}" "" || true
+    recover_snapshot "$old_current" "$old_previous" "${old_previous##*/}" ""
     return 1
   fi
   append_state manual_rollback "${old_previous##*/}" "" activated
+  return 0
 }
 
 do_status() {
@@ -488,9 +675,16 @@ PY
 }
 
 case "$action" in
-  status) do_status ;;
-  upload|activate|rollback)
-    inner="${action}-inner"
+  status|upload|activate|rollback)
+    if [[ "$action" == status ]]; then
+      if [[ "$test_mode" != true && ! -d "$lock_dir" ]]; then
+        do_status
+        exit 0
+      fi
+      inner=status-inner
+    else
+      inner="${action}-inner"
+    fi
     if [[ "$test_mode" == true ]]; then
       locked_command=(env -i PATH="$PATH" PREFIX="$prefix" GPU_MONITOR_TEST_PATH="$PATH" \
         GPU_MONITOR_INTERNAL_PYTHON="$internal_python" GPU_MONITOR_MAX_UPLOAD_BYTES="$max_upload" \
@@ -511,6 +705,7 @@ os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
     fi
     exec /usr/bin/flock "$lock_file" "$script_dir/activate-release.sh" "$inner" "$env_name" ${sha:+"$sha"} ${digest:+"$digest"}
     ;;
+  status-inner) do_status ;;
   upload-inner) do_upload ;;
   activate-inner) prune_temps; do_activate ;;
   rollback-inner) prune_temps; do_rollback ;;

@@ -48,14 +48,40 @@ IFS=$' \t\n'
 PATH=$command_path
 export PATH
 
+validate_test_prefix() {
+  local raw=$1 py=$2
+  [[ "$raw" == /* && "$raw" != / && "$raw" != *$'\n'* ]] || return 1
+  "$py" - "$raw" <<'PY'
+import os, pathlib, sys
+raw = sys.argv[1]
+path = pathlib.Path(raw)
+if os.path.normpath(raw) != raw:
+    raise SystemExit(1)
+existing = path
+while not existing.exists():
+    if existing.parent == existing:
+        raise SystemExit(1)
+    existing = existing.parent
+if existing.stat().st_uid != os.getuid():
+    raise SystemExit(1)
+cursor = pathlib.Path('/')
+for part in path.parts[1:]:
+    cursor = cursor / part
+    if cursor.exists() and cursor.is_symlink():
+        raise SystemExit(1)
+if str(path.resolve(strict=False)) != raw:
+    raise SystemExit(1)
+PY
+}
+
 validate_bound() {
   local name=$1 value=$2 maximum=$3
   [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= maximum )) ||
     fail "$name must be between 1 and $maximum"
 }
 if [[ "$test_mode" == true ]]; then
-  [[ "$prefix" == /* && "$prefix" != / && "$prefix" != *$'\n'* ]] || fail "invalid test PREFIX"
   [[ "$internal_python" == /* && -x "$internal_python" ]] || fail "invalid test Python"
+  validate_test_prefix "$prefix" "$internal_python" || fail "invalid test PREFIX"
   validate_bound "test upload bound" "$max_upload" "$PRODUCTION_UPLOAD_LIMIT"
   IFS=: read -r -a path_parts <<< "$command_path"
   for part in "${path_parts[@]}"; do [[ "$part" == /* && -d "$part" ]] || fail "invalid test PATH"; done
