@@ -574,6 +574,204 @@ class WorkflowPolicyTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assert_policy_violation(body, "unsupported-runs-on-mapping", "integration", filename)
 
+
+    def test_rejects_environment_bearing_release_named_job_without_deploy_token(self):
+        self.assert_policy_violation(
+            """
+            on: push
+            jobs:
+              release-gpu:
+                runs-on: ubuntu-latest
+                environment: gpu-live
+                steps:
+                  - run: ./release.sh
+            """,
+            "deploy-main-guard",
+            "release-gpu",
+        )
+
+    def test_rejects_live_deployment_workflows_triggered_by_pull_request(self):
+        self.assert_policy_violation(
+            """
+            on: pull_request
+            jobs:
+              deploy:
+                if: github.ref == 'refs/heads/main'
+                runs-on: ubuntu-latest
+                environment: gpu-live
+                steps:
+                  - run: ./deploy.sh
+            """,
+            "deploy-pull-request-event",
+            "deploy",
+        )
+
+    def test_rejects_workflow_run_deployments_without_completed_ci_push_main_same_repo_success_guard(self):
+        workflows = {
+            "missing-types.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                jobs:
+                  deploy:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                      - run: ./deploy.sh
+            """,
+            "missing-ci-workflow.yml": """
+                on:
+                  workflow_run:
+                    workflows: [lint]
+                    types: [completed]
+                jobs:
+                  deploy:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                      - run: ./deploy.sh
+            """,
+            "missing-event-guard.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  deploy:
+                    if: github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                      - run: ./deploy.sh
+            """,
+            "missing-branch-guard.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  deploy:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                      - run: ./deploy.sh
+            """,
+            "missing-success-guard.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  deploy:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                      - run: ./deploy.sh
+            """,
+            "missing-same-repo-guard.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  deploy:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success'
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                      - run: ./deploy.sh
+            """,
+            "missing-authorization-step.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  deploy:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - run: ./deploy.sh
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "workflow-run-deploy-guard", "deploy", filename)
+
+    def test_rejects_deployment_jobs_using_self_hosted_runners(self):
+        self.assert_policy_violation(
+            """
+            on: push
+            jobs:
+              activate:
+                if: github.ref == 'refs/heads/main'
+                runs-on: [self-hosted, gpu-live]
+                environment: gpu-live
+                steps:
+                  - run: ./activate.sh
+            """,
+            "deploy-self-hosted-runner",
+            "activate",
+        )
+
+    def test_rejects_pull_request_jobs_that_reference_secrets(self):
+        self.assert_policy_violation(
+            """
+            on: pull_request
+            jobs:
+              unit:
+                runs-on: ubuntu-latest
+                env:
+                  API_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+                steps:
+                  - run: echo '${{ secrets.DEPLOY_TOKEN }}'
+            """,
+            "pr-secrets",
+            "unit",
+        )
+
+    def test_accepts_sha_pinned_authorized_workflow_run_live_deployment(self):
+        result = self.run_validator(
+            {
+                "gpu-live.yml": f"""
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                permissions: read-all
+                jobs:
+                  release-gpu:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - uses: actions/checkout@{PINNED_SHA}
+                      - name: Authorize deployment
+                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                      - run: ./deploy.sh
+                """
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rejects_deploy_jobs_without_exact_job_level_main_branch_guard(self):
         for condition in (
             "startsWith(github.ref, 'refs/heads/main')",

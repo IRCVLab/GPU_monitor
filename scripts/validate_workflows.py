@@ -11,6 +11,8 @@ from pathlib import Path
 
 PINNED_ACTION_RE = re.compile(r"@[0-9a-f]{40}$")
 PRODUCTION_LABELS = {"prod", "production", "prd", "prod-runner"}
+DEPLOYMENT_JOB_IDS = {"deploy", "release", "activate", "rollback"}
+DEPLOYMENT_TOKENS = ("deploy", "release", "activate", "rollback")
 
 YAML_TOKEN_BOUNDARIES = set(" \t[{,:")
 
@@ -65,6 +67,8 @@ def without_github_expressions(value: str) -> str:
 def has_unquoted_yaml_anchor_or_alias(value: str) -> bool:
     text = without_github_expressions(without_quoted_strings_and_comments(value))
     for index, char in enumerate(text):
+        if char == "&" and index + 1 < len(text) and text[index + 1] == "&":
+            continue
         if char not in {"&", "*"}:
             continue
         if index > 0 and text[index - 1] not in YAML_TOKEN_BOUNDARIES:
@@ -436,19 +440,109 @@ def permission_write_violations(
     return violations
 
 
+def normalized_identifier(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
 def is_deploy_job(job: JobBlock) -> bool:
     name = direct_job_value(job, "name") or ""
-    haystack = f"{job.job_id} {name}".lower()
-    return "deploy" in haystack
+    normalized_name = normalized_identifier(f"{job.job_id} {name}")
+    return (
+        job.job_id in DEPLOYMENT_JOB_IDS
+        or direct_job_value(job, "environment") is not None
+        or any(token in normalized_name for token in DEPLOYMENT_TOKENS)
+    )
+
+
+def normalized_condition(job: JobBlock) -> str:
+    condition = direct_job_value(job, "if") or ""
+    normalized = condition.replace('"', "'").replace(" ", "")
+    if normalized.startswith("${{") and normalized.endswith("}}"):
+        normalized = normalized[3:-2]
+    return normalized.strip()
 
 
 def has_main_guard(job: JobBlock) -> bool:
-    condition = direct_job_value(job, "if") or ""
-    normalized = condition.replace('"', "'").replace(" ", "")
+    normalized = normalized_condition(job)
     return normalized in {
         "github.ref=='refs/heads/main'",
         "github.ref_name=='main'",
     }
+
+
+def contains_literal(values: list[str], expected: str) -> bool:
+    return any(unquote(value).lower() == expected for value in values)
+
+
+def workflow_run_values(lines: list[SourceLine], key: str) -> list[str]:
+    for index, line in enumerate(lines):
+        parsed = key_value(line.text)
+        if not parsed or parsed[0] != "on":
+            continue
+        if parsed[1]:
+            return []
+        for event_index, event_line in enumerate(lines[index + 1 :], start=index + 1):
+            if event_line.indent <= line.indent:
+                break
+            event_parsed = key_value(event_line.text)
+            if not event_parsed or event_parsed[0] != "workflow_run":
+                continue
+            if event_parsed[1]:
+                return []
+            for child_index, child in enumerate(lines[event_index + 1 :], start=event_index + 1):
+                if child.indent <= event_line.indent:
+                    break
+                child_parsed = key_value(child.text)
+                if child_parsed and child.indent == event_line.indent + 2 and child_parsed[0] == key:
+                    values = parse_scalar_list(child_parsed[1])
+                    if values:
+                        return values
+                    return child_list(lines, child_index, child.indent)
+        break
+    return []
+
+
+def has_completed_ci_workflow_run_trigger(lines: list[SourceLine]) -> bool:
+    return contains_literal(workflow_run_values(lines, "workflows"), "ci") and contains_literal(
+        workflow_run_values(lines, "types"), "completed"
+    )
+
+
+def has_workflow_run_provenance_guard(job: JobBlock) -> bool:
+    normalized = normalized_condition(job)
+    required_fragments = (
+        "github.event.workflow_run.event=='push'",
+        "github.event.workflow_run.head_branch=='main'",
+        "github.event.workflow_run.conclusion=='success'",
+    )
+    same_repo_fragments = (
+        "github.event.workflow_run.head_repository.full_name==github.repository",
+        "github.event.workflow_run.head_repository.id==github.repository_id",
+    )
+    return all(fragment in normalized for fragment in required_fragments) and any(
+        fragment in normalized for fragment in same_repo_fragments
+    )
+
+
+def has_authorization_step(job: JobBlock) -> bool:
+    for line in job.lines[1:]:
+        parsed = key_value(line.text)
+        if parsed and parsed[0] in {"name", "id"}:
+            value = unquote(parsed[1]).lower()
+            if "authorize" in value or "authorization" in value:
+                return True
+    return False
+
+
+def job_references_secrets(job: JobBlock) -> bool:
+    for line in job.lines[1:]:
+        text = strip_comment(line.text).lower()
+        if "secrets." in text or "secrets[" in text:
+            return True
+        parsed = key_value(line.text)
+        if parsed and parsed[0] == "secrets":
+            return True
+    return False
 
 
 def validate_workflow(path: Path) -> list[Violation]:
@@ -495,7 +589,33 @@ def validate_workflow(path: Path) -> list[Violation]:
                 )
 
         deploy_job = is_deploy_job(job)
-        if deploy_job and not has_main_guard(job):
+        if is_pull_request_workflow and job_references_secrets(job):
+            violations.append(
+                Violation(path, "pr-secrets", "pull_request jobs must not reference GitHub secrets", job.job_id)
+            )
+        if deploy_job and is_pull_request_workflow:
+            violations.append(
+                Violation(path, "deploy-pull-request-event", "deployment jobs must not run from pull_request workflows", job.job_id)
+            )
+        if deploy_job and "self-hosted" in runner_labels:
+            violations.append(
+                Violation(path, "deploy-self-hosted-runner", "deployment jobs must use GitHub-hosted runners", job.job_id)
+            )
+        if deploy_job and "workflow_run" in events:
+            if not (
+                has_completed_ci_workflow_run_trigger(lines)
+                and has_workflow_run_provenance_guard(job)
+                and has_authorization_step(job)
+            ):
+                violations.append(
+                    Violation(
+                        path,
+                        "workflow-run-deploy-guard",
+                        "workflow_run deployment jobs must require completed ci on main push from the same repo, success, and authorization",
+                        job.job_id,
+                    )
+                )
+        elif deploy_job and not has_main_guard(job):
             violations.append(
                 Violation(path, "deploy-main-guard", "deploy jobs must have a main-branch if guard", job.job_id)
             )
