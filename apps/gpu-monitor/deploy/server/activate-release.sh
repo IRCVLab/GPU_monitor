@@ -599,36 +599,47 @@ PY
 
 finalize_release_tree() {
   local release=$1
-  "$INTERNAL_PYTHON" - "$release" "$runtime_gid" <<'PY'
+  "$INTERNAL_PYTHON" - "$release" "$runtime_gid" <<'PY' || return 1
 import os, stat, sys
-root, expected_gid = sys.argv[1], int(sys.argv[2])
+root = sys.argv[1]
 for current, dirs, files in os.walk(root):
-    current_stat = os.lstat(current)
-    if current_stat.st_gid != expected_gid:
-        print(f"ERROR: staging gid mismatch: {current}", file=sys.stderr)
-        raise SystemExit(1)
     os.chmod(current, 0o550)
-    for name in dirs:
-        path = os.path.join(current, name)
-        if os.lstat(path).st_gid != expected_gid:
-            print(f"ERROR: staging gid mismatch: {path}", file=sys.stderr)
-            raise SystemExit(1)
     for name in files:
         path = os.path.join(current, name)
         mode = os.lstat(path).st_mode
-        if os.lstat(path).st_gid != expected_gid:
-            print(f"ERROR: staging gid mismatch: {path}", file=sys.stderr)
-            raise SystemExit(1)
         if stat.S_ISREG(mode):
             os.chmod(path, 0o550 if mode & stat.S_IXUSR else 0o440)
-for current, dirs, files in os.walk(root):
-    if stat.S_IMODE(os.lstat(current).st_mode) != 0o550:
-        raise SystemExit(f"ERROR: final directory mode mismatch: {current}")
-    for name in files:
-        path = os.path.join(current, name)
-        mode = os.lstat(path).st_mode
-        if stat.S_ISREG(mode) and stat.S_IMODE(mode) not in (0o440, 0o550):
-            raise SystemExit(f"ERROR: final file mode mismatch: {path}")
+PY
+  "$INTERNAL_PYTHON" - "$release" "$runtime_gid" <<'PY' || return 1
+import os, stat, sys
+root, expected_gid = sys.argv[1], int(sys.argv[2])
+
+def reject(path, reason):
+    print(f"ERROR: published inode metadata mismatch: {path}: {reason}", file=sys.stderr)
+    raise SystemExit(1)
+
+def verify(path):
+    metadata = os.lstat(path)
+    mode = stat.S_IMODE(metadata.st_mode)
+    if metadata.st_gid != expected_gid:
+        reject(path, f"gid {metadata.st_gid}, expected {expected_gid}")
+    if stat.S_ISDIR(metadata.st_mode):
+        if mode != 0o550:
+            reject(path, f"directory mode {mode:04o}, expected 0550")
+        with os.scandir(path) as entries:
+            children = sorted((entry.path for entry in entries), key=os.fsencode)
+        for child in children:
+            verify(child)
+    elif stat.S_ISREG(metadata.st_mode):
+        if mode not in (0o440, 0o550):
+            reject(path, f"regular-file mode {mode:04o}, expected 0440 or 0550")
+    elif stat.S_ISLNK(metadata.st_mode):
+        if mode != 0o777:
+            reject(path, f"symlink mode {mode:04o}, expected 0777")
+    else:
+        reject(path, "unsupported inode type")
+
+verify(root)
 PY
   fsync_regular_files "$release" || return 1
   fsync_tree_bottom_up "$release" || return 1

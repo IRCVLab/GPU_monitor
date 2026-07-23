@@ -296,25 +296,66 @@ FAKENPM
   log "failed build leaves no partial outputs and script works from any CWD"
 }
 
-kill_process_tree() {
-  local root=$1 child
-  while read -r child; do
-    [[ -n "$child" ]] || continue
-    kill_process_tree "$child"
-  done < <(ps -axo pid=,ppid= | awk -v p="$root" '$2 == p {print $1}')
-  kill -TERM "$root" 2>/dev/null || true
+export_test_context() {
+  local _declare _flag function_name variable
+  while read -r _declare _flag function_name; do
+    export -f "$function_name"
+  done < <(declare -F)
+  for variable in \
+    SCRIPT_DIR SOURCE_ROOT BUILD_SCRIPT SERVER_DIR DEPLOY_COMMAND ACTIVATE_SCRIPT \
+    HEALTH_SCRIPT INSTALLER_SCRIPT RESTART_BROKER DEV_SUDOERS LIVE_SUDOERS; do
+    if [[ "${!variable+x}" == x ]]; then
+      export "$variable"
+    fi
+  done
+}
+
+launch_test_session() {
+  local name=$1
+  exec python3 - "$name" <<'PY'
+import os, sys
+name = sys.argv[1]
+os.setsid()
+os.execve(
+    "/bin/bash",
+    ["/bin/bash", "-c", 'set -euo pipefail; "$1"', "gpu-monitor-test", name],
+    os.environ,
+)
+PY
+}
+
+process_group_exists() {
+  kill -0 -- "-$1" 2>/dev/null
+}
+
+terminate_test_group() {
+  local group=$1
+  process_group_exists "$group" || return 0
+  kill -TERM -- "-$group" 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    process_group_exists "$group" || return 0
+    sleep 0.05
+  done
+  kill -KILL -- "-$group" 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    process_group_exists "$group" || return 0
+    sleep 0.05
+  done
+  ! process_group_exists "$group"
 }
 
 run_test() {
   local name=$1 timeout_seconds=${TEST_TIMEOUT_SECONDS:-120} marker timer_file timer_pid
+  local watchdog pid status=0 timed_out=false
   if [[ -n "${TEST_FILTER:-}" && "$name" != *"$TEST_FILTER"* ]]; then
     return 0
   fi
   marker=$(mktemp "${TMPDIR:-/tmp}/gpu-release-test-timeout.${name}.XXXXXX")
   rm -f "$marker"
   timer_file="${marker}.timer"
-  ( "$name" ) &
-  local pid=$!
+  export_test_context
+  launch_test_session "$name" &
+  pid=$!
   (
     watchdog_timer=
     cleanup_watchdog_timer() {
@@ -329,17 +370,21 @@ run_test() {
     printf '%s\n' "$watchdog_timer" > "$timer_file"
     wait "$watchdog_timer" || exit 0
     if kill -0 "$pid" 2>/dev/null; then
-      printf 'FAIL: %s timed out after %ss\n' "$name" "$timeout_seconds" >&2
       : > "$marker"
-      kill_process_tree "$pid"
-      sleep 1
-      kill -KILL "$pid" 2>/dev/null || true
+      terminate_test_group "$pid"
     fi
   ) &
-  local watchdog=$! status=0
+  watchdog=$!
   wait "$pid" || status=$?
-  kill "$watchdog" 2>/dev/null || true
-  wait "$watchdog" 2>/dev/null || true
+  if [[ -e "$marker" ]]; then
+    timed_out=true
+    wait "$watchdog" 2>/dev/null || true
+  else
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+    terminate_test_group "$pid" ||
+      fail "$name left processes alive in its isolated process group"
+  fi
   if [[ -s "$timer_file" ]]; then
     timer_pid=$(<"$timer_file")
     if [[ "$timer_pid" =~ ^[0-9]+$ ]] && kill -0 "$timer_pid" 2>/dev/null; then
@@ -349,14 +394,97 @@ run_test() {
       fail "$name left its watchdog timer running"
     fi
   fi
-  if [[ -e "$marker" ]]; then
-    rm -f "$marker" "$timer_file"
-    fail "$name exceeded per-test timeout"
-  fi
   rm -f "$marker" "$timer_file"
+  if [[ "$timed_out" == true ]]; then
+    printf 'FAIL: %s timed out after %ss\n' "$name" "$timeout_seconds" >&2
+    return 124
+  fi
   return "$status"
 }
 
+test_watchdog_term_ignoring_descendant_fixture() {
+  python3 -c '
+import os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(sys.argv[1], "w", encoding="utf-8") as marker:
+    marker.write(f"{os.getpid()} {os.getpgrp()} {os.getsid(0)}\n")
+    marker.flush()
+while True:
+    print("term-ignoring-descendant", flush=True)
+    time.sleep(0.05)
+' "$GPU_MONITOR_WATCHDOG_DESCENDANT_MARKER" &
+  wait
+}
+
+test_watchdog_failure_status_fixture() {
+  return 37
+}
+
+test_watchdog_isolates_and_kills_term_ignoring_process_group() {
+  local tmp pipeline_pid descendant_pid descendant_pgid descendant_sid outer_pgid status elapsed start
+  tmp=$(mktemp_dir gpu-release-watchdog-group)
+  trap 'if [[ -s "$tmp/descendant.pid" ]]; then read -r descendant_pid _ < "$tmp/descendant.pid"; kill -KILL "$descendant_pid" 2>/dev/null || true; fi; rm -rf "$tmp"' RETURN
+  outer_pgid=$(python3 -c 'import os; print(os.getpgrp())')
+
+  start=$(date +%s)
+  (
+    set +e
+    env GPU_MONITOR_WATCHDOG_FIXTURE=term \
+      GPU_MONITOR_WATCHDOG_DESCENDANT_MARKER="$tmp/descendant.pid" \
+      TEST_FILTER= \
+      TEST_TIMEOUT_SECONDS=1 \
+      bash "$SCRIPT_DIR/test_release_scripts.sh" 2>&1 | cat > "$tmp/timeout.out"
+    printf '%s\n' "${PIPESTATUS[0]}" > "$tmp/timeout.status"
+  ) &
+  pipeline_pid=$!
+  for _ in $(seq 1 100); do
+    kill -0 "$pipeline_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if kill -0 "$pipeline_pid" 2>/dev/null; then
+    read -r descendant_pid _ < "$tmp/descendant.pid" 2>/dev/null || descendant_pid=
+    [[ -z "$descendant_pid" ]] || kill -KILL "$descendant_pid" 2>/dev/null || true
+    kill -TERM "$pipeline_pid" 2>/dev/null || true
+    wait "$pipeline_pid" 2>/dev/null || true
+    fail "TERM-ignoring descendant retained stdout past the strict watchdog bound"
+  fi
+  wait "$pipeline_pid"
+  elapsed=$(($(date +%s) - start))
+  status=$(cat "$tmp/timeout.status")
+  if [[ "$status" != 124 ]]; then
+    cat "$tmp/timeout.out" >&2
+    fail "watchdog timeout returned $status instead of 124"
+  fi
+  (( elapsed < 5 )) || fail "watchdog timeout took ${elapsed}s"
+  read -r descendant_pid descendant_pgid descendant_sid < "$tmp/descendant.pid"
+  [[ "$descendant_pgid" == "$descendant_sid" ]] ||
+    fail "timed test did not run in a dedicated session/process group"
+  [[ "$descendant_pgid" != "$outer_pgid" ]] ||
+    fail "nested timed test reused the parent test process group"
+  ! kill -0 "$descendant_pid" 2>/dev/null ||
+    fail "TERM-ignoring descendant survived process-group KILL"
+
+  set +e
+  env GPU_MONITOR_WATCHDOG_FIXTURE=failure TEST_FILTER= TEST_TIMEOUT_SECONDS=5 \
+    bash "$SCRIPT_DIR/test_release_scripts.sh" > "$tmp/failure.out" 2> "$tmp/failure.err"
+  status=$?
+  set -e
+  [[ "$status" == 37 ]] || fail "watchdog masked original failure status 37 as $status"
+  log "watchdog isolates each test and kills the full TERM-ignoring process group"
+}
+
+case "${GPU_MONITOR_WATCHDOG_FIXTURE:-}" in
+  term)
+    run_test test_watchdog_term_ignoring_descendant_fixture
+    exit $?
+    ;;
+  failure)
+    run_test test_watchdog_failure_status_fixture
+    exit $?
+    ;;
+esac
+
+run_test test_watchdog_isolates_and_kills_term_ignoring_process_group
 run_test test_missing_builder_fails
 run_test test_rejects_dirty_source
 run_test test_rejects_invalid_and_non_head_sha
@@ -1358,6 +1486,83 @@ PY
   log "candidates stage privately in tmp and publish only verified runtime-gid read-only inodes"
 }
 
+run_release_metadata_verifier_failure_case() {
+  local failure=$1 sha=$2 tmp prefix fakebin log_file digest python_wrapper alternate_gid=
+  tmp=$(mktemp_dir "gpu-release-metadata-$failure")
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"; fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
+  python_wrapper="$tmp/metadata-python"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+  if [[ "$failure" == nested-gid ]]; then
+    alternate_gid=$(id -G | tr ' ' '\n' | awk -v current="$(id -g)" '$1 != current { print; exit }')
+    if [[ -z "$alternate_gid" && "$(id -u)" == 0 ]]; then
+      alternate_gid=$(( $(id -g) + 1 ))
+    fi
+    [[ -n "$alternate_gid" ]] ||
+      fail "nested GID regression requires root or an alternate supplementary group"
+  fi
+  printf '%s\n' "$failure" > "$python_wrapper.failure"
+  printf '%s\n' "$alternate_gid" > "$python_wrapper.gid"
+  cat > "$python_wrapper" <<'PYWRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+real_python=/usr/bin/python3
+if [[ "${1:-}" != - ]]; then exec "$real_python" "$@"; fi
+script=$(mktemp "${TMPDIR:-/tmp}/gpu-monitor-metadata-python.XXXXXX")
+trap 'rm -f "$script"' EXIT
+/bin/cat > "$script"
+if /usr/bin/grep -Eq 'final directory mode mismatch|published inode metadata mismatch' "$script"; then
+  failure=$(cat "$0.failure")
+  case "$failure" in
+    verifier-failure)
+      exit 91
+      ;;
+    nested-mode)
+      chmod 0600 "$2/backend/main.py"
+      ;;
+    nested-gid)
+      chgrp "$(cat "$0.gid")" "$2/backend/main.py"
+      ;;
+  esac
+fi
+exec "$real_python" "$script" "${@:2}"
+PYWRAPPER
+  chmod +x "$python_wrapper"
+  mkdir -p "$tmp/artifact"
+  make_release_artifact "$tmp/artifact" "$sha" "$failure"
+  digest=$(cat "$tmp/artifact/digest")
+  run_forced_command "$prefix" "upload dev $sha $digest" "$tmp/artifact/gpu-monitor-$sha.tar.gz"
+  if run_forced_command "$prefix" "activate dev $sha $digest" /dev/null \
+    "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin GPU_MONITOR_INTERNAL_PYTHON=$python_wrapper" \
+    >"$tmp/activate.out" 2>"$tmp/activate.err"; then
+    fail "$failure metadata verifier failure was masked"
+  fi
+  [[ ! -e "$prefix/srv/gpu-monitor/dev/releases/$sha" ]] ||
+    fail "$failure metadata mismatch published a release"
+  [[ ! -e "$prefix/srv/gpu-monitor/dev/current" ]] ||
+    fail "$failure metadata mismatch changed current"
+  ! find "$prefix/srv/gpu-monitor/dev/tmp" -mindepth 1 -maxdepth 1 -name 'release-*' | grep -q . ||
+    fail "$failure metadata mismatch left a staging candidate"
+  trap - RETURN
+  chmod -R u+w "$tmp" 2>/dev/null || true
+  rm -rf "$tmp"
+}
+
+test_metadata_verifier_python_failure_prevents_publish() {
+  run_release_metadata_verifier_failure_case verifier-failure a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1
+  log "metadata verifier Python failure is propagated before fsync and publish"
+}
+
+test_nested_wrong_mode_prevents_publish() {
+  run_release_metadata_verifier_failure_case nested-mode b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
+  log "nested wrong final mode prevents release publication"
+}
+
+test_nested_wrong_gid_prevents_publish() {
+  run_release_metadata_verifier_failure_case nested-gid c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+  log "nested wrong runtime GID prevents release publication"
+}
+
 test_retention_uses_latest_success_recency() {
   local tmp prefix fakebin log_file sha digest label
   tmp=$(mktemp_dir gpu-release-retention-recency)
@@ -1664,6 +1869,9 @@ run_test test_incoming_artifact_open_rejects_symlink_and_fifo_without_hanging
 run_test test_archive_rejects_all_nonregular_types_conflicts_and_limit_plus_one
 run_test test_generation_pointer_model_and_failed_candidate_cleanup
 run_test test_candidate_stages_privately_in_tmp_and_publishes_verified_runtime_gid
+run_test test_metadata_verifier_python_failure_prevents_publish
+run_test test_nested_wrong_mode_prevents_publish
+run_test test_nested_wrong_gid_prevents_publish
 run_test test_retention_uses_latest_success_recency
 run_test test_installer_separate_users_prefix_upgrade_and_idempotency
 run_test test_installer_runtime_traversal_ports_and_key_material_contract
