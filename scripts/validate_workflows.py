@@ -15,7 +15,7 @@ PRODUCTION_LABELS = {"prod", "production", "prd", "prod-runner"}
 DEPLOYMENT_JOB_IDS = {"deploy", "release", "activate", "rollback"}
 DEPLOYMENT_TOKENS = ("deploy", "release", "activate", "rollback")
 NON_DEPLOYMENT_NAMES = {"release-notes", "activate-venv"}
-GITHUB_HOSTED_RUNNER_RE = re.compile(r"^(ubuntu|windows|macos)-[a-z0-9_.-]+$")
+ALLOWED_DEPLOYMENT_RUNNERS = {"ubuntu-24.04"}
 
 YAML_TOKEN_BOUNDARIES = set(" \t[{,:")
 
@@ -401,28 +401,6 @@ def direct_job_line(job: JobBlock, key: str) -> tuple[SourceLine, str] | None:
 
 
 
-def unsupported_job_indentation_violations(path: Path, job: JobBlock) -> list[Violation]:
-    if not job.lines:
-        return []
-    direct_indent = direct_child_indent(job.lines, job.lines[0].indent)
-    if direct_indent is None:
-        return []
-    violations: list[Violation] = []
-    for line in job.lines[1:]:
-        parsed = key_value(line.text)
-        if not parsed or line.indent <= job.lines[0].indent or line.indent == direct_indent:
-            continue
-        if parsed[0] in {"environment", "runs-on"}:
-            violations.append(
-                Violation(
-                    path,
-                    "unsupported-job-indentation",
-                    f"job-level {parsed[0]!r} uses unsupported indentation at line {line.number}",
-                    job.job_id,
-                )
-            )
-    return violations
-
 def has_runs_on_mapping(job: JobBlock) -> bool:
     runs_on = direct_job_line(job, "runs-on")
     if runs_on is None:
@@ -498,18 +476,29 @@ def identifier_segments(value: str) -> list[str]:
     return normalized.split("-")
 
 
+def segment_has_deployment_stem(segment: str) -> bool:
+    return (
+        segment.startswith("deploy")
+        or segment.startswith("releas")
+        or segment.startswith("activat")
+        or segment.startswith("rollback")
+    )
+
+
+def has_deployment_segment(value: str) -> bool:
+    return any(segment_has_deployment_stem(segment) for segment in identifier_segments(value))
+
+
 def is_deploy_job(job: JobBlock) -> bool:
     name = direct_job_value(job, "name") or ""
     normalized_job_id = normalized_identifier(job.job_id)
     normalized_name = normalized_identifier(name)
+    strong_signal = normalized_job_id in DEPLOYMENT_JOB_IDS or direct_job_value(job, "environment") is not None
+    if strong_signal:
+        return True
     if normalized_job_id in NON_DEPLOYMENT_NAMES or normalized_name in NON_DEPLOYMENT_NAMES:
-        return direct_job_value(job, "environment") is not None
-    return (
-        job.job_id in DEPLOYMENT_JOB_IDS
-        or direct_job_value(job, "environment") is not None
-        or any(token in identifier_segments(job.job_id) for token in DEPLOYMENT_TOKENS)
-        or any(token in identifier_segments(name) for token in DEPLOYMENT_TOKENS)
-    )
+        return False
+    return has_deployment_segment(job.job_id) or has_deployment_segment(name)
 
 
 def normalized_condition(job: JobBlock) -> str:
@@ -659,28 +648,144 @@ def shell_words(value: str) -> list[str]:
         return []
 
 
+def step_direct_indent(block: list[SourceLine]) -> int | None:
+    direct_indent: int | None = None
+    if not block:
+        return None
+    item_indent = block[0].indent
+    for line in block[1:]:
+        parsed = key_value(line.text)
+        if not parsed or line.indent <= item_indent:
+            continue
+        if direct_indent is None or line.indent < direct_indent:
+            direct_indent = line.indent
+    return direct_indent
+
+
+def step_property(block: list[SourceLine], key: str) -> tuple[int, SourceLine, str] | None:
+    direct_indent = step_direct_indent(block)
+    for index, line in enumerate(block):
+        parsed = key_value(line.text)
+        if not parsed or parsed[0] != key:
+            continue
+        if line is block[0] and line.text.startswith("-"):
+            return index, line, unquote(parsed[1])
+        if direct_indent is not None and line.indent == direct_indent:
+            return index, line, unquote(parsed[1])
+    return None
+
+
+def step_property_value(block: list[SourceLine], key: str) -> str | None:
+    found = step_property(block, key)
+    if found is None:
+        return None
+    _index, _line, value = found
+    return value
+
+
+def run_command_value(block: list[SourceLine]) -> str | None:
+    found = step_property(block, "run")
+    if found is None:
+        return None
+    index, line, value = found
+    if strip_comment(value).strip() in {"|", ">", "|-", ">-", "|+", ">+"}:
+        commands: list[str] = []
+        for child in block[index + 1 :]:
+            if child.indent <= line.indent:
+                break
+            commands.append(strip_comment(child.text).strip())
+        return "\n".join(command for command in commands if command)
+    return value
+
+
+def command_has_shell_control(value: str) -> bool:
+    return any(token in value for token in ("||", "&&", ";", "|", ">", "<", "$(", "`"))
+
+
 def run_executes_authorize_gpu_release(value: str) -> bool:
-    words = shell_words(value)
+    commands = [line.strip() for line in value.splitlines() if line.strip()]
+    if len(commands) != 1:
+        return False
+    command = commands[0]
+    if command_has_shell_control(command):
+        return False
+    words = shell_words(command)
     return len(words) >= 2 and words[0] == "python3.12" and words[1] == "scripts/authorize_gpu_release.py"
 
 
 def has_authorization_step(job: JobBlock) -> bool:
     for block in step_blocks(job):
-        for line in block:
-            parsed = key_value(line.text)
-            if parsed and parsed[0] == "run" and run_executes_authorize_gpu_release(unquote(parsed[1])):
-                return True
+        command = run_command_value(block)
+        if command is None or not run_executes_authorize_gpu_release(command):
+            continue
+        if step_property_value(block, "if") is not None:
+            continue
+        continue_on_error = (step_property_value(block, "continue-on-error") or "").lower()
+        if continue_on_error in {"true", "${{true}}"}:
+            continue
+        working_directory = step_property_value(block, "working-directory")
+        if working_directory not in {None, "", "."}:
+            continue
+        return True
     return False
 
 
-GITHUB_EXPRESSION_RE = re.compile(r"\$\{\{(.*?)\}\}")
 SECRETS_CONTEXT_RE = re.compile(r"(?<![A-Za-z0-9_])secrets(?![A-Za-z0-9_])")
 
 
+def github_expression_bodies(value: str) -> list[str]:
+    bodies: list[str] = []
+    index = 0
+    while index < len(value):
+        start = value.find("${{", index)
+        if start == -1:
+            break
+        cursor = start + 3
+        in_single = False
+        while cursor < len(value):
+            char = value[cursor]
+            if char == "'":
+                if in_single and cursor + 1 < len(value) and value[cursor + 1] == "'":
+                    cursor += 2
+                    continue
+                in_single = not in_single
+                cursor += 1
+                continue
+            if not in_single and value.startswith("}}", cursor):
+                bodies.append(value[start + 3 : cursor])
+                cursor += 2
+                break
+            cursor += 1
+        else:
+            break
+        index = cursor
+    return bodies
+
+
+def strip_github_string_literals(value: str) -> str:
+    chars: list[str] = []
+    in_single = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "'":
+            chars.append(" ")
+            if in_single and index + 1 < len(value) and value[index + 1] == "'":
+                chars.append(" ")
+                index += 2
+                continue
+            in_single = not in_single
+        elif in_single:
+            chars.append(" ")
+        else:
+            chars.append(char)
+        index += 1
+    return "".join(chars)
+
+
 def expression_references_secrets(value: str) -> bool:
-    for match in GITHUB_EXPRESSION_RE.finditer(value):
-        expression = match.group(1)
-        if SECRETS_CONTEXT_RE.search(expression):
+    for expression in github_expression_bodies(value):
+        if SECRETS_CONTEXT_RE.search(strip_github_string_literals(expression)):
             return True
     return False
 
@@ -696,19 +801,22 @@ def job_references_secrets(job: JobBlock) -> bool:
 
 
 def top_level_references_secrets(lines: list[SourceLine]) -> bool:
+    in_jobs = False
     for line in lines:
         parsed = key_value(line.text)
-        if parsed and parsed[0] == "jobs" and line.indent == 0:
-            break
-        if parsed and line.indent == 0 and parsed[0] == "secrets":
-            return True
+        if line.indent == 0 and parsed:
+            in_jobs = parsed[0] == "jobs"
+            if parsed[0] == "secrets":
+                return True
+        if in_jobs and line.indent > 0:
+            continue
         if expression_references_secrets(strip_comment(line.text)):
             return True
     return False
 
 
 def is_github_hosted_runner_label(label: str) -> bool:
-    return bool(GITHUB_HOSTED_RUNNER_RE.fullmatch(label))
+    return label in ALLOWED_DEPLOYMENT_RUNNERS
 
 
 def deployment_runner_violation(runner_labels: set[str]) -> bool:
@@ -738,7 +846,6 @@ def validate_workflow(path: Path) -> list[Violation]:
     for job in find_jobs(lines):
         job_indent = job.lines[0].indent
         violations.extend(permission_write_violations(path, job.lines[1:], owner_indent=direct_child_indent(job.lines, job_indent) or job_indent + 2, job=job.job_id))
-        violations.extend(unsupported_job_indentation_violations(path, job))
 
         for value in uses_values(job):
             if not PINNED_ACTION_RE.search(value):

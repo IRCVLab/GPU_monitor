@@ -759,7 +759,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                 jobs:
                   release-gpu:
                     if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
-                    runs-on: ubuntu-latest
+                    runs-on: ubuntu-24.04
                     environment: gpu-live
                     steps:
                       - uses: actions/checkout@{PINNED_SHA}
@@ -772,6 +772,27 @@ class WorkflowPolicyTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+
+
+    def guarded_workflow_run(self, run_step: str, *, step_prefix: str = "- name: Authorize deployment", extra_job: str = "") -> str:
+        run_step = textwrap.indent(textwrap.dedent(run_step).strip("\n"), "                        ")
+        extra_job = textwrap.indent(textwrap.dedent(extra_job).strip("\n"), "                    ") if extra_job else ""
+        if extra_job:
+            extra_job = "\n" + extra_job
+        return f"""
+            on:
+              workflow_run:
+                workflows: [ci]
+                types: [completed]
+            jobs:
+              release-gpu:
+                if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                runs-on: ubuntu-24.04
+                environment: gpu-live{extra_job}
+                steps:
+                  {step_prefix}
+{run_step}
+        """
 
     def test_rejects_workflow_run_provenance_guard_or_quoted_dead_branch_and_extra_clause_bypasses(self):
         workflows = {
@@ -907,7 +928,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                 jobs:
                   release-gpu:
                     if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
-                    runs-on: ubuntu-latest
+                    runs-on: ubuntu-24.04
                     environment: gpu-live
                     steps:
                       - name: unauthorized deploy
@@ -921,7 +942,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                 jobs:
                   release-gpu:
                     if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
-                    runs-on: ubuntu-latest
+                    runs-on: ubuntu-24.04
                     environment: gpu-live
                     steps:
                       - name: Authorize deployment
@@ -935,7 +956,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                 jobs:
                   release-gpu:
                     if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
-                    runs-on: ubuntu-latest
+                    runs-on: ubuntu-24.04
                     environment: gpu-live
                     steps:
                       - name: Authorize deployment
@@ -1064,6 +1085,170 @@ class WorkflowPolicyTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+
+    def test_rejects_authorization_command_that_is_not_strict_gate(self):
+        workflows = {
+            "or-mask.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo || true"),
+            "and-chain.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo && ./deploy.sh"),
+            "semicolon.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo; ./deploy.sh"),
+            "pipe.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo | cat"),
+            "redirect.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo > /tmp/auth.log"),
+            "subshell.yml": self.guarded_workflow_run("run: $(python3.12 scripts/authorize_gpu_release.py --repo owner/repo)"),
+            "step-if.yml": self.guarded_workflow_run(
+                """
+                if: always()
+                run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo
+                """
+            ),
+            "continue-on-error.yml": self.guarded_workflow_run(
+                """
+                continue-on-error: true
+                run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo
+                """
+            ),
+            "working-directory.yml": self.guarded_workflow_run(
+                """
+                working-directory: /tmp
+                run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo
+                """
+            ),
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "workflow-run-deploy-guard", "release-gpu", filename)
+
+    def test_accepts_safe_multiline_authorization_run_block(self):
+        result = self.run_validator(
+            {
+                "gpu-live.yml": self.guarded_workflow_run(
+                    """
+                    run: |
+                      python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+                    """
+                )
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_deployment_runners_except_exact_known_github_hosted_labels(self):
+        workflows = {
+            "ubuntu-latest.yml": "ubuntu-latest",
+            "ubuntu-gpu.yml": "ubuntu-gpu",
+            "custom-prefix.yml": "ubuntu-24.04-gpu",
+            "array-extra.yml": "[ubuntu-24.04, gpu-live]",
+            "self-hosted.yml": "[ubuntu-24.04, self-hosted]",
+        }
+        for filename, runs_on in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(
+                    f"""
+                    on: push
+                    jobs:
+                      deploy:
+                        if: github.ref == 'refs/heads/main'
+                        runs-on: {runs_on}
+                        steps:
+                          - run: ./deploy.sh
+                    """,
+                    "deploy-runner",
+                    "deploy",
+                    filename,
+                )
+
+    def test_detects_deployment_inflections_and_strong_signals_override_exceptions(self):
+        workflows = {
+            "deployment.yml": ("deployment-check", "deploy-main-guard"),
+            "deployer.yml": ("gpu-deployer", "deploy-main-guard"),
+            "deployed.yml": ("gpu-deployed", "deploy-main-guard"),
+            "releasing.yml": ("gpu-releasing", "deploy-main-guard"),
+            "activation.yml": ("gpu-activation", "deploy-main-guard"),
+            "exact-release-overrides-name.yml": ("release", "deploy-main-guard"),
+            "exact-activate-overrides-name.yml": ("activate", "deploy-main-guard"),
+        }
+        for filename, (job_id, rule) in workflows.items():
+            with self.subTest(filename=filename):
+                name_line = "name: release-notes" if "overrides" in filename else "name: smoke"
+                self.assert_policy_violation(
+                    f"""
+                    on: push
+                    jobs:
+                      {job_id}:
+                        {name_line}
+                        runs-on: ubuntu-24.04
+                        steps:
+                          - run: true
+                    """,
+                    rule,
+                    job_id,
+                    filename,
+                )
+
+    def test_secret_expression_scanner_ignores_quoted_strings_but_handles_embedded_closing_braces(self):
+        result = self.run_validator(
+            {
+                "quoted.yml": """
+                on: pull_request
+                jobs:
+                  unit:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo "${{ format('https://example.invalid/secrets }} docs', github.ref_name) }}"
+                """
+            }
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        self.assert_policy_violation(
+            """
+            on: pull_request
+            jobs:
+              unit:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo "${{ format('}}', secrets.DEPLOY_TOKEN) }}"
+            """,
+            "pr-secrets",
+            "unit",
+        )
+
+    def test_rejects_pull_request_secret_context_after_jobs_section(self):
+        self.assert_policy_violation(
+            """
+            on: pull_request
+            jobs:
+              unit:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: true
+            env:
+              TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+            """,
+            "pr-secrets",
+        )
+
+    def test_allows_nested_with_and_matrix_environment_keys(self):
+        result = self.run_validator(
+            {
+                "nested-env.yml": f"""
+                on: push
+                jobs:
+                  test:
+                    runs-on: ubuntu-latest
+                    strategy:
+                      matrix:
+                        environment: [dev, test]
+                    steps:
+                      - uses: actions/checkout@{PINNED_SHA}
+                        with:
+                          environment: dev
+                      - run: true
+                """
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rejects_deploy_jobs_without_exact_job_level_main_branch_guard(self):
         for condition in (
             "startsWith(github.ref, 'refs/heads/main')",
@@ -1110,7 +1295,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                 jobs:
                   deploy-production:
                     if: github.ref == 'refs/heads/main'
-                    runs-on: ubuntu-latest
+                    runs-on: ubuntu-24.04
                     steps:
                       - run: ./deploy.sh
                 """
