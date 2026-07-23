@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +53,52 @@ class HistoryInventoryTest(unittest.TestCase):
             env=env,
         )
 
+    def annotated_tag(self, repo: Path, name: str, message: str) -> None:
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Inventory Test",
+            "GIT_AUTHOR_EMAIL": "inventory-test@example.com",
+            "GIT_COMMITTER_NAME": "Inventory Test",
+            "GIT_COMMITTER_EMAIL": "inventory-test@example.com",
+        }
+        subprocess.run(
+            ["git", "-C", str(repo), "tag", "-a", name, "-m", message],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+
+    def test_fixture_creates_annotated_tag_without_global_git_identity(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = Path(tempdir) / "source"
+            empty_home = Path(tempdir) / "empty-home"
+            repo.mkdir()
+            empty_home.mkdir()
+            self.git(repo, "init", "--initial-branch=main")
+            self.commit_file(repo, "tracked.txt", "tracked\n", "Alice <alice@example.com>")
+
+            isolated_git = {
+                "HOME": str(empty_home),
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "user.useConfigOnly",
+                "GIT_CONFIG_VALUE_0": "true",
+            }
+            with mock.patch.dict(os.environ, isolated_git):
+                without_fixture_identity = subprocess.run(
+                    ["git", "-C", str(repo), "tag", "-a", "without-identity", "-m", "must fail"],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertNotEqual(without_fixture_identity.returncode, 0)
+                self.annotated_tag(repo, "v1.0.0", "version 1")
+
+            self.assertEqual(self.git(repo, "cat-file", "-t", "refs/tags/v1.0.0"), "tag")
+
     def test_inventory_includes_refs_commit_counts_tags_and_authors(self):
         with tempfile.TemporaryDirectory() as tempdir:
             repo = Path(tempdir) / "source"
@@ -64,7 +111,7 @@ class HistoryInventoryTest(unittest.TestCase):
             self.commit_file(repo, "feature.txt", "feature\n", "Bob <bob@example.com>")
             self.git(repo, "checkout", "main")
             self.commit_file(repo, "two.txt", "two\n", "Bob <bob@example.com>")
-            self.git(repo, "tag", "-a", "v0.1.0", "-m", "version 0.1.0")
+            self.annotated_tag(repo, "v0.1.0", "version 0.1.0")
 
             result = self.run_inventory(repo, output)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -123,7 +170,7 @@ class HistoryInventoryTest(unittest.TestCase):
             self.git(repo, "init", "--initial-branch=main")
             self.commit_file(repo, "tracked.txt", "tracked\n", "Alice <alice@example.com>")
             target = self.git(repo, "rev-parse", "HEAD")
-            self.git(repo, "tag", "-a", "v1.0.0", "-m", "version 1")
+            self.annotated_tag(repo, "v1.0.0", "version 1")
 
             result = self.run_inventory(repo, output)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -147,7 +194,7 @@ class HistoryInventoryTest(unittest.TestCase):
             self.git(repo, "checkout", "-b", "feature/a")
             self.commit_file(repo, "a.txt", "a\n", "Alice <alice@example.com>")
             self.git(repo, "checkout", "main")
-            self.git(repo, "tag", "-a", "v1.0.0", "-m", "version 1")
+            self.annotated_tag(repo, "v1.0.0", "version 1")
 
             first_result = self.run_inventory(repo, first)
             second_result = self.run_inventory(repo, second)
@@ -170,7 +217,7 @@ class HistoryInventoryTest(unittest.TestCase):
             self.git(source, "checkout", "-b", "feature/test")
             self.commit_file(source, "feature.txt", "feature\n", "Bob <bob@example.com>")
             feature_oid = self.git(source, "rev-parse", "HEAD")
-            self.git(source, "tag", "-a", "v1.0.0", "-m", "version 1")
+            self.annotated_tag(source, "v1.0.0", "version 1")
             tag_oid = self.git(source, "rev-parse", "refs/tags/v1.0.0")
             tag_target = self.git(source, "rev-parse", "refs/tags/v1.0.0^{}")
             subprocess.run(
@@ -218,7 +265,7 @@ class HistoryInventoryTest(unittest.TestCase):
             self.git(source, "checkout", "-b", "feature/a")
             self.commit_file(source, "a.txt", "a\n", "Alice <alice@example.com>")
             self.git(source, "checkout", "main")
-            self.git(source, "tag", "-a", "v1.0.0", "-m", "version 1")
+            self.annotated_tag(source, "v1.0.0", "version 1")
             subprocess.run(
                 ["git", "clone", "--mirror", str(source), str(mirror)],
                 check=True,

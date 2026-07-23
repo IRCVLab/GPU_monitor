@@ -46,8 +46,10 @@ test-storage:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \
 	find viewer -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check; \
 	bash deploy/test_deploy_scripts.sh; \
+	test ! -e scanner/hstscan || { printf '%s\n' 'FAIL: deploy tests left scanner/hstscan behind'; exit 1; }; \
+	test ! -e output/verification/linux-verification.txt || { printf '%s\n' 'FAIL: deploy tests left a verification artifact behind'; exit 1; }; \
 	if [ "$$(uname -s)" = Linux ]; then \
-	  bash scanner/test_hstscan.sh; \
+	  $$(MAKE) -C scanner clean all test; \
 	  bash deploy/verify-linux.sh --local; \
 	else \
 	  printf '%s\n' 'SKIP: Linux-only scanner tests use SYS_getdents64; covered by Task 3 remote Linux verification.'; \

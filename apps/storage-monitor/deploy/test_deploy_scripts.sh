@@ -23,6 +23,15 @@ file_mode() {
     stat -f %Lp "$1"
   fi
 }
+cleanup() {
+  [[ -z "${VERIFY_TMP:-}" ]] || rm -rf -- "$VERIFY_TMP"
+  [[ -z "${TMP:-}" ]] || rm -rf -- "$TMP"
+  [[ -z "${VIEWER_SECRET:-}" ]] || rm -f -- "$VIEWER_SECRET"
+  [[ -z "${STALE_SCANNER:-}" ]] || rm -f -- "$STALE_SCANNER"
+  rm -f -- "$ROOT/output/verification/linux-verification.txt"
+  rmdir "$ROOT/output/verification" "$ROOT/output" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 for f in "$SERVICE" "$TIMER" "$SUDOERS" "$INSTALL" "$DEPLOY_SCRIPT" "$VERIFY_LINUX"; do
   assert_file "$f"
@@ -42,7 +51,6 @@ assert_not_grep "$VERIFY_LINUX" 'sudo|sshpass|expect|(^|[^A-Z])password|/home/ir
 pass "Linux verification wrapper has tracked-files-only temp execution contract"
 
 VERIFY_TMP="$(mktemp -d "${TMPDIR:-/tmp}/storage-viz-verify-test.XXXXXX")"
-trap 'rm -rf "$VERIFY_TMP"' EXIT
 VERIFY_FAKEBIN="$VERIFY_TMP/bin"
 mkdir -p "$VERIFY_FAKEBIN"
 cat > "$VERIFY_FAKEBIN/ssh" <<'FAKE'
@@ -236,8 +244,6 @@ assert_not_grep "$DEPLOY_SCRIPT" 'eval|sshpass|expect|(^|[^A-Z])password|echo.*s
 pass "deploy script has hardened SSH/static sudo contract"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/storage-viz-deploy-test.XXXXXX")"
-cleanup() { rm -rf "$TMP"; }
-trap cleanup EXIT
 
 FAKEBIN="$TMP/bin"
 mkdir -p "$FAKEBIN"
@@ -281,7 +287,6 @@ STALE_SCANNER="$ROOT/scanner/hstscan"
 rm -f "$STALE_SCANNER"
 printf 'stale scanner\n' > "$STALE_SCANNER"
 chmod +x "$STALE_SCANNER"
-trap 'rm -rf "$TMP"; rm -f "${VIEWER_SECRET:-}" "${STALE_SCANNER:-}"' EXIT
 cat > "$FAKEBIN/id" <<'FAKE'
 #!/usr/bin/env bash
 printf 'id %s\n' "$*" >> "${FAKE_LOG:?}"
@@ -381,7 +386,6 @@ if "$DEPLOY_SCRIPT" --dry-run --host host-a.example --identity-file "$ID" --know
   fail "deploy accepted relative known-hosts path"
 fi
 VIEWER_SECRET="$ROOT/viewer/storage-viz-test-secret"
-trap 'rm -rf "$TMP"; rm -f "$VIEWER_SECRET"' EXIT
 touch "$VIEWER_SECRET"
 if "$DEPLOY_SCRIPT" --dry-run --host host-a.example --identity-file "$VIEWER_SECRET" --known-hosts-file "$KH" >"$TMP/viewer-id.out" 2>"$TMP/viewer-id.err"; then
   fail "deploy accepted identity under viewer web root"

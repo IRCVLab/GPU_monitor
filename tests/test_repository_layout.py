@@ -221,8 +221,10 @@ class RepositoryLayoutTest(unittest.TestCase):
                 'PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \\',
                 "find viewer -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check; \\",
                 'bash deploy/test_deploy_scripts.sh; \\',
+                "test ! -e scanner/hstscan || { printf '%s\\n' 'FAIL: deploy tests left scanner/hstscan behind'; exit 1; }; \\",
+                "test ! -e output/verification/linux-verification.txt || { printf '%s\\n' 'FAIL: deploy tests left a verification artifact behind'; exit 1; }; \\",
                 'if [ "$$(uname -s)" = Linux ]; then \\',
-                '  bash scanner/test_hstscan.sh; \\',
+                '  $$(MAKE) -C scanner clean all test; \\',
                 '  bash deploy/verify-linux.sh --local; \\',
                 'else \\',
                 "  printf '%s\\n' 'SKIP: Linux-only scanner tests use SYS_getdents64; covered by Task 3 remote Linux verification.'; \\",
@@ -230,6 +232,24 @@ class RepositoryLayoutTest(unittest.TestCase):
             ],
             make_target_recipe("test-storage"),
         )
+
+    def test_storage_deploy_tests_use_one_aggregate_exit_cleanup(self):
+        script = Path("apps/storage-monitor/deploy/test_deploy_scripts.sh").read_text()
+        exit_traps = [
+            line.strip()
+            for line in script.splitlines()
+            if line.startswith("trap ") and line.endswith(" EXIT")
+        ]
+
+        self.assertEqual(exit_traps, ["trap cleanup EXIT"])
+        for owned_path in (
+            '${VERIFY_TMP:-}',
+            '${TMP:-}',
+            '${VIEWER_SECRET:-}',
+            '${STALE_SCANNER:-}',
+            '$ROOT/output/verification/linux-verification.txt',
+        ):
+            self.assertIn(owned_path, script)
 
     def test_gpu_shell_scripts_are_app_local_and_resolve_root_from_script_location(self):
         old_script_paths = [
