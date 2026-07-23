@@ -12,7 +12,7 @@ Required live check:
 python3.12 scripts/check_deploy_prerequisites.py --repo IRCVLab/GPU_monitor
 ```
 
-Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. If the caller lacks org runner-group permission, `runner_availability` must be `UNKNOWN`, not treated as accepted.
+Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; `READY` requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. If runner enumeration cannot read the repo/org runner APIs, `runner_availability` must be `UNKNOWN`, not treated as accepted.
 
 ## Required `main` protection before runner registration
 
@@ -27,11 +27,11 @@ Before registering or authorizing any production runner, configure `main` with a
 7. Disable force pushes.
 8. Keep `.github/CODEOWNERS`, `.github/workflows/`, deployment controls, prerequisite checker, and operation docs operator-owned.
 
-A protected `main` with `ci/required`, at least one approving review, code-owner review, no force pushes, and no administrator bypass is `READY` for runner-registration planning. Any `UNKNOWN` prerequisite exits nonzero and is never treated as `READY`. It is not the same as production cutover approval.
+A protected `main` with `ci/required`, at least one approving review, code-owner review, explicit administrator enforcement, explicit no force pushes, and explicit no administrator bypass is `READY` for runner-registration planning. If any of those fields are unavailable from metadata or the API contract, the checker reports `UNKNOWN` and exits nonzero. Any `UNKNOWN` prerequisite exits nonzero and is never treated as `READY`. It is not the same as production cutover approval.
 
 ## Why the production runner is not installed yet
 
-The production runner is intentionally not installed because a self-hosted runner connected before branch protection and CODEOWNER enforcement would create a deployment path that is stronger than the repository's review controls. Runner installation may start only after the checker reports `READY` for protected `main`, CODEOWNER enforcement, and runner availability.
+The production runner is intentionally not installed because a self-hosted runner connected before branch protection and CODEOWNER enforcement would create a deployment path that is stronger than the repository's review controls. Runner installation may start only after the checker reports `READY` for protected `main`, CODEOWNER enforcement, and runner availability. Runner availability is based on actual repo/org runner enumeration and requires at least one online eligible runner; runner-group API readability or permission to inspect runner groups alone is not sufficient for `READY`. Permission or API uncertainty remains `UNKNOWN`.
 
 Pull-request CI must continue to use GitHub-hosted runners. Production labels such as `prod`, `production`, `prd`, or `prod-runner` are reserved for deployment jobs and remain denied for normal PR jobs by workflow policy validation.
 
@@ -99,4 +99,9 @@ python3.12 scripts/check_deploy_prerequisites.py \
   --require-host-for-cutover
 ```
 
-Without `--check-host`, the checker reports server reachability as `UNKNOWN` and does not contact the server. With `--check-host`, it runs only `ssh -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1 ... true`; it does not request credentials or mutate the server.
+Without `--check-host`, the checker reports server reachability as `UNKNOWN` and does not contact the server. With `--check-host`, it validates the host target, rejects option-injection or malformed user/host/port values, and runs only `ssh -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1 ... true` with a subprocess timeout as a second bound; it does not request credentials or mutate the server. When `--metadata-file` and `--check-host` are supplied together, the fresh bounded probe overrides any stale `serverReachability` value in the metadata file.
+
+## Fail-closed metadata handling
+
+- `CODEOWNERS` live fetch treats only `HTTP 404` as absence. Authentication, authorization, rate-limit, malformed response, and 5xx failures are `UNKNOWN` and fail closed.
+- The checker copies supplied metadata dictionaries before deriving fields so caller-owned fixtures and API payloads are not mutated by evaluation.

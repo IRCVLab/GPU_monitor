@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import subprocess
 import tempfile
@@ -34,7 +36,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                 "defaultBranchRef": {"name": "main"},
                 "branchProtectionRule": None,
                 "codeowners": {"present": True, "reviewRequired": False},
-                "runnerAvailability": {"status": "ready", "evidence": "github-hosted runners available"},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
                 "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
             }
         )
@@ -54,9 +56,12 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "requiredStatusCheckContexts": ["ci/required"],
                     "requiresApprovingReviews": True,
                     "requiresCodeOwnerReviews": True,
+                    "isAdminEnforced": True,
+                    "allowsForcePushes": False,
+                    "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
-                "runnerAvailability": {"status": "ready", "evidence": "github-hosted runners available"},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
                 "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
             }
         )
@@ -78,9 +83,12 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "requiredStatusCheckContexts": ["ci/required"],
                     "requiresApprovingReviews": True,
                     "requiresCodeOwnerReviews": True,
+                    "isAdminEnforced": True,
+                    "allowsForcePushes": False,
+                    "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
-                "runnerAvailability": {"status": "ready", "evidence": "github-hosted runners available"},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
                 "serverReachability": {"status": "blocked", "evidence": "ssh timed out"},
             },
             "--require-host-for-cutover",
@@ -103,6 +111,9 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "requiredStatusCheckContexts": ["ci/required"],
                     "requiresApprovingReviews": True,
                     "requiresCodeOwnerReviews": True,
+                    "isAdminEnforced": True,
+                    "allowsForcePushes": False,
+                    "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
                 "runnerAvailability": {
@@ -151,6 +162,9 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "requiredStatusCheckContexts": ["ci/required"],
                     "requiresApprovingReviews": True,
                     "requiresCodeOwnerReviews": True,
+                    "isAdminEnforced": True,
+                    "allowsForcePushes": False,
+                    "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
                 "runnerAvailability": {"status": "unknown", "evidence": "runner API unavailable"},
@@ -167,7 +181,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
             "repository": {"nameWithOwner": "IRCVLab/GPU_monitor", "isPrivate": True},
             "defaultBranchRef": {"name": "main"},
             "codeowners": {"present": True, "reviewRequired": True},
-            "runnerAvailability": {"status": "ready", "evidence": "available"},
+            "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
             "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
         }
         for status_shape in (
@@ -182,6 +196,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "requiresCodeOwnerReviews": True,
                     "isAdminEnforced": True,
                     "allowsForcePushes": False,
+                    "adminBypassAllowed": False,
                 }
                 report = check_deploy_prerequisites.evaluate_metadata(metadata)
                 self.assertEqual(report["checks"]["protected_main"]["status"], "READY")
@@ -195,9 +210,12 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "requiredStatusChecks": None,
                     "requiredApprovingReviewCount": 1,
                     "requiresCodeOwnerReviews": True,
+                    "isAdminEnforced": True,
+                    "allowsForcePushes": False,
+                    "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
-                "runnerAvailability": {"status": "ready", "evidence": "available"},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
                 "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
             }
         )
@@ -218,7 +236,7 @@ class DeployPrerequisitesTest(unittest.TestCase):
                             "requiresCodeOwnerReviews": codeowner_required,
                         },
                         "codeowners": {"present": True, "reviewRequired": codeowner_required},
-                        "runnerAvailability": {"status": "ready", "evidence": "available"},
+                        "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
                         "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
                     }
                 )
@@ -255,6 +273,9 @@ class DeployPrerequisitesTest(unittest.TestCase):
                     "requiredStatusCheckContexts": ["ci/required"],
                     "requiredApprovingReviewCount": 1,
                     "requiresCodeOwnerReviews": True,
+                    "isAdminEnforced": True,
+                    "allowsForcePushes": False,
+                    "adminBypassAllowed": False,
                 },
                 "codeowners": {"present": True, "reviewRequired": True},
                 "runnerAvailability": {"runners": [{"name": "prod-1", "status": "offline"}]},
@@ -333,11 +354,221 @@ class DeployPrerequisitesTest(unittest.TestCase):
                         "defaultBranchRef": {"name": "main"},
                         "branchProtectionRule": rule,
                         "codeowners": {"present": True, "reviewRequired": True},
-                        "runnerAvailability": {"status": "ready", "evidence": "available"},
+                        "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
                         "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
                     }
                 )
                 self.assertEqual(report["checks"]["protected_main"]["status"], "BLOCKED")
+
+
+    def ready_metadata(self) -> dict:
+        return {
+            "repository": {"nameWithOwner": "IRCVLab/GPU_monitor", "isPrivate": True},
+            "defaultBranchRef": {"name": "main"},
+            "branchProtectionRule": {
+                "requiredStatusCheckContexts": ["ci/required"],
+                "requiredApprovingReviewCount": 1,
+                "requiresCodeOwnerReviews": True,
+                "isAdminEnforced": True,
+                "allowsForcePushes": False,
+                "adminBypassAllowed": False,
+            },
+            "codeowners": {"present": True, "reviewRequired": True},
+            "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online"}]},
+            "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
+        }
+
+    def test_branch_protection_missing_explicit_admin_and_force_push_evidence_is_unknown_not_ready(self):
+        for omitted in ("isAdminEnforced", "allowsForcePushes", "adminBypassAllowed"):
+            with self.subTest(omitted=omitted):
+                metadata = self.ready_metadata()
+                del metadata["branchProtectionRule"][omitted]
+
+                report = check_deploy_prerequisites.evaluate_metadata(metadata)
+
+                self.assertEqual(report["checks"]["protected_main"]["status"], "UNKNOWN")
+                self.assertIn(omitted, report["checks"]["protected_main"]["evidence"])
+                self.assertEqual(report["overall"], "UNKNOWN")
+
+    def test_branch_protection_explicit_admin_not_enforced_is_blocked(self):
+        metadata = self.ready_metadata()
+        metadata["branchProtectionRule"]["isAdminEnforced"] = False
+
+        report = check_deploy_prerequisites.evaluate_metadata(metadata)
+
+        self.assertEqual(report["checks"]["protected_main"]["status"], "BLOCKED")
+        self.assertIn("administrator bypass", report["checks"]["protected_main"]["evidence"])
+
+    def test_host_target_rejects_option_injection_and_invalid_targets(self):
+        bad_targets = (
+            "-oProxyCommand=sh",
+            " host.example.com",
+            "host.example.com ",
+            "host\n.example.com",
+            "user name@host.example.com",
+            "user@-host.example.com",
+            "user@host.example.com:0",
+            "user@host.example.com:65536",
+            "user@host.example.com:notaport",
+            "bad/user@host.example.com",
+            "user@bad_host!",
+        )
+        for target in bad_targets:
+            with self.subTest(target=target):
+                with self.assertRaises(ValueError):
+                    check_deploy_prerequisites.parse_host_target(target)
+
+    def test_host_probe_passes_subprocess_timeout(self):
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        report = check_deploy_prerequisites.inspect_host("deploy@example.com:2200", runner=fake_run)
+
+        self.assertEqual(report["status"], "ready")
+        self.assertEqual(calls[0][1].get("timeout"), 10)
+        self.assertIn("deploy@example.com", calls[0][0])
+
+    def test_metadata_file_with_check_host_performs_fresh_probe_and_overrides_stale_reachability(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            metadata = self.ready_metadata()
+            metadata["serverReachability"] = {"status": "ready", "evidence": "stale prior success"}
+            metadata_file = Path(tempdir) / "metadata.json"
+            metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+            calls = []
+
+            def fake_inspect(host):
+                calls.append(host)
+                return {"status": "blocked", "evidence": "fresh probe failed"}
+
+            original = check_deploy_prerequisites.inspect_host
+            try:
+                check_deploy_prerequisites.inspect_host = fake_inspect
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = check_deploy_prerequisites.main([
+                        "--metadata-file",
+                        str(metadata_file),
+                        "--check-host",
+                        "example.com:2200",
+                        "--require-host-for-cutover",
+                    ])
+            finally:
+                check_deploy_prerequisites.inspect_host = original
+
+        self.assertEqual(calls, ["example.com:2200"])
+        self.assertEqual(code, 1)
+        report = json.loads(stdout.getvalue())
+        self.assertEqual(report["checks"]["server_reachability"]["status"], "BLOCKED")
+        self.assertIn("fresh probe failed", report["checks"]["server_reachability"]["evidence"])
+        self.assertEqual(stderr.getvalue(), "")
+
+
+    def test_live_runner_availability_enumerates_repo_and_org_runners(self):
+        calls = []
+
+        def fake_api(path):
+            calls.append(path)
+            if path == "repos/IRCVLab/GPU_monitor/actions/runners":
+                return {"runners": [{"name": "repo-prod", "status": "offline"}]}
+            if path == "orgs/IRCVLab/actions/runners":
+                return {"runners": [{"name": "org-prod", "status": "online"}]}
+            self.fail(f"unexpected API path {path}")
+
+        original = check_deploy_prerequisites.run_gh_api
+        try:
+            check_deploy_prerequisites.run_gh_api = fake_api
+            runner = check_deploy_prerequisites.fetch_runner_availability("IRCVLab/GPU_monitor")
+        finally:
+            check_deploy_prerequisites.run_gh_api = original
+
+        self.assertEqual(calls, ["repos/IRCVLab/GPU_monitor/actions/runners", "orgs/IRCVLab/actions/runners"])
+        self.assertEqual([item["name"] for item in runner["runners"]], ["repo-prod", "org-prod"])
+        self.assertEqual(check_deploy_prerequisites.runner_check({"runnerAvailability": runner})["status"], "READY")
+
+    def test_enumerated_no_runner_is_blocked_not_ready(self):
+        result = check_deploy_prerequisites.runner_check({"runnerAvailability": {"runners": []}})
+
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("no eligible online runner", result["evidence"])
+
+    def test_live_runner_permission_uncertainty_is_unknown(self):
+        def fake_api(path):
+            if path == "repos/IRCVLab/GPU_monitor/actions/runners":
+                return {"runners": []}
+            raise check_deploy_prerequisites.GhApiError(path, 1, "Resource not accessible by integration (HTTP 403)")
+
+        original = check_deploy_prerequisites.run_gh_api
+        try:
+            check_deploy_prerequisites.run_gh_api = fake_api
+            runner = check_deploy_prerequisites.fetch_runner_availability("IRCVLab/GPU_monitor")
+        finally:
+            check_deploy_prerequisites.run_gh_api = original
+
+        self.assertEqual(runner["status"], "unknown")
+        self.assertIn("HTTP 403", runner["evidence"])
+
+    def test_runner_group_readability_without_online_runner_is_unknown_not_ready(self):
+        report = check_deploy_prerequisites.evaluate_metadata(
+            {
+                **self.ready_metadata(),
+                "runnerAvailability": {
+                    "status": "ready",
+                    "evidence": "org runner-group API is readable; runner registration permission can be evaluated",
+                },
+            }
+        )
+
+        self.assertEqual(report["checks"]["runner_availability"]["status"], "UNKNOWN")
+        self.assertIn("no eligible online runner", report["checks"]["runner_availability"]["evidence"])
+
+    def test_fetch_codeowners_only_404_is_absent_auth_errors_fail_closed(self):
+        calls = []
+
+        def fake_api(path):
+            calls.append(path)
+            if path.endswith(".github/CODEOWNERS?ref=main"):
+                raise check_deploy_prerequisites.GhApiError(path, 1, "Not Found (HTTP 404)")
+            raise check_deploy_prerequisites.GhApiError(path, 1, "Bad credentials (HTTP 401)")
+
+        original = check_deploy_prerequisites.run_gh_api
+        try:
+            check_deploy_prerequisites.run_gh_api = fake_api
+            result = check_deploy_prerequisites.fetch_codeowners("IRCVLab/GPU_monitor", "main")
+        finally:
+            check_deploy_prerequisites.run_gh_api = original
+
+        self.assertEqual(result["present"], None)
+        self.assertEqual(result["status"], "unknown")
+        self.assertIn("HTTP 401", result["evidence"])
+        self.assertEqual(len(calls), 2)
+
+    def test_metadata_from_api_payloads_copies_inputs_before_mutation(self):
+        codeowners = {"present": True, "reviewRequired": False}
+        runner = {"runners": [{"name": "prod-1", "status": "online"}]}
+        metadata = check_deploy_prerequisites.metadata_from_api_payloads(
+            repo="IRCVLab/GPU_monitor",
+            repository={"full_name": "IRCVLab/GPU_monitor", "private": True, "default_branch": "main"},
+            protection={
+                "required_status_checks": {"contexts": ["ci/required"]},
+                "required_pull_request_reviews": {
+                    "required_approving_review_count": 1,
+                    "require_code_owner_reviews": True,
+                },
+                "enforce_admins": {"enabled": True},
+                "allow_force_pushes": {"enabled": False},
+            },
+            codeowners=codeowners,
+            runner=runner,
+        )
+
+        self.assertEqual(codeowners, {"present": True, "reviewRequired": False})
+        self.assertIsNot(metadata["codeowners"], codeowners)
+        self.assertIsNot(metadata["runnerAvailability"], runner)
+        self.assertTrue(metadata["codeowners"]["reviewRequired"])
 
 
 if __name__ == "__main__":

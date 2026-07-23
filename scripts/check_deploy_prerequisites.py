@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import json
 import re
 import subprocess
@@ -17,6 +18,8 @@ READY = "READY"
 BLOCKED = "BLOCKED"
 UNKNOWN = "UNKNOWN"
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+SSH_USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+SSH_HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
 class GhApiError(RuntimeError):
@@ -102,15 +105,25 @@ def branch_protection_check(metadata: dict[str, Any]) -> dict[str, str]:
     contexts = required_contexts(rule)
     if REQUIRED_STATUS_CHECK not in contexts:
         return check(BLOCKED, f"main protection does not require {REQUIRED_STATUS_CHECK}")
-    if rule.get("allowsForcePushes") is True:
+
+    explicit_contract_fields = ("isAdminEnforced", "allowsForcePushes", "adminBypassAllowed")
+    missing_fields = [field for field in explicit_contract_fields if field not in rule]
+    if missing_fields:
+        return check(UNKNOWN, f"main protection evidence missing explicit field(s): {', '.join(missing_fields)}")
+
+    if rule.get("isAdminEnforced") is not True:
+        return check(BLOCKED, "main protection allows administrator bypass")
+    if rule.get("allowsForcePushes") is not False:
         return check(BLOCKED, "main protection allows force pushes")
-    if rule.get("adminBypassAllowed") is True or rule.get("isAdminEnforced") is False:
+    if rule.get("adminBypassAllowed") is not False:
         return check(BLOCKED, "main protection allows administrator bypass")
     return check(READY, f"main is protected and requires {REQUIRED_STATUS_CHECK}")
 
 def codeowner_check(metadata: dict[str, Any]) -> dict[str, str]:
     codeowners = metadata.get("codeowners") or {}
     rule = metadata.get("branchProtectionRule") or {}
+    if "status" in codeowners and normalize_status(codeowners.get("status")) == UNKNOWN and codeowners.get("present") is not False:
+        return check(UNKNOWN, codeowners.get("evidence") or "CODEOWNERS presence could not be verified")
     present = codeowners.get("present") is True
     review_required = codeowners.get("reviewRequired") is True or rule.get("requiresCodeOwnerReviews") is True
     review_count = approving_review_count(rule) if isinstance(rule, dict) else 0
@@ -127,16 +140,26 @@ def runner_check(metadata: dict[str, Any]) -> dict[str, str]:
     runner = metadata.get("runnerAvailability") or {}
     runners = runner.get("runners")
     if isinstance(runners, list):
-        online = [item for item in runners if isinstance(item, dict) and str(item.get("status", "")).lower() == "online"]
+        online = [
+            item
+            for item in runners
+            if isinstance(item, dict)
+            and str(item.get("status", "")).lower() == "online"
+            and item.get("eligible", True) is not False
+        ]
         offline = [item for item in runners if isinstance(item, dict) and str(item.get("status", "")).lower() == "offline"]
         if online:
             names = ", ".join(str(item.get("name", "unnamed")) for item in online)
-            return check(READY, f"online runner(s) available: {names}")
+            return check(READY, f"online eligible runner(s) available: {names}")
         if offline:
             names = ", ".join(str(item.get("name", "unnamed")) for item in offline)
             return check(BLOCKED, f"runner(s) are offline: {names}")
+        return check(BLOCKED, "no eligible online runner found in enumerated repo/org runners")
+
     status = normalize_status(runner.get("status"))
     evidence = runner.get("evidence") or "runner availability not inspected"
+    if status == READY:
+        return check(UNKNOWN, f"no eligible online runner enumeration evidence; {evidence}")
     return check(status, evidence)
 
 def server_check(metadata: dict[str, Any]) -> dict[str, str]:
@@ -207,17 +230,28 @@ def run_gh_api(path: str) -> dict[str, Any]:
         raise GhApiError(path, result.returncode, result.stderr)
     return json.loads(result.stdout or "{}")
 
+def is_http_404(stderr: str) -> bool:
+    lowered = stderr.lower()
+    return "http 404" in lowered or "not found" in lowered and "http 404" in lowered
+
+
 def fetch_codeowners(repo: str, branch: str) -> dict[str, Any]:
+    missing_paths: list[str] = []
     for path in (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"):
+        api_path = f"repos/{repo}/contents/{path}?ref={branch}"
         try:
-            payload = run_gh_api(f"repos/{repo}/contents/{path}?ref={branch}")
-        except GhApiError:
-            continue
+            payload = run_gh_api(api_path)
+        except GhApiError as exc:
+            if is_http_404(exc.stderr):
+                missing_paths.append(path)
+                continue
+            failure = classify_gh_api_failure(exc.path, exc.returncode, exc.stderr)
+            return {"present": None, "reviewRequired": False, "status": failure["status"], "evidence": failure["evidence"]}
         content = payload.get("content") or ""
         if payload.get("encoding") == "base64":
             content = base64.b64decode(content).decode("utf-8", errors="replace")
         return {"present": True, "reviewRequired": False, "path": path, "entries": len(content.splitlines())}
-    return {"present": False, "reviewRequired": False}
+    return {"present": False, "reviewRequired": False, "evidence": f"CODEOWNERS absent at {', '.join(missing_paths)}"}
 
 
 def metadata_from_api_payloads(
@@ -241,16 +275,21 @@ def metadata_from_api_payloads(
                 if isinstance(item, dict) and isinstance(item.get("context"), str):
                     contexts.append(item["context"])
         reviews = protection.get("required_pull_request_reviews") or {}
-        enforce_admins = protection.get("enforce_admins") or {}
-        force_pushes = protection.get("allow_force_pushes") or {}
+        enforce_admins = protection.get("enforce_admins")
+        force_pushes = protection.get("allow_force_pushes")
         branch_rule = {
             "requiredStatusCheckContexts": contexts,
             "requiredApprovingReviewCount": reviews.get("required_approving_review_count", 0),
             "requiresCodeOwnerReviews": reviews.get("require_code_owner_reviews") is True,
-            "isAdminEnforced": enforce_admins.get("enabled") is True,
-            "allowsForcePushes": force_pushes.get("enabled") is True,
         }
+        if isinstance(enforce_admins, dict) and "enabled" in enforce_admins:
+            branch_rule["isAdminEnforced"] = enforce_admins.get("enabled") is True
+            branch_rule["adminBypassAllowed"] = enforce_admins.get("enabled") is not True
+        if isinstance(force_pushes, dict) and "enabled" in force_pushes:
+            branch_rule["allowsForcePushes"] = force_pushes.get("enabled") is True
 
+    codeowners_copy = copy.deepcopy(codeowners) if codeowners is not None else {"present": False, "reviewRequired": False}
+    runner_copy = copy.deepcopy(runner) if runner is not None else {"status": "unknown", "evidence": "runner availability not inspected"}
     server = inspect_host(check_host) if check_host else {"status": "unknown", "evidence": "host check not requested; no server contact attempted"}
     metadata = {
         "repository": {
@@ -260,8 +299,8 @@ def metadata_from_api_payloads(
         },
         "defaultBranchRef": {"name": branch},
         "branchProtectionRule": branch_rule,
-        "codeowners": codeowners or {"present": False, "reviewRequired": False},
-        "runnerAvailability": runner or {"status": "unknown", "evidence": "runner availability not inspected"},
+        "codeowners": codeowners_copy,
+        "runnerAvailability": runner_copy,
         "serverReachability": server,
     }
     if protection_error:
@@ -274,6 +313,43 @@ def metadata_from_api_payloads(
 def validate_repo_name(repo: str) -> None:
     if not REPO_RE.match(repo):
         raise ValueError("--repo must be in OWNER/REPO form using repository owner and name")
+
+
+def fetch_runner_availability(repo: str) -> dict[str, Any]:
+    owner = repo.split("/", 1)[0]
+    runners: list[dict[str, Any]] = []
+    evidence: list[str] = []
+
+    try:
+        repo_payload = run_gh_api(f"repos/{repo}/actions/runners")
+    except GhApiError as exc:
+        return classify_gh_api_failure(exc.path, exc.returncode, exc.stderr)
+    repo_runners = repo_payload.get("runners")
+    if not isinstance(repo_runners, list):
+        return {"status": "unknown", "evidence": "repo runner API response did not include runners list"}
+    for item in repo_runners:
+        if isinstance(item, dict):
+            runner = copy.deepcopy(item)
+            runner["scope"] = "repo"
+            runners.append(runner)
+    evidence.append(f"repo runners enumerated: {len(repo_runners)}")
+
+    try:
+        org_payload = run_gh_api(f"orgs/{owner}/actions/runners")
+    except GhApiError as exc:
+        failure = classify_gh_api_failure(exc.path, exc.returncode, exc.stderr)
+        return {"status": failure["status"], "evidence": f"{'; '.join(evidence)}; {failure['evidence']}"}
+    org_runners = org_payload.get("runners")
+    if not isinstance(org_runners, list):
+        return {"status": "unknown", "evidence": f"{'; '.join(evidence)}; org runner API response did not include runners list"}
+    for item in org_runners:
+        if isinstance(item, dict):
+            runner = copy.deepcopy(item)
+            runner["scope"] = "org"
+            runners.append(runner)
+    evidence.append(f"org runners enumerated: {len(org_runners)}")
+
+    return {"runners": runners, "evidence": "; ".join(evidence)}
 
 
 def fetch_live_metadata(repo: str, *, check_host: str | None) -> dict[str, Any]:
@@ -289,12 +365,7 @@ def fetch_live_metadata(repo: str, *, check_host: str | None) -> dict[str, Any]:
         protection_error = classify_gh_api_failure(exc.path, exc.returncode, exc.stderr)["evidence"]
 
     codeowners = fetch_codeowners(repo, branch)
-    owner = repo.split("/", 1)[0]
-    try:
-        run_gh_api(f"orgs/{owner}/actions/runner-groups")
-        runner = {"status": "ready", "evidence": "org runner-group API is readable; runner registration permission can be evaluated"}
-    except GhApiError as exc:
-        runner = classify_gh_api_failure(exc.path, exc.returncode, exc.stderr)
+    runner = fetch_runner_availability(repo)
 
     return metadata_from_api_payloads(
         repo=repo,
@@ -306,15 +377,46 @@ def fetch_live_metadata(repo: str, *, check_host: str | None) -> dict[str, Any]:
         check_host=check_host,
     )
 
+def validate_host_name(host: str) -> None:
+    if not host or host.startswith("-") or host.endswith("-"):
+        raise ValueError("invalid host in --check-host")
+    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
+        octets = [int(part) for part in host.split(".")]
+        if all(0 <= part <= 255 for part in octets):
+            return
+        raise ValueError("invalid IPv4 address in --check-host")
+    labels = host.split(".")
+    if not all(SSH_HOST_LABEL_RE.fullmatch(label) for label in labels):
+        raise ValueError("invalid host in --check-host")
+
+
 def parse_host_target(target: str) -> tuple[str, int]:
-    if target.count(":") == 1:
-        host, port_text = target.rsplit(":", 1)
-        if port_text.isdigit():
-            port = int(port_text)
-            if not (1 <= port <= 65535):
-                raise ValueError(f"invalid port in --check-host {target!r}")
-            return host, port
-    return target, 22
+    if not target or target != target.strip() or target.startswith("-") or any(ord(ch) < 33 or ord(ch) == 127 for ch in target):
+        raise ValueError(f"invalid --check-host target {target!r}")
+
+    endpoint = target
+    port = 22
+    if target.count(":") > 1:
+        raise ValueError(f"invalid --check-host target {target!r}")
+    if ":" in target:
+        endpoint, port_text = target.rsplit(":", 1)
+        if not port_text.isdigit():
+            raise ValueError(f"invalid port in --check-host {target!r}")
+        port = int(port_text)
+        if not (1 <= port <= 65535):
+            raise ValueError(f"invalid port in --check-host {target!r}")
+
+    if endpoint.count("@") > 1:
+        raise ValueError(f"invalid --check-host target {target!r}")
+    if "@" in endpoint:
+        user, hostname = endpoint.split("@", 1)
+        if not SSH_USER_RE.fullmatch(user):
+            raise ValueError(f"invalid user in --check-host {target!r}")
+    else:
+        hostname = endpoint
+
+    validate_host_name(hostname)
+    return endpoint, port
 
 
 def inspect_host(host: str, *, runner=subprocess.run) -> dict[str, str]:
@@ -342,7 +444,10 @@ def inspect_host(host: str, *, runner=subprocess.run) -> dict[str, str]:
         hostname,
         "true",
     ]
-    result = runner(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    try:
+        result = runner(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=10)
+    except subprocess.TimeoutExpired:
+        return {"status": "blocked", "evidence": f"bounded read-only ssh probe timed out for {hostname}:{port}"}
     if result.returncode == 0:
         return {"status": "ready", "evidence": f"bounded read-only ssh probe succeeded for {hostname}:{port}"}
     stderr = (result.stderr or result.stdout or f"ssh exited {result.returncode}").strip()
@@ -376,6 +481,9 @@ def main(argv: list[str] | None = None) -> int:
             metadata = load_metadata(args.metadata_file)
             if not isinstance(metadata, dict):
                 raise ValueError("metadata root must be a JSON object")
+            metadata = copy.deepcopy(metadata)
+            if args.check_host:
+                metadata["serverReachability"] = inspect_host(args.check_host)
         else:
             metadata = fetch_live_metadata(args.repo, check_host=args.check_host)
     except (json.JSONDecodeError, OSError, ValueError) as exc:
