@@ -269,6 +269,82 @@ class AuthorizeGpuReleaseTest(unittest.TestCase):
                         fetch_live_inputs(repository, workflow_run)
                     run.assert_not_called()
 
+
+    def test_rejects_arbitrary_or_timezone_naive_merge_timestamps(self):
+        for merged_at in ("not-a-timestamp", "2026-07-23T00:00:00", "2026-13-99T99:99:99Z"):
+            with self.subTest(merged_at=merged_at):
+                authorization = self.authorize(pull_requests=[self.pull_request(merged_at=merged_at)])
+
+                self.assertIs(authorization.authorized, False)
+                self.assertEqual(authorization.reason, "malformed_input")
+
+    def test_rejects_single_approval_missing_review_ordering_fields(self):
+        for bad_review in (
+            self.approval(id=None),
+            self.approval(submitted_at=None),
+            self.approval(submitted_at="2026-07-23T00:01:00"),
+            self.approval(submitted_at="not-a-timestamp"),
+        ):
+            with self.subTest(bad_review=bad_review):
+                authorization = self.authorize(reviews=[bad_review])
+
+                self.assertIs(authorization.authorized, False)
+                self.assertEqual(authorization.reason, "malformed_input")
+
+    def test_rejects_review_missing_login_or_state(self):
+        for bad_review in (
+            self.approval(user={"login": ""}),
+            self.approval(user={}),
+            self.approval(state=""),
+            self.approval(state=None),
+        ):
+            with self.subTest(bad_review=bad_review):
+                authorization = self.authorize(reviews=[bad_review])
+
+                self.assertIs(authorization.authorized, False)
+                self.assertEqual(authorization.reason, "malformed_input")
+
+    def test_single_matching_required_check_requires_id_and_completed_at(self):
+        for bad_check in (
+            self.required_check(id=None),
+            self.required_check(completed_at=None),
+            self.required_check(completed_at="2026-07-23T00:04:00"),
+            self.required_check(completed_at="not-a-timestamp"),
+        ):
+            with self.subTest(bad_check=bad_check):
+                authorization = self.authorize(check_runs=[bad_check])
+
+                self.assertIs(authorization.authorized, False)
+                self.assertEqual(authorization.reason, "malformed_input")
+
+    def test_duplicate_required_checks_compare_parsed_timestamps_then_id(self):
+        earlier_text_later_instant = self.required_check(
+            id=1,
+            completed_at="2026-07-23T00:30:00+09:00",
+            conclusion="failure",
+        )
+        later_instant_lower_text = self.required_check(
+            id=2,
+            completed_at="2026-07-22T16:00:00Z",
+            conclusion="success",
+        )
+
+        authorization = self.authorize(check_runs=[earlier_text_later_instant, later_instant_lower_text])
+
+        self.assertIs(authorization.authorized, True)
+        self.assertEqual(authorization.reason, "authorized")
+
+    def test_duplicate_required_checks_reject_invalid_completed_at(self):
+        authorization = self.authorize(
+            check_runs=[
+                self.required_check(id=1, completed_at="2026-07-23T00:01:00Z"),
+                self.required_check(id=2, completed_at="not-a-timestamp"),
+            ]
+        )
+
+        self.assertIs(authorization.authorized, False)
+        self.assertEqual(authorization.reason, "malformed_input")
+
     def test_rejects_workflow_run_from_different_repository(self):
         authorization = self.authorize(workflow_run=self.workflow_run(head_repository={"full_name": "IRCVLab/fork"}))
 

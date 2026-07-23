@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import json
 import re
 import subprocess
@@ -14,6 +15,9 @@ from typing import Any
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+RFC3339_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,21 @@ def validate_sha(sha: str) -> None:
         raise MalformedInput("sha must be exactly 40 lowercase hex characters")
 
 
+def parse_github_timestamp(value: object, field_name: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise MalformedInput(f"{field_name} must be a non-empty RFC3339 timestamp")
+    if RFC3339_RE.fullmatch(value) is None:
+        raise MalformedInput(f"{field_name} must be a GitHub RFC3339 timestamp")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise MalformedInput(f"{field_name} must be a valid timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise MalformedInput(f"{field_name} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
 def normalize_login(value: object) -> str | None:
     if isinstance(value, str) and value:
         return value.casefold()
@@ -79,10 +98,9 @@ def display_login(value: object) -> str | None:
 def has_valid_merge_evidence(pull_request: dict[str, object]) -> bool:
     if "merged_at" in pull_request:
         merged_at = pull_request.get("merged_at")
-        if isinstance(merged_at, str) and merged_at:
-            return True
         if merged_at is not None:
-            raise MalformedInput("merged_at must be a non-empty string timestamp")
+            parse_github_timestamp(merged_at, "merged_at")
+            return True
     merged = pull_request.get("merged")
     if merged is True:
         return True
@@ -95,21 +113,29 @@ def is_merged_main_pr(pull_request: dict[str, object]) -> bool:
     return string_field(pull_request, "base", "ref") == "main" and has_valid_merge_evidence(pull_request)
 
 
-def review_order(review: dict[str, object]) -> tuple[str, int]:
+def review_order(review: dict[str, object]) -> tuple[datetime, int]:
     submitted_at = string_field(review, "submitted_at") or string_field(review, "submittedAt")
     review_id = int_field(review, "id")
-    if submitted_at is None or review_id is None:
-        raise MalformedInput("review ordering fields must be present")
-    return submitted_at, review_id
+    if review_id is None:
+        raise MalformedInput("review id must be numeric")
+    return parse_github_timestamp(submitted_at, "submitted_at"), review_id
+
+
+def validated_review_identity(review: dict[str, object]) -> tuple[str, str]:
+    login = normalize_login(nested(review, "user", "login")) or normalize_login(review.get("author"))
+    state = string_field(review, "state")
+    if login is None:
+        raise MalformedInput("review login must be non-empty")
+    if state is None:
+        raise MalformedInput("review state must be non-empty")
+    review_order(review)
+    return login, state
 
 
 def latest_effective_reviews(reviews: list[dict[str, object]]) -> dict[str, dict[str, object]]:
     latest: dict[str, dict[str, object]] = {}
     for review in reviews:
-        login = normalize_login(nested(review, "user", "login")) or normalize_login(review.get("author"))
-        state = string_field(review, "state")
-        if login is None or state is None:
-            continue
+        login, _state = validated_review_identity(review)
         previous = latest.get(login)
         if previous is None or review_order(review) >= review_order(previous):
             latest[login] = review
@@ -128,19 +154,17 @@ def latest_required_check(check_runs: list[dict[str, object]], *, sha: str, requ
     matches = matching_required_checks(check_runs, sha=sha, required_check=required_check)
     if not matches:
         return None
-    if len(matches) == 1:
-        return matches[0]
 
-    ordered: list[tuple[str, int, dict[str, object]]] = []
-    seen_keys: set[tuple[str, int]] = set()
+    ordered: list[tuple[datetime, int, dict[str, object]]] = []
+    seen_keys: set[tuple[datetime, int]] = set()
     for check_run in matches:
-        completed_at = string_field(check_run, "completed_at")
         check_id = int_field(check_run, "id")
-        if completed_at is None or check_id is None:
-            raise MalformedInput("duplicate required checks must have completed_at and numeric id")
+        if check_id is None:
+            raise MalformedInput("matching required check id must be numeric")
+        completed_at = parse_github_timestamp(string_field(check_run, "completed_at"), "completed_at")
         key = (completed_at, check_id)
         if key in seen_keys:
-            raise MalformedInput("duplicate required checks have ambiguous ordering")
+            raise MalformedInput("matching required checks have ambiguous ordering")
         seen_keys.add(key)
         ordered.append((completed_at, check_id, check_run))
     return max(ordered, key=lambda item: (item[0], item[1]))[2]
