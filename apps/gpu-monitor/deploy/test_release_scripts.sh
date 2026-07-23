@@ -255,6 +255,7 @@ PY
   assert_contains "$list1" "gpu-monitor/backend/requirements.txt"
   assert_contains "$list1" "gpu-monitor/frontend/package.json"
   assert_contains "$list1" "gpu-monitor/frontend/package-lock.json"
+  assert_contains "$list1" "gpu-monitor/frontend/server.mjs"
   assert_contains "$list1" "gpu-monitor/frontend/build/index.js"
   assert_not_matches "$list1" '(^|/)(\.env|node_modules|\.venv|__pycache__|\.pytest_cache|\.svelte-kit|runtime-cache)(/|$)'
   assert_not_matches "$list1" '\.(db|sqlite|sqlite3|pyc)$'
@@ -526,6 +527,7 @@ make_release_artifact() {
   cp "$SOURCE_ROOT/apps/gpu-monitor/backend/requirements.txt" "$root/gpu-monitor/backend/requirements.txt"
   cp "$SOURCE_ROOT/apps/gpu-monitor/frontend/package.json" "$root/gpu-monitor/frontend/package.json"
   cp "$SOURCE_ROOT/apps/gpu-monitor/frontend/package-lock.json" "$root/gpu-monitor/frontend/package-lock.json"
+  cp "$SOURCE_ROOT/apps/gpu-monitor/frontend/server.mjs" "$root/gpu-monitor/frontend/server.mjs"
   printf 'console.log("%s")\n' "$label" > "$root/gpu-monitor/frontend/build/index.js"
   COPYFILE_DISABLE=1 tar -C "$root" -czf "$out/gpu-monitor-$sha.tar.gz" gpu-monitor
   sha256_file "$out/gpu-monitor-$sha.tar.gz" | awk '{print $1}' > "$out/digest"
@@ -896,6 +898,32 @@ test_health_test_overrides_are_positive_and_bounded() {
   log "health retry overrides are validated as bounded positive integers"
 }
 
+test_health_checks_same_origin_api_and_websocket_paths() {
+  local tmp fakebin log_file
+  tmp=$(mktemp_dir gpu-release-health-proxy)
+  trap 'rm -rf "$tmp"' RETURN
+  fakebin="$tmp/fakebin"
+  log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass
+
+  env -i \
+    PATH="/usr/bin:/bin" \
+    GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    GPU_MONITOR_HEALTH_RETRIES=1 \
+    GPU_MONITOR_HEALTH_SLEEP_SECONDS=1 \
+    "$HEALTH_SCRIPT" --test-mode dev
+
+  grep -Fq 'http://127.0.0.1:8101/health' "$log_file" ||
+    fail "dev health omitted direct backend health"
+  grep -Fq 'http://127.0.0.1:5174/' "$log_file" ||
+    fail "dev health omitted frontend root"
+  grep -Fq 'http://127.0.0.1:5174/api/health' "$log_file" ||
+    fail "dev health omitted same-origin API proxy"
+  grep -Fq 'python3 - 127.0.0.1 5174 /ws/metrics' "$log_file" ||
+    fail "dev health omitted same-origin WebSocket upgrade"
+  log "health validates the browser-facing API and WebSocket proxy paths"
+}
+
 test_systemd_units_match_real_runtime_entrypoints() {
   local backend_unit bridge_unit frontend_unit
   backend_unit="$SERVER_DIR/systemd/gpu-monitor-backend@.service"
@@ -918,8 +946,10 @@ PY
     fail "backend unit does not run the real FastAPI module through uvicorn with configured port"
   grep -Fq -- '-m uvicorn backend.slack_bridge:app --host 127.0.0.1 --port ${GPU_MONITOR_BRIDGE_PORT}' "$bridge_unit" ||
     fail "bridge unit does not run the real FastAPI bridge module through uvicorn with configured port"
-  grep -Fq 'ExecStart=/opt/gpu-monitor/node/bin/node /srv/gpu-monitor/%i/current/frontend/build/index.js' "$frontend_unit" ||
-    fail "frontend unit does not run the built adapter-node entrypoint with the managed Node runtime"
+  grep -Fq 'ExecStart=/opt/gpu-monitor/node/bin/node /srv/gpu-monitor/%i/current/frontend/server.mjs' "$frontend_unit" ||
+    fail "frontend unit does not run the same-origin runtime server with the managed Node runtime"
+  grep -Fq '"frontend/server.mjs"' "$ACTIVATE_SCRIPT" ||
+    fail "activation does not require the committed same-origin runtime server"
   ! grep -Fq '/usr/bin/node' "$frontend_unit" ||
     fail "frontend unit still depends on the host distribution Node runtime"
   grep -Fq 'Environment=HOST=127.0.0.1' "$frontend_unit" ||
@@ -1454,13 +1484,14 @@ FAKETIMEOUT
   [[ -n "$candidate" ]] || fail "release candidate was not constructed under private tmp staging"
   ! find "$prefix/srv/gpu-monitor/dev/releases" -mindepth 1 -maxdepth 1 -name '.release-*' | grep -q . ||
     fail "release candidate was constructed under runtime-traversable releases"
-  python3 - "$candidate" "$prefix/srv/gpu-monitor/dev/tmp" <<'PY'
+python3 - "$candidate" "$prefix/srv/gpu-monitor/dev/tmp" <<'PY'
 import os, stat, sys
 candidate, staging = sys.argv[1:]
 candidate_stat = os.stat(candidate)
 staging_stat = os.stat(staging)
 mode = stat.S_IMODE(candidate_stat.st_mode)
-assert mode == 0o2700, oct(mode)
+expected_mode = 0o700 if sys.platform == "darwin" else 0o2700
+assert mode == expected_mode, (sys.platform, oct(mode), oct(expected_mode))
 assert candidate_stat.st_gid == staging_stat.st_gid, (candidate_stat.st_gid, staging_stat.st_gid)
 PY
   touch "$continue"
@@ -1939,6 +1970,7 @@ run_test test_upload_is_bounded_digest_verified_and_cleans_failures
 run_test test_activation_dev_live_boundaries_pointers_units_and_rollback
 run_test test_first_activation_failure_restores_absent_pointer_state
 run_test test_health_test_overrides_are_positive_and_bounded
+run_test test_health_checks_same_origin_api_and_websocket_paths
 run_test test_systemd_units_match_real_runtime_entrypoints
 run_test test_state_appends_use_crash_durable_writer
 run_test test_directory_mutations_are_fsynced

@@ -53,6 +53,7 @@ required_tracked=(
   apps/gpu-monitor/backend/requirements.txt
   apps/gpu-monitor/frontend/package.json
   apps/gpu-monitor/frontend/package-lock.json
+  apps/gpu-monitor/frontend/server.mjs
   apps/gpu-monitor/frontend/svelte.config.js
   apps/gpu-monitor/frontend/vite.config.ts
   apps/gpu-monitor/frontend/tsconfig.json
@@ -199,6 +200,7 @@ copy_tree(app_root / "backend", stage_app / "backend", include=lambda rel: rel.s
 for rel in [
     Path("frontend/package.json"),
     Path("frontend/package-lock.json"),
+    Path("frontend/server.mjs"),
 ]:
     copy_file(app_root / rel, stage_app / rel)
 copy_tree(app_root / "frontend" / "build", stage_app / "frontend" / "build", include=lambda rel: True)

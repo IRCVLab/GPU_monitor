@@ -551,7 +551,8 @@ with artifact_file:
                 if written != member.size: reject("short archive member")
             os.chmod(output, member.mode & 0o777)
 required = ["backend/main.py", "backend/slack_bridge.py", "backend/requirements.txt",
-            "frontend/package.json", "frontend/package-lock.json", "frontend/build/index.js"]
+            "frontend/package.json", "frontend/package-lock.json",
+            "frontend/server.mjs", "frontend/build/index.js"]
 for relative in required:
     if not (destination / relative).is_file(): reject("archive missing required runtime file: " + relative)
 manifest = {"application": "gpu-monitor", "artifact": f"gpu-monitor-{sha}.tar.gz",

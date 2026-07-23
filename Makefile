@@ -34,6 +34,7 @@ build-gpu-release:
 	apps/gpu-monitor/deploy/build-release.sh --sha "$$(git rev-parse HEAD)" --output-dir "$${OUTPUT_DIR:-apps/gpu-monitor/dist/releases}"
 
 test-gpu:
+	cd apps/gpu-monitor/frontend && npm run test:runtime
 	cd apps/gpu-monitor/frontend && npm run check
 	cd apps/gpu-monitor && SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password python3.12 -m unittest discover -s backend/tests -v
 

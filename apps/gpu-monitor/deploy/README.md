@@ -71,7 +71,7 @@ GPU_MONITOR_BRIDGE_PORT=8000
 PORT=5173
 ```
 
-Before enabling units, operators must add the application secrets and runtime settings required by the backend (including `SECRET_KEY`, `ADMIN_PASSWORD`, and a server-local writable `DATABASE_URL`) to the selected environment file. The backend and bridge templates run `backend.main:app` and `backend.slack_bridge:app` through uvicorn. The frontend template runs the packaged Svelte adapter-node entrypoint directly with Node and binds it to loopback.
+Before enabling units, operators must add the application secrets and runtime settings required by the backend (including `SECRET_KEY`, `ADMIN_PASSWORD`, and a server-local writable `DATABASE_URL`) to the selected environment file. The backend and bridge templates run `backend.main:app` and `backend.slack_bridge:app` through uvicorn. The frontend template runs the packaged `frontend/server.mjs` with the managed Node runtime and binds it to loopback. That server delegates normal page and asset requests to the generated adapter-node handler, strips only the exact `/api` prefix while proxying HTTP requests to the environment-local backend, and preserves `/ws` paths while tunnelling WebSocket upgrades. The proxy target defaults to `127.0.0.1:$GPU_MONITOR_BACKEND_PORT` and rejects non-loopback targets. Activation health checks exercise the browser-facing `/api/health` and `/ws/metrics` paths through the frontend port in addition to checking each backend directly, so a missing production proxy cannot pass release activation.
 
 The forced command accepts only these `SSH_ORIGINAL_COMMAND` forms:
 
