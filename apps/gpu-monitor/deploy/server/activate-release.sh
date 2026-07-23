@@ -580,6 +580,21 @@ install_dependencies() {
   return 0
 }
 
+prepare_runtime_group_inheritance() {
+  local release=$1
+  "$INTERNAL_PYTHON" - "$release" "$runtime_gid" <<'PY' || return 1
+import os, stat, sys
+root, expected_gid = sys.argv[1], int(sys.argv[2])
+for current, dirs, _files in os.walk(root):
+    metadata = os.lstat(current)
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_gid != expected_gid:
+        print(f"ERROR: staging directory has unexpected runtime group: {current}", file=sys.stderr)
+        raise SystemExit(1)
+    os.chmod(current, 0o2750)
+    dirs.sort()
+PY
+}
+
 check_release_size_and_space() {
   local release=$1
   "$INTERNAL_PYTHON" - "$release" "$max_expanded_bytes" <<'PY'
@@ -807,6 +822,7 @@ do_activate() {
     temporary="$tmp_root/release-${sha}.$$"
     rm -rf "$temporary"
     if ! (validate_and_extract "$object_dir" "$artifact_name" "$temporary" &&
+      prepare_runtime_group_inheritance "$temporary" &&
       install_dependencies "$temporary" &&
       check_release_size_and_space "$temporary" &&
       finalize_release_tree "$temporary"); then
