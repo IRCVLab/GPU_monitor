@@ -86,6 +86,13 @@ jobs:
         with:
           ref: ${{ steps.resolve.outputs.sha }}
 
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.14.0'
+          cache: npm
+          cache-dependency-path: apps/gpu-monitor/frontend/package-lock.json
+
       - name: Build release artifact
         id: build
         env:

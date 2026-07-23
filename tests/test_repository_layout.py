@@ -319,6 +319,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             "git ls-files > /tmp/ci-all-paths.txt",
             "git hash-object -t tree /dev/null",
             "node-version: '22.14.0'",
+            "npm run test:runtime",
             "python-version: '3.12.10'",
             "pytest==8.4.1",
         ):
@@ -415,6 +416,17 @@ class RepositoryLayoutTest(unittest.TestCase):
         for name, body in (("dev", dev), ("live", live)):
             self.assertIn("runs-on: ubuntu-24.04", body, name)
             self.assertIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", body, name)
+            self.assertIn(
+                "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+                body,
+                name,
+            )
+            self.assertIn("node-version: '22.14.0'", body, name)
+            self.assertIn(
+                "cache-dependency-path: apps/gpu-monitor/frontend/package-lock.json",
+                body,
+                name,
+            )
             self.assertNotIn("self-hosted", body, name)
             self.assertNotIn("storage", body.lower(), name)
             self.assertNotIn("Storage", body, name)

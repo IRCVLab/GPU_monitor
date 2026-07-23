@@ -83,6 +83,12 @@ f1bcf4684619d4337a06e1c914fca77ef488c4f810aa1c7f282600d25587f4f2  .migration/inv
 
 Verification timestamp: `2026-07-23T18:48:20Z`.
 
+Operational status: **pending and intentionally outside this unpushed PR
+preparation branch**. The tooling and read-only preflight are complete, but the
+remote annotated-tag creation, peeled-target verification, and any subsequent
+archive-branch deletion remain separate operator actions. This branch must not
+be described as having completed remote archive preservation.
+
 `python3.12 scripts/preserve_archive_refs.py --remote origin --dry-run` read the
 current remote refs and matched all 10 archive branches to the frozen migration
 inventory. This preflight did not create or push tags and did not delete
