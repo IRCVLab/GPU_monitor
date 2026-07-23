@@ -1,9 +1,10 @@
 SHELL := /bin/bash
-.PHONY: test layout-test history-test impact-test policy-test test-gpu build-gpu test-storage verify diff-check
+.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test test-gpu build-gpu test-storage verify diff-check
 
 test: layout-test history-test
 	$(MAKE) impact-test
 	$(MAKE) policy-test
+	$(MAKE) deploy-readiness-test
 
 layout-test:
 	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_repository_layout -v
@@ -17,6 +18,9 @@ impact-test:
 policy-test:
 	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_workflow_policy -v
 	python3.12 scripts/validate_workflows.py .github/workflows
+
+deploy-readiness-test:
+	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_deploy_prerequisites -v
 
 test-gpu:
 	cd apps/gpu-monitor/frontend && npm run check
