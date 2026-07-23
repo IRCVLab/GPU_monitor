@@ -769,6 +769,12 @@ def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -
         ):
             continue
         lines = executable_lines(run_command_value(block))
+        ssh_lines = [line for line in lines if line.startswith('ssh ')]
+        expected_ssh_lines = [
+            f'ssh "${{ssh_opts[@]}}" "$target" {upload} < "$artifact"',
+            f'ssh "${{ssh_opts[@]}}" "$target" {activate}',
+            f'ssh "${{ssh_opts[@]}}" "$target" {status}',
+        ]
         if not all(
             (
                 line_contains(lines, 'sha="$SHA"'),
@@ -782,9 +788,7 @@ def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -
                 line_contains(lines, 'target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"'),
                 line_contains(lines, '[[ "$target"', "^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$"),
                 line_contains(lines, "ssh_opts=", "StrictHostKeyChecking=yes", "UserKnownHostsFile", "IdentitiesOnly=yes", '-p "$GPU_DEPLOY_PORT"'),
-                any(line.startswith('ssh "${ssh_opts[@]}" "$target" ') and upload in line and '< "$artifact"' in line for line in lines),
-                any(line.startswith('ssh "${ssh_opts[@]}" "$target" ') and activate in line for line in lines),
-                any(line.startswith('ssh "${ssh_opts[@]}" "$target" ') and status in line for line in lines),
+                ssh_lines == expected_ssh_lines,
             )
         ):
             continue

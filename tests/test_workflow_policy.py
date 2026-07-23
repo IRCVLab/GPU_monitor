@@ -1223,6 +1223,26 @@ class WorkflowPolicyTest(unittest.TestCase):
             "live-cancel-true.yml",
         )
 
+    def test_rejects_gpu_dev_extra_ssh_commands_even_with_required_forced_commands(self):
+        for filename, extra_ssh in {
+            "dev-extra-rollback.yml": 'ssh "${ssh_opts[@]}" "$target" "rollback dev"',
+            "dev-extra-uptime.yml": 'ssh "${ssh_opts[@]}" "$target" uptime',
+        }.items():
+            workflow = Path(".github/workflows/deploy-gpu-dev.yml").read_text(encoding="utf-8")
+            workflow = workflow.replace('ssh "${ssh_opts[@]}" "$target" "status dev"', 'ssh "${ssh_opts[@]}" "$target" "status dev"\n          ' + extra_ssh)
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(workflow, "workflow-dispatch-dev-deploy-guard", "deploy", filename)
+
+    def test_rejects_gpu_live_extra_ssh_commands_even_with_required_forced_commands(self):
+        for filename, extra_ssh in {
+            "live-extra-rollback.yml": 'ssh "${ssh_opts[@]}" "$target" "rollback live"',
+            "live-extra-uptime.yml": 'ssh "${ssh_opts[@]}" "$target" uptime',
+        }.items():
+            workflow = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
+            workflow = workflow.replace('ssh "${ssh_opts[@]}" "$target" "status live"', 'ssh "${ssh_opts[@]}" "$target" "status live"\n          ' + extra_ssh)
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
+
     def test_rejects_gpu_deployment_workflows_with_storage_coupling(self):
         for filename, event in (("dev-storage.yml", "workflow_dispatch"), ("live-storage.yml", "workflow_run")):
             with self.subTest(filename=filename):
