@@ -5,9 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=gpu-deploy
-WorkingDirectory=/srv/gpu-monitor/%i/current/backend
+WorkingDirectory=/srv/gpu-monitor/%i/current
 EnvironmentFile=/etc/gpu-monitor/%i.env
-ExecStart=/srv/gpu-monitor/%i/current/.venv/bin/python /srv/gpu-monitor/%i/current/backend/main.py
+ExecStart=/srv/gpu-monitor/%i/current/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port ${GPU_MONITOR_BACKEND_PORT}
 Restart=on-failure
 
 [Install]

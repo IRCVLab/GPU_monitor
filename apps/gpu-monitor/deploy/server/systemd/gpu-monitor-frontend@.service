@@ -7,7 +7,8 @@ Type=simple
 User=gpu-deploy
 WorkingDirectory=/srv/gpu-monitor/%i/current/frontend
 EnvironmentFile=/etc/gpu-monitor/%i.env
-ExecStart=/usr/bin/npm run start -- --host 127.0.0.1
+Environment=HOST=127.0.0.1
+ExecStart=/usr/bin/node /srv/gpu-monitor/%i/current/frontend/build/index.js
 Restart=on-failure
 
 [Install]

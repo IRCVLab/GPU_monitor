@@ -1,59 +1,128 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 set -euo pipefail
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-PREFIX_IN=${PREFIX:-}
-TEST_PATH=${GPU_MONITOR_TEST_PATH:-}
-MAX_UPLOAD=${GPU_MONITOR_MAX_UPLOAD_BYTES:-536870912}
-ALLOWED_ENV=${GPU_MONITOR_ALLOWED_ENV:-}
-if [[ $# -gt 0 ]]; then
-  [[ $# -eq 1 ]] || fail "usage: gpu-monitor-deploy-command [dev|live]"
-  case "$1" in dev|live) ALLOWED_ENV="$1" ;; *) fail "invalid authorized environment" ;; esac
-fi
-ORIGINAL=${SSH_ORIGINAL_COMMAND:-}
-PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-[[ -n "$TEST_PATH" ]] && PATH="$TEST_PATH"
-export PATH PREFIX="$PREFIX_IN" GPU_MONITOR_MAX_UPLOAD_BYTES="$MAX_UPLOAD"
-INTERNAL_PYTHON="${GPU_MONITOR_INTERNAL_PYTHON:-/usr/bin/python3}"
-[[ -x "$INTERNAL_PYTHON" ]] || INTERNAL_PYTHON=$(command -v python3)
-[[ -n "$TEST_PATH" ]] && export GPU_MONITOR_TEST_PATH="$TEST_PATH"
-unset BASH_ENV ENV CDPATH IFS
-IFS=$' \t\n'
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-[[ -n "$ORIGINAL" ]] || fail "missing SSH_ORIGINAL_COMMAND"
+PRODUCTION_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PRODUCTION_PYTHON=/usr/bin/python3
+PRODUCTION_UPLOAD_LIMIT=536870912
+test_mode=false
+
+test_max_archive_files=""
+test_max_expanded_bytes=""
+test_health_retries=""
+test_health_sleep_seconds=""
+case "$#:${1:-}" in
+  1:dev|1:live)
+    allowed_env=$1
+    prefix=""
+    command_path=$PRODUCTION_PATH
+    internal_python=$PRODUCTION_PYTHON
+    max_upload=$PRODUCTION_UPLOAD_LIMIT
+    ;;
+  2:--test-mode)
+    case "$2" in dev|live) ;; *) fail "invalid test-mode authorized environment" ;; esac
+    test_mode=true
+    allowed_env=$2
+    prefix=${PREFIX:-}
+    command_path=${GPU_MONITOR_TEST_PATH:-$PRODUCTION_PATH}
+    internal_python=${GPU_MONITOR_INTERNAL_PYTHON:-$PRODUCTION_PYTHON}
+    max_upload=${GPU_MONITOR_MAX_UPLOAD_BYTES:-$PRODUCTION_UPLOAD_LIMIT}
+    test_max_archive_files=${GPU_MONITOR_MAX_ARCHIVE_FILES:-}
+    test_max_expanded_bytes=${GPU_MONITOR_MAX_EXPANDED_BYTES:-}
+    test_health_retries=${GPU_MONITOR_HEALTH_RETRIES:-}
+    test_health_sleep_seconds=${GPU_MONITOR_HEALTH_SLEEP_SECONDS:-}
+    ;;
+  *)
+    fail "usage: gpu-monitor-deploy-command <dev|live> | --test-mode <dev|live>"
+    ;;
+esac
+
+# Capture only the SSH protocol input after the argv boundary is known. Test
+# overrides above are unreachable from installed authorized_keys entries.
+original=${SSH_ORIGINAL_COMMAND:-}
+unset \
+  BASH_ENV ENV CDPATH GLOBIGNORE \
+  PREFIX GPU_MONITOR_ALLOWED_ENV GPU_MONITOR_TEST_PATH \
+  GPU_MONITOR_MAX_UPLOAD_BYTES GPU_MONITOR_INTERNAL_PYTHON \
+  GPU_MONITOR_MAX_ARCHIVE_FILES GPU_MONITOR_MAX_EXPANDED_BYTES \
+  GPU_MONITOR_HEALTH_RETRIES GPU_MONITOR_HEALTH_SLEEP_SECONDS \
+  PYTHONHOME PYTHONPATH PYTHONSTARTUP NODE_OPTIONS
+IFS=$' \t\n'
+PATH=$command_path
+export PATH
+
+if [[ "$test_mode" == true ]]; then
+  [[ "$prefix" == /* && "$prefix" != / && "$prefix" != *$'\n'* ]] ||
+    fail "test PREFIX must be an absolute non-root path"
+  [[ "$internal_python" == /* && -x "$internal_python" ]] ||
+    fail "test internal Python must be an executable absolute path"
+  [[ "$max_upload" =~ ^[0-9]+$ ]] &&
+    (( max_upload >= 1 && max_upload <= PRODUCTION_UPLOAD_LIMIT )) ||
+    fail "test upload bound must be between 1 and 536870912"
+  IFS=: read -r -a test_path_parts <<< "$command_path"
+  for test_path_part in "${test_path_parts[@]}"; do
+    [[ "$test_path_part" == /* && -d "$test_path_part" ]] ||
+      fail "test PATH entries must be existing absolute directories"
+  done
+  IFS=$' \t\n'
+else
+  [[ -x "$PRODUCTION_PYTHON" ]] || fail "required internal Python is unavailable"
+fi
+
+script_dir=${BASH_SOURCE[0]%/*}
+[[ "$script_dir" != "${BASH_SOURCE[0]}" ]] || script_dir=.
+script_dir=$(cd -- "$script_dir" && /bin/pwd -P)
+
+[[ -n "$original" ]] || fail "missing SSH_ORIGINAL_COMMAND"
 cmd=""
 env_name=""
 sha=""
 digest=""
-if [[ "$ORIGINAL" =~ ^(upload|activate)\ (dev|live)\ ([0-9a-f]{40})\ ([0-9a-f]{64})$ ]]; then
+if [[ "$original" =~ ^(upload|activate)\ (dev|live)\ ([0-9a-f]{40})\ ([0-9a-f]{64})$ ]]; then
   cmd=${BASH_REMATCH[1]}
   env_name=${BASH_REMATCH[2]}
   sha=${BASH_REMATCH[3]}
   digest=${BASH_REMATCH[4]}
-elif [[ "$ORIGINAL" =~ ^(status|rollback)\ (dev|live)$ ]]; then
+elif [[ "$original" =~ ^(status|rollback)\ (dev|live)$ ]]; then
   cmd=${BASH_REMATCH[1]}
   env_name=${BASH_REMATCH[2]}
 else
   fail "rejected SSH_ORIGINAL_COMMAND"
 fi
-if [[ -n "$ALLOWED_ENV" && "$env_name" != "$ALLOWED_ENV" ]]; then
-  fail "command not authorized for environment"
-fi
+[[ "$env_name" == "$allowed_env" ]] || fail "command not authorized for environment"
 
-root="${PREFIX}/srv/gpu-monitor/${env_name}"
-mkdir -p "$root/incoming" "$root/releases" "$root/tmp"
+child_env=(/usr/bin/env -i "PATH=$PATH")
+if [[ "$test_mode" == true ]]; then
+  child_env+=(
+    "PREFIX=$prefix"
+    "GPU_MONITOR_TEST_PATH=$PATH"
+    "GPU_MONITOR_INTERNAL_PYTHON=$internal_python"
+    "GPU_MONITOR_MAX_UPLOAD_BYTES=$max_upload"
+  )
+  [[ -z "$test_max_archive_files" ]] ||
+    child_env+=("GPU_MONITOR_MAX_ARCHIVE_FILES=$test_max_archive_files")
+  [[ -z "$test_max_expanded_bytes" ]] ||
+    child_env+=("GPU_MONITOR_MAX_EXPANDED_BYTES=$test_max_expanded_bytes")
+  [[ -z "$test_health_retries" ]] ||
+    child_env+=("GPU_MONITOR_HEALTH_RETRIES=$test_health_retries")
+  [[ -z "$test_health_sleep_seconds" ]] ||
+    child_env+=("GPU_MONITOR_HEALTH_SLEEP_SECONDS=$test_health_sleep_seconds")
+fi
 
 case "$cmd:$env_name" in
   upload:dev|upload:live)
+    root="${prefix}/srv/gpu-monitor/${env_name}"
+    /bin/mkdir -p "$root/incoming" "$root/tmp"
     tmp="$root/tmp/upload-${sha}.$$"
     final="$root/incoming/$sha.tar.gz"
-    rm -f "$tmp"
-    if ! "$INTERNAL_PYTHON" -c 'import hashlib, os, sys
+    /bin/rm -f "$tmp"
+    if ! "${child_env[@]}" "$internal_python" -c 'import hashlib, os, sys
 path, expected, max_bytes = sys.argv[1], sys.argv[2], int(sys.argv[3])
-h = hashlib.sha256(); total = 0
+h = hashlib.sha256()
+total = 0
 try:
-    with open(path, "wb") as out:
+    with open(path, "xb") as out:
         while True:
             chunk = sys.stdin.buffer.read(1024 * 1024)
             if not chunk:
@@ -61,30 +130,46 @@ try:
             total += len(chunk)
             if total > max_bytes:
                 raise SystemExit(2)
-            h.update(chunk); out.write(chunk)
+            h.update(chunk)
+            out.write(chunk)
+        out.flush()
+        os.fsync(out.fileno())
 except BaseException:
-    try: os.unlink(path)
-    except FileNotFoundError: pass
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
     raise
 if h.hexdigest() != expected:
     os.unlink(path)
     raise SystemExit(3)
-' "$tmp" "$digest" "$MAX_UPLOAD"
+' "$tmp" "$digest" "$max_upload"
     then
-      rm -f "$tmp"
+      /bin/rm -f "$tmp"
       fail "upload failed size or digest verification"
     fi
-    mv -f "$tmp" "$final"
+    /bin/mv -f "$tmp" "$final"
     printf '{"environment":"%s","sha":"%s","sha256":"%s","status":"uploaded"}\n' "$env_name" "$sha" "$digest"
     ;;
   activate:dev|activate:live)
-    exec "$script_dir/activate-release.sh" activate "$env_name" "$sha" "$digest"
+    if [[ "$test_mode" == true ]]; then
+      exec "${child_env[@]}" "$script_dir/activate-release.sh" --test-mode "$env_name" activate "$sha" "$digest"
+    fi
+    exec "${child_env[@]}" "$script_dir/activate-release.sh" activate "$env_name" "$sha" "$digest"
     ;;
   status:dev|status:live)
-    exec "$script_dir/activate-release.sh" status "$env_name"
+    if [[ "$test_mode" == true ]]; then
+      exec "${child_env[@]}" "$script_dir/activate-release.sh" --test-mode "$env_name" status
+    fi
+    exec "${child_env[@]}" "$script_dir/activate-release.sh" status "$env_name"
     ;;
   rollback:dev|rollback:live)
-    exec "$script_dir/activate-release.sh" rollback "$env_name"
+    if [[ "$test_mode" == true ]]; then
+      exec "${child_env[@]}" "$script_dir/activate-release.sh" --test-mode "$env_name" rollback
+    fi
+    exec "${child_env[@]}" "$script_dir/activate-release.sh" rollback "$env_name"
     ;;
-  *) fail "rejected SSH_ORIGINAL_COMMAND" ;;
+  *)
+    fail "rejected SSH_ORIGINAL_COMMAND"
+    ;;
 esac
