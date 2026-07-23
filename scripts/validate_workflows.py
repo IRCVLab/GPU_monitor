@@ -656,42 +656,142 @@ def workflow_mentions_storage(lines: list[SourceLine]) -> bool:
     return "storage" in workflow_text_from_lines(lines).lower()
 
 
+
+def executable_lines(command: str | None) -> list[str]:
+    if command is None:
+        return []
+    return [line.strip() for line in command.splitlines() if line.strip() and not line.strip().startswith("#")]
+
+
+def line_contains(lines: list[str], *needles: str) -> bool:
+    return any(all(needle in line for needle in needles) for line in lines)
+
+
+def step_nested_value(block: list[SourceLine], parent_key: str, child_key: str) -> str | None:
+    found = step_property(block, parent_key)
+    if found is None:
+        return None
+    index, line, value = found
+    if value:
+        return None
+    for child in block[index + 1 :]:
+        if child.indent <= line.indent:
+            break
+        parsed = key_value(child.text)
+        if parsed and parsed[0] == child_key:
+            return unquote(parsed[1])
+    return None
+
+
+def step_has_env(block: list[SourceLine], key: str, expected: str) -> bool:
+    found = step_property(block, "env")
+    if found is None:
+        return False
+    index, line, value = found
+    if value:
+        return False
+    for child in block[index + 1 :]:
+        if child.indent <= line.indent:
+            break
+        parsed = key_value(child.text)
+        if parsed and parsed[0] == key and unquote(parsed[1]) == expected:
+            return True
+    return False
+
+
+def has_checkout_ref(job: JobBlock, expected_ref: str) -> bool:
+    for block in step_blocks(job):
+        uses = step_property_value(block, "uses")
+        if uses is None or not PINNED_ACTION_RE.search(uses) or not uses.startswith("actions/checkout@"):
+            continue
+        if step_nested_value(block, "with", "ref") == expected_ref:
+            return True
+    return False
+
+
+def has_dev_resolve_step(job: JobBlock) -> bool:
+    for block in step_blocks(job):
+        if step_property_value(block, "id") != "resolve":
+            continue
+        lines = executable_lines(run_command_value(block))
+        return all(
+            (
+                line_contains(lines, "pr_number=", "PR_NUMBER"),
+                line_contains(lines, '[[ "$pr_number"', "^[1-9][0-9]*$"),
+                line_contains(lines, "pr_json=", "gh api", "pulls/$pr_number"),
+                line_contains(lines, "state=", "json.load", "state"),
+                line_contains(lines, '[[ "$state" == open ]]'),
+                line_contains(lines, "base_repo=", "base", "repo", "full_name"),
+                line_contains(lines, '[[ "$base_repo" == "$GITHUB_REPOSITORY" ]]'),
+                line_contains(lines, "head_repo=", "head", "repo", "full_name"),
+                line_contains(lines, '[[ "$head_repo" == "$GITHUB_REPOSITORY" ]]'),
+                line_contains(lines, "sha=", "head", "sha"),
+                line_contains(lines, '[[ "$sha"', "^[0-9a-f]{40}$"),
+                line_contains(lines, "checks_json=", "gh api", "--paginate", "--slurp", "check-runs"),
+                line_contains(lines, "completed_at"),
+                line_contains(lines, "check_id"),
+                line_contains(lines, "latest", "max"),
+                line_contains(lines, "status", "completed"),
+                line_contains(lines, "conclusion", "success"),
+                line_contains(lines, "ci/required"),
+            )
+        )
+    return False
+
+
+def has_build_step(job: JobBlock, expected_sha_source: str) -> bool:
+    for block in step_blocks(job):
+        if step_property_value(block, "id") != "build":
+            continue
+        if not step_has_env(block, "SHA", expected_sha_source):
+            continue
+        lines = executable_lines(run_command_value(block))
+        if line_contains(lines, 'sha="$SHA"') and line_contains(lines, '[[ "$sha"', "^[0-9a-f]{40}$"):
+            return True
+    return False
+
+
+def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -> bool:
+    upload = f'"upload {lane} $sha $digest"'
+    activate = f'"activate {lane} $sha $digest"'
+    status = f'"status {lane}"'
+    for block in step_blocks(job):
+        if not all(
+            step_has_env(block, name, value)
+            for name, value in (
+                ("SHA", expected_sha_source),
+                ("DIGEST", "${{ steps.build.outputs.digest }}"),
+                ("ARTIFACT", "${{ steps.build.outputs.artifact }}"),
+                ("GPU_DEPLOY_HOST", "${{ secrets.GPU_DEPLOY_HOST }}"),
+                ("GPU_DEPLOY_PORT", "${{ secrets.GPU_DEPLOY_PORT }}"),
+                ("GPU_DEPLOY_USER", "${{ secrets.GPU_DEPLOY_USER }}"),
+            )
+        ):
+            continue
+        lines = executable_lines(run_command_value(block))
+        if not all(
+            (
+                line_contains(lines, 'sha="$SHA"'),
+                line_contains(lines, 'digest="$DIGEST"'),
+                line_contains(lines, 'artifact="$ARTIFACT"'),
+                line_contains(lines, '[[ "$sha"', "^[0-9a-f]{40}$"),
+                line_contains(lines, '[[ "$digest"', "^[0-9a-f]{64}$"),
+                line_contains(lines, '[[ "$GPU_DEPLOY_HOST"', "^[A-Za-z0-9._-]+$"),
+                line_contains(lines, '[[ "$GPU_DEPLOY_USER"', "^[A-Za-z0-9._-]+$"),
+                line_contains(lines, '[[ "$GPU_DEPLOY_PORT"', "^[0-9]+$"),
+                line_contains(lines, 'target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"'),
+                line_contains(lines, '[[ "$target"', "^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$"),
+                line_contains(lines, "ssh_opts=", "StrictHostKeyChecking=yes", "UserKnownHostsFile", "IdentitiesOnly=yes", '-p "$GPU_DEPLOY_PORT"'),
+                any(line.startswith('ssh "${ssh_opts[@]}" "$target" ') and upload in line and '< "$artifact"' in line for line in lines),
+                any(line.startswith('ssh "${ssh_opts[@]}" "$target" ') and activate in line for line in lines),
+                any(line.startswith('ssh "${ssh_opts[@]}" "$target" ') and status in line for line in lines),
+            )
+        ):
+            continue
+        return True
+    return False
+
 def has_gpu_dev_dispatch_guard(lines: list[SourceLine], job: JobBlock, events: set[str], runner_labels: set[str]) -> bool:
-    text = job_text(job)
-    required_snippets = (
-        "pulls/",
-        "github.repository",
-        "base.repo.full_name",
-        "head.repo.full_name",
-        "head.sha",
-        "state",
-        "open",
-        "ci/required",
-        "check-runs",
-        "--paginate",
-        "--slurp",
-        "completed_at",
-        "id",
-        "latest",
-        "steps.resolve.outputs.sha",
-        "StrictHostKeyChecking=yes",
-        "UserKnownHostsFile",
-        "IdentitiesOnly=yes",
-        "GPU_DEPLOY_HOST",
-        "GPU_DEPLOY_USER",
-        "status",
-        "conclusion",
-        "upload dev $sha $digest",
-        "activate dev $sha $digest",
-        "status dev",
-    )
-    validation_snippets = (
-        "^[1-9][0-9]*$",
-        "^[0-9a-f]{40}$",
-        "^[0-9a-f]{64}$",
-        "GPU_DEPLOY_PORT",
-        "target",
-    )
     return (
         "workflow_dispatch" in events
         and not ({"push", "pull_request", "pull_request_target", "workflow_run"} & events)
@@ -700,8 +800,10 @@ def has_gpu_dev_dispatch_guard(lines: list[SourceLine], job: JobBlock, events: s
         and workflow_dispatch_input_names(lines) == {"pr_number"}
         and has_workflow_dispatch_pr_number_input(lines)
         and has_top_level_concurrency(lines, group="gpu-dev", cancel_in_progress="true")
-        and all(snippet in text for snippet in required_snippets)
-        and all(snippet in text for snippet in validation_snippets)
+        and has_dev_resolve_step(job)
+        and has_checkout_ref(job, "${{ steps.resolve.outputs.sha }}")
+        and has_build_step(job, "${{ steps.resolve.outputs.sha }}")
+        and has_forced_deploy_step(job, "dev", "${{ steps.resolve.outputs.sha }}")
         and not workflow_mentions_storage(lines)
     )
 
@@ -740,26 +842,10 @@ def has_split_live_authorization(lines: list[SourceLine], jobs: list[JobBlock], 
 
 
 def live_deploy_job_uses_forced_protocol(job: JobBlock) -> bool:
-    text = job_text(job)
-    return all(
-        snippet in text
-        for snippet in (
-            "github.event.workflow_run.head_sha",
-            "upload live $sha $digest",
-            "activate live $sha $digest",
-            "status live",
-            "StrictHostKeyChecking=yes",
-            "UserKnownHostsFile",
-            "IdentitiesOnly=yes",
-            "GPU_DEPLOY_HOST",
-            "GPU_DEPLOY_USER",
-            "^[0-9a-f]{40}$",
-            "^[0-9a-f]{64}$",
-            "GPU_DEPLOY_PORT",
-            "GPU_DEPLOY_HOST",
-            "GPU_DEPLOY_USER",
-            "target",
-        )
+    return (
+        has_checkout_ref(job, "${{ github.event.workflow_run.head_sha }}")
+        and has_build_step(job, "${{ github.event.workflow_run.head_sha }}")
+        and has_forced_deploy_step(job, "live", "${{ github.event.workflow_run.head_sha }}")
     )
 
 
