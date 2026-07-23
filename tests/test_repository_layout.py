@@ -13,9 +13,11 @@ ALLOWED_STORAGE_SAMPLE_FIXTURES = {
 
 DISALLOWED_DIR_NAMES = {
     ".cache",
+    ".omx",
     ".pytest_cache",
     ".ruff_cache",
     ".svelte-kit",
+    ".superpowers",
     ".venv",
     "__pycache__",
     "build",
@@ -170,7 +172,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             make_target_recipe("build-gpu"),
         )
         self.assertEqual(
-            ["layout-test", "history-test", "test-gpu", "build-gpu", "test-storage", "diff-check"],
+            ["test", "test-gpu", "build-gpu", "test-storage", "diff-check"],
             make_target_dependencies("verify"),
         )
 
@@ -294,6 +296,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             "--merge-base",
             "--fallback-to-all-tracked",
             "git ls-files > /tmp/ci-all-paths.txt",
+            "git hash-object -t tree /dev/null",
             "node-version: '22.14.0'",
             "python-version: '3.12.10'",
             "pytest==8.4.1",
@@ -309,6 +312,12 @@ class RepositoryLayoutTest(unittest.TestCase):
     def test_tracked_files_exclude_generated_runtime_and_local_environment_data(self):
         disallowed = [path for path in tracked_paths() if is_disallowed_tracked_path(path)]
         self.assertEqual([], disallowed)
+
+    def test_diff_check_accepts_an_explicit_committed_range(self):
+        recipe = normalized_make_recipe("diff-check")
+        self.assertIn("DIFF_CHECK_BASE", recipe)
+        self.assertIn("DIFF_CHECK_HEAD", recipe)
+        self.assertIn('git diff --check "$$base" "$$head"', recipe)
 
 
 if __name__ == "__main__":

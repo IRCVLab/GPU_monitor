@@ -53,7 +53,17 @@ test-storage:
 	  printf '%s\n' 'SKIP: Linux-only scanner tests use SYS_getdents64; covered by Task 3 remote Linux verification.'; \
 	fi
 
-verify: layout-test history-test test-gpu build-gpu test-storage diff-check
+verify: test test-gpu build-gpu test-storage diff-check
 
 diff-check:
-	git diff --check
+	@set -euo pipefail; \
+	base="$${DIFF_CHECK_BASE:-}"; \
+	head="$${DIFF_CHECK_HEAD:-HEAD}"; \
+	if [[ -n "$$base" ]]; then \
+	  if [[ "$${DIFF_CHECK_MERGE_BASE:-false}" == true ]]; then \
+	    base=$$(git merge-base "$$base" "$$head"); \
+	  fi; \
+	  git diff --check "$$base" "$$head"; \
+	else \
+	  git diff --check; \
+	fi

@@ -309,7 +309,7 @@ def server_check(metadata: dict[str, Any]) -> dict[str, str]:
     return check(status, evidence)
 
 
-def evaluate_metadata(metadata: dict[str, Any], *, require_host_for_cutover: bool = False) -> dict[str, Any]:
+def evaluate_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     schema_errors = validate_metadata_schema(metadata)
     if schema_errors:
         return schema_invalid_report(schema_errors)
@@ -333,13 +333,8 @@ def evaluate_metadata(metadata: dict[str, Any], *, require_host_for_cutover: boo
     ]
     cutover = merge_status(cutover_checks)
 
-    overall_checks = [checks["protected_main"], checks["codeowner_enforcement"], checks["runner_availability"]]
-    if require_host_for_cutover:
-        overall_checks.append(checks["server_reachability"])
-    overall = merge_status(overall_checks)
-
     return {
-        "overall": overall,
+        "overall": cutover,
         "ci_publication": ci_publication,
         "runner_registration": runner_registration,
         "cutover": cutover,
@@ -617,9 +612,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     source.add_argument("--repo", help="GitHub repository name, for read-only gh api inspection (OWNER/REPO)")
     parser.add_argument("--check-host", help="explicitly run a bounded read-only SSH probe for host or host:port")
     parser.add_argument(
-        "--require-host-for-cutover",
-        action="store_true",
-        help="include server reachability in the process exit status",
+        "--stage",
+        choices=("publication", "runner", "cutover"),
+        default="cutover",
+        help="select the readiness stage used for the process exit status (default: cutover)",
     )
     return parser.parse_args(argv)
 
@@ -662,9 +658,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
         return 1
 
-    report = evaluate_metadata(metadata, require_host_for_cutover=args.require_host_for_cutover)
+    report = evaluate_metadata(metadata)
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if report["overall"] == READY else 1
+    stage_key = {
+        "publication": "ci_publication",
+        "runner": "runner_registration",
+        "cutover": "cutover",
+    }[args.stage]
+    return 0 if report[stage_key] == READY else 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

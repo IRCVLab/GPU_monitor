@@ -126,6 +126,66 @@ class CiImpactTest(unittest.TestCase):
             apps_required=True,
         )
 
+    def test_design_token_change_validates_both_frontends_without_storage_agent(self):
+        self.assert_decisions(
+            ("packages/design-tokens/tokens.css",),
+            gpu=True,
+            storage_dashboard=True,
+            shared=True,
+            apps_required=True,
+        )
+
+    def test_deploy_paths_validate_only_their_affected_application(self):
+        self.assert_decisions(
+            ("deploy/gpu-monitor/service.yml",),
+            gpu=True,
+            apps_required=True,
+        )
+        self.assert_decisions(
+            ("deploy/storage-dashboard/service.yml",),
+            storage_dashboard=True,
+            apps_required=True,
+        )
+        self.assert_decisions(
+            ("deploy/storage-agent/install.sh",),
+            storage_agent=True,
+            apps_required=True,
+        )
+
+    def test_root_governance_change_validates_all_applications(self):
+        self.assert_decisions(
+            (".gitignore",),
+            gpu=True,
+            storage_dashboard=True,
+            storage_agent=True,
+            shared=True,
+            apps_required=True,
+        )
+
+    def test_storage_app_root_config_validates_dashboard_and_agent(self):
+        self.assert_decisions(
+            ("apps/storage-monitor/Makefile",),
+            storage_dashboard=True,
+            storage_agent=True,
+            apps_required=True,
+        )
+        self.assert_decisions(
+            ("apps/storage-monitor/config/servers.example.yaml",),
+            storage_dashboard=True,
+            storage_agent=True,
+            apps_required=True,
+        )
+
+    def test_unclassified_non_documentation_path_fails_closed_to_all_applications(self):
+        self.assert_decisions(
+            ("packages/future-shared-library/source.js",),
+            gpu=True,
+            storage_dashboard=True,
+            storage_agent=True,
+            shared=True,
+            apps_required=True,
+        )
+
     def test_empty_diff_sets_no_decisions(self):
         self.assert_decisions(())
 

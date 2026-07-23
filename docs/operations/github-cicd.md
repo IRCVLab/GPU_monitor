@@ -12,6 +12,8 @@ Required live check:
 python3.12 scripts/check_deploy_prerequisites.py --repo IRCVLab/GPU_monitor
 ```
 
+The default process exit status is the production `cutover` status, so missing or blocked server reachability can never produce exit `0`. Use `--stage runner` only when evaluating runner-registration readiness. `--stage publication` reports protected-CI readiness; it is not a gate for the repository's first source-only push.
+
 Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; `READY` requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. If runner enumeration cannot read the repository runner API, `runner_availability` must be `UNKNOWN`, not treated as accepted; org runner and runner-group evidence is advisory unless it explicitly proves this repository is eligible.
 
 ## Required `main` protection before runner registration
@@ -41,10 +43,9 @@ Local pre-publication verification:
 
 ```bash
 make verify
-python3.12 scripts/check_deploy_prerequisites.py --repo IRCVLab/GPU_monitor
 ```
 
-Publication is source-only until the prerequisite report is ready:
+The first publication is source-only and does not require the deployment checker to return `READY`:
 
 ```bash
 git push origin HEAD
@@ -95,11 +96,10 @@ Only run a live host check when explicitly requested:
 ```bash
 python3.12 scripts/check_deploy_prerequisites.py \
   --repo IRCVLab/GPU_monitor \
-  --check-host 166.104.167.11:2200 \
-  --require-host-for-cutover
+  --check-host 166.104.167.11:2200
 ```
 
-Without `--check-host`, the checker reports server reachability as `UNKNOWN` and does not contact the server. With `--check-host`, it validates the host target, rejects option-injection or malformed user/host/port values, and runs only `ssh -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1 ... true` with a subprocess timeout as a second bound; it does not request credentials or mutate the server. When `--metadata-file` and `--check-host` are supplied together, the fresh bounded probe overrides any stale `serverReachability` value in the metadata file.
+Without `--check-host`, the checker reports server reachability as `UNKNOWN`, exits nonzero for the default `cutover` stage, and does not contact the server. With `--check-host`, it validates the host target, rejects option-injection or malformed user/host/port values, and runs only `ssh -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1 ... true` with a subprocess timeout as a second bound; it does not request credentials or mutate the server. When `--metadata-file` and `--check-host` are supplied together, the fresh bounded probe overrides any stale `serverReachability` value in the metadata file.
 
 ## Fail-closed metadata handling
 

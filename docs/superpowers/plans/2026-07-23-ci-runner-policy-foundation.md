@@ -310,4 +310,3 @@ Use `gh run list`, `gh run watch`, and `gh run view --log-failed` to prove the i
 - [ ] **Step 8: Run live deployment prerequisite check**
 
 Expected current result: BLOCKED until protected-main controls are available and `166.104.167.11:2200` is reachable. Do not register a production runner or alter live services while blocked.
-

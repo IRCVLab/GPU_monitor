@@ -63,18 +63,47 @@ class DeployPrerequisitesTest(unittest.TestCase):
                 "codeowners": {"present": True, "reviewRequired": True},
                 "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
                 "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
-            }
+            },
+            "--stage",
+            "runner",
         )
 
         self.assertEqual(code, 0)
-        self.assertEqual(report["overall"], "READY")
+        self.assertEqual(report["overall"], "UNKNOWN")
         self.assertEqual(report["ci_publication"], "READY")
         self.assertEqual(report["runner_registration"], "READY")
         self.assertEqual(report["cutover"], "UNKNOWN")
         self.assertEqual(report["checks"]["protected_main"]["status"], "READY")
         self.assertEqual(report["checks"]["codeowner_enforcement"]["status"], "READY")
 
-    def test_missing_server_reachability_blocks_cutover_but_not_ci_publication(self):
+    def test_default_exit_status_is_cutover_and_fails_when_host_is_blocked(self):
+        code, report, _stderr = self.evaluate(
+            {
+                "repository": {"nameWithOwner": "IRCVLab/GPU_monitor", "isPrivate": True},
+                "defaultBranchRef": {"name": "main"},
+                "branchProtectionRule": {
+                    "requiredStatusCheckContexts": ["ci/required"],
+                    "requiresApprovingReviews": True,
+                    "requiresCodeOwnerReviews": True,
+                    "isAdminEnforced": True,
+                    "allowsForcePushes": False,
+                    "adminBypassAllowed": False,
+                },
+                "codeowners": {"present": True, "reviewRequired": True},
+                "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
+                "serverReachability": {"status": "blocked", "evidence": "ssh timed out"},
+            }
+        )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(report["overall"], "BLOCKED")
+        self.assertEqual(report["ci_publication"], "READY")
+        self.assertEqual(report["runner_registration"], "READY")
+        self.assertEqual(report["cutover"], "BLOCKED")
+        self.assertEqual(report["checks"]["server_reachability"]["status"], "BLOCKED")
+        self.assertIn("ssh timed out", report["checks"]["server_reachability"]["evidence"])
+
+    def test_publication_stage_can_succeed_without_server_reachability(self):
         code, report, _stderr = self.evaluate(
             {
                 "repository": {"nameWithOwner": "IRCVLab/GPU_monitor", "isPrivate": True},
@@ -91,16 +120,14 @@ class DeployPrerequisitesTest(unittest.TestCase):
                 "runnerAvailability": {"runners": [{"name": "prod-1", "status": "online", "scope": "repo"}]},
                 "serverReachability": {"status": "blocked", "evidence": "ssh timed out"},
             },
-            "--require-host-for-cutover",
+            "--stage",
+            "publication",
         )
 
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
         self.assertEqual(report["overall"], "BLOCKED")
         self.assertEqual(report["ci_publication"], "READY")
-        self.assertEqual(report["runner_registration"], "READY")
         self.assertEqual(report["cutover"], "BLOCKED")
-        self.assertEqual(report["checks"]["server_reachability"]["status"], "BLOCKED")
-        self.assertIn("ssh timed out", report["checks"]["server_reachability"]["evidence"])
 
     def test_missing_org_runner_group_permission_is_unknown_not_silently_ready(self):
         report = check_deploy_prerequisites.evaluate_metadata(
@@ -535,7 +562,8 @@ class DeployPrerequisitesTest(unittest.TestCase):
                         str(metadata_file),
                         "--check-host",
                         "example.com:2200",
-                        "--require-host-for-cutover",
+                        "--stage",
+                        "cutover",
                     ])
             finally:
                 check_deploy_prerequisites.inspect_host = original
@@ -635,7 +663,8 @@ class DeployPrerequisitesTest(unittest.TestCase):
         report = check_deploy_prerequisites.evaluate_metadata(metadata)
 
         self.assertEqual(report["checks"]["runner_availability"]["status"], "READY")
-        self.assertEqual(report["overall"], "READY")
+        self.assertEqual(report["runner_registration"], "READY")
+        self.assertEqual(report["overall"], "UNKNOWN")
 
     def test_repo_scoped_online_runner_is_ready_even_when_org_enumeration_is_forbidden(self):
         calls = []

@@ -37,13 +37,29 @@ def _with_slash(prefix: str) -> str:
     return prefix if prefix.endswith("/") else f"{prefix}/"
 
 
-GPU_RULE = PathRule("gpu", prefixes=("apps/gpu-monitor/",))
+GPU_RULE = PathRule(
+    "gpu",
+    prefixes=(
+        "apps/gpu-monitor/",
+        "deploy/gpu-monitor/",
+    ),
+)
 STORAGE_DASHBOARD_RULE = PathRule(
     "storage_dashboard",
     prefixes=(
         "apps/storage-monitor/collector/",
+        "apps/storage-monitor/config/",
         "apps/storage-monitor/data/",
         "apps/storage-monitor/viewer/",
+        "deploy/storage-dashboard/",
+    ),
+    exact=(
+        "apps/storage-monitor/.gitignore",
+        "apps/storage-monitor/Makefile",
+        "apps/storage-monitor/pyproject.toml",
+        "apps/storage-monitor/pytest.ini",
+        "apps/storage-monitor/requirements.txt",
+        "apps/storage-monitor/requirements-dev.txt",
     ),
 )
 STORAGE_AGENT_RULE = PathRule(
@@ -53,21 +69,36 @@ STORAGE_AGENT_RULE = PathRule(
         "apps/storage-monitor/config/",
         "apps/storage-monitor/deploy/",
         "apps/storage-monitor/scanner/",
+        "deploy/storage-agent/",
     ),
-    exact=("apps/storage-monitor/install.sh",),
+    exact=(
+        "apps/storage-monitor/.gitignore",
+        "apps/storage-monitor/Makefile",
+        "apps/storage-monitor/install.sh",
+        "apps/storage-monitor/pyproject.toml",
+        "apps/storage-monitor/pytest.ini",
+        "apps/storage-monitor/requirements.txt",
+        "apps/storage-monitor/requirements-dev.txt",
+    ),
 )
 WORKFLOW_RULE = PathRule("workflow", prefixes=(".github/",))
 SHARED_RULE = PathRule(
     "shared",
     prefixes=("scripts/",),
     exact=(
+        ".editorconfig",
+        ".gitattributes",
+        ".gitignore",
         "Makefile",
+        "package-lock.json",
+        "package.json",
         "pyproject.toml",
         "pytest.ini",
         "requirements.txt",
         "requirements-dev.txt",
     ),
 )
+DESIGN_TOKENS_RULE = PathRule("shared", prefixes=("packages/design-tokens/",))
 DOCUMENTATION_RULE = PathRule(
     "documentation",
     prefixes=(
@@ -137,16 +168,29 @@ def matches_rule(path: str, rule: PathRule) -> bool:
 def classify_paths(paths: Sequence[str]) -> dict[str, bool]:
     normalized_paths = normalize_paths(paths)
     decisions = {key: False for key in DECISION_KEYS}
+    full_shared_change = False
 
     for path in normalized_paths:
         documentation_only = matches_rule(path, DOCUMENTATION_RULE)
+        path_matched = documentation_only
+        if not documentation_only and matches_rule(path, DESIGN_TOKENS_RULE):
+            decisions["shared"] = True
+            decisions["gpu"] = True
+            decisions["storage_dashboard"] = True
+            path_matched = True
         for rule in PATH_RULES:
             if documentation_only and rule.decision in {"gpu", "storage_dashboard", "storage_agent"}:
                 continue
             if matches_rule(path, rule):
+                path_matched = True
                 decisions[rule.decision] = True
+                if rule is SHARED_RULE:
+                    full_shared_change = True
+        if not path_matched:
+            decisions["shared"] = True
+            full_shared_change = True
 
-    if decisions["workflow"] or decisions["shared"]:
+    if decisions["workflow"] or full_shared_change:
         decisions["gpu"] = True
         decisions["storage_dashboard"] = True
         decisions["storage_agent"] = True
