@@ -469,10 +469,10 @@ PY
 
 validate_and_extract() {
   local object_dir=$1 artifact_name=$2 destination=$3
-  "$INTERNAL_PYTHON" - "$object_dir" "$artifact_name" "$destination" "$sha" "$digest" "$max_archive_files" "$max_expanded_bytes" "$runtime_gid" <<'PY'
+  "$INTERNAL_PYTHON" - "$object_dir" "$artifact_name" "$destination" "$sha" "$digest" "$max_archive_files" "$max_expanded_bytes" "$runtime_gid" "$test_mode" <<'PY'
 import hashlib, json, os, shutil, stat, sys, tarfile
 from pathlib import Path, PurePosixPath
-object_dir_path, artifact_name, destination_path, sha, expected, max_entries, max_bytes, expected_gid = sys.argv[1:]
+object_dir_path, artifact_name, destination_path, sha, expected, max_entries, max_bytes, expected_gid, test_mode = sys.argv[1:]
 destination = Path(destination_path); max_entries = int(max_entries); max_bytes = int(max_bytes); expected_gid = int(expected_gid)
 def reject(message):
     print("ERROR: " + message, file=sys.stderr); raise SystemExit(1)
@@ -488,13 +488,18 @@ def make_staging_directory(path):
             os.mkdir(cursor, 0o2700)
         except FileExistsError:
             if not cursor.is_dir(): reject("staging path is not a directory")
-        os.chmod(cursor, 0o2700)
-        if os.lstat(cursor).st_gid != expected_gid:
-            reject("staging directory did not inherit runtime group")
+        metadata = os.lstat(cursor)
+        actual_gid = metadata.st_gid
+        if actual_gid != expected_gid:
+            reject(f"staging directory did not inherit runtime group: {cursor}: gid {actual_gid}, expected {expected_gid}")
+        if test_mode != "true" and not metadata.st_mode & stat.S_ISGID:
+            reject(f"staging directory lost setgid inheritance: {cursor}")
 if destination.exists(): reject("temporary destination exists")
 destination.mkdir(parents=True, mode=0o2700)
-os.chmod(destination, 0o2700)
-if os.lstat(destination).st_gid != expected_gid: reject("temporary destination did not inherit runtime group")
+destination_metadata = os.lstat(destination)
+if destination_metadata.st_gid != expected_gid: reject("temporary destination did not inherit runtime group")
+if test_mode != "true" and not destination_metadata.st_mode & stat.S_ISGID:
+    reject("temporary destination lost setgid inheritance")
 seen = {}; count = total = 0
 object_dir_fd = os.open(object_dir_path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
 try:
@@ -589,15 +594,17 @@ install_dependencies() {
 
 prepare_runtime_group_inheritance() {
   local release=$1
-  "$INTERNAL_PYTHON" - "$release" "$runtime_gid" <<'PY' || return 1
+  "$INTERNAL_PYTHON" - "$release" "$runtime_gid" "$test_mode" <<'PY' || return 1
 import os, stat, sys
-root, expected_gid = sys.argv[1], int(sys.argv[2])
+root, expected_gid, test_mode = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 for current, dirs, _files in os.walk(root):
     metadata = os.lstat(current)
     if not stat.S_ISDIR(metadata.st_mode) or metadata.st_gid != expected_gid:
         print(f"ERROR: staging directory has unexpected runtime group: {current}", file=sys.stderr)
         raise SystemExit(1)
-    os.chmod(current, 0o2750)
+    if test_mode != "true" and not metadata.st_mode & stat.S_ISGID:
+        print(f"ERROR: staging directory lost setgid inheritance: {current}", file=sys.stderr)
+        raise SystemExit(1)
     dirs.sort()
 PY
 }
