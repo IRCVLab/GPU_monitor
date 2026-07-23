@@ -42,28 +42,43 @@ jobs:
           state=$(python3.12 -c 'import json,sys; print(json.load(sys.stdin)["state"])' <<<"$pr_json")
           [[ "$state" == open ]] || { echo "PR state is not open" >&2; exit 1; }
 
+          base_repo=$(python3.12 -c 'import json,sys; print(json.load(sys.stdin)["base"]["repo"]["full_name"])' <<<"$pr_json")
+          [[ "$base_repo" == "$GITHUB_REPOSITORY" ]] || { echo "PR base.repo.full_name is not this repository" >&2; exit 1; }
+
           head_repo=$(python3.12 -c 'import json,sys; print(json.load(sys.stdin)["head"]["repo"]["full_name"])' <<<"$pr_json")
           [[ "$head_repo" == "$GITHUB_REPOSITORY" ]] || { echo "PR head.repo.full_name is not this repository" >&2; exit 1; }
 
           sha=$(python3.12 -c 'import json,sys; print(json.load(sys.stdin)["head"]["sha"])' <<<"$pr_json")
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "head.sha is not a 40-character lowercase SHA" >&2; exit 1; }
 
-          checks_json=$(gh api "repos/${REPOSITORY}/commits/$sha/check-runs")
+          checks_json=$(gh api --paginate --slurp "repos/${REPOSITORY}/commits/$sha/check-runs")
           CHECKS_JSON="$checks_json" python3.12 - "$sha" <<'PY'
+          import datetime as dt
           import json
           import os
           import sys
+
           sha = sys.argv[1]
-          payload = json.loads(os.environ["CHECKS_JSON"])
-          matches = [
-              check for check in payload.get("check_runs", [])
-              if check.get("name") == "ci/required"
-              and check.get("head_sha") == sha
-              and check.get("status") == "completed"
-              and check.get("conclusion") == "success"
-          ]
+          pages = json.loads(os.environ["CHECKS_JSON"])
+          if not isinstance(pages, list):
+              raise SystemExit("check-runs payload is not paginated")
+          matches = []
+          for page in pages:
+              for check in page.get("check_runs", []):
+                  if check.get("name") == "ci/required" and check.get("head_sha") == sha:
+                      completed_at = check.get("completed_at")
+                      check_id = check.get("id")
+                      if not isinstance(completed_at, str) or not isinstance(check_id, int):
+                          raise SystemExit("matching ci/required check lacks completed_at or numeric id")
+                      timestamp = dt.datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+                      if timestamp.tzinfo is None:
+                          raise SystemExit("matching ci/required completed_at lacks timezone")
+                      matches.append((timestamp, check_id, check))
           if not matches:
-              raise SystemExit("ci/required is not successful for PR head SHA")
+              raise SystemExit("ci/required is missing for PR head SHA")
+          _timestamp, _check_id, latest = max(matches, key=lambda item: (item[0], item[1]))
+          if latest.get("status") != "completed" or latest.get("conclusion") != "success":
+              raise SystemExit("latest ci/required is not successful for PR head SHA")
           PY
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
 
