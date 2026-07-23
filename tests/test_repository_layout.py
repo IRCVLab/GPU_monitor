@@ -344,6 +344,12 @@ class RepositoryLayoutTest(unittest.TestCase):
             "docs/superpowers/specs/2026-07-23-development-release-workflow-design.md"
         ).read_text(encoding="utf-8")
         github_cicd = Path("docs/operations/github-cicd.md").read_text(encoding="utf-8")
+        old_monorepo_design = Path(
+            "docs/superpowers/specs/2026-07-22-monitoring-platform-monorepo-design.md"
+        ).read_text(encoding="utf-8")
+        deploy_checker = Path("scripts/check_deploy_prerequisites.py").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("PR head SHA", workflow_design)
         self.assertIn("main SHA", workflow_design)
@@ -351,6 +357,26 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertIn("GitHub-hosted", github_cicd)
         self.assertIn("forced-command", github_cicd)
         self.assertIn("Storage agents remain manual", github_cicd)
+        self.assertIn(
+            '"runner_availability": runner_check(metadata)',
+            deploy_checker,
+        )
+        self.assertIn(
+            "legacy branch-protected/self-hosted readiness model",
+            github_cicd,
+        )
+        self.assertIn(
+            "not the authorization gate for the GitHub-hosted trusted-team workflow",
+            github_cicd,
+        )
+        self.assertIn("must be re-scoped before live activation", github_cicd)
+        self.assertIn("Current cutover is expected to remain non-READY", github_cicd)
+        self.assertIn(
+            "Superseded for runner and deployment policy by "
+            "`docs/superpowers/specs/2026-07-23-development-release-workflow-design.md`",
+            old_monorepo_design,
+        )
+        self.assertIn("Historical rationale", old_monorepo_design)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,8 @@
 
 Approved architecture direction: one repository containing two independently deployable monitoring applications.
 
+Superseded for runner and deployment policy by `docs/superpowers/specs/2026-07-23-development-release-workflow-design.md`. The runner and deployment sections below are preserved as Historical rationale for the earlier branch-protected/self-hosted design, not as the active release policy.
+
 This document defines repository boundaries, history migration, continuous integration, automatic deployment, rollback, documentation, and operational isolation. It does not merge the GPU and Storage products into one runtime or one backend.
 
 ## Goals

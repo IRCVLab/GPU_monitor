@@ -1,6 +1,8 @@
 # GitHub CI/CD bootstrap guard
 
-This repository is ready to publish source, pull-request CI, and the trusted-team GPU deployment workflow, but live cutover remains deliberately delayed until the workflow and server-side release path are implemented and verified. The guardrail is `scripts/check_deploy_prerequisites.py`, a read-only checker that reports `READY`, `BLOCKED`, or `UNKNOWN` for repository protection, CODEOWNER enforcement, runner availability, and server reachability. It never changes GitHub settings, registers runners, copies artifacts, restarts services, or writes to the production server; malformed metadata fails closed and never falls back to live inspection.
+This repository is ready to publish source, pull-request CI, and the trusted-team GPU deployment workflow, but live cutover remains deliberately delayed until the workflow and server-side release path are implemented and verified.
+
+`scripts/check_deploy_prerequisites.py` is the legacy branch-protected/self-hosted readiness model. It reports `READY`, `BLOCKED`, or `UNKNOWN` for repository protection, CODEOWNER enforcement, runner availability, and server reachability, then still merges `protected_main`, `codeowner_enforcement`, `runner_availability`, and `server_reachability` into its default `cutover` status. It never changes GitHub settings, registers runners, copies artifacts, restarts services, or writes to the production server; malformed metadata fails closed and never falls back to live inspection. This checker is not the authorization gate for the GitHub-hosted trusted-team workflow, and it must be re-scoped before live activation.
 
 ## Current private-plan limitation
 
@@ -12,9 +14,9 @@ Required live check:
 python3.12 scripts/check_deploy_prerequisites.py --repo IRCVLab/GPU_monitor
 ```
 
-The default process exit status is the production `cutover` status, so missing or blocked server reachability can never produce exit `0`. Use `--stage runner` only when evaluating runner-registration readiness. `--stage publication` reports protected-CI readiness; it is not a gate for the repository's first source-only push.
+The default process exit status is the legacy production `cutover` status, so missing or blocked branch protection, runner availability, or server reachability can never produce exit `0`. Use `--stage runner` only when evaluating the legacy runner-registration readiness model. `--stage publication` reports protected-CI readiness; it is not a gate for the repository's first source-only push.
 
-Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; full branch-protection readiness still requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. Runner enumeration is advisory for historical self-hosted planning only; pull-request and deployment workflows use GitHub-hosted runners.
+Current cutover is expected to remain non-READY. Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; full branch-protection readiness still requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. Runner enumeration in this checker is still part of the legacy cutover calculation, which is why this checker must not be treated as the new GitHub-hosted deployment authorization gate.
 
 ## Desired `main` protection when the plan allows it
 
@@ -35,7 +37,7 @@ A protected `main` with `ci/required`, at least one approving review, code-owner
 
 Pull-request and deployment workflows use GitHub-hosted runners. The deployment credential is environment-scoped and accepted by a server-side forced-command wrapper that cannot execute arbitrary repository-provided shell. Self-hosted production runners remain disabled while branch protection is unavailable.
 
-The trusted-team deployment workflow must verify merged-PR provenance, effective approval, and a fresh successful `ci/required` result for the resulting `main` SHA before it builds or deploys. A direct push to `main` may run CI, but it must not satisfy the deployment condition. Production labels such as `prod`, `production`, `prd`, or `prod-runner` remain denied because production jobs do not use self-hosted runners.
+The trusted-team deployment workflow must verify merged-PR provenance, effective approval, and a fresh successful `ci/required` result for the resulting `main` SHA before it builds or deploys. A direct push to `main` may run CI, but it must not satisfy the deployment condition. Production labels such as `prod`, `production`, `prd`, or `prod-runner` remain denied because production jobs do not use self-hosted runners. Before live activation, deployment readiness checks must be re-scoped from the legacy branch-protected/self-hosted model to this GitHub-hosted trusted-team model.
 
 ## Initial publication commands
 
@@ -89,7 +91,7 @@ Storage agents remain manual and tagged. They must not auto-deploy from `main`. 
 
 ## Server reachability and SSH timeout
 
-Server reachability is a cutover blocker, not a source-publication blocker. The known production SSH route is `166.104.167.11:2200`. Bounded read-only SSH failures, including the previously observed timeout class and the current non-interactive permission-denied result from this environment, block production cutover and live service changes. They do not block publishing source, opening pull requests, or running GitHub-hosted CI.
+Server reachability is a legacy checker cutover input, not a source-publication blocker. The known production SSH route is `166.104.167.11:2200`. Bounded read-only SSH failures, including the previously observed timeout class and the current non-interactive permission-denied result from this environment, keep the legacy cutover status non-READY. They do not block publishing source, opening pull requests, or running GitHub-hosted CI.
 
 Only run a live host check when explicitly requested:
 
