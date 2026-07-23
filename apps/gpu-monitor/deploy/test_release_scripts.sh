@@ -1629,7 +1629,10 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
     fail "installer omitted restart authorization"
   ! grep -Fq 'deploy_user" /usr/sbin/nologin' "$INSTALLER_SCRIPT" || fail "installer creates nologin deploy SSH accounts"
   grep -Fq 'runtime_user" "/var/lib/gpu-monitor/$environment" /usr/sbin/nologin' "$INSTALLER_SCRIPT" || fail "installer does not make runtime users non-login"
-  grep -Fq '/usr/sbin/usermod -L "$user"' "$INSTALLER_SCRIPT" || fail "installer does not password-lock deploy users"
+  grep -Fq '/usr/sbin/usermod --password "$password_hash" "$deploy_user"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not assign an unknown random password hash to public-key deploy users"
+  grep -Fq '/usr/sbin/usermod -L "$runtime_user"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not password-lock non-login runtime users"
   grep -Fq 'getent passwd "$user"' "$INSTALLER_SCRIPT" || fail "installer does not validate existing deploy users"
   grep -Fq 'ensure_deploy_and_runtime_users' "$INSTALLER_SCRIPT" || fail "installer does not validate existing runtime users"
   grep -Fq 'validate_identity_separation' "$INSTALLER_SCRIPT" || fail "installer does not validate deploy/runtime UID/GID separation"

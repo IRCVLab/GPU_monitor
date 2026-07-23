@@ -111,13 +111,17 @@ ensure_identity() {
   else
     /usr/sbin/useradd --system --gid "$user" --home-dir "$home" --shell "$shell" "$user"
   fi
-  /usr/sbin/usermod -L "$user"
 }
 
 ensure_deploy_and_runtime_users() {
   local environment=$1 deploy_user="gpu-deploy-$1" runtime_user="gpu-monitor-$1"
+  local random_password password_hash
   ensure_identity "$deploy_user" "/home/$deploy_user" /bin/sh true
   ensure_identity "$runtime_user" "/var/lib/gpu-monitor/$environment" /usr/sbin/nologin true
+  random_password=$(/usr/bin/openssl rand -hex 32)
+  password_hash=$(printf '%s' "$random_password" | /usr/bin/openssl passwd -6 -stdin)
+  /usr/sbin/usermod --password "$password_hash" "$deploy_user"
+  /usr/sbin/usermod -L "$runtime_user"
 }
 
 validate_identity_separation() {
