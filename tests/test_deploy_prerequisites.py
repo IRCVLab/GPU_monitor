@@ -378,6 +378,87 @@ class DeployPrerequisitesTest(unittest.TestCase):
             "serverReachability": {"status": "unknown", "evidence": "host check not requested"},
         }
 
+
+    def test_metadata_file_rejects_non_object_nested_schema_without_traceback(self):
+        field_values = {
+            "defaultBranchRef": (None, [], "scalar", 7),
+            "repository": (None, [], "scalar", 7),
+            "branchProtectionRule": ([], "scalar", 7),
+            "codeowners": (None, [], "scalar", 7),
+            "runnerAvailability": (None, [], "scalar", 7),
+            "serverReachability": (None, [], "scalar", 7),
+        }
+        for field, values in field_values.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    metadata = self.ready_metadata()
+                    metadata[field] = value
+                    with tempfile.TemporaryDirectory() as tempdir:
+                        metadata_file = Path(tempdir) / "metadata.json"
+                        metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+                        result = subprocess.run(
+                            ["python3.12", str(SCRIPT), "--metadata-file", str(metadata_file)],
+                            cwd=REPO_ROOT,
+                            text=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                        )
+
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("invalid metadata", result.stderr)
+                    self.assertIn(field, result.stderr)
+                    self.assertNotIn("Traceback", result.stdout + result.stderr)
+
+    def test_evaluate_metadata_with_non_object_nested_schema_is_unknown_not_ready(self):
+        for field, value in (
+            ("defaultBranchRef", None),
+            ("repository", []),
+            ("branchProtectionRule", "scalar"),
+            ("codeowners", 7),
+            ("runnerAvailability", None),
+            ("serverReachability", ["bad"]),
+        ):
+            with self.subTest(field=field, value=value):
+                metadata = self.ready_metadata()
+                metadata[field] = value
+
+                report = check_deploy_prerequisites.evaluate_metadata(metadata)
+
+                self.assertEqual(report["overall"], "UNKNOWN")
+                self.assertNotEqual(report["overall"], "READY")
+                self.assertEqual(report["checks"]["metadata_schema"]["status"], "UNKNOWN")
+                self.assertIn(field, report["checks"]["metadata_schema"]["evidence"])
+
+    def test_nested_array_items_with_invalid_shapes_never_make_ready(self):
+        branch_metadata = self.ready_metadata()
+        branch_metadata["branchProtectionRule"]["requiredStatusCheckContexts"] = [
+            None,
+            ["ci/required"],
+            {"context": "ci/required"},
+        ]
+        branch_metadata["branchProtectionRule"]["requiredStatusChecks"] = {
+            "contexts": [None, ["ci/required"]],
+            "checks": [None, ["ci/required"], {"notContext": "ci/required"}],
+        }
+        runner_metadata = self.ready_metadata()
+        runner_metadata["runnerAvailability"] = {
+            "runners": [None, ["bad"], "scalar"],
+            "evidence": "malformed runner entries",
+        }
+
+        for metadata, evidence_text in (
+            (branch_metadata, "requiredStatusCheckContexts"),
+            (runner_metadata, "runnerAvailability.runners"),
+        ):
+            with self.subTest(evidence_text=evidence_text):
+                report = check_deploy_prerequisites.evaluate_metadata(metadata)
+
+                self.assertEqual(report["overall"], "UNKNOWN")
+                self.assertNotEqual(report["overall"], "READY")
+                self.assertEqual(report["checks"]["metadata_schema"]["status"], "UNKNOWN")
+                self.assertIn(evidence_text, report["checks"]["metadata_schema"]["evidence"])
+
     def test_branch_protection_missing_explicit_admin_and_force_push_evidence_is_unknown_not_ready(self):
         for omitted in ("isAdminEnforced", "allowsForcePushes", "adminBypassAllowed"):
             with self.subTest(omitted=omitted):

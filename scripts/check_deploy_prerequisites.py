@@ -45,6 +45,123 @@ def check(status: str, evidence: str) -> dict[str, str]:
     return {"status": normalize_status(status), "evidence": evidence}
 
 
+
+REQUIRED_OBJECT_METADATA_FIELDS = (
+    "defaultBranchRef",
+    "repository",
+    "codeowners",
+    "runnerAvailability",
+    "serverReachability",
+)
+OPTIONAL_OBJECT_METADATA_FIELDS = ("branchProtectionRule",)
+
+
+def type_name(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, list):
+        return "array"
+    return type(value).__name__
+
+
+def validate_metadata_schema(metadata: Any) -> list[str]:
+    """Return concise schema errors for metadata shapes this checker dereferences."""
+    if not isinstance(metadata, dict):
+        return [f"metadata root must be object, got {type_name(metadata)}"]
+
+    errors: list[str] = []
+    for field in REQUIRED_OBJECT_METADATA_FIELDS:
+        value = metadata.get(field)
+        if not isinstance(value, dict):
+            errors.append(f"{field} must be object, got {type_name(value)}")
+
+    for field in OPTIONAL_OBJECT_METADATA_FIELDS:
+        value = metadata.get(field)
+        if value is not None and not isinstance(value, dict):
+            errors.append(f"{field} must be object or null, got {type_name(value)}")
+
+    rule = metadata.get("branchProtectionRule")
+    if isinstance(rule, dict):
+        contexts = rule.get("requiredStatusCheckContexts")
+        if contexts is not None:
+            if not isinstance(contexts, list):
+                errors.append(
+                    f"branchProtectionRule.requiredStatusCheckContexts must be array, got {type_name(contexts)}"
+                )
+            else:
+                for index, item in enumerate(contexts):
+                    if not isinstance(item, str):
+                        errors.append(
+                            "branchProtectionRule.requiredStatusCheckContexts"
+                            f"[{index}] must be string, got {type_name(item)}"
+                        )
+        status_checks = rule.get("requiredStatusChecks")
+        if status_checks is not None:
+            if not isinstance(status_checks, dict):
+                errors.append(f"branchProtectionRule.requiredStatusChecks must be object, got {type_name(status_checks)}")
+            else:
+                nested_contexts = status_checks.get("contexts")
+                if nested_contexts is not None:
+                    if not isinstance(nested_contexts, list):
+                        errors.append(
+                            "branchProtectionRule.requiredStatusChecks.contexts "
+                            f"must be array, got {type_name(nested_contexts)}"
+                        )
+                    else:
+                        for index, item in enumerate(nested_contexts):
+                            if not isinstance(item, str):
+                                errors.append(
+                                    "branchProtectionRule.requiredStatusChecks.contexts"
+                                    f"[{index}] must be string, got {type_name(item)}"
+                                )
+                checks = status_checks.get("checks")
+                if checks is not None:
+                    if not isinstance(checks, list):
+                        errors.append(
+                            "branchProtectionRule.requiredStatusChecks.checks "
+                            f"must be array, got {type_name(checks)}"
+                        )
+                    else:
+                        for index, item in enumerate(checks):
+                            if not (isinstance(item, str) or isinstance(item, dict) and isinstance(item.get("context"), str)):
+                                errors.append(
+                                    "branchProtectionRule.requiredStatusChecks.checks"
+                                    f"[{index}] must be string or object with string context, got {type_name(item)}"
+                                )
+
+    runner = metadata.get("runnerAvailability")
+    if isinstance(runner, dict):
+        runners = runner.get("runners")
+        if runners is not None:
+            if not isinstance(runners, list):
+                errors.append(f"runnerAvailability.runners must be array, got {type_name(runners)}")
+            else:
+                for index, item in enumerate(runners):
+                    if not isinstance(item, dict):
+                        errors.append(f"runnerAvailability.runners[{index}] must be object, got {type_name(item)}")
+
+    return errors
+
+
+def schema_invalid_report(errors: list[str]) -> dict[str, Any]:
+    evidence = "metadata schema invalid: " + "; ".join(errors[:6])
+    if len(errors) > 6:
+        evidence += f"; and {len(errors) - 6} more"
+    return {
+        "overall": UNKNOWN,
+        "ci_publication": UNKNOWN,
+        "runner_registration": UNKNOWN,
+        "cutover": UNKNOWN,
+        "checks": {
+            "metadata_schema": check(UNKNOWN, evidence),
+            "protected_main": check(UNKNOWN, "not inspected because metadata schema was invalid"),
+            "codeowner_enforcement": check(UNKNOWN, "not inspected because metadata schema was invalid"),
+            "runner_availability": check(UNKNOWN, "not inspected because metadata schema was invalid"),
+            "server_reachability": check(UNKNOWN, "not inspected because metadata schema was invalid"),
+        },
+    }
+
+
 def merge_status(checks: list[dict[str, str]], *, unknown_is_ready: bool = False) -> str:
     statuses = [item["status"] for item in checks]
     if BLOCKED in statuses:
@@ -193,6 +310,10 @@ def server_check(metadata: dict[str, Any]) -> dict[str, str]:
 
 
 def evaluate_metadata(metadata: dict[str, Any], *, require_host_for_cutover: bool = False) -> dict[str, Any]:
+    schema_errors = validate_metadata_schema(metadata)
+    if schema_errors:
+        return schema_invalid_report(schema_errors)
+
     checks = {
         "protected_main": branch_protection_check(metadata),
         "codeowner_enforcement": codeowner_check(metadata),
@@ -510,13 +631,17 @@ def main(argv: list[str] | None = None) -> int:
             validate_repo_name(args.repo)
         if args.metadata_file:
             metadata = load_metadata(args.metadata_file)
-            if not isinstance(metadata, dict):
-                raise ValueError("metadata root must be a JSON object")
+            schema_errors = validate_metadata_schema(metadata)
+            if schema_errors:
+                raise ValueError("metadata schema invalid: " + "; ".join(schema_errors[:6]))
             metadata = copy.deepcopy(metadata)
             if args.check_host:
                 metadata["serverReachability"] = inspect_host(args.check_host)
         else:
             metadata = fetch_live_metadata(args.repo, check_host=args.check_host)
+            schema_errors = validate_metadata_schema(metadata)
+            if schema_errors:
+                raise ValueError("metadata schema invalid: " + "; ".join(schema_errors[:6]))
     except (json.JSONDecodeError, OSError, ValueError) as exc:
         print(f"invalid metadata or arguments: {exc}", file=sys.stderr)
         return 2
