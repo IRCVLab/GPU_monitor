@@ -58,8 +58,7 @@ make_fixture_repo() {
   git -C "$fixture" init -q
   git -C "$fixture" config user.email release-test@example.invalid
   git -C "$fixture" config user.name 'Release Script Test'
-  git -C "$fixture" add -f apps/gpu-monitor/deploy \
-    apps/gpu-monitor/backend apps/gpu-monitor/frontend Makefile
+  git -C "$fixture" add -A
   git -C "$fixture" commit -q -m 'release script fixture'
 }
 
@@ -110,6 +109,75 @@ test_rejects_invalid_and_non_head_sha() {
     fail "non-HEAD SHA was accepted"
   fi
   log "invalid/non-HEAD SHA is rejected"
+}
+
+
+test_rejects_untracked_nonignored_sources_before_build() {
+  local tmp repo out sha
+  tmp=$(mktemp_dir gpu-release-untracked)
+  trap 'rm -rf "$tmp"' RETURN
+  repo="$tmp/repo"; out="$tmp/out"
+  make_fixture_repo "$repo"
+  sha=$(git -C "$repo" rev-parse HEAD)
+
+  printf 'UNTRACKED_BACKEND_PROBE = True\n' > "$repo/apps/gpu-monitor/backend/untracked_release_probe.py"
+  if run_builder "$repo" "$out" "$sha" >"$tmp/backend.out" 2>"$tmp/backend.err"; then
+    fail "untracked backend source was accepted"
+  fi
+  grep -Eiq 'untracked|clean' "$tmp/backend.err" || fail "untracked backend rejection did not explain clean checkout requirement"
+  rm -f "$repo/apps/gpu-monitor/backend/untracked_release_probe.py"
+
+  mkdir -p "$repo/apps/gpu-monitor/frontend/src/routes/review-probe"
+  cat > "$repo/apps/gpu-monitor/frontend/src/routes/review-probe/+page.svelte" <<'SVELTE'
+<h1>untracked frontend probe must not build</h1>
+SVELTE
+  if run_builder "$repo" "$out" "$sha" >"$tmp/frontend.out" 2>"$tmp/frontend.err"; then
+    fail "untracked frontend source was accepted"
+  fi
+  grep -Eiq 'untracked|clean' "$tmp/frontend.err" || fail "untracked frontend rejection did not explain clean checkout requirement"
+  log "untracked nonignored backend and frontend sources are rejected"
+}
+
+test_build_does_not_mutate_checkout_node_modules_or_build() {
+  local tmp repo out sha before after
+  tmp=$(mktemp_dir gpu-release-mutation)
+  trap 'rm -rf "$tmp"' RETURN
+  repo="$tmp/repo"; out="$tmp/out"
+  make_fixture_repo "$repo"
+  sha=$(git -C "$repo" rev-parse HEAD)
+  cat >> "$repo/.git/info/exclude" <<'EXCLUDES'
+/apps/gpu-monitor/frontend/node_modules/
+/apps/gpu-monitor/frontend/build/
+EXCLUDES
+  mkdir -p "$repo/apps/gpu-monitor/frontend/node_modules/local-sentinel" "$repo/apps/gpu-monitor/frontend/build"
+  printf 'keep-node-modules\n' > "$repo/apps/gpu-monitor/frontend/node_modules/local-sentinel/sentinel.txt"
+  printf 'keep-build\n' > "$repo/apps/gpu-monitor/frontend/build/sentinel.txt"
+  before=$(find "$repo/apps/gpu-monitor/frontend/node_modules/local-sentinel" "$repo/apps/gpu-monitor/frontend/build" -type f -maxdepth 2 -print -exec shasum -a 256 {} \; | LC_ALL=C sort)
+  run_builder "$repo" "$out" "$sha"
+  after=$(find "$repo/apps/gpu-monitor/frontend/node_modules/local-sentinel" "$repo/apps/gpu-monitor/frontend/build" -type f -maxdepth 2 -print -exec shasum -a 256 {} \; | LC_ALL=C sort)
+  [[ "$before" == "$after" ]] || fail "builder mutated checkout node_modules or build directory"
+  log "builder does not mutate checkout node_modules or build outputs"
+}
+
+test_post_temp_output_failure_cleans_tmp_outputs() {
+  local tmp repo out sha manifest_before
+  tmp=$(mktemp_dir gpu-release-temp-cleanup)
+  trap 'rm -rf "$tmp"' RETURN
+  repo="$tmp/repo"; out="$tmp/out"
+  make_fixture_repo "$repo"
+  sha=$(git -C "$repo" rev-parse HEAD)
+  mkdir -p "$out"
+  printf '{"preexisting":true}\n' > "$out/release-manifest.json"
+  manifest_before=$(cat "$out/release-manifest.json")
+  if run_builder "$repo" "$out" "$sha" >"$tmp/stdout" 2>"$tmp/stderr"; then
+    fail "builder overwrote conflicting manifest instead of failing"
+  fi
+  [[ "$(cat "$out/release-manifest.json")" == "$manifest_before" ]] || fail "conflicting manifest was modified"
+  if find "$out" -type f \( -name '*.tmp' -o -name 'gpu-monitor-*.tar.gz' -o -name 'gpu-monitor-*.sha256' \) | grep -q .; then
+    find "$out" -type f >&2
+    fail "post-temp failure left temporary or partial release outputs"
+  fi
+  log "post-temp output failure cleans temporary outputs"
 }
 
 test_build_outputs_contract() {
@@ -219,5 +287,8 @@ FAKENPM
 test_missing_builder_fails
 test_rejects_dirty_source
 test_rejects_invalid_and_non_head_sha
+test_rejects_untracked_nonignored_sources_before_build
+test_build_does_not_mutate_checkout_node_modules_or_build
+test_post_temp_output_failure_cleans_tmp_outputs
 test_build_outputs_contract
 test_failed_build_leaves_no_partial_outputs_and_works_from_any_cwd

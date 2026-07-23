@@ -41,10 +41,12 @@ cd "$repo_root"
 head_sha=$(git rev-parse HEAD) || fail "cannot resolve HEAD"
 [[ "$sha" == "$head_sha" ]] || fail "requested sha must equal HEAD ($head_sha)"
 
-# Fail closed on modified/staged tracked source. Untracked ignored runtime files are not copied because
-# packaging uses an explicit allowlist rather than a broad checkout copy.
-git diff --quiet --exit-code -- . ':!apps/gpu-monitor/frontend/build' ':!apps/gpu-monitor/frontend/.svelte-kit' || fail "checkout must be clean before building release"
-git diff --cached --quiet --exit-code -- . ':!apps/gpu-monitor/frontend/build' ':!apps/gpu-monitor/frontend/.svelte-kit' || fail "checkout index must be clean before building release"
+# Fail closed on any tracked modifications and any nonignored untracked files.
+# Ignored local runtime artifacts remain allowed because the release is built from the exact HEAD tree below.
+git diff --quiet --exit-code -- . || fail "checkout must be clean before building release"
+git diff --cached --quiet --exit-code -- . || fail "checkout index must be clean before building release"
+untracked=$(git ls-files --others --exclude-standard)
+[[ -z "$untracked" ]] || fail "checkout has nonignored untracked files; commit or remove them before building release"
 
 required_tracked=(
   apps/gpu-monitor/backend/main.py
@@ -57,12 +59,17 @@ required_tracked=(
 )
 for path in "${required_tracked[@]}"; do
   git ls-files --error-unmatch "$path" >/dev/null 2>&1 || fail "required tracked runtime input is missing: $path"
-  [[ -e "$path" ]] || fail "required runtime input is absent from working tree: $path"
 done
 
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/gpu-release-build.XXXXXX")
 cleanup() { rm -rf "$tmpdir"; }
 trap cleanup EXIT
+source_root="$tmpdir/source"
+mkdir -p "$source_root"
+git archive --format=tar "$sha" apps/gpu-monitor | tar -xf - -C "$source_root"
+for path in "${required_tracked[@]}"; do
+  [[ -e "$source_root/$path" ]] || fail "required runtime input is absent from committed HEAD tree: $path"
+done
 
 release_now=$((16#${sha:0:12}))
 cat > "$tmpdir/fixed-date.cjs" <<EOF_DATE
@@ -70,7 +77,7 @@ const fixedNow = $release_now;
 Date.now = () => fixedNow;
 EOF_DATE
 
-frontend_dir="$repo_root/apps/gpu-monitor/frontend"
+frontend_dir="$source_root/apps/gpu-monitor/frontend"
 (
   cd "$frontend_dir"
   npm ci
@@ -89,12 +96,13 @@ artifact_path="$output_dir/$artifact_name"
 checksum_path="$output_dir/$checksum_name"
 manifest_path="$output_dir/$manifest_name"
 
-python3 - "$repo_root" "$tmpdir/stage" "$output_dir" "$sha" "$artifact_name" "$artifact_path" "$checksum_path" "$manifest_path" <<'PY'
+python3 - "$source_root" "$tmpdir/stage" "$output_dir" "$sha" "$artifact_name" "$artifact_path" "$checksum_path" "$manifest_path" <<'PY'
 import fnmatch
 import gzip
 import hashlib
 import json
 import os
+import tempfile
 from pathlib import Path
 import posixpath
 import shutil
@@ -102,7 +110,7 @@ import stat
 import sys
 import tarfile
 
-repo = Path(sys.argv[1]).resolve()
+source = Path(sys.argv[1]).resolve()
 stage = Path(sys.argv[2]).resolve()
 outdir = Path(sys.argv[3]).resolve()
 sha = sys.argv[4]
@@ -110,7 +118,7 @@ artifact_name = sys.argv[5]
 artifact_path = Path(sys.argv[6]).resolve()
 checksum_path = Path(sys.argv[7]).resolve()
 manifest_path = Path(sys.argv[8]).resolve()
-app_root = repo / "apps" / "gpu-monitor"
+app_root = source / "apps" / "gpu-monitor"
 stage_app = stage / "gpu-monitor"
 
 EXCLUDED_NAMES = {
@@ -147,19 +155,19 @@ def is_excluded(rel: Path) -> bool:
 
 def copy_file(src: Path, dest: Path, mode=None) -> None:
     if src.is_symlink():
-        fail(f"symlink runtime input is not allowed: {src.relative_to(repo)}")
-    require_under(src, repo)
+        fail(f"symlink runtime input is not allowed: {src.relative_to(source)}")
+    require_under(src, source)
     if not src.is_file():
-        fail(f"runtime input is missing: {src.relative_to(repo)}")
+        fail(f"runtime input is missing: {src.relative_to(source)}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, dest)
     os.chmod(dest, mode if mode is not None else (src.stat().st_mode & 0o777))
 
 
 def copy_tree(src: Path, dest: Path, *, include) -> None:
-    root = require_under(src, repo)
+    root = require_under(src, source)
     if not root.is_dir():
-        fail(f"runtime directory is missing: {src.relative_to(repo)}")
+        fail(f"runtime directory is missing: {src.relative_to(source)}")
     for current, dirs, files in os.walk(root, topdown=True):
         cur = Path(current)
         rel_dir = cur.relative_to(root)
@@ -168,7 +176,7 @@ def copy_tree(src: Path, dest: Path, *, include) -> None:
             drel = rel_dir / dirname
             dpath = cur / dirname
             if dpath.is_symlink():
-                fail(f"symlink runtime directory is not allowed: {dpath.relative_to(repo)}")
+                fail(f"symlink runtime directory is not allowed: {dpath.relative_to(source)}")
             if is_excluded(drel):
                 continue
             kept_dirs.append(dirname)
@@ -208,67 +216,77 @@ for path in (artifact_path, checksum_path, manifest_path):
     if path.exists() and path.is_dir():
         fail(f"refusing to overwrite directory: {path}")
 
-tmp_artifact = artifact_path.with_name(artifact_path.name + ".tmp")
-tmp_checksum = checksum_path.with_name(checksum_path.name + ".tmp")
-tmp_manifest = manifest_path.with_name(manifest_path.name + ".tmp")
-for path in (tmp_artifact, tmp_checksum, tmp_manifest):
-    if path.exists():
-        path.unlink()
+def make_output_temp(final_path: Path) -> Path:
+    fd, name = tempfile.mkstemp(prefix=f".{final_path.name}.", suffix=".tmp", dir=str(outdir))
+    os.close(fd)
+    return Path(name)
 
-entries = sorted(p for p in stage_app.rglob("*") if p.is_file())
-with open(tmp_artifact, "wb") as raw:
-    with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
-        with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
-            root_info = tarfile.TarInfo("gpu-monitor")
-            root_info.type = tarfile.DIRTYPE
-            root_info.mode = 0o755
-            root_info.uid = root_info.gid = 0
-            root_info.uname = root_info.gname = "root"
-            root_info.mtime = 0
-            tar.addfile(root_info)
-            dirs_added = {Path(".")}
-            for file_path in entries:
-                rel = file_path.relative_to(stage_app)
-                for parent in reversed(rel.parents):
-                    if parent == Path(".") or parent in dirs_added:
-                        continue
-                    arcdir = posixpath.join("gpu-monitor", *parent.parts)
-                    info = tarfile.TarInfo(arcdir)
-                    info.type = tarfile.DIRTYPE
-                    info.mode = 0o755
+tmp_artifact = make_output_temp(artifact_path)
+tmp_checksum = make_output_temp(checksum_path)
+tmp_manifest = make_output_temp(manifest_path)
+temps = [tmp_artifact, tmp_checksum, tmp_manifest]
+try:
+    entries = sorted(p for p in stage_app.rglob("*") if p.is_file())
+    with open(tmp_artifact, "wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+            with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
+                root_info = tarfile.TarInfo("gpu-monitor")
+                root_info.type = tarfile.DIRTYPE
+                root_info.mode = 0o755
+                root_info.uid = root_info.gid = 0
+                root_info.uname = root_info.gname = "root"
+                root_info.mtime = 0
+                tar.addfile(root_info)
+                dirs_added = {Path(".")}
+                for file_path in entries:
+                    rel = file_path.relative_to(stage_app)
+                    for parent in reversed(rel.parents):
+                        if parent == Path(".") or parent in dirs_added:
+                            continue
+                        arcdir = posixpath.join("gpu-monitor", *parent.parts)
+                        info = tarfile.TarInfo(arcdir)
+                        info.type = tarfile.DIRTYPE
+                        info.mode = 0o755
+                        info.uid = info.gid = 0
+                        info.uname = info.gname = "root"
+                        info.mtime = 0
+                        tar.addfile(info)
+                        dirs_added.add(parent)
+                    arcname = posixpath.join("gpu-monitor", *rel.parts)
+                    info = tar.gettarinfo(str(file_path), arcname=arcname)
                     info.uid = info.gid = 0
                     info.uname = info.gname = "root"
                     info.mtime = 0
-                    tar.addfile(info)
-                    dirs_added.add(parent)
-                arcname = posixpath.join("gpu-monitor", *rel.parts)
-                info = tar.gettarinfo(str(file_path), arcname=arcname)
-                info.uid = info.gid = 0
-                info.uname = info.gname = "root"
-                info.mtime = 0
-                info.mode = 0o755 if (file_path.stat().st_mode & stat.S_IXUSR) else 0o644
-                with open(file_path, "rb") as fh:
-                    tar.addfile(info, fh)
+                    info.mode = 0o755 if (file_path.stat().st_mode & stat.S_IXUSR) else 0o644
+                    with open(file_path, "rb") as fh:
+                        tar.addfile(info, fh)
 
-digest = hashlib.sha256(tmp_artifact.read_bytes()).hexdigest()
-manifest = {
-    "application": "gpu-monitor",
-    "git_sha": sha,
-    "artifact": artifact_name,
-    "sha256": digest,
-    "schema": 1,
-}
-tmp_manifest.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
-tmp_checksum.write_text(f"{digest}  {artifact_path}\n", encoding="utf-8")
+    digest = hashlib.sha256(tmp_artifact.read_bytes()).hexdigest()
+    manifest = {
+        "application": "gpu-monitor",
+        "git_sha": sha,
+        "artifact": artifact_name,
+        "sha256": digest,
+        "schema": 1,
+    }
+    tmp_manifest.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    tmp_checksum.write_text(f"{digest}  {artifact_path}\n", encoding="utf-8")
 
-# Ensure no partial output escapes on failures above; publish atomically within output dir.
-# Existing outputs are accepted only when they are byte-identical to the newly computed release.
-for existing, candidate in ((artifact_path, tmp_artifact), (checksum_path, tmp_checksum), (manifest_path, tmp_manifest)):
-    if existing.exists() and existing.read_bytes() != candidate.read_bytes():
-        fail(f"refusing to overwrite different existing output: {existing}")
-os.replace(tmp_artifact, artifact_path)
-os.replace(tmp_checksum, checksum_path)
-os.replace(tmp_manifest, manifest_path)
+    # Ensure no partial output escapes on failures above; publish atomically within output dir.
+    # Existing outputs are accepted only when they are byte-identical to the newly computed release.
+    for existing, candidate in ((artifact_path, tmp_artifact), (checksum_path, tmp_checksum), (manifest_path, tmp_manifest)):
+        if existing.exists() and existing.read_bytes() != candidate.read_bytes():
+            fail(f"refusing to overwrite different existing output: {existing}")
+    os.replace(tmp_artifact, artifact_path)
+    os.replace(tmp_checksum, checksum_path)
+    os.replace(tmp_manifest, manifest_path)
+    temps.clear()
+finally:
+    for temp_path in temps:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
 PY
 
 [[ -s "$artifact_path" ]] || fail "artifact output is missing or empty"
