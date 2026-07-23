@@ -781,61 +781,6 @@ def canonical_deploy_lines(lane: str) -> list[str]:
         f'ssh "${{ssh_opts[@]}}" "$target" "status {lane}"',
     ]
 
-def is_shell_assignment(word: str) -> bool:
-    return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", word) is not None
-
-
-def effective_executable(words: list[str]) -> str | None:
-    index = 0
-    while index < len(words):
-        while index < len(words) and is_shell_assignment(words[index]):
-            index += 1
-        if index >= len(words):
-            return None
-        if words[index] == "command":
-            index += 1
-            continue
-        if words[index] == "env":
-            index += 1
-            while index < len(words):
-                word = words[index]
-                if word == "--":
-                    index += 1
-                    break
-                if word in {"-i", "--ignore-environment"}:
-                    index += 1
-                    continue
-                if word in {"-u", "--unset"}:
-                    index += 2
-                    continue
-                if word.startswith("--unset="):
-                    index += 1
-                    continue
-                if is_shell_assignment(word):
-                    index += 1
-                    continue
-                break
-            continue
-        return words[index]
-    return None
-
-
-def executable_ssh_invocations(lines: list[str], expected_ssh_lines: list[str]) -> list[str] | None:
-    invocations: list[str] = []
-    for line in lines:
-        try:
-            words = shlex.split(line)
-        except ValueError:
-            if "ssh" in line:
-                return None
-            continue
-        if effective_executable(words) != "ssh":
-            continue
-        if line not in expected_ssh_lines and command_has_shell_control(line):
-            return None
-        invocations.append(line)
-    return invocations
-
 def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -> bool:
     for block in step_blocks(job):
         if not all(
