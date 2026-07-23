@@ -5,21 +5,34 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 PRODUCTION_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 test_mode=false
 
-case "$#:${1:-}" in
-  1:dev|1:live)
+if [[ "${1:-}" == --test-mode ]]; then
+  test_mode=true
+  shift
+fi
+
+case "$#" in
+  1)
+    action=restart
     environment=$1
-    command_path=$PRODUCTION_PATH
-    systemctl_command=/usr/bin/systemctl
     ;;
-  2:--test-mode)
-    case "$2" in dev|live) ;; *) fail "invalid test environment" ;; esac
-    test_mode=true
+  2)
+    [[ "$1" == stop ]] || fail "invalid broker action"
+    action=stop
     environment=$2
-    command_path=${GPU_MONITOR_TEST_PATH:-$PRODUCTION_PATH}
-    systemctl_command=systemctl
     ;;
-  *) fail "usage: gpu-monitor-restart-broker <dev|live>" ;;
+  *)
+    fail "usage: gpu-monitor-restart-broker [--test-mode] [stop] <dev|live>"
+    ;;
 esac
+case "$environment" in dev|live) ;; *) fail "invalid environment" ;; esac
+
+if [[ "$test_mode" == true ]]; then
+  command_path=${GPU_MONITOR_TEST_PATH:-$PRODUCTION_PATH}
+  systemctl_command=systemctl
+else
+  command_path=$PRODUCTION_PATH
+  systemctl_command=/usr/bin/systemctl
+fi
 
 unset BASH_ENV ENV CDPATH GLOBIGNORE GPU_MONITOR_TEST_PATH PYTHONHOME PYTHONPATH NODE_OPTIONS
 PATH=$command_path
@@ -30,8 +43,8 @@ if [[ "$test_mode" == true ]]; then
   for part in "${path_parts[@]}"; do [[ "$part" == /* && -d "$part" ]] || fail "invalid test PATH"; done
 fi
 
-"$systemctl_command" restart "gpu-monitor-backend@${environment}.service"
-"$systemctl_command" restart "gpu-monitor-frontend@${environment}.service"
+"$systemctl_command" "$action" "gpu-monitor-backend@${environment}.service"
+"$systemctl_command" "$action" "gpu-monitor-frontend@${environment}.service"
 if [[ "$environment" == live ]]; then
-  "$systemctl_command" restart "gpu-monitor-bridge@live.service"
+  "$systemctl_command" "$action" "gpu-monitor-bridge@live.service"
 fi

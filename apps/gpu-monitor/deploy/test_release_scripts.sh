@@ -861,7 +861,7 @@ test_first_activation_failure_restores_absent_pointer_state() {
   prefix="$tmp/prefix"
   fakebin="$tmp/fakebin"
   log_file="$tmp/commands.log"
-  install_fake_server_commands "$fakebin" "$log_file" fail-first
+  install_fake_server_commands "$fakebin" "$log_file" fail-all
   sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
   mkdir -p "$tmp/artifact"
   make_release_artifact "$tmp/artifact" "$sha" first
@@ -873,7 +873,19 @@ test_first_activation_failure_restores_absent_pointer_state() {
   fi
   [[ ! -e "$prefix/srv/gpu-monitor/dev/current" ]] || fail "failed first activation left a current pointer"
   [[ ! -e "$prefix/srv/gpu-monitor/dev/previous" ]] || fail "failed first activation changed absent previous pointer state"
-  log "failed first activation restores exactly absent current and previous pointers"
+  grep -Fq '"status":"rollback_succeeded"' "$prefix/srv/gpu-monitor/dev/deployments.jsonl" ||
+    fail "failed first activation did not record absent deployment recovery as rollback_succeeded"
+  grep -Fq '"message":"restored_absent"' "$prefix/srv/gpu-monitor/dev/deployments.jsonl" ||
+    fail "failed first activation did not distinguish absent deployment recovery"
+  ! grep -Fq '"status":"rollback_failed"' "$prefix/srv/gpu-monitor/dev/deployments.jsonl" ||
+    fail "failed first activation falsely recorded absent deployment recovery as rollback_failed"
+  grep -Fq 'systemctl stop gpu-monitor-backend@dev.service' "$log_file" ||
+    fail "failed first activation did not stop the failed backend"
+  grep -Fq 'systemctl stop gpu-monitor-frontend@dev.service' "$log_file" ||
+    fail "failed first activation did not stop the failed frontend"
+  [[ "$(grep -c '^curl ' "$log_file")" -eq 1 ]] ||
+    fail "absent deployment recovery ran health checks after removing current"
+  log "failed first activation restores absent pointers, stops failed units, and records rollback_succeeded"
 }
 
 test_health_test_overrides_are_positive_and_bounded() {
@@ -991,12 +1003,18 @@ test_isolated_identities_broker_and_descriptor_extraction_contract() {
   done
   grep -Fxq 'gpu-deploy-dev ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker dev' "$DEV_SUDOERS" ||
     fail "dev sudoers is not the exact dev-only broker allowlist"
+  grep -Fxq 'gpu-deploy-dev ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker stop dev' "$DEV_SUDOERS" ||
+    fail "dev sudoers does not allow only the exact dev stop broker command"
   grep -Fxq 'gpu-deploy-live ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker live' "$LIVE_SUDOERS" ||
     fail "live sudoers is not the exact live-only broker allowlist"
+  grep -Fxq 'gpu-deploy-live ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker stop live' "$LIVE_SUDOERS" ||
+    fail "live sudoers does not allow only the exact live stop broker command"
   ! grep -Fq ' live' "$DEV_SUDOERS" || fail "dev sudoers grants a live restart capability"
   ! grep -Fq ' dev' "$LIVE_SUDOERS" || fail "live sudoers grants a dev restart capability"
   grep -Fq '/usr/bin/sudo -n "$restart_broker" "$env"' "$ACTIVATE_SCRIPT" ||
     fail "production activation does not call only sudo -n and the exact broker"
+  grep -Fq '/usr/bin/sudo -n "$restart_broker" stop "$env"' "$ACTIVATE_SCRIPT" ||
+    fail "absent recovery does not call only sudo -n and the exact stop broker"
   ! grep -Eq 'getmembers|extractall|tarfile\.open\([^f]' "$ACTIVATE_SCRIPT" ||
     fail "archive implementation uses bulk enumeration/extraction or pathname reopen"
   grep -Fq 'dir_fd=object_dir_fd' "$ACTIVATE_SCRIPT" || fail "incoming artifact is not opened relative to incoming dirfd"
@@ -1024,10 +1042,20 @@ test_restart_broker_exact_unit_allowlist() {
   env -i PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
     "$RESTART_BROKER" --test-mode live
   grep -Fq 'gpu-monitor-bridge@live.service' "$log_file" || fail "live broker omitted bridge"
+
+  : > "$log_file"; printf '0\n' > "$fakebin/restart-count"
+  env -i PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    "$RESTART_BROKER" --test-mode stop dev
+  grep -Fq 'systemctl stop gpu-monitor-backend@dev.service' "$log_file" ||
+    fail "dev stop broker omitted backend"
+  grep -Fq 'systemctl stop gpu-monitor-frontend@dev.service' "$log_file" ||
+    fail "dev stop broker omitted frontend"
+  ! grep -Eq 'bridge|@live' "$log_file" || fail "dev stop broker widened into bridge/live"
+
   if "$RESTART_BROKER" dev live > "$tmp/bad.out" 2> "$tmp/bad.err"; then
     fail "broker accepted a widened command shape"
   fi
-  log "restart broker maps exact environments to exact selected units"
+  log "restart broker maps exact restart and stop actions to exact selected units"
 }
 
 test_transaction_restores_both_pointers_for_restart_health_and_manual_failures() {

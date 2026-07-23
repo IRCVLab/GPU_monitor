@@ -1,1 +1,2 @@
 gpu-deploy-dev ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker dev
+gpu-deploy-dev ALL=(root) NOPASSWD: /usr/local/libexec/gpu-monitor-restart-broker stop dev

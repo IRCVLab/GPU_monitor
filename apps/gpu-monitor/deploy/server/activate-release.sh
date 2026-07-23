@@ -385,6 +385,15 @@ restart_units() {
   fi
 }
 
+stop_units() {
+  local env=$env_name
+  if [[ "$test_mode" == true ]]; then
+    GPU_MONITOR_TEST_PATH="$PATH" "$sudo_command" -n "$restart_broker" --test-mode stop "$env_name"
+  else
+    /usr/bin/sudo -n "$restart_broker" stop "$env"
+  fi
+}
+
 run_health() {
   if [[ "$test_mode" == true ]]; then
     env -i PATH="$PATH" GPU_MONITOR_TEST_PATH="$PATH" \
@@ -813,6 +822,15 @@ recover_snapshot() {
   fi
   if [[ -z "$recovery_error" ]] && ! snapshot_targets_match "$old_current" "$old_previous"; then
     recovery_error=pointer_restore_verification_failed
+  fi
+  if [[ -z "$recovery_error" && -z "$old_current" ]]; then
+    if ! stop_units; then
+      recovery_error=recovery_stop_failed
+    elif append_state rollback_succeeded "$failed_sha" "$failed_digest" restored_absent; then
+      return 0
+    else
+      recovery_error=rollback_success_log_failed
+    fi
   fi
   if [[ -z "$recovery_error" ]]; then
     if ! restart_units; then
