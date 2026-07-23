@@ -619,7 +619,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                     environment: gpu-live
                     steps:
                       - name: Authorize deployment
-                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
                       - run: ./deploy.sh
             """,
             "missing-ci-workflow.yml": """
@@ -634,7 +634,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                     environment: gpu-live
                     steps:
                       - name: Authorize deployment
-                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
                       - run: ./deploy.sh
             """,
             "missing-event-guard.yml": """
@@ -649,7 +649,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                     environment: gpu-live
                     steps:
                       - name: Authorize deployment
-                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
                       - run: ./deploy.sh
             """,
             "missing-branch-guard.yml": """
@@ -664,7 +664,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                     environment: gpu-live
                     steps:
                       - name: Authorize deployment
-                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
                       - run: ./deploy.sh
             """,
             "missing-success-guard.yml": """
@@ -679,7 +679,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                     environment: gpu-live
                     steps:
                       - name: Authorize deployment
-                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
                       - run: ./deploy.sh
             """,
             "missing-same-repo-guard.yml": """
@@ -694,7 +694,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                     environment: gpu-live
                     steps:
                       - name: Authorize deployment
-                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
                       - run: ./deploy.sh
             """,
             "missing-authorization-step.yml": """
@@ -764,8 +764,300 @@ class WorkflowPolicyTest(unittest.TestCase):
                     steps:
                       - uses: actions/checkout@{PINNED_SHA}
                       - name: Authorize deployment
-                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
                       - run: ./deploy.sh
+                """
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+    def test_rejects_workflow_run_provenance_guard_or_quoted_dead_branch_and_extra_clause_bypasses(self):
+        workflows = {
+            "or-bypass.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository || always()
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+            """,
+            "quoted-injection.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    if: contains('github.event.workflow_run.event == ''push'' && github.event.workflow_run.head_branch == ''main'' && github.event.workflow_run.conclusion == ''success'' && github.event.workflow_run.head_repository.full_name == github.repository', 'push')
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+            """,
+            "dead-branch.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    if: false && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+            """,
+            "negated-clause.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    if: ${{ github.event.workflow_run.event == 'push' && !github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository }}
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+            """,
+            "extra-true-clause.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && true
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "workflow-run-deploy-guard", "release-gpu", filename)
+
+    def test_rejects_four_space_job_properties_that_would_hide_environment(self):
+        self.assert_policy_violation(
+            """
+            on: push
+            jobs:
+              smoke-gpu:
+                  runs-on: ubuntu-latest
+                  environment: gpu-live
+                  steps:
+                    - run: ./smoke.sh
+            """,
+            "deploy-main-guard",
+            "smoke-gpu",
+        )
+
+    def test_rejects_workflow_run_with_four_space_trigger_children_missing_types(self):
+        self.assert_policy_violation(
+            """
+            on:
+              workflow_run:
+                  workflows: [ci]
+            jobs:
+              release-gpu:
+                if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                runs-on: ubuntu-latest
+                environment: gpu-live
+                steps:
+                  - run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo --sha 0123456789abcdef0123456789abcdef01234567
+            """,
+            "workflow-run-deploy-guard",
+            "release-gpu",
+        )
+
+    def test_rejects_cosmetic_or_substring_authorization_steps(self):
+        workflows = {
+            "job-name-only.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    name: Authorize deployment
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - run: ./deploy.sh
+            """,
+            "unauthorized-name.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: unauthorized deploy
+                        run: ./deploy.sh
+            """,
+            "echo-only.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: echo python3.12 scripts/authorize_gpu_release.py
+            """,
+            "wrong-script.yml": """
+                on:
+                  workflow_run:
+                    workflows: [ci]
+                    types: [completed]
+                jobs:
+                  release-gpu:
+                    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                    runs-on: ubuntu-latest
+                    environment: gpu-live
+                    steps:
+                      - name: Authorize deployment
+                        run: python3.12 scripts/check_deploy_prerequisites.py --repo owner/repo
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "workflow-run-deploy-guard", "release-gpu", filename)
+
+    def test_rejects_pull_request_workflow_env_and_expression_secret_contexts(self):
+        workflows = {
+            "workflow-env.yml": """
+                on: pull_request
+                env:
+                  TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+                jobs:
+                  unit:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: true
+            """,
+            "whole-context.yml": """
+                on: pull_request
+                jobs:
+                  unit:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo '${{ secrets }}'
+            """,
+            "to-json.yml": """
+                on: pull_request
+                jobs:
+                  unit:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo '${{ toJson(secrets) }}'
+            """,
+            "spaced-bracket.yml": """
+                on: pull_request
+                jobs:
+                  unit:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo "${{ secrets ['DEPLOY_TOKEN'] }}"
+            """,
+            "secrets-mapping.yml": """
+                on: pull_request
+                jobs:
+                  unit:
+                    runs-on: ubuntu-latest
+                    secrets: inherit
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "pr-secrets", filename=filename)
+
+    def test_allows_pull_request_literal_secret_word_in_url_without_expression(self):
+        result = self.run_validator(
+            {
+                "docs.yml": """
+                on: pull_request
+                jobs:
+                  unit:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: curl https://example.invalid/docs/secrets.html
+                """
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_dynamic_matrix_and_non_github_hosted_deployment_runners(self):
+        workflows = {
+            "dynamic.yml": """
+                on: push
+                jobs:
+                  deploy:
+                    if: github.ref == 'refs/heads/main'
+                    runs-on: ${{ matrix.runner }}
+                    steps:
+                      - run: ./deploy.sh
+            """,
+            "expression.yml": """
+                on: push
+                jobs:
+                  deploy:
+                    if: github.ref == 'refs/heads/main'
+                    runs-on: ${{ github.ref_name }}
+                    steps:
+                      - run: ./deploy.sh
+            """,
+            "custom-label.yml": """
+                on: push
+                jobs:
+                  deploy:
+                    if: github.ref == 'refs/heads/main'
+                    runs-on: [ubuntu-latest, gpu-live]
+                    steps:
+                      - run: ./deploy.sh
+            """,
+        }
+        for filename, body in workflows.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(body, "deploy-runner", "deploy", filename)
+
+    def test_allows_release_notes_and_activate_venv_non_deploy_names(self):
+        result = self.run_validator(
+            {
+                "docs.yml": """
+                on: push
+                jobs:
+                  release-notes:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: ./scripts/generate-release-notes.sh
+                  activate-venv:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: python -m venv .venv && . .venv/bin/activate
                 """
             }
         )
@@ -818,7 +1110,7 @@ class WorkflowPolicyTest(unittest.TestCase):
                 jobs:
                   deploy-production:
                     if: github.ref == 'refs/heads/main'
-                    runs-on: [ubuntu-latest, production]
+                    runs-on: ubuntu-latest
                     steps:
                       - run: ./deploy.sh
                 """

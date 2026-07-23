@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,8 @@ PINNED_ACTION_RE = re.compile(r"@[0-9a-f]{40}$")
 PRODUCTION_LABELS = {"prod", "production", "prd", "prod-runner"}
 DEPLOYMENT_JOB_IDS = {"deploy", "release", "activate", "rollback"}
 DEPLOYMENT_TOKENS = ("deploy", "release", "activate", "rollback")
+NON_DEPLOYMENT_NAMES = {"release-notes", "activate-venv"}
+GITHUB_HOSTED_RUNNER_RE = re.compile(r"^(ubuntu|windows|macos)-[a-z0-9_.-]+$")
 
 YAML_TOKEN_BOUNDARIES = set(" \t[{,:")
 
@@ -340,41 +343,85 @@ def find_jobs(lines: list[SourceLine]) -> list[JobBlock]:
     return jobs
 
 
+def direct_child_indent(block_lines: list[SourceLine], parent_indent: int) -> int | None:
+    direct_indent: int | None = None
+    for line in block_lines[1:]:
+        if line.indent <= parent_indent or line.text.startswith("-"):
+            continue
+        parsed = key_value(line.text)
+        if parsed is None:
+            continue
+        if direct_indent is None or line.indent < direct_indent:
+            direct_indent = line.indent
+    return direct_indent
+
+
+def direct_block_line(block_lines: list[SourceLine], parent_indent: int, key: str) -> tuple[int, SourceLine, str] | None:
+    child_indent = direct_child_indent(block_lines, parent_indent)
+    if child_indent is None:
+        return None
+    for index, line in enumerate(block_lines[1:], start=1):
+        parsed = key_value(line.text)
+        if parsed and line.indent == child_indent and parsed[0] == key:
+            return index, line, unquote(parsed[1])
+    return None
+
+
 def direct_job_value(job: JobBlock, key: str) -> str | None:
     if not job.lines:
         return None
-    job_indent = job.lines[0].indent
-    for line in job.lines[1:]:
-        parsed = key_value(line.text)
-        if parsed and line.indent == job_indent + 2 and parsed[0] == key:
-            return unquote(parsed[1])
-    return None
+    found = direct_block_line(job.lines, job.lines[0].indent, key)
+    if found is None:
+        return None
+    _index, _line, value = found
+    return value
 
 
 def direct_job_values(job: JobBlock, key: str) -> list[str]:
     if not job.lines:
         return []
-    job_indent = job.lines[0].indent
-    for index, line in enumerate(job.lines[1:], start=1):
-        parsed = key_value(line.text)
-        if parsed and line.indent == job_indent + 2 and parsed[0] == key:
-            values = parse_scalar_list(parsed[1])
-            if values:
-                return values
-            return child_list(job.lines, index, line.indent)
-    return []
+    found = direct_block_line(job.lines, job.lines[0].indent, key)
+    if found is None:
+        return []
+    index, line, value = found
+    values = parse_scalar_list(value)
+    if values:
+        return values
+    return child_list(job.lines, index, line.indent)
 
 
 def direct_job_line(job: JobBlock, key: str) -> tuple[SourceLine, str] | None:
     if not job.lines:
         return None
-    job_indent = job.lines[0].indent
+    found = direct_block_line(job.lines, job.lines[0].indent, key)
+    if found is None:
+        return None
+    _index, line, value = found
+    return line, value
+
+
+
+def unsupported_job_indentation_violations(path: Path, job: JobBlock) -> list[Violation]:
+    if not job.lines:
+        return []
+    direct_indent = direct_child_indent(job.lines, job.lines[0].indent)
+    if direct_indent is None:
+        return []
+    violations: list[Violation] = []
     for line in job.lines[1:]:
         parsed = key_value(line.text)
-        if parsed and line.indent == job_indent + 2 and parsed[0] == key:
-            return line, unquote(parsed[1])
-    return None
-
+        if not parsed or line.indent <= job.lines[0].indent or line.indent == direct_indent:
+            continue
+        if parsed[0] in {"environment", "runs-on"}:
+            violations.append(
+                Violation(
+                    path,
+                    "unsupported-job-indentation",
+                    f"job-level {parsed[0]!r} uses unsupported indentation at line {line.number}",
+                    job.job_id,
+                )
+            )
+    return violations
 
 def has_runs_on_mapping(job: JobBlock) -> bool:
     runs_on = direct_job_line(job, "runs-on")
@@ -444,22 +491,38 @@ def normalized_identifier(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
+def identifier_segments(value: str) -> list[str]:
+    normalized = normalized_identifier(value)
+    if not normalized:
+        return []
+    return normalized.split("-")
+
+
 def is_deploy_job(job: JobBlock) -> bool:
     name = direct_job_value(job, "name") or ""
-    normalized_name = normalized_identifier(f"{job.job_id} {name}")
+    normalized_job_id = normalized_identifier(job.job_id)
+    normalized_name = normalized_identifier(name)
+    if normalized_job_id in NON_DEPLOYMENT_NAMES or normalized_name in NON_DEPLOYMENT_NAMES:
+        return direct_job_value(job, "environment") is not None
     return (
         job.job_id in DEPLOYMENT_JOB_IDS
         or direct_job_value(job, "environment") is not None
-        or any(token in normalized_name for token in DEPLOYMENT_TOKENS)
+        or any(token in identifier_segments(job.job_id) for token in DEPLOYMENT_TOKENS)
+        or any(token in identifier_segments(name) for token in DEPLOYMENT_TOKENS)
     )
 
 
 def normalized_condition(job: JobBlock) -> str:
     condition = direct_job_value(job, "if") or ""
-    normalized = condition.replace('"', "'").replace(" ", "")
+    return normalize_expression(condition)
+
+
+def normalize_expression(condition: str) -> str:
+    normalized = unquote(condition).strip()
     if normalized.startswith("${{") and normalized.endswith("}}"):
-        normalized = normalized[3:-2]
-    return normalized.strip()
+        normalized = normalized[3:-2].strip()
+    normalized = normalized.replace('"', "'")
+    return re.sub(r"\s+", "", normalized)
 
 
 def has_main_guard(job: JobBlock) -> bool:
@@ -474,32 +537,43 @@ def contains_literal(values: list[str], expected: str) -> bool:
     return any(unquote(value).lower() == expected for value in values)
 
 
-def workflow_run_values(lines: list[SourceLine], key: str) -> list[str]:
+def top_level_event_block(lines: list[SourceLine], event: str) -> tuple[int, SourceLine] | None:
     for index, line in enumerate(lines):
         parsed = key_value(line.text)
         if not parsed or parsed[0] != "on":
             continue
         if parsed[1]:
-            return []
+            return None
         for event_index, event_line in enumerate(lines[index + 1 :], start=index + 1):
             if event_line.indent <= line.indent:
                 break
             event_parsed = key_value(event_line.text)
-            if not event_parsed or event_parsed[0] != "workflow_run":
-                continue
-            if event_parsed[1]:
-                return []
-            for child_index, child in enumerate(lines[event_index + 1 :], start=event_index + 1):
-                if child.indent <= event_line.indent:
-                    break
-                child_parsed = key_value(child.text)
-                if child_parsed and child.indent == event_line.indent + 2 and child_parsed[0] == key:
-                    values = parse_scalar_list(child_parsed[1])
-                    if values:
-                        return values
-                    return child_list(lines, child_index, child.indent)
+            if event_parsed and event_parsed[0] == event:
+                return event_index, event_line
         break
-    return []
+    return None
+
+
+def workflow_run_values(lines: list[SourceLine], key: str) -> list[str]:
+    event = top_level_event_block(lines, "workflow_run")
+    if event is None:
+        return []
+    event_index, event_line = event
+    if key_value(event_line.text) and key_value(event_line.text)[1]:
+        return []
+    block_lines = [event_line]
+    for child in lines[event_index + 1 :]:
+        if child.indent <= event_line.indent:
+            break
+        block_lines.append(child)
+    found = direct_block_line(block_lines, event_line.indent, key)
+    if found is None:
+        return []
+    index, line, value = found
+    values = parse_scalar_list(value)
+    if values:
+        return values
+    return child_list(block_lines, index, line.indent)
 
 
 def has_completed_ci_workflow_run_trigger(lines: list[SourceLine]) -> bool:
@@ -508,41 +582,141 @@ def has_completed_ci_workflow_run_trigger(lines: list[SourceLine]) -> bool:
     )
 
 
+def split_top_level_conjunction(expression: str) -> list[str] | None:
+    if "||" in expression:
+        return None
+    clauses: list[str] = []
+    start = 0
+    in_single = False
+    index = 0
+    while index < len(expression):
+        char = expression[index]
+        if char == "'":
+            in_single = not in_single
+            index += 1
+            continue
+        if not in_single and expression.startswith("&&", index):
+            clauses.append(expression[start:index])
+            index += 2
+            start = index
+            continue
+        index += 1
+    clauses.append(expression[start:])
+    if in_single or any(not clause for clause in clauses):
+        return None
+    return clauses
+
+
 def has_workflow_run_provenance_guard(job: JobBlock) -> bool:
-    normalized = normalized_condition(job)
-    required_fragments = (
+    clauses = split_top_level_conjunction(normalized_condition(job))
+    if clauses is None:
+        return False
+    required = {
         "github.event.workflow_run.event=='push'",
         "github.event.workflow_run.head_branch=='main'",
         "github.event.workflow_run.conclusion=='success'",
-    )
-    same_repo_fragments = (
         "github.event.workflow_run.head_repository.full_name==github.repository",
-        "github.event.workflow_run.head_repository.id==github.repository_id",
-    )
-    return all(fragment in normalized for fragment in required_fragments) and any(
-        fragment in normalized for fragment in same_repo_fragments
-    )
+    }
+    return set(clauses) == required
+
+
+def step_blocks(job: JobBlock) -> list[list[SourceLine]]:
+    steps_line = direct_job_line(job, "steps")
+    if steps_line is None:
+        return []
+    parent_line, _value = steps_line
+    children: list[SourceLine] = []
+    for line in job.lines:
+        if line.number <= parent_line.number:
+            continue
+        if line.indent <= parent_line.indent:
+            break
+        children.append(line)
+    blocks: list[list[SourceLine]] = []
+    current: list[SourceLine] = []
+    current_indent: int | None = None
+    for line in children:
+        if line.text.startswith("-") and current_indent is None:
+            current = [line]
+            current_indent = line.indent
+            continue
+        if line.text.startswith("-") and current_indent is not None and line.indent <= current_indent:
+            blocks.append(current)
+            current = [line]
+            current_indent = line.indent
+            continue
+        if current_indent is not None:
+            current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def shell_words(value: str) -> list[str]:
+    try:
+        return shlex.split(value)
+    except ValueError:
+        return []
+
+
+def run_executes_authorize_gpu_release(value: str) -> bool:
+    words = shell_words(value)
+    return len(words) >= 2 and words[0] == "python3.12" and words[1] == "scripts/authorize_gpu_release.py"
 
 
 def has_authorization_step(job: JobBlock) -> bool:
-    for line in job.lines[1:]:
-        parsed = key_value(line.text)
-        if parsed and parsed[0] in {"name", "id"}:
-            value = unquote(parsed[1]).lower()
-            if "authorize" in value or "authorization" in value:
+    for block in step_blocks(job):
+        for line in block:
+            parsed = key_value(line.text)
+            if parsed and parsed[0] == "run" and run_executes_authorize_gpu_release(unquote(parsed[1])):
                 return True
+    return False
+
+
+GITHUB_EXPRESSION_RE = re.compile(r"\$\{\{(.*?)\}\}")
+SECRETS_CONTEXT_RE = re.compile(r"(?<![A-Za-z0-9_])secrets(?![A-Za-z0-9_])")
+
+
+def expression_references_secrets(value: str) -> bool:
+    for match in GITHUB_EXPRESSION_RE.finditer(value):
+        expression = match.group(1)
+        if SECRETS_CONTEXT_RE.search(expression):
+            return True
     return False
 
 
 def job_references_secrets(job: JobBlock) -> bool:
     for line in job.lines[1:]:
-        text = strip_comment(line.text).lower()
-        if "secrets." in text or "secrets[" in text:
-            return True
         parsed = key_value(line.text)
         if parsed and parsed[0] == "secrets":
             return True
+        if expression_references_secrets(strip_comment(line.text)):
+            return True
     return False
+
+
+def top_level_references_secrets(lines: list[SourceLine]) -> bool:
+    for line in lines:
+        parsed = key_value(line.text)
+        if parsed and parsed[0] == "jobs" and line.indent == 0:
+            break
+        if parsed and line.indent == 0 and parsed[0] == "secrets":
+            return True
+        if expression_references_secrets(strip_comment(line.text)):
+            return True
+    return False
+
+
+def is_github_hosted_runner_label(label: str) -> bool:
+    return bool(GITHUB_HOSTED_RUNNER_RE.fullmatch(label))
+
+
+def deployment_runner_violation(runner_labels: set[str]) -> bool:
+    if not runner_labels:
+        return True
+    if any("${{" in label or "matrix." in label for label in runner_labels):
+        return True
+    return not all(is_github_hosted_runner_label(label) for label in runner_labels)
 
 
 def validate_workflow(path: Path) -> list[Violation]:
@@ -558,9 +732,13 @@ def validate_workflow(path: Path) -> list[Violation]:
     violations.extend(permission_write_violations(path, lines, owner_indent=0))
 
     is_pull_request_workflow = "pull_request" in events
+    workflow_has_pr_secrets = is_pull_request_workflow and top_level_references_secrets(lines)
+    if workflow_has_pr_secrets:
+        violations.append(Violation(path, "pr-secrets", "pull_request workflows must not reference GitHub secrets"))
     for job in find_jobs(lines):
         job_indent = job.lines[0].indent
-        violations.extend(permission_write_violations(path, job.lines[1:], owner_indent=job_indent + 2, job=job.job_id))
+        violations.extend(permission_write_violations(path, job.lines[1:], owner_indent=direct_child_indent(job.lines, job_indent) or job_indent + 2, job=job.job_id))
+        violations.extend(unsupported_job_indentation_violations(path, job))
 
         for value in uses_values(job):
             if not PINNED_ACTION_RE.search(value):
@@ -589,7 +767,7 @@ def validate_workflow(path: Path) -> list[Violation]:
                 )
 
         deploy_job = is_deploy_job(job)
-        if is_pull_request_workflow and job_references_secrets(job):
+        if is_pull_request_workflow and job_references_secrets(job) and not workflow_has_pr_secrets:
             violations.append(
                 Violation(path, "pr-secrets", "pull_request jobs must not reference GitHub secrets", job.job_id)
             )
@@ -600,6 +778,10 @@ def validate_workflow(path: Path) -> list[Violation]:
         if deploy_job and "self-hosted" in runner_labels:
             violations.append(
                 Violation(path, "deploy-self-hosted-runner", "deployment jobs must use GitHub-hosted runners", job.job_id)
+            )
+        if deploy_job and deployment_runner_violation(runner_labels):
+            violations.append(
+                Violation(path, "deploy-runner", "deployment jobs must use explicit GitHub-hosted runner labels", job.job_id)
             )
         if deploy_job and "workflow_run" in events:
             if not (
