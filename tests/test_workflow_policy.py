@@ -1251,6 +1251,36 @@ class WorkflowPolicyTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
 
+    def test_rejects_any_extra_executable_line_in_canonical_gpu_dev_deploy_step(self):
+        extras = {
+            "dev-extra-true.yml": "true",
+            "dev-extra-bash-c-ssh.yml": "bash -c 'ssh example.invalid uptime'",
+            "dev-extra-variable-ssh.yml": "s=ssh; $s example.invalid uptime",
+            "dev-extra-eval.yml": "eval 'echo no'",
+            "dev-extra-python.yml": "python3.12 -c 'print(1)'",
+        }
+        base = Path(".github/workflows/deploy-gpu-dev.yml").read_text(encoding="utf-8")
+        marker = '          ssh "${ssh_opts[@]}" "$target" "status dev"'
+        for filename, extra in extras.items():
+            workflow = base.replace(marker, marker + "\n          " + extra)
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(workflow, "workflow-dispatch-dev-deploy-guard", "deploy", filename)
+
+    def test_rejects_any_extra_executable_line_in_canonical_gpu_live_deploy_step(self):
+        extras = {
+            "live-extra-true.yml": "true",
+            "live-extra-bash-c-ssh.yml": "bash -c 'ssh example.invalid uptime'",
+            "live-extra-variable-ssh.yml": "s=ssh; $s example.invalid uptime",
+            "live-extra-source.yml": "source ./deploy.env",
+            "live-extra-python.yml": "python3.12 -c 'print(1)'",
+        }
+        base = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
+        marker = '          ssh "${ssh_opts[@]}" "$target" "status live"'
+        for filename, extra in extras.items():
+            workflow = base.replace(marker, marker + "\n          " + extra)
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
+
     def test_rejects_gpu_deployment_workflows_with_storage_coupling(self):
         for filename, event in (("dev-storage.yml", "workflow_dispatch"), ("live-storage.yml", "workflow_run")):
             with self.subTest(filename=filename):
@@ -1462,65 +1492,20 @@ class WorkflowPolicyTest(unittest.TestCase):
 
 
     def split_authorized_live_workflow(self, *, extra_deploy_step: str = "", auth_continue: str | None = None) -> str:
-        extra = textwrap.indent(textwrap.dedent(extra_deploy_step).strip("\n"), "                      ") if extra_deploy_step else ""
-        if extra:
-            extra = "\n" + extra
-        continue_line = f"\n                    continue-on-error: {auth_continue}" if auth_continue else ""
-        return f"""
-            on:
-              workflow_run:
-                workflows: [ci]
-                types: [completed]
-            permissions: read-all
-            concurrency:
-              group: gpu-live
-              cancel-in-progress: false
-            jobs:
-              authorize:
-                if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
-                runs-on: ubuntu-24.04
-                steps:
-                  - uses: actions/checkout@{PINNED_SHA}
-                  - name: Authorize deployment{continue_line}
-                    run: python3.12 scripts/authorize_gpu_release.py --repository ${{{{ github.repository }}}} --workflow-run-file ${{{{ github.event_path }}}} --live --required-check ci/required
-              deploy:
-                needs: authorize
-                if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
-                runs-on: ubuntu-24.04
-                environment: gpu-live
-                steps:
-                  - uses: actions/checkout@{PINNED_SHA}
-                    with:
-                      ref: ${{{{ github.event.workflow_run.head_sha }}}}
-                  - id: build
-                    env:
-                      SHA: ${{{{ github.event.workflow_run.head_sha }}}}
-                    run: |
-                      sha="$SHA"
-                      [[ "$sha" =~ ^[0-9a-f]{{40}}$ ]]
-                  - env:
-                      SHA: ${{{{ github.event.workflow_run.head_sha }}}}
-                      DIGEST: ${{{{ steps.build.outputs.digest }}}}
-                      ARTIFACT: ${{{{ steps.build.outputs.artifact }}}}
-                      GPU_DEPLOY_HOST: ${{{{ secrets.GPU_DEPLOY_HOST }}}}
-                      GPU_DEPLOY_PORT: ${{{{ secrets.GPU_DEPLOY_PORT }}}}
-                      GPU_DEPLOY_USER: ${{{{ secrets.GPU_DEPLOY_USER }}}}
-                    run: |
-                      sha="$SHA"
-                      digest="$DIGEST"
-                      artifact="$ARTIFACT"
-                      target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
-                      [[ "$sha" =~ ^[0-9a-f]{{40}}$ ]]
-                      [[ "$digest" =~ ^[0-9a-f]{{64}}$ ]]
-                      [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
-                      [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
-                      [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
-                      [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]]
-                      ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
-                      ssh "${{ssh_opts[@]}}" "$target" "upload live $sha $digest" < "$artifact"
-                      ssh "${{ssh_opts[@]}}" "$target" "activate live $sha $digest"
-                      ssh "${{ssh_opts[@]}}" "$target" "status live"{extra}
-        """
+        workflow = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
+        if auth_continue:
+            workflow = workflow.replace(
+                "      - name: Authorize deployment\n",
+                f"      - name: Authorize deployment\n        continue-on-error: {auth_continue}\n",
+            )
+        if extra_deploy_step:
+            extra = textwrap.indent(textwrap.dedent(extra_deploy_step).strip("\n"), "          ")
+            workflow = workflow.replace(
+                '          ssh "${ssh_opts[@]}" "$target" "status live"',
+                '          ssh "${ssh_opts[@]}" "$target" "status live"\n' + extra,
+            )
+        return workflow
+
 
 
 

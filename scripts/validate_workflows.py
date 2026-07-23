@@ -752,6 +752,35 @@ def has_build_step(job: JobBlock, expected_sha_source: str) -> bool:
 
 
 
+
+def canonical_deploy_lines(lane: str) -> list[str]:
+    return [
+        "set -euo pipefail",
+        'sha="$SHA"',
+        'digest="$DIGEST"',
+        'artifact="$ARTIFACT"',
+        '[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid SHA" >&2; exit 1; }',
+        '[[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid digest" >&2; exit 1; }',
+        '[[ -f "$artifact" ]] || { echo "artifact missing" >&2; exit 1; }',
+        '[[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid host" >&2; exit 1; }',
+        '[[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid user" >&2; exit 1; }',
+        '[[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]] && (( GPU_DEPLOY_PORT >= 1 && GPU_DEPLOY_PORT <= 65535 )) || { echo "invalid port" >&2; exit 1; }',
+        'target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"',
+        '[[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] || { echo "invalid target" >&2; exit 1; }',
+        'key_file=$(mktemp)',
+        'known_hosts=$(mktemp)',
+        'cleanup() { rm -f "$key_file" "$known_hosts"; }',
+        'trap cleanup EXIT',
+        'printf \'%s\\n\' "$GPU_DEPLOY_SSH_KEY" > "$key_file"',
+        'chmod 600 "$key_file"',
+        'printf \'%s\\n\' "$GPU_DEPLOY_KNOWN_HOSTS" > "$known_hosts"',
+        '[[ -s "$known_hosts" ]] || { echo "known_hosts is empty" >&2; exit 1; }',
+        'ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")',
+        f'ssh "${{ssh_opts[@]}}" "$target" "upload {lane} $sha $digest" < "$artifact"',
+        f'ssh "${{ssh_opts[@]}}" "$target" "activate {lane} $sha $digest"',
+        f'ssh "${{ssh_opts[@]}}" "$target" "status {lane}"',
+    ]
+
 def is_shell_assignment(word: str) -> bool:
     return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", word) is not None
 
@@ -808,9 +837,6 @@ def executable_ssh_invocations(lines: list[str], expected_ssh_lines: list[str]) 
     return invocations
 
 def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -> bool:
-    upload = f'"upload {lane} $sha $digest"'
-    activate = f'"activate {lane} $sha $digest"'
-    status = f'"status {lane}"'
     for block in step_blocks(job):
         if not all(
             step_has_env(block, name, value)
@@ -821,34 +847,13 @@ def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -
                 ("GPU_DEPLOY_HOST", "${{ secrets.GPU_DEPLOY_HOST }}"),
                 ("GPU_DEPLOY_PORT", "${{ secrets.GPU_DEPLOY_PORT }}"),
                 ("GPU_DEPLOY_USER", "${{ secrets.GPU_DEPLOY_USER }}"),
+                ("GPU_DEPLOY_SSH_KEY", "${{ secrets.GPU_DEPLOY_SSH_KEY }}"),
+                ("GPU_DEPLOY_KNOWN_HOSTS", "${{ secrets.GPU_DEPLOY_KNOWN_HOSTS }}"),
             )
         ):
             continue
-        lines = executable_lines(run_command_value(block))
-        expected_ssh_lines = [
-            f'ssh "${{ssh_opts[@]}}" "$target" {upload} < "$artifact"',
-            f'ssh "${{ssh_opts[@]}}" "$target" {activate}',
-            f'ssh "${{ssh_opts[@]}}" "$target" {status}',
-        ]
-        ssh_lines = executable_ssh_invocations(lines, expected_ssh_lines)
-        if not all(
-            (
-                line_contains(lines, 'sha="$SHA"'),
-                line_contains(lines, 'digest="$DIGEST"'),
-                line_contains(lines, 'artifact="$ARTIFACT"'),
-                line_contains(lines, '[[ "$sha"', "^[0-9a-f]{40}$"),
-                line_contains(lines, '[[ "$digest"', "^[0-9a-f]{64}$"),
-                line_contains(lines, '[[ "$GPU_DEPLOY_HOST"', "^[A-Za-z0-9._-]+$"),
-                line_contains(lines, '[[ "$GPU_DEPLOY_USER"', "^[A-Za-z0-9._-]+$"),
-                line_contains(lines, '[[ "$GPU_DEPLOY_PORT"', "^[0-9]+$"),
-                line_contains(lines, 'target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"'),
-                line_contains(lines, '[[ "$target"', "^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$"),
-                line_contains(lines, "ssh_opts=", "StrictHostKeyChecking=yes", "UserKnownHostsFile", "IdentitiesOnly=yes", '-p "$GPU_DEPLOY_PORT"'),
-                ssh_lines == expected_ssh_lines,
-            )
-        ):
-            continue
-        return True
+        if executable_lines(run_command_value(block)) == canonical_deploy_lines(lane):
+            return True
     return False
 
 def has_gpu_dev_dispatch_guard(lines: list[SourceLine], job: JobBlock, events: set[str], runner_labels: set[str]) -> bool:
