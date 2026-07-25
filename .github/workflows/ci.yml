@@ -143,14 +143,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
         working-directory: apps/gpu-monitor/frontend
-      - name: Test frontend runtime proxy
-        run: npm run test:runtime
-        working-directory: apps/gpu-monitor/frontend
       - name: Check frontend
         run: npm run check
         working-directory: apps/gpu-monitor/frontend
       - name: Build frontend
         run: npm run build
+        working-directory: apps/gpu-monitor/frontend
+      - name: Test frontend runtime proxy
+        run: npm run test:runtime
         working-directory: apps/gpu-monitor/frontend
       - name: Install backend dependencies
         run: |

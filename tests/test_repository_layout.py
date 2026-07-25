@@ -162,8 +162,9 @@ class RepositoryLayoutTest(unittest.TestCase):
         )
         self.assertEqual(
             [
-                "cd apps/gpu-monitor/frontend && npm run test:runtime",
                 "cd apps/gpu-monitor/frontend && npm run check",
+                "cd apps/gpu-monitor/frontend && npm run build",
+                "cd apps/gpu-monitor/frontend && npm run test:runtime",
                 "cd apps/gpu-monitor && SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password python3.12 -m unittest discover -s backend/tests -v",
             ],
             make_target_recipe("test-gpu"),
@@ -173,7 +174,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             make_target_recipe("build-gpu"),
         )
         self.assertEqual(
-            ["test", "test-gpu", "build-gpu", "test-storage", "diff-check"],
+            ["test", "test-gpu", "test-storage", "diff-check"],
             make_target_dependencies("verify"),
         )
 
@@ -330,6 +331,12 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertNotIn("python-version: '3.12'", content)
         self.assertNotIn("node-version: '20'", content)
         self.assertNotIn("run: python3.12 -m pip install pytest\n", content)
+
+        check_index = content.index("- name: Check frontend")
+        build_index = content.index("- name: Build frontend")
+        runtime_index = content.index("- name: Test frontend runtime proxy")
+        self.assertLess(check_index, build_index)
+        self.assertLess(build_index, runtime_index)
 
     def test_tracked_files_exclude_generated_runtime_and_local_environment_data(self):
         disallowed = [path for path in tracked_paths() if is_disallowed_tracked_path(path)]

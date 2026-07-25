@@ -38,8 +38,9 @@ build-gpu-release:
 	apps/gpu-monitor/deploy/build-release.sh --sha "$$(git rev-parse HEAD)" --output-dir "$${OUTPUT_DIR:-apps/gpu-monitor/dist/releases}"
 
 test-gpu:
-	cd apps/gpu-monitor/frontend && npm run test:runtime
 	cd apps/gpu-monitor/frontend && npm run check
+	cd apps/gpu-monitor/frontend && npm run build
+	cd apps/gpu-monitor/frontend && npm run test:runtime
 	cd apps/gpu-monitor && SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password python3.12 -m unittest discover -s backend/tests -v
 
 build-gpu:
@@ -71,7 +72,7 @@ test-storage:
 	  printf '%s\n' 'SKIP: Linux-only scanner tests use SYS_getdents64; covered by Task 3 remote Linux verification.'; \
 	fi
 
-verify: test test-gpu build-gpu test-storage diff-check
+verify: test test-gpu test-storage diff-check
 
 diff-check:
 	@set -euo pipefail; \
