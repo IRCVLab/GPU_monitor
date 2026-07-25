@@ -373,7 +373,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             github_cicd,
         )
         self.assertIn(
-            "re-scoped from the legacy branch-protected/self-hosted model",
+            "Legacy readiness checks are retained",
             github_cicd,
         )
         self.assertIn("Historical design artifact (superseded).", workflow_design)
@@ -415,6 +415,8 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertIn("local development", combined.lower())
         self.assertNotIn("run `deploy-gpu-dev`", combined)
         self.assertNotIn("`pr_number`", combined)
+        self.assertNotIn("Required live check", cicd)
+        self.assertNotIn("Before live activation", cicd)
         for phrase in (
             "ci/required",
             "gpu-live",

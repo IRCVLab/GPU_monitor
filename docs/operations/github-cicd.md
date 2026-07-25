@@ -8,7 +8,7 @@ This repository publishes source with pull-request CI and runs the live deployme
 
 `IRCVLab/GPU_monitor` is a private repository on the current GitHub plan, and `main` branch protection is unavailable/not configured for that private-plan state. This section is retained as historical operational context; it is not current authorization logic.
 
-Required live check:
+Legacy checker command (informational only):
 
 ```bash
 python3.12 scripts/check_deploy_prerequisites.py --repo IRCVLab/GPU_monitor
@@ -37,6 +37,8 @@ A protected `main` with `ci/required`, at least one approving review, code-owner
 
 Pull-request and deployment workflows use GitHub-hosted runners. The deployment credential is environment-scoped and accepted by a server-side forced-command wrapper that cannot execute arbitrary repository-provided shell. Self-hosted production runners remain disabled.
 
+## Current GitHub-hosted live authorization
+
 The trusted-team deployment workflow authorizes the exact push SHA directly from `ci` provenance. A direct push to `main` is valid if:
 
 - the workflow is `ci`;
@@ -46,7 +48,9 @@ The trusted-team deployment workflow authorizes the exact push SHA directly from
 - `head_repository.full_name` equals `IRCVLab/GPU_monitor`;
 - latest `ci/required` check is successful for the same `head_sha`.
 
-Pull requests and manual review are optional for current operator flow; they are not required deployment gate criteria. Before live activation, deployment readiness checks must be re-scoped from the legacy branch-protected/self-hosted model to this GitHub-hosted model.
+Pull requests and manual review are optional for current operator flow; they are not required deployment gate criteria.
+
+Legacy readiness checks are retained for historical and planning context only. The current live authorization path is the GitHub-hosted workflow criteria above and does not use `scripts/check_deploy_prerequisites.py` as a gate.
 
 ## Initial publication commands
 
