@@ -7,10 +7,11 @@
 
 Remove the always-on shared GPU development deployment from the supported
 platform model. Developers run and validate changes on their own machines,
-GitHub CI validates repository changes, and every successful same-repository
-`main` push deploys its exact commit to the existing live service. Pull requests
-remain available for changes that benefit from review but are not a release
-requirement.
+GitHub CI validates repository changes, and the newest successful
+same-repository `main` push deploys its exact commit to the existing live
+service. A delayed or rerun workflow for a SHA that is no longer current `main`
+must not replace a newer release. Pull requests remain available for changes
+that benefit from review but are not a release requirement.
 
 ## Rationale
 
@@ -33,8 +34,8 @@ performs browser-facing health checks, and rolls back a failed activation.
    request and merges it into `main`.
 4. The resulting `main` push runs `ci/required` and path-aware application
    checks.
-5. Successful same-repository `main` CI authorizes that exact SHA for live
-   deployment.
+5. Successful same-repository `main` CI authorizes that exact SHA while it
+   remains the current `main` ref.
 6. The server activates the immutable live release.
 7. Failed health checks restore the previous live release automatically.
 
@@ -77,6 +78,10 @@ The first server pass stops and disables development services but preserves the
 development release files as a reversible checkpoint. Account and file deletion
 is a later cleanup after the live-only workflow has been verified.
 
+The server installer must support an explicit Live-only reconciliation mode.
+That mode installs or rotates the Live forced-command key while revoking the Dev
+`authorized_keys` entry without deleting the Dev account or release files.
+
 ## GitHub Configuration
 
 Create only the `gpu-live` Environment. Configure its five environment secrets:
@@ -91,7 +96,10 @@ No environment-level manual approval is required. Live authorization remains
 an exact successful-workflow provenance check. It requires a `push` event on
 `main`, a successful `ci/required` result for the workflow SHA, the expected
 repository identity, and equality between the checked and deployed SHA. It does
-not require a pull request or review.
+not require a pull request or review. Authorization and the secret-bearing
+deployment job both compare the workflow SHA with the current GitHub `main` ref;
+the deployment job checks again immediately before activation so a stale rerun
+cannot roll Live backward.
 
 Protect `main` against force pushes and branch deletion while permitting trusted
 repository writers to push normally. Do not require pull requests. CI is an
@@ -120,7 +128,9 @@ Repository verification:
 - Workflow policy tests pass with one deployment lane.
 - Live authorization accepts only an exact successful same-repository `main`
   push workflow SHA and rejects pull-request, non-main, failed, cross-repository,
-  or mismatched-SHA workflow metadata.
+  mismatched-SHA, or stale-main workflow metadata.
+- The server installer can reconcile Live-only authorization and remove Dev SSH
+  authorization without deleting Dev release files or accounts.
 - GPU backend tests pass.
 - GPU frontend runtime tests, checks, and build pass.
 - Storage tests and deploy-asset tests remain unchanged and pass.
