@@ -7,8 +7,10 @@
 
 Remove the always-on shared GPU development deployment from the supported
 platform model. Developers run and validate changes on their own machines,
-GitHub CI validates pull requests, and an authorized merge to `main` deploys
-the exact successful commit to the existing live service.
+GitHub CI validates repository changes, and every successful same-repository
+`main` push deploys its exact commit to the existing live service. Pull requests
+remain available for changes that benefit from review but are not a release
+requirement.
 
 ## Rationale
 
@@ -20,16 +22,19 @@ contributors do not need.
 
 Local development is sufficient for ordinary frontend and backend work. CI
 provides reproducible repository validation. The live release path already
-builds immutable artifacts, validates provenance, performs browser-facing
-health checks, and rolls back a failed activation.
+builds immutable artifacts, validates the successful `main` workflow provenance,
+performs browser-facing health checks, and rolls back a failed activation.
 
 ## Supported Workflow
 
 1. A contributor clones the repository and develops locally.
 2. The contributor runs the documented application-local checks.
-3. A pull request runs `ci/required` and path-aware application checks.
-4. The pull request is reviewed and merged into `main`.
-5. Successful `main` CI authorizes the exact merged SHA for live deployment.
+3. The contributor either pushes directly to `main` or optionally uses a pull
+   request and merges it into `main`.
+4. The resulting `main` push runs `ci/required` and path-aware application
+   checks.
+5. Successful same-repository `main` CI authorizes that exact SHA for live
+   deployment.
 6. The server activates the immutable live release.
 7. Failed health checks restore the previous live release automatically.
 
@@ -83,12 +88,16 @@ Create only the `gpu-live` Environment. Configure its five environment secrets:
 - `GPU_DEPLOY_KNOWN_HOSTS`
 
 No environment-level manual approval is required. Live authorization remains
-the reviewed merged-PR provenance check implemented by the repository.
+an exact successful-workflow provenance check. It requires a `push` event on
+`main`, a successful `ci/required` result for the workflow SHA, the expected
+repository identity, and equality between the checked and deployed SHA. It does
+not require a pull request or review.
 
-Protect `main` with pull-request and `ci/required` requirements now that the
-repository is public. Disable force pushes and branch deletion. The protection
-rule is configured only after the workflow has been published and the required
-check context exists.
+Protect `main` against force pushes and branch deletion while permitting trusted
+repository writers to push normally. Do not require pull requests. CI is an
+asynchronous deployment gate rather than a pre-push branch-update gate: a failed
+commit may remain in `main`, but it must not replace the last healthy live
+release.
 
 ## Local Development
 
@@ -109,6 +118,9 @@ Repository verification:
 
 - Root contract tests pass.
 - Workflow policy tests pass with one deployment lane.
+- Live authorization accepts only an exact successful same-repository `main`
+  push workflow SHA and rejects pull-request, non-main, failed, cross-repository,
+  or mismatched-SHA workflow metadata.
 - GPU backend tests pass.
 - GPU frontend runtime tests, checks, and build pass.
 - Storage tests and deploy-asset tests remain unchanged and pass.
@@ -137,6 +149,8 @@ The change is complete when:
 
 - The repository documents local development as the only development mode.
 - No supported GitHub workflow or secret references `gpu-dev`.
+- Pull requests and review are optional and are not live deployment
+  prerequisites.
 - The retired development services and local development tunnel are stopped.
 - Live and Storage remain healthy.
 - The branch passes full verification.
