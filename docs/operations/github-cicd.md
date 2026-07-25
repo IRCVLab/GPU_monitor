@@ -177,6 +177,16 @@ rollback live
 
 The server-side forced command enforces the live rollback boundary.
 
+## Development runtime retirement evidence
+
+Retirement date: 2026-07-25 KST.
+
+- The local `15174 -> 5174` development SSH tunnel loop and its active SSH child were terminated; the Live `15173 -> 5173` and Storage `8088 -> 8088` tunnels remained listening and healthy.
+- `gpu-monitor-backend@dev.service` and `gpu-monitor-frontend@dev.service` were disabled and stopped. Both units report `disabled` and `inactive`.
+- No remote listeners remain on development ports `5174` or `8101`.
+- `/srv/gpu-monitor/dev`, `/var/lib/gpu-monitor/dev`, and `/etc/gpu-monitor/dev.env` remain preserved for rollback evidence and reversible recovery.
+- Live frontend port `5173`, Live backend port `8001`, and Storage port `8088` remained healthy after retirement. No Live or Storage unit, release, data, port, or tunnel was changed.
+
 > Historical evidence: the shared GPU development lane was retired by
 > `docs/superpowers/specs/2026-07-25-local-development-live-release-design.md`.
 > The following records describe the completed rehearsal and are not current
