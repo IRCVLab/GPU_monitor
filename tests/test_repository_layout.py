@@ -354,8 +354,9 @@ class RepositoryLayoutTest(unittest.TestCase):
         )
 
         self.assertIn("PR head SHA", workflow_design)
-        self.assertIn("main SHA", workflow_design)
         self.assertIn("direct push", workflow_design.lower())
+        self.assertIn("This design is superseded for current release policy by", workflow_design)
+        self.assertIn("docs/superpowers/specs/2026-07-25-local-development-live-release-design.md", workflow_design)
         self.assertIn("GitHub-hosted", github_cicd)
         self.assertIn("forced-command", github_cicd)
         self.assertIn("Storage agents remain manual", github_cicd)
@@ -368,10 +369,13 @@ class RepositoryLayoutTest(unittest.TestCase):
             github_cicd,
         )
         self.assertIn(
-            "not the authorization gate for the GitHub-hosted trusted-team workflow",
+            "not the authorization gate for live deployment in the current contract",
             github_cicd,
         )
-        self.assertIn("must be re-scoped before live activation", github_cicd)
+        self.assertIn(
+            "re-scoped from the legacy branch-protected/self-hosted model",
+            github_cicd,
+        )
         self.assertIn("Current cutover is expected to remain non-READY", github_cicd)
         self.assertIn(
             "Superseded for runner and deployment policy by "
@@ -410,13 +414,14 @@ class RepositoryLayoutTest(unittest.TestCase):
             "GPU_DEPLOY_KNOWN_HOSTS",
         ):
             self.assertIn(secret, combined)
+        self.assertIn("Pull requests are optional", combined)
+        self.assertIn("successful same-repository `main` push", combined)
+        self.assertIn("local development", combined.lower())
+        self.assertNotIn("run `deploy-gpu-dev`", combined)
+        self.assertNotIn("`pr_number`", combined)
         for phrase in (
-            "workflow_dispatch",
-            "pr_number",
             "ci/required",
-            "gpu-dev",
             "gpu-live",
-            "direct pushes",
             "status",
             "rollback",
         ):

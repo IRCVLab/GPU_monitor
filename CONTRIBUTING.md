@@ -18,6 +18,8 @@ This monorepo preserves two independent products. Keep changes scoped to the app
 
 ## Deployment boundary
 
-Deployment remains application-specific. The GPU release path validates the PR head SHA through CI and shared development-server validation, then a reviewed GitHub merge to `main` is the production deployment authorization point. The resulting main SHA may differ from the PR head SHA, so fresh `ci/required` success, merged-PR provenance, and effective approval verification are required before building and deploying the exact successful main SHA.
+Deployment remains application-specific. In the supported policy, local development is the default path: contributors may use optional pull requests or push directly to `main`; successful same-repository `main` CI determines the exact release SHA, and only that SHA is deployed to live.
+
+Pull requests are optional. A failed `main` CI does not change the current live release, even though the failed commit remains in Git history.
 
 Pull-request and deployment workflows use GitHub-hosted runners. Self-hosted production runners remain disabled while branch protection is unavailable. The deployment credential must be environment-scoped and accepted only by a server-side forced-command wrapper that cannot execute arbitrary repository-provided shell. These checks are trusted-team safeguards against accidental direct-push deployment, not a substitute for branch protection against a malicious authorized writer.

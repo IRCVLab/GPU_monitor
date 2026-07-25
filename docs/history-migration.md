@@ -1,5 +1,7 @@
 # History migration inventory
 
+The workflow design in `docs/superpowers/specs/2026-07-23-development-release-workflow-design.md` is preserved here as historical design evidence only. It is superseded for current release policy by `docs/superpowers/specs/2026-07-25-local-development-live-release-design.md`.
+
 Use `scripts/history_inventory.py` to create a deterministic JSON inventory of a source Git repository before migrating history.
 
 ```bash

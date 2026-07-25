@@ -1,8 +1,8 @@
 # GitHub CI/CD bootstrap guard
 
-This repository is ready to publish source, pull-request CI, and the trusted-team GPU deployment workflow, but live cutover remains deliberately delayed until the workflow and server-side release path are implemented and verified.
+This repository publishes source with pull-request CI and runs the live deployment workflow from successful same-repository `main` pushes.
 
-`scripts/check_deploy_prerequisites.py` is the legacy branch-protected/self-hosted readiness model. It reports `READY`, `BLOCKED`, or `UNKNOWN` for repository protection, CODEOWNER enforcement, runner availability, and server reachability, then still merges `protected_main`, `codeowner_enforcement`, `runner_availability`, and `server_reachability` into its default `cutover` status. It never changes GitHub settings, registers runners, copies artifacts, restarts services, or writes to the production server; malformed metadata fails closed and never falls back to live inspection. This checker is not the authorization gate for the GitHub-hosted trusted-team workflow, and it must be re-scoped before live activation.
+`scripts/check_deploy_prerequisites.py` is the legacy branch-protected/self-hosted readiness model. It reports `READY`, `BLOCKED`, or `UNKNOWN` for repository protection, CODEOWNER enforcement, runner availability, and server reachability, then merges `protected_main`, `codeowner_enforcement`, `runner_availability`, and `server_reachability` into its default `cutover` status. It never changes GitHub settings, registers runners, copies artifacts, restarts services, or writes to the production server; malformed metadata fails closed and never falls back to live inspection. This checker is not the authorization gate for live deployment in the current contract, and it must be re-scoped for other planning models.
 
 ## Current private-plan limitation
 
@@ -35,9 +35,18 @@ A protected `main` with `ci/required`, at least one approving review, code-owner
 
 ## Runner and deployment credential policy
 
-Pull-request and deployment workflows use GitHub-hosted runners. The deployment credential is environment-scoped and accepted by a server-side forced-command wrapper that cannot execute arbitrary repository-provided shell. Self-hosted production runners remain disabled while branch protection is unavailable.
+Pull-request and deployment workflows use GitHub-hosted runners. The deployment credential is environment-scoped and accepted by a server-side forced-command wrapper that cannot execute arbitrary repository-provided shell. Self-hosted production runners remain disabled.
 
-The trusted-team deployment workflow must verify merged-PR provenance, effective approval, and a fresh successful `ci/required` result for the resulting `main` SHA before it builds or deploys. A direct push to `main` may run CI, but it must not satisfy the deployment condition. Production labels such as `prod`, `production`, `prd`, or `prod-runner` remain denied because production jobs do not use self-hosted runners. Before live activation, deployment readiness checks must be re-scoped from the legacy branch-protected/self-hosted model to this GitHub-hosted trusted-team model.
+The trusted-team deployment workflow authorizes the exact push SHA directly from `ci` provenance. A direct push to `main` is valid if:
+
+- the workflow is `ci`;
+- event `push`;
+- `main` branch;
+- workflow `status: completed` and `conclusion: success`;
+- `head_repository.full_name` equals `IRCVLab/GPU_monitor`;
+- latest `ci/required` check is successful for the same `head_sha`.
+
+Pull requests and manual review are optional for current operator flow; they are not required deployment gate criteria. Before live activation, deployment readiness checks must be re-scoped from the legacy branch-protected/self-hosted model to this GitHub-hosted model.
 
 ## Initial publication commands
 
@@ -68,7 +77,7 @@ Do not register a self-hosted runner, create deployment secrets, restart service
 
 Phase 4 deployment must use immutable artifacts and atomic release activation:
 
-1. Build each application artifact from the exact successful main SHA after merged-PR provenance, effective approval, and fresh `ci/required` verification.
+1. Build each application artifact from the exact successful main SHA after provenance and fresh `ci/required` verification.
 2. Name or address artifacts by commit SHA/content digest.
 3. Upload artifacts without modifying the active release.
 4. Validate checksums and application-local smoke checks.
@@ -110,17 +119,17 @@ Without `--check-host`, the checker reports server reachability as `UNKNOWN`, ex
 
 ## Task 6 GPU deployment workflows
 
-Two GitHub-hosted deployment lanes are available for the GPU monitor. Both lanes build the immutable GPU release artifact from the exact SHA being deployed and send only the closed forced-command protocol to the server:
+Only one supported GitHub-hosted GPU deployment lane exists (`gpu-live`). It builds the immutable GPU release artifact from the exact SHA being deployed and sends only the closed forced-command protocol to the server:
 
 ```text
-upload <dev|live> <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
-activate <dev|live> <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
-status <dev|live>
+upload live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+activate live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+status live
 ```
 
-The workflows validate the PR number, SHA, digest, host, user, port, and final `user@host` target before invoking SSH. SSH runs with `BatchMode=yes`, `StrictHostKeyChecking=yes`, an environment-scoped `UserKnownHostsFile`, `IdentitiesOnly=yes`, the environment-scoped key, and the validated port. The checkout ref, build SHA, upload SHA, activation SHA, and status SHA source are the same resolved SHA for each lane.
+The workflow validates SHA, digest, host, user, port, and final `user@host` target before invoking SSH. SSH runs with `BatchMode=yes`, `StrictHostKeyChecking=yes`, an environment-scoped `UserKnownHostsFile`, `IdentitiesOnly=yes`, the environment-scoped key, and the validated port. The checkout ref, build SHA, upload SHA, activation SHA, and status SHA source are the same resolved SHA for the workflow run.
 
-Configure these exact GitHub environment secrets on both `gpu-dev` and `gpu-live` as appropriate:
+Configure these exact GitHub environment secrets on `gpu-live`:
 
 ```text
 GPU_DEPLOY_HOST
@@ -132,28 +141,38 @@ GPU_DEPLOY_KNOWN_HOSTS
 
 `GPU_DEPLOY_KNOWN_HOSTS` must contain the expected host key line for `GPU_DEPLOY_HOST`/`GPU_DEPLOY_PORT`. Do not store these values in repository files, logs, artifacts, or comments.
 
-### Shared development deployment (`gpu-dev`)
-
-`.github/workflows/deploy-gpu-dev.yml` is `workflow_dispatch` only and accepts exactly one input: `pr_number`. Operators dispatch it from GitHub Actions with the open same-repository pull request number to test on the shared development environment.
-
-The workflow resolves the selected PR through the GitHub API, requires that it is open, requires that `head.repo.full_name` exactly matches `github.repository`, resolves the exact PR `head.sha`, and requires a successful completed `ci/required` check run for that same SHA. It then checks out `steps.resolve.outputs.sha`, builds that SHA, and deploys that SHA to `environment: gpu-dev` with `concurrency.group: gpu-dev` and `cancel-in-progress: true`; a newer development deployment can cancel a superseded one.
-
 ### Live deployment (`gpu-live`)
 
-`.github/workflows/deploy-gpu-live.yml` runs only from a completed `ci` `workflow_run` for `main`. The live deploy job is guarded by the exact provenance expression requiring a push event, `main` branch, successful CI conclusion, and the same repository. Direct pushes may run CI, but live authorization still requires `scripts/authorize_gpu_release.py` to authorize the final SHA from GitHub provenance; direct pushes without the required merged-PR/review/check evidence are denied.
+`.github/workflows/deploy-gpu-live.yml` runs only from a completed `ci` `workflow_run` and is governed by:
+
+```text
+workflow name ci
+event push
+branch main
+status completed
+conclusion success
+head repository IRCVLab/GPU_monitor
+latest ci/required check successful for the exact head SHA
+```
+
+The workflow uses `scripts/authorize_gpu_release.py` to re-validate that provenance before build/deploy and compares the workflow SHA with the current `main` head immediately before activation.
 
 Live authorization and secret access are separate jobs. The `authorize` job has no deployment environment and no deployment secrets; it uses repository checkout and the GitHub token context only as needed to run `python3.12 scripts/authorize_gpu_release.py`. The secret-bearing deploy job has `needs: authorize`, `environment: gpu-live`, `concurrency.group: gpu-live`, and `cancel-in-progress: false`, so an in-progress live deployment is never cancelled by a newer run. It checks out `github.event.workflow_run.head_sha`, builds that exact SHA, and deploys only that SHA.
 
 ### Status and rollback
 
-Each successful deployment records remote `status dev` or `status live` through the forced-command wrapper. For manual inspection, use the matching deploy identity and forced command configured on the server. Rollback remains environment-local:
+Each successful deployment records remote `status live` through the forced-command wrapper. For manual inspection, use the matching deploy identity and forced command configured on the server. Rollback remains local to the GPU live slot:
 
 ```text
-rollback dev
 rollback live
 ```
 
-A development rollback must not target live, and a live rollback must not target development. The server-side forced command enforces the lane boundary.
+The server-side forced command enforces the live rollback boundary.
+
+> Historical evidence: the shared GPU development lane was retired by
+> `docs/superpowers/specs/2026-07-25-local-development-live-release-design.md`.
+> The following records describe the completed rehearsal and are not current
+> operating instructions.
 
 ## Development-slot rehearsal evidence
 

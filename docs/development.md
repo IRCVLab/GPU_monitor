@@ -5,7 +5,7 @@ This repository is a hybrid monorepo for two independently deployable monitoring
 - `apps/gpu-monitor` — GPU Monitor frontend, FastAPI backend, Slack bridge, and GPU-specific scripts.
 - `apps/storage-monitor` — Storage Monitor viewer, collector, scanner, agent, and deployment templates.
 
-The foundation migration enabled local validation and documentation. The trusted-team GPU release workflow is documented separately and, once implemented, uses GitHub-hosted deployment jobs plus a server-side forced-command wrapper for live release activation. It does not register self-hosted production runners, restart live services during ordinary verification, or change production ports.
+The foundation migration enabled local validation and documentation. The trusted-team GPU release workflow is documented separately and uses a GitHub-hosted live deployment plus a server-side forced-command wrapper for live release activation. It does not register self-hosted production runners, restart live services during ordinary verification, or change production ports.
 
 ## Safety rules
 
@@ -18,9 +18,15 @@ The foundation migration enabled local validation and documentation. The trusted
 
 ## Pull request CI
 
-GitHub Actions runs on pull requests, pushes to `main`, and manual dispatch. Every pull request reports `ci/required`; path-aware GPU and Storage jobs run only when their application paths or shared workflow inputs change, so documentation-only changes skip the app suites. Pushes to feature branches do not deploy or run the production path. GPU release automation validates a PR head SHA on the shared development server, then treats the reviewed GitHub merge as release authorization and requires fresh `ci/required` success for the resulting main SHA before any delayed live cutover deploys that exact main SHA.
+GitHub Actions runs on pull requests, pushes to `main`, and manual dispatch. Every pull request reports `ci/required`; path-aware GPU and Storage jobs run only when their application paths or shared workflow inputs change, so documentation-only changes skip the app suites. `ci/required` protects repository contracts for all supported changes.
 
-Because the private GitHub plan does not currently provide enforceable branch protection, the compensating deployment checks are not equivalent to branch protection against a malicious authorized writer. They prevent accidental direct-push deployment inside the trusted team model.
+The supported deployment contract is:
+
+`local development -> optional PR or direct main push -> main CI -> exact successful SHA live deployment`
+
+This means a successful same-repository `main` push can authorize that exact SHA.
+
+Pull requests are optional. A failed `main` CI run does not change the live service, although the failed commit may remain in `main` history.
 
 ## Root verification
 
@@ -113,11 +119,19 @@ The scanner uses Linux-specific `SYS_getdents64` behavior. On non-Linux hosts, t
 
 ## GPU deployment workflow operation
 
-Development deployments are manual. In GitHub Actions, run `deploy-gpu-dev` with the `workflow_dispatch` input `pr_number` set to an open same-repository pull request. The workflow deploys only the exact PR head SHA after `ci/required` has succeeded for that SHA. It uses the `gpu-dev` environment and cancels older in-progress development deployments.
+Live deployment is automatic after the `ci` workflow completes successfully for `main` with the required provenance conditions:
 
-Live deployments are automatic only after the `ci` workflow completes successfully for `main`. The live workflow first runs a non-secret `authorize` job, then a separate `gpu-live` deployment job with `needs: authorize`. The live job never cancels an in-progress live deployment. Direct pushes to `main` may run CI, but they are denied for live deployment unless the authorization script can prove the required merged-PR, approval, and `ci/required` evidence for the final SHA.
+- `workflow name ci`
+- `event push`
+- `branch main`
+- `status completed`
+- `conclusion success`
+- `head repository IRCVLab/GPU_monitor`
+- latest `ci/required` successful for the exact head SHA
 
-Both workflows require these exact environment secrets on their GitHub deployment environment:
+The release then builds and deploys that exact SHA in the `gpu-live` environment.
+
+The live workflow requires these exact environment secrets:
 
 ```text
 GPU_DEPLOY_HOST
@@ -127,4 +141,18 @@ GPU_DEPLOY_SSH_KEY
 GPU_DEPLOY_KNOWN_HOSTS
 ```
 
-The workflows validate `pr_number`, SHA, artifact digest, port, host, user, and `user@host` target before SSH. SSH uses strict known-host checking with the environment-provided known hosts file. Remote commands are limited to `upload`, `activate`, and `status` for the selected lane; rollback is a deliberate operator action through `rollback dev` or `rollback live` on the server-side forced-command interface.
+The workflow validates SHA, artifact digest, port, host, user, and `user@host` target before SSH. SSH uses `BatchMode`, strict host verification, and `StrictHostKeyChecking` with the environment-provided `known_hosts`. Remote commands are limited to:
+
+```text
+upload live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+activate live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+status live
+```
+
+Rollback is a deliberate operator action:
+
+```text
+rollback live
+```
+
+A failed live deployment or live health check leaves the current live release unchanged.

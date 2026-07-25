@@ -54,14 +54,16 @@ python3 viewer/serve.py
 
 ## Continuous integration
 
-Pull requests receive one branch-protection-friendly required check named `ci/required`. The workflow also classifies changed paths so documentation-only changes skip GPU and Storage application suites while still running repository contract validation. Pushes to feature branches do not deploy because CI only runs on pull requests, pushes to `main`, or manual dispatch. Production deployment is intentionally disabled until repository protection is available. See `docs/operations/github-cicd.md` for the read-only deployment prerequisite checker, current branch-protection blocker, runner policy, and cutover guardrails.
+Local development is the default and supported path. Contributors may use optional pull requests or direct pushes to `main`. The supported release contract is: local development -> optional PR or direct main push -> main CI -> exact successful SHA live deployment. `ci/required` gates required repository checks on CI; a failed `main` CI leaves the current live release unchanged even though the failed commit remains in Git history.
+
+See `docs/operations/github-cicd.md` for the live authorization contract, current status checks, secrets/runner constraints, and status/rollback commands.
 
 ## Repository rules
 
 - Keep generated, collected, runtime, cache, database, browser-output, virtual-environment, and dependency-install data out of Git.
 - Privacy-safe Storage sample fixtures under `apps/storage-monitor/data/` are allowed because they are reviewed sample data, not collected runtime snapshots.
 - Keep setup, tests, and runtime assumptions application-local unless a root migration or governance file explicitly says otherwise.
-- Merging this foundation to `main` is the later authorization point for production deployment planning.
-- Production deployment is not enabled by this foundation plan, this Makefile, or the migration history assembly.
+- Merging this foundation to `main` is the later stage in this release contract; it does not itself replace an already-live release if CI fails.
+- Production deployment follows the optional PR/direct `main` contract and the successful same-repository `main` deployment rules in `docs/operations/github-cicd.md`.
 
 See `docs/history-migration.md` for migration evidence and history-preservation details.
