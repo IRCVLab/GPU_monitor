@@ -81,34 +81,32 @@ f1bcf4684619d4337a06e1c914fca77ef488c4f810aa1c7f282600d25587f4f2  .migration/inv
 - Archived/ref verification checks: `16` total, `0` failures; counts `{"checkpoint-tag-exact": 3, "head": 10, "source-tag-archive": 3}`.
 - Ref verification SHA-256: `1aad5ecb628ad16a06e00b786aa19640dd0ef60d0f65ab8d65c393839055e72a`
 
-## Task 8 archive branch preservation preflight
+## Task 8 archive branch preservation
 
-Verification timestamp: `2026-07-23T18:48:20Z`.
+Preflight timestamp: `2026-07-23T18:48:20Z`.
+Completion verification timestamp: `2026-07-25T18:31:29Z`.
 
-Operational status: **pending and intentionally outside this unpushed PR
-preparation branch**. The tooling and read-only preflight are complete, but the
-remote annotated-tag creation, peeled-target verification, and any subsequent
-archive-branch deletion remain separate operator actions. This branch must not
-be described as having completed remote archive preservation.
+Operational status: **complete**. All 10 frozen archive branches were preserved
+as reproducible annotated tags, each tag's peeled target was verified against
+the frozen branch OID, and the verified source branches were removed with one
+atomic push guarded by explicit expected-OID leases.
 
-`python3.12 scripts/preserve_archive_refs.py --remote origin --dry-run` read the
-current remote refs and matched all 10 archive branches to the frozen migration
-inventory. This preflight did not create or push tags and did not delete
-branches. Accordingly, peeled tag OIDs remain explicitly pending rather than
-being represented as verified.
+The operator ran `--dry-run`, `--create-tags`, `--verify`, and finally
+`--delete-verified-branches` against `origin`. The final remote inventory
+contained all 10 peeled archive tags and none of the former archive branches.
 
 | Branch | Frozen branch OID | Intended annotated tag | Peeled tag OID | Reachable commits |
 | --- | --- | --- | --- | ---: |
-| `archive/gpu-dev/codex/task5-failure-veil` | `7aa30626cf0ceda3b1d5aada4c19d834ecd4b834` | `archive/branch/gpu-dev/codex/task5-failure-veil` | pending (not pushed) | 160 |
-| `archive/gpu-dev/develop` | `cf70ad07bda5b9b2efb7fb3b06869cc080f95c9a` | `archive/branch/gpu-dev/develop` | pending (not pushed) | 46 |
-| `archive/gpu-dev/feature/apple-dashboard-refinement` | `ca9ec6614458a6049041dca3c3b874ae4f34bf6f` | `archive/branch/gpu-dev/feature/apple-dashboard-refinement` | pending (not pushed) | 57 |
-| `archive/gpu-dev/feature/compact-gpu-dashboard` | `64c4b838d6e1293daf52ab0039084a2b9f84bc59` | `archive/branch/gpu-dev/feature/compact-gpu-dashboard` | pending (not pushed) | 217 |
-| `archive/gpu-dev/main` | `c50f9d2aa9465d742c870ba47793589807832efa` | `archive/branch/gpu-dev/main` | pending (not pushed) | 33 |
-| `archive/gpu-live/main` | `f2ea62f5ba4dc6a791bf0faf3fee4153e83462ce` | `archive/branch/gpu-live/main` | pending (not pushed) | 34 |
-| `archive/gpu-live/old` | `b18c78fd7adda3c6065df32d183524f281fa94fe` | `archive/branch/gpu-live/old` | pending (not pushed) | 30 |
-| `archive/storage/checkpoint/ai-advisor-workspace-20260717` | `0685b5f2161041ccce7025a8e5d2b4dd140d6590` | `archive/branch/storage/checkpoint/ai-advisor-workspace-20260717` | pending (not pushed) | 81 |
-| `archive/storage/feature/multiserver-storage-dashboard` | `0d7e1dcf2cfd9cfe819851e37384e8bb80930365` | `archive/branch/storage/feature/multiserver-storage-dashboard` | pending (not pushed) | 195 |
-| `archive/storage/master` | `ea59cb591fbf408c583bdfad570726d8787cc25a` | `archive/branch/storage/master` | pending (not pushed) | 80 |
+| `archive/gpu-dev/codex/task5-failure-veil` | `7aa30626cf0ceda3b1d5aada4c19d834ecd4b834` | `archive/branch/gpu-dev/codex/task5-failure-veil` | `7aa30626cf0ceda3b1d5aada4c19d834ecd4b834` | 160 |
+| `archive/gpu-dev/develop` | `cf70ad07bda5b9b2efb7fb3b06869cc080f95c9a` | `archive/branch/gpu-dev/develop` | `cf70ad07bda5b9b2efb7fb3b06869cc080f95c9a` | 46 |
+| `archive/gpu-dev/feature/apple-dashboard-refinement` | `ca9ec6614458a6049041dca3c3b874ae4f34bf6f` | `archive/branch/gpu-dev/feature/apple-dashboard-refinement` | `ca9ec6614458a6049041dca3c3b874ae4f34bf6f` | 57 |
+| `archive/gpu-dev/feature/compact-gpu-dashboard` | `64c4b838d6e1293daf52ab0039084a2b9f84bc59` | `archive/branch/gpu-dev/feature/compact-gpu-dashboard` | `64c4b838d6e1293daf52ab0039084a2b9f84bc59` | 217 |
+| `archive/gpu-dev/main` | `c50f9d2aa9465d742c870ba47793589807832efa` | `archive/branch/gpu-dev/main` | `c50f9d2aa9465d742c870ba47793589807832efa` | 33 |
+| `archive/gpu-live/main` | `f2ea62f5ba4dc6a791bf0faf3fee4153e83462ce` | `archive/branch/gpu-live/main` | `f2ea62f5ba4dc6a791bf0faf3fee4153e83462ce` | 34 |
+| `archive/gpu-live/old` | `b18c78fd7adda3c6065df32d183524f281fa94fe` | `archive/branch/gpu-live/old` | `b18c78fd7adda3c6065df32d183524f281fa94fe` | 30 |
+| `archive/storage/checkpoint/ai-advisor-workspace-20260717` | `0685b5f2161041ccce7025a8e5d2b4dd140d6590` | `archive/branch/storage/checkpoint/ai-advisor-workspace-20260717` | `0685b5f2161041ccce7025a8e5d2b4dd140d6590` | 81 |
+| `archive/storage/feature/multiserver-storage-dashboard` | `0d7e1dcf2cfd9cfe819851e37384e8bb80930365` | `archive/branch/storage/feature/multiserver-storage-dashboard` | `0d7e1dcf2cfd9cfe819851e37384e8bb80930365` | 195 |
+| `archive/storage/master` | `ea59cb591fbf408c583bdfad570726d8787cc25a` | `archive/branch/storage/master` | `ea59cb591fbf408c583bdfad570726d8787cc25a` | 80 |
 
 The preservation tool fails closed on moved branch OIDs, lightweight or
 mismatched tags, invalid or directory/file-conflicting tag refs, and missing
