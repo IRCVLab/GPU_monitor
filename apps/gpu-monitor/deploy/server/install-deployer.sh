@@ -181,6 +181,17 @@ elif [[ "$dry_run" == false && ! -x "$managed_node/bin/node" ]]; then
   fail "--node-prefix is required until a managed Node runtime is installed"
 fi
 
+installed_dev_authorization="$prefix/home/gpu-deploy-dev/.ssh/authorized_keys"
+if [[ "$retire_dev" == true && -f "$installed_dev_authorization" ]]; then
+  installed_dev_line=$(<"$installed_dev_authorization")
+  installed_dev_prefix='restrict,command="/usr/local/libexec/gpu-monitor-deploy-command dev" '
+  [[ "$installed_dev_line" == "$installed_dev_prefix"* ]] ||
+    fail "installed dev authorized key has unexpected format"
+  installed_dev_key=$(normalize_key "${installed_dev_line#"$installed_dev_prefix"}")
+  [[ "$installed_dev_key" != "$live_key" ]] ||
+    fail "live and installed dev public key material must be distinct"
+fi
+
 installed_live_authorization="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
 if [[ -n "$dev_key" && -z "$live_key" && -f "$installed_live_authorization" ]]; then
   installed_live_line=$(<"$installed_live_authorization")

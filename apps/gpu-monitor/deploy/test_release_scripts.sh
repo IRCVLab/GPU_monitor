@@ -1756,6 +1756,14 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   if "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --live-public-key "$livekey" > "$tmp/live-only.out" 2> "$tmp/live-only.err"; then
     fail "installer allowed live key rotation without dev key or explicit dev retirement"
   fi
+  cp "$dev_auth" "$tmp/dev-before-retire-reuse"
+  cp "$live_auth" "$tmp/live-before-retire-reuse"
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --retire-dev \
+    --live-public-key "${key% *} live reuse attempt" > "$tmp/retire-reuse-dev.out" 2> "$tmp/retire-reuse-dev.err"; then
+    fail "installer allowed live-only reconciliation to reuse installed dev key material"
+  fi
+  cmp "$tmp/dev-before-retire-reuse" "$dev_auth" || fail "rejected dev-key reuse mutated dev authorization"
+  cmp "$tmp/live-before-retire-reuse" "$live_auth" || fail "rejected dev-key reuse mutated live authorization"
 
   "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" \
     --retire-dev --live-public-key "$livekey" > "$tmp/retire-dev.out"
