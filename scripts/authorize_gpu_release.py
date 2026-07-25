@@ -18,6 +18,7 @@ REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 RFC3339_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
+EXPECTED_CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,8 @@ def authorize_release(
             return denied("workflow_conclusion_not_success", sha)
         if string_field(workflow_run, "head_repository", "full_name") != repository:
             return denied("workflow_repository_mismatch", sha)
+        if string_field(workflow_run, "path") != EXPECTED_CI_WORKFLOW_PATH:
+            return denied("workflow_path_mismatch", sha)
         validate_sha(current_main_sha)
         if sha != current_main_sha:
             return denied("workflow_sha_not_current_main", sha)

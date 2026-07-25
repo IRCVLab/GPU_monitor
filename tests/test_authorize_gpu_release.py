@@ -24,6 +24,7 @@ class AuthorizeGpuReleaseTest(unittest.TestCase):
             "status": "completed",
             "head_sha": FINAL_SHA,
             "head_repository": {"full_name": REPOSITORY},
+            "path": ".github/workflows/ci.yml",
         }
         data.update(overrides)
         return data
@@ -63,6 +64,8 @@ class AuthorizeGpuReleaseTest(unittest.TestCase):
             ({"status": "in_progress"}, "workflow_status_not_completed"),
             ({"conclusion": "failure"}, "workflow_conclusion_not_success"),
             ({"head_repository": {"full_name": "IRCVLab/fork"}}, "workflow_repository_mismatch"),
+            ({"path": ".github/workflows/other-ci.yml"}, "workflow_path_mismatch"),
+            ({"path": "ci.yml"}, "workflow_path_mismatch"),
         )
         for overrides, reason in cases:
             with self.subTest(overrides=overrides):

@@ -24,7 +24,7 @@ The supported deployment contract is:
 
 `local development -> optional PR or direct main push -> main CI -> exact successful SHA live deployment`
 
-This means a successful same-repository `main` push can authorize that exact SHA.
+This means a successful same-repository `main` push can authorize that exact SHA when the triggering workflow is `.github/workflows/ci.yml`, the latest `ci/required` check succeeded for that SHA, and an immediate current `main` head recheck still equals that SHA. This is a trusted-team policy, not protection against malicious or compromised trusted writers; branch protection with required review is the stronger future control.
 
 Pull requests are optional. A failed `main` CI run does not change the live service, although the failed commit may remain in `main` history.
 

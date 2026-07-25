@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "validate_workflows.py"
 PINNED_SHA = "0123456789abcdef0123456789abcdef01234567"
 UPPER_SHA = "0123456789ABCDEF0123456789ABCDEF01234567"
+WORKFLOW_PATH_CLAUSE = "github.event.workflow_run.path == '.github/workflows/ci.yml'"
 
 
 def deployment_workflow_with(retired):
@@ -632,6 +633,50 @@ class WorkflowPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+    def test_canonical_gpu_live_jobs_bind_workflow_run_to_ci_file_path(self):
+        workflow = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
+        for job_id in ("authorize", "deploy"):
+            with self.subTest(job_id=job_id):
+                self.assertRegex(
+                    workflow,
+                    rf"(?s)\n  {job_id}:.*?\n    if: [^\n]*{WORKFLOW_PATH_CLAUSE.replace(".", r"\.")}",
+                )
+
+    def test_rejects_gpu_live_jobs_missing_or_changing_workflow_path_guard(self):
+        base = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
+        self.assertIn(WORKFLOW_PATH_CLAUSE, base)
+        mutations = {
+            "live-missing-workflow-path.yml": base.replace(f" && {WORKFLOW_PATH_CLAUSE}", ""),
+            "live-wrong-workflow-path.yml": base.replace(WORKFLOW_PATH_CLAUSE, "github.event.workflow_run.path == '.github/workflows/build.yml'"),
+        }
+        for filename, workflow in mutations.items():
+            with self.subTest(filename=filename):
+                self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
+
+    def test_rejects_retired_gpu_dev_references_in_non_deploy_workflow(self):
+        for command in (
+            'echo "gpu-dev"',
+            'echo "upload dev $sha $digest"',
+            'echo "activate dev $sha $digest"',
+            'echo "status dev"',
+            'echo "rollback dev"',
+        ):
+            with self.subTest(command=command):
+                self.assert_policy_violation(
+                    f"""
+                    on: push
+                    jobs:
+                      docs:
+                        runs-on: ubuntu-24.04
+                        steps:
+                          - run: {command}
+                    """,
+                    "retired-gpu-dev-deployment",
+                    None,
+                    "hidden-retired-dev.yml",
+                )
 
     def test_rejects_live_deployments_without_separate_non_secret_authorization_job(self):
         workflows = {

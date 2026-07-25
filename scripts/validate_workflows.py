@@ -837,6 +837,7 @@ def has_workflow_run_provenance_guard(job: JobBlock) -> bool:
         "github.event.workflow_run.head_branch=='main'",
         "github.event.workflow_run.conclusion=='success'",
         "github.event.workflow_run.head_repository.full_name==github.repository",
+        "github.event.workflow_run.path=='.github/workflows/ci.yml'",
     }
     return set(clauses) == required
 
@@ -1112,6 +1113,15 @@ def validate_workflow(path: Path) -> list[Violation]:
     if workflow_has_pr_secrets:
         violations.append(Violation(path, "pr-secrets", "pull_request workflows must not reference GitHub secrets"))
     jobs = find_jobs(lines)
+    if not any(is_deploy_job(job) for job in jobs) and workflow_mentions_retired_gpu_dev(lines):
+        violations.append(
+            Violation(
+                path,
+                "retired-gpu-dev-deployment",
+                "permanent GPU development deployment is retired; develop locally and deploy only gpu-live",
+            )
+        )
+
     for job in jobs:
         job_indent = job.lines[0].indent
         violations.extend(permission_write_violations(path, job.lines[1:], owner_indent=direct_child_indent(job.lines, job_indent) or job_indent + 2, job=job.job_id))

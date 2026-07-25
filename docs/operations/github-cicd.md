@@ -39,14 +39,16 @@ Pull-request and deployment workflows use GitHub-hosted runners. The deployment 
 
 ## Current GitHub-hosted live authorization
 
-The trusted-team deployment workflow authorizes the exact push SHA directly from `ci` provenance. A direct push to `main` is valid if:
+The trusted-team deployment workflow authorizes the exact push SHA directly from `ci` provenance. Direct-main automatic deployment is a trusted-team policy: trusted writers can modify candidate code, CI, workflows, and the authorizer, so these repository-side checks reduce accidents but are not protection against malicious or compromised trusted writers. Branch protection with required review is the stronger future control when the plan allows it. A direct push to `main` is valid if:
 
 - the workflow is `ci`;
 - event `push`;
 - `main` branch;
 - workflow `status: completed` and `conclusion: success`;
 - `head_repository.full_name` equals `IRCVLab/GPU_monitor`;
-- latest `ci/required` check is successful for the same `head_sha`.
+- workflow `path: .github/workflows/ci.yml`;
+- latest `ci/required` check is successful for the same `head_sha`;
+- the workflow SHA is still the current `main` head when the authorizer runs.
 
 Pull requests and manual review are optional for current operator flow; they are not required deployment gate criteria.
 
@@ -147,7 +149,7 @@ GPU_DEPLOY_KNOWN_HOSTS
 
 ### Live deployment (`gpu-live`)
 
-`.github/workflows/deploy-gpu-live.yml` runs only from a completed `ci` `workflow_run` and is governed by:
+`.github/workflows/deploy-gpu-live.yml` is triggered by a completed `ci` `workflow_run`; it then fails closed unless the event and authorizer evidence satisfy:
 
 ```text
 workflow name ci
@@ -156,10 +158,12 @@ branch main
 status completed
 conclusion success
 head repository IRCVLab/GPU_monitor
+workflow path .github/workflows/ci.yml
 latest ci/required check successful for the exact head SHA
+current main head still equals the exact head SHA at authorization time
 ```
 
-The workflow uses `scripts/authorize_gpu_release.py` to re-validate that provenance before build/deploy and compares the workflow SHA with the current `main` head immediately before activation.
+The workflow uses `scripts/authorize_gpu_release.py` to re-validate that provenance before build/deploy and compares the workflow SHA with the current `main` head immediately before activation. There is a narrow race between this immediate current-main recheck and activation: if `main` advances after the recheck but before activation, the just-deployed SHA may no longer be current, but the deployed SHA still passed `main` CI and the closed forced-command deployment path.
 
 Live authorization and secret access are separate jobs. The `authorize` job has no deployment environment and no deployment secrets; it uses repository checkout and the GitHub token context only as needed to run `python3.12 scripts/authorize_gpu_release.py`. The secret-bearing deploy job has `needs: authorize`, `environment: gpu-live`, `concurrency.group: gpu-live`, and `cancel-in-progress: false`, so an in-progress live deployment is never cancelled by a newer run. It checks out `github.event.workflow_run.head_sha`, builds that exact SHA, and deploys only that SHA.
 
