@@ -1,6 +1,6 @@
 # Local Development and Live Release Design
 
-**Date:** 2026-07-25  
+**Date:** 2026-07-25
 **Status:** Approved direction
 
 ## Objective
