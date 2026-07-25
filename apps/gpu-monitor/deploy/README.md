@@ -24,13 +24,13 @@ The build manifest remains an operator/CI artifact and is not trusted by the dep
 
 ## Server-side forced deployment boundary
 
-Task 5 adds the server-side forced command and activation scripts under `apps/gpu-monitor/deploy/server/`. Install them on the target host with a development key, and optionally a distinct live key:
+Task 5 adds the server-side forced command and activation scripts under `apps/gpu-monitor/deploy/server/`. Install them on the target host in live-only mode with a distinct live key, explicitly retiring development SSH authorization while preserving development release files, state, and configuration:
 
 ```bash
 sudo apps/gpu-monitor/deploy/server/install-deployer.sh \
-  --dev-public-key "$(cat /path/to/dev_deploy.pub)" \
-  --node-prefix /path/to/clean/node-prefix \
-  --live-public-key "$(cat /path/to/live_deploy.pub)"
+  --retire-dev \
+  --live-public-key "$(cat /path/to/live_deploy.pub)" \
+  --node-prefix /path/to/clean/node-prefix
 ```
 
 `--node-prefix` must name a canonical, self-contained Node prefix with an executable
@@ -56,7 +56,7 @@ For unprivileged validation or packaging, use `--dry-run --prefix <dir>`. `--pre
 - `gpu-deploy-dev` and `gpu-deploy-live` own deployment state such as uploads, locks, release directories, generation pointers, deployment JSONL, and `authorized_keys`.
 - `gpu-monitor-dev` and `gpu-monitor-live` run the systemd services. The environment root, `releases`, and `generations` grant the matching runtime group read/traverse access only; `incoming`, the contents of the setgid `tmp` staging root, locks, and JSONL state remain deploy-owned and inaccessible to runtime. The staging root carries the runtime GID only so construction preserves the eventual published group deliberately; its `2700` mode grants the runtime group no access. Runtime users own only their mutable shared directory under `/var/lib/gpu-monitor/<env>`.
 
-The installer lays out `/srv/gpu-monitor/{dev,live}`, `/var/lib/gpu-monitor/{dev,live}`, `/etc/gpu-monitor/{dev,live}.env`, environment-local locks/incoming storage, the restart broker, exact sudoers allowlists validated with `visudo`, and systemd templates without starting or enabling any service. Reinstallation keeps only the writable traversal parents setgid/writable, reconciles published release and generation descendants to read-only modes, and keeps any legacy hidden `.release-*` candidate private rather than exposing it to runtime. It normalizes public keys to key type plus base64 blob before rejecting identical dev/live material, so comments cannot disguise key reuse. When a live key argument is omitted during rotation, the installer also normalizes the already-installed live authorization and rejects a proposed development key with the same material before either authorization is changed. It validates that deploy/runtime accounts have the expected UIDs/GIDs, homes, shells, locked passwords, group memberships, and no cross-environment group access. The installer binds keys to explicit forced-command environments (`gpu-monitor-deploy-command dev` or `gpu-monitor-deploy-command live`), so a development key cannot request live commands. The production activator requires the effective username to be exactly `gpu-deploy-dev` or `gpu-deploy-live` for the selected environment; root has no bypass and must use the matching deploy identity. Installed key lines never expose the test-only argv mode and reject key inputs that try to prepend `authorized_keys` options. The development key is installed by default; the live key is installed only when `--live-public-key` is supplied, and an existing live authorization is preserved when it is omitted.
+The installer lays out `/srv/gpu-monitor/{dev,live}`, `/var/lib/gpu-monitor/{dev,live}`, `/etc/gpu-monitor/{dev,live}.env`, environment-local locks/incoming storage, the restart broker, exact sudoers allowlists validated with `visudo`, and systemd templates without starting or enabling any service. Reinstallation keeps only the writable traversal parents setgid/writable, reconciles published release and generation descendants to read-only modes, and keeps any legacy hidden `.release-*` candidate private rather than exposing it to runtime. It normalizes public keys to key type plus base64 blob before rejecting identical dev/live material, so comments cannot disguise key reuse. When a live key argument is omitted during rotation, the installer also normalizes the already-installed live authorization and rejects a proposed development key with the same material before either authorization is changed. Live-only reconciliation is explicit: `--retire-dev` must be combined with `--live-public-key`, cannot be combined with `--dev-public-key`, removes only `/home/gpu-deploy-dev/.ssh/authorized_keys`, and preserves development release files, state, and configuration. Supplying `--live-public-key` by itself is rejected so development revocation cannot happen by accidental omission. It validates that deploy/runtime accounts have the expected UIDs/GIDs, homes, shells, locked passwords, group memberships, and no cross-environment group access. The installer binds keys to explicit forced-command environments (`gpu-monitor-deploy-command dev` or `gpu-monitor-deploy-command live`), so a development key cannot request live commands. The production activator requires the effective username to be exactly `gpu-deploy-dev` or `gpu-deploy-live` for the selected environment; root has no bypass and must use the matching deploy identity. Installed key lines never expose the test-only argv mode and reject key inputs that try to prepend `authorized_keys` options.
 
 On every install, the installer atomically rewrites and deduplicates only the exact reserved port keys below while preserving comments, unrelated settings, and secrets byte-for-byte:
 
@@ -73,17 +73,22 @@ PORT=5173
 
 Before enabling units, operators must add the application secrets and runtime settings required by the backend (including `SECRET_KEY`, `ADMIN_PASSWORD`, and a server-local writable `DATABASE_URL`) to the selected environment file. The backend and bridge templates run `backend.main:app` and `backend.slack_bridge:app` through uvicorn. The frontend template runs the packaged `frontend/server.mjs` with the managed Node runtime and binds it to loopback. That server delegates normal page and asset requests to the generated adapter-node handler, strips only the exact `/api` prefix while proxying HTTP requests to the environment-local backend, and preserves `/ws` paths while tunnelling WebSocket upgrades. The proxy target defaults to `127.0.0.1:$GPU_MONITOR_BACKEND_PORT` and rejects non-loopback targets. Activation health checks exercise the browser-facing `/api/health` and `/ws/metrics` paths through the frontend port in addition to checking each backend directly, so a missing production proxy cannot pass release activation.
 
-The forced command accepts only these `SSH_ORIGINAL_COMMAND` forms:
+Current live operators use only these `SSH_ORIGINAL_COMMAND` forms:
+
+```text
+upload live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+activate live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
+status live
+rollback live
+```
+
+Historical compatibility note: development forced-command forms still exist for preserved development state and older controlled environments, but they are not current live-only operator commands:
 
 ```text
 upload dev <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
-upload live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
 activate dev <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
-activate live <40-lowercase-hex-sha> <64-lowercase-hex-sha256>
 status dev
-status live
 rollback dev
-rollback live
 ```
 
 Uploads stream from SSH stdin into environment-local incoming storage, are bounded to 512 MiB by default, and are kept only after SHA-256 verification. Activation opens the uploaded artifact through the incoming directory file descriptor with `O_NOFOLLOW`/`O_CLOEXEC`, rejects symlinks/FIFOs/non-regular files, validates archive structure defensively from the same opened descriptor used for hashing, reconstructs the release manifest from the validated command arguments plus recomputed digest, and extracts into a private `tmp/release-*` candidate that runtime cannot traverse. Locked runtime dependency construction is bounded and fail-closed: production requires trusted absolute timeout, Python, pip-through-the-created-venv, and the installer-managed Node/npm runtime; every timeout, venv, pip, npm, or cleanup failure rejects the candidate without publication. Activation then checks expanded size/free-space limits, verifies every candidate inode has the expected runtime GID, applies and verifies read-only published modes, fsyncs every regular file and directory bottom-up, atomically publishes `releases/<sha>`, fsyncs both staging and release parents, and only then performs the pointer swap.

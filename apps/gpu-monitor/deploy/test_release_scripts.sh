@@ -1677,13 +1677,15 @@ test_retention_uses_latest_success_recency() {
 }
 
 test_installer_separate_users_prefix_upgrade_and_idempotency() {
-  local tmp prefix key livekey dev_auth live_auth before after hostile_key
+  local tmp prefix key livekey livekey_blob dev_auth live_auth before after hostile_key
   tmp=$(mktemp_dir gpu-release-installer-isolation)
   tmp=$(cd "$tmp" && pwd -P)
   trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
   prefix="$tmp/install"
   key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDEVKEYONLY00000000000000000000000000000000000 dev@example'
   livekey='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILIVEKEYONLY000000000000000000000000000000000 live@example'
+  livekey_blob=${livekey#ssh-ed25519 }
+  livekey_blob=${livekey_blob%% *}
   "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/first.out"
   dev_auth="$prefix/home/gpu-deploy-dev/.ssh/authorized_keys"
   live_auth="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
@@ -1744,6 +1746,27 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   if "$INSTALLER_SCRIPT" --dry-run --prefix "$tmp/hostile" --dev-public-key "$hostile_key"; then
     fail "installer accepted key options"
   fi
+
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --retire-dev > "$tmp/retire-no-live.out" 2> "$tmp/retire-no-live.err"; then
+    fail "installer allowed dev retirement without a live public key"
+  fi
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --retire-dev --dev-public-key "$key" --live-public-key "$livekey" > "$tmp/retire-with-dev.out" 2> "$tmp/retire-with-dev.err"; then
+    fail "installer allowed dev retirement with a dev public key"
+  fi
+  if "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --live-public-key "$livekey" > "$tmp/live-only.out" 2> "$tmp/live-only.err"; then
+    fail "installer allowed live key rotation without dev key or explicit dev retirement"
+  fi
+
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" \
+    --retire-dev --live-public-key "$livekey" > "$tmp/retire-dev.out"
+  [[ ! -e "$dev_auth" ]] || fail "live-only reconciliation preserved dev SSH authorization"
+  grep -Fq "$livekey_blob" "$live_auth" ||
+    fail "live-only reconciliation did not preserve the requested live key"
+  [[ -d "$prefix/srv/gpu-monitor/dev/releases" ]] ||
+    fail "live-only reconciliation deleted preserved dev releases"
+  [[ -f "$prefix/etc/gpu-monitor/dev.env" ]] ||
+    fail "live-only reconciliation deleted preserved dev configuration"
+
   log "installer provisions isolated operable identities and upgrades idempotently without bypasses"
 }
 

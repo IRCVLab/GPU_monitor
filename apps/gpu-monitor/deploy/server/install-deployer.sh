@@ -5,12 +5,13 @@ export PATH
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
-  printf 'Usage: %s [--dry-run] [--prefix ABSOLUTE] --dev-public-key KEY [--live-public-key KEY] [--node-prefix ABSOLUTE]\n' "$0" >&2
+  printf 'Usage: %s [--dry-run] [--prefix ABSOLUTE] [--retire-dev] [--dev-public-key KEY] [--live-public-key KEY] [--node-prefix ABSOLUTE]\n' "$0" >&2
   exit 2
 }
 
 dry_run=false
 prefix=/
+retire_dev=false
 dev_key=
 live_key=
 node_prefix=
@@ -18,13 +19,19 @@ while (($#)); do
   case "$1" in
     --dry-run) dry_run=true; shift ;;
     --prefix) [[ $# -ge 2 ]] || usage; prefix=$2; shift 2 ;;
+    --retire-dev) retire_dev=true; shift ;;
     --dev-public-key) [[ $# -ge 2 ]] || usage; dev_key=$2; shift 2 ;;
     --live-public-key) [[ $# -ge 2 ]] || usage; live_key=$2; shift 2 ;;
     --node-prefix) [[ $# -ge 2 ]] || usage; node_prefix=$2; shift 2 ;;
     *) usage ;;
   esac
 done
-[[ -n "$dev_key" ]] || fail "--dev-public-key is required"
+if [[ "$retire_dev" == true ]]; then
+  [[ -z "$dev_key" ]] || fail "--retire-dev cannot be combined with --dev-public-key"
+  [[ -n "$live_key" ]] || fail "--retire-dev requires --live-public-key"
+else
+  [[ -n "$dev_key" ]] || fail "--dev-public-key is required unless --retire-dev is used"
+fi
 if [[ "$prefix" != / && "$dry_run" == false ]]; then
   fail "--prefix is supported only with --dry-run"
 fi
@@ -37,10 +44,12 @@ normalize_key() {
   key_blob=${remainder%% *}
   printf '%s %s\n' "$key_type" "$key_blob"
 }
-dev_key=$(normalize_key "$dev_key")
+if [[ -n "$dev_key" ]]; then
+  dev_key=$(normalize_key "$dev_key")
+fi
 if [[ -n "$live_key" ]]; then
   live_key=$(normalize_key "$live_key")
-  [[ "$live_key" != "$dev_key" ]] || fail "dev and live public key material must be distinct"
+  [[ -z "$dev_key" || "$live_key" != "$dev_key" ]] || fail "dev and live public key material must be distinct"
 fi
 
 canonical_prefix=$(/usr/bin/python3 - "$prefix" "$dry_run" "$(id -u)" <<'PY'
@@ -173,7 +182,7 @@ elif [[ "$dry_run" == false && ! -x "$managed_node/bin/node" ]]; then
 fi
 
 installed_live_authorization="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
-if [[ -z "$live_key" && -f "$installed_live_authorization" ]]; then
+if [[ -n "$dev_key" && -z "$live_key" && -f "$installed_live_authorization" ]]; then
   installed_live_line=$(<"$installed_live_authorization")
   installed_live_prefix='restrict,command="/usr/local/libexec/gpu-monitor-deploy-command live" '
   [[ "$installed_live_line" == "$installed_live_prefix"* ]] ||
@@ -379,7 +388,11 @@ write_authorized_key() {
   mv "$temporary" "$path"
   if [[ "$dry_run" == false ]]; then chown root:root "$path"; fi
 }
-write_authorized_key dev "$dev_key"
+if [[ "$retire_dev" == true ]]; then
+  rm -f "$prefix/home/gpu-deploy-dev/.ssh/authorized_keys"
+else
+  write_authorized_key dev "$dev_key"
+fi
 [[ -z "$live_key" ]] || write_authorized_key live "$live_key"
 
 install_file 0755 "$script_dir/gpu-monitor-deploy-command" "$prefix/usr/local/libexec/gpu-monitor-deploy-command"
