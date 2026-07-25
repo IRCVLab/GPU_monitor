@@ -30,6 +30,38 @@ sha256_check() {
   fi
 }
 
+file_tree_manifest() {
+  python3 - "$1" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+root = os.path.abspath(sys.argv[1])
+entries = []
+for directory, _, filenames in os.walk(root):
+    for filename in filenames:
+        path = os.path.join(directory, filename)
+        metadata = os.lstat(path)
+        if not stat.S_ISREG(metadata.st_mode):
+            continue
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        entries.append(
+            (
+                os.path.relpath(path, root),
+                stat.S_IMODE(metadata.st_mode),
+                digest.hexdigest(),
+            )
+        )
+
+for relative_path, mode, digest in sorted(entries):
+    print(f"{mode:04o}\t{digest}\t{relative_path}")
+PY
+}
+
 assert_contains() {
   local file=$1 needle=$2
   grep -Fxq "$needle" "$file" || fail "expected artifact to contain $needle"
@@ -1706,9 +1738,9 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   grep -Fxq 'OPERATOR_SECRET=preserve-me' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade destroyed operator secret"
   grep -Fxq 'PORT=5174' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to enforce reserved frontend port"
   grep -Fxq 'GPU_MONITOR_BACKEND_PORT=8101' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to merge missing required port"
-  before=$(find "$prefix" -type f -exec shasum -a 256 {} \; -exec stat -f '%Lp %N' {} \; | LC_ALL=C sort)
+  before=$(file_tree_manifest "$prefix")
   "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/repeat.out"
-  after=$(find "$prefix" -type f -exec shasum -a 256 {} \; -exec stat -f '%Lp %N' {} \; | LC_ALL=C sort)
+  after=$(file_tree_manifest "$prefix")
   [[ "$before" == "$after" ]] || fail "repeat install was not byte/mode idempotent"
   [[ -d "$prefix/var/lock/gpu-monitor/dev" && -d "$prefix/var/lock/gpu-monitor/live" ]] ||
     fail "installer omitted isolated lock paths"
