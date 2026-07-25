@@ -127,7 +127,9 @@ Live deployment is automatic after the `ci` workflow completes successfully for 
 - `status completed`
 - `conclusion success`
 - `head repository IRCVLab/GPU_monitor`
+- workflow `path: .github/workflows/ci.yml`
 - latest `ci/required` successful for the exact head SHA
+- immediate current `main` head recheck still equals that SHA
 
 The release then builds and deploys that exact SHA in the `gpu-live` environment.
 

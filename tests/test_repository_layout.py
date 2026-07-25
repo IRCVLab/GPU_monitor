@@ -427,6 +427,10 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertNotIn("`pr_number`", combined)
         self.assertNotIn("Required live check", cicd)
         self.assertNotIn("Before live activation", cicd)
+        operation_section = development.split("## GPU deployment workflow operation", 1)[1].split("##", 1)[0]
+        self.assertIn("workflow `path: .github/workflows/ci.yml`", operation_section)
+        self.assertIn("immediate current `main` head recheck", operation_section)
+
         for phrase in (
             "ci/required",
             "gpu-live",
