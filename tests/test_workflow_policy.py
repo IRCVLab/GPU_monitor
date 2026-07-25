@@ -11,6 +11,23 @@ PINNED_SHA = "0123456789abcdef0123456789abcdef01234567"
 UPPER_SHA = "0123456789ABCDEF0123456789ABCDEF01234567"
 
 
+def deployment_workflow_with(retired):
+    top_level = "  group: gpu-dev" if retired == "group: gpu-dev" else "  group: gpu-live"
+    job_line = "    environment: gpu-live" if retired == "group: gpu-dev" else f"    {retired}"
+    return f"""
+name: retired-dev
+on: workflow_run
+concurrency:
+{top_level}
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+{job_line}
+    steps:
+      - run: echo deploy
+"""
+
+
 class WorkflowPolicyTest(unittest.TestCase):
     def run_validator(self, workflows: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -575,79 +592,26 @@ class WorkflowPolicyTest(unittest.TestCase):
                 self.assert_policy_violation(body, "unsupported-runs-on-mapping", "integration", filename)
 
 
-    def test_accepts_gated_gpu_dev_workflow_dispatch_deployment(self):
-        workflow = Path(".github/workflows/deploy-gpu-dev.yml").read_text(encoding="utf-8")
-        result = self.run_validator({"deploy-gpu-dev.yml": workflow})
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
-    def test_rejects_gpu_dev_workflow_dispatch_bypasses(self):
-        workflows = {
-            "missing-pr-input.yml": """
-                on:
-                  workflow_dispatch:
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - run: gh api repos/${{ github.repository }}/pulls/1
-                      - run: ci/required
-                      - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
-            """,
-            "missing-ci-required.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - run: gh api repos/${{ github.repository }}/pulls/$pr_number
-                      - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
-            """,
-            "wrong-environment.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-live
-                  cancel-in-progress: false
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-live
-                    steps:
-                      - run: gh api repos/${{ github.repository }}/pulls/$pr_number && ci/required
-                      - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
-            """,
-            "mutable-runner.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-latest
-                    environment: gpu-dev
-                    steps:
-                      - run: gh api repos/${{ github.repository }}/pulls/$pr_number && ci/required
-                      - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
-            """,
-        }
-        for filename, body in workflows.items():
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(body, "workflow-dispatch-dev-deploy-guard", "deploy", filename)
+
+    def test_rejects_retired_gpu_dev_deployment(self):
+        for retired in (
+            "group: gpu-dev",
+            "environment: gpu-dev",
+            'run: echo "upload dev $sha $digest"',
+            'run: echo "activate dev $sha $digest"',
+            'run: echo "status dev"',
+            'run: echo "rollback dev"',
+        ):
+            with self.subTest(retired=retired):
+                body = deployment_workflow_with(retired)
+                self.assert_policy_violation(
+                    body,
+                    "retired-gpu-dev-deployment",
+                    "deploy",
+                    "retired-dev.yml",
+                )
 
     def test_rejects_live_deployments_without_separate_non_secret_authorization_job(self):
         workflows = {
@@ -696,298 +660,7 @@ class WorkflowPolicyTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assert_policy_violation(body, "workflow-run-deploy-guard", filename=filename)
 
-    def test_rejects_gpu_dev_without_base_repo_validation_or_paginated_latest_required_check(self):
-        workflows = {
-            "missing-base-repo.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - name: Resolve PR
-                        run: |
-                          pr_number="${{ github.event.inputs.pr_number }}"
-                          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
-                          pr_json=$(gh api "repos/${{ github.repository }}/pulls/$pr_number")
-                          state open
-                          head.repo.full_name
-                          head.sha
-                          gh api --paginate "repos/${{ github.repository }}/commits/$sha/check-runs"
-                          completed_at id latest status conclusion ci/required
-                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                        with:
-                          ref: ${{ steps.resolve.outputs.sha }}
-                      - run: |
-                          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-                          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-                          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
-                          target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
-                          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
-                          ssh "${ssh_opts[@]}" "$target" "upload dev $sha $digest" < "$artifact"
-                          ssh "${ssh_opts[@]}" "$target" "activate dev $sha $digest"
-                          ssh "${ssh_opts[@]}" "$target" "status dev"
-            """,
-            "non-paginated-check-runs.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - name: Resolve PR
-                        run: |
-                          pr_number="${{ github.event.inputs.pr_number }}"
-                          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
-                          pr_json=$(gh api "repos/${{ github.repository }}/pulls/$pr_number")
-                          state open
-                          base.repo.full_name
-                          head.repo.full_name
-                          head.sha
-                          gh api "repos/${{ github.repository }}/commits/$sha/check-runs"
-                          completed_at id latest status conclusion ci/required
-                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                        with:
-                          ref: ${{ steps.resolve.outputs.sha }}
-                      - run: |
-                          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-                          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-                          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
-                          target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
-                          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
-                          ssh "${ssh_opts[@]}" "$target" "upload dev $sha $digest" < "$artifact"
-                          ssh "${ssh_opts[@]}" "$target" "activate dev $sha $digest"
-                          ssh "${ssh_opts[@]}" "$target" "status dev"
-            """,
-            "missing-slurp-check-runs.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - name: Resolve PR
-                        run: |
-                          pr_number="${{ github.event.inputs.pr_number }}"
-                          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
-                          pr_json=$(gh api "repos/${{ github.repository }}/pulls/$pr_number")
-                          state open
-                          base.repo.full_name
-                          head.repo.full_name
-                          head.sha
-                          gh api --paginate "repos/${{ github.repository }}/commits/$sha/check-runs"
-                          completed_at id latest status conclusion ci/required
-                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                        with:
-                          ref: ${{ steps.resolve.outputs.sha }}
-                      - run: |
-                          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-                          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-                          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
-                          target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
-                          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
-                          ssh "${ssh_opts[@]}" "$target" "upload dev $sha $digest" < "$artifact"
-                          ssh "${ssh_opts[@]}" "$target" "activate dev $sha $digest"
-                          ssh "${ssh_opts[@]}" "$target" "status dev"
-            """,
-            "older-success-mask.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - name: Resolve PR
-                        run: |
-                          pr_number="${{ github.event.inputs.pr_number }}"
-                          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
-                          pr_json=$(gh api "repos/${{ github.repository }}/pulls/$pr_number")
-                          state open
-                          base.repo.full_name
-                          head.repo.full_name
-                          head.sha
-                          gh api --paginate "repos/${{ github.repository }}/commits/$sha/check-runs"
-                          ci/required status conclusion success
-                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                        with:
-                          ref: ${{ steps.resolve.outputs.sha }}
-                      - run: |
-                          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-                          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-                          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
-                          target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
-                          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
-                          ssh "${ssh_opts[@]}" "$target" "upload dev $sha $digest" < "$artifact"
-                          ssh "${ssh_opts[@]}" "$target" "activate dev $sha $digest"
-                          ssh "${ssh_opts[@]}" "$target" "status dev"
-            """,
-        }
-        for filename, body in workflows.items():
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(body, "workflow-dispatch-dev-deploy-guard", "deploy", filename)
 
-    def test_rejects_gpu_dev_synthetic_substring_bypasses(self):
-        workflows = {
-            "echoed-contract.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - name: fake contract
-                        run: |
-                          echo 'pulls/ github.repository base.repo.full_name head.repo.full_name head.sha state open ci/required check-runs --paginate --slurp completed_at id latest status conclusion steps.resolve.outputs.sha StrictHostKeyChecking=yes UserKnownHostsFile IdentitiesOnly=yes GPU_DEPLOY_HOST GPU_DEPLOY_USER upload dev $sha $digest activate dev $sha $digest status dev ^[1-9][0-9]*$ ^[0-9a-f]{40}$ ^[0-9a-f]{64}$ GPU_DEPLOY_PORT target'
-                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                        with:
-                          ref: main
-                      - run: ssh example.invalid uptime
-            """,
-            "commented-contract.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - name: commented contract
-                        run: |
-                          # pulls/ github.repository base.repo.full_name head.repo.full_name head.sha state open ci/required check-runs --paginate --slurp completed_at id latest status conclusion steps.resolve.outputs.sha StrictHostKeyChecking=yes UserKnownHostsFile IdentitiesOnly=yes GPU_DEPLOY_HOST GPU_DEPLOY_USER upload dev $sha $digest activate dev $sha $digest status dev ^[1-9][0-9]*$ ^[0-9a-f]{40}$ ^[0-9a-f]{64}$ GPU_DEPLOY_PORT target
-                          true
-                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                        with:
-                          ref: ${{ steps.resolve.outputs.sha }}
-                      - run: true
-            """,
-            "wrong-checkout-ref.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - id: resolve
-                        run: |
-                          pr_number="${{ github.event.inputs.pr_number }}"
-                          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
-                          pr_json=$(gh api "repos/${{ github.repository }}/pulls/$pr_number")
-                          state=$(python3.12 -c 'print("open")')
-                          [[ "$state" == open ]]
-                          base.repo.full_name head.repo.full_name head.sha
-                          gh api --paginate --slurp "repos/${{ github.repository }}/commits/$sha/check-runs"
-                          completed_at id latest status conclusion ci/required
-                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                        with:
-                          ref: main
-                      - run: |
-                          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-                          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-                          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
-                          target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
-                          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
-                          ssh "${ssh_opts[@]}" "$target" "upload dev $sha $digest" < "$artifact"
-                          ssh "${ssh_opts[@]}" "$target" "activate dev $sha $digest"
-                          ssh "${ssh_opts[@]}" "$target" "status dev"
-            """,
-            "arbitrary-ssh.yml": """
-                on:
-                  workflow_dispatch:
-                    inputs:
-                      pr_number:
-                        required: true
-                concurrency:
-                  group: gpu-dev
-                  cancel-in-progress: true
-                jobs:
-                  deploy:
-                    runs-on: ubuntu-24.04
-                    environment: gpu-dev
-                    steps:
-                      - id: resolve
-                        run: |
-                          pr_number="${{ github.event.inputs.pr_number }}"
-                          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
-                          pr_json=$(gh api "repos/${{ github.repository }}/pulls/$pr_number")
-                          state open base.repo.full_name head.repo.full_name head.sha
-                          gh api --paginate --slurp "repos/${{ github.repository }}/commits/$sha/check-runs"
-                          completed_at id latest status conclusion ci/required
-                      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                        with:
-                          ref: ${{ steps.resolve.outputs.sha }}
-                      - run: |
-                          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-                          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-                          [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
-                          [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
-                          target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
-                          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
-                          echo 'upload dev $sha $digest activate dev $sha $digest status dev'
-                          ssh "${ssh_opts[@]}" "$target" uptime
-            """,
-        }
-        for filename, body in workflows.items():
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(body, "workflow-dispatch-dev-deploy-guard", "deploy", filename)
 
     def test_rejects_gpu_live_synthetic_substring_bypasses(self):
         workflows = {
@@ -1094,76 +767,6 @@ class WorkflowPolicyTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assert_policy_violation(body, "workflow-run-deploy-guard", "deploy", filename)
 
-    def test_rejects_gpu_dev_extra_workflow_dispatch_inputs(self):
-        for extra_input in ("sha", "ref", "branch"):
-            with self.subTest(extra_input=extra_input):
-                self.assert_policy_violation(
-                    f"""
-                    on:
-                      workflow_dispatch:
-                        inputs:
-                          pr_number:
-                            required: true
-                          {extra_input}:
-                            required: false
-                    concurrency:
-                      group: gpu-dev
-                      cancel-in-progress: true
-                    jobs:
-                      deploy:
-                        runs-on: ubuntu-24.04
-                        environment: gpu-dev
-                        steps:
-                          - id: resolve
-                            run: |
-                              pr_number="${{{{ github.event.inputs.pr_number }}}}"
-                              [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
-                              pr_json=$(gh api "repos/${{{{ github.repository }}}}/pulls/$pr_number")
-                              state=$(python3.12 -c 'print("open")')
-                              [[ "$state" == open ]]
-                              base_repo=$(python3.12 -c 'print("base.repo.full_name")')
-                              [[ "$base_repo" == "$GITHUB_REPOSITORY" ]]
-                              head_repo=$(python3.12 -c 'print("head.repo.full_name")')
-                              [[ "$head_repo" == "$GITHUB_REPOSITORY" ]]
-                              sha=$(python3.12 -c 'print("head.sha")')
-                              [[ "$sha" =~ ^[0-9a-f]{{40}}$ ]]
-                              gh api --paginate --slurp "repos/${{{{ github.repository }}}}/commits/$sha/check-runs"
-                              completed_at id latest status conclusion ci/required
-                          - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
-                            with:
-                              ref: ${{{{ steps.resolve.outputs.sha }}}}
-                          - id: build
-                            env:
-                              SHA: ${{{{ steps.resolve.outputs.sha }}}}
-                            run: |
-                              sha="$SHA"
-                              [[ "$sha" =~ ^[0-9a-f]{{40}}$ ]]
-                          - env:
-                              SHA: ${{{{ steps.resolve.outputs.sha }}}}
-                              DIGEST: ${{{{ steps.build.outputs.digest }}}}
-                              ARTIFACT: ${{{{ steps.build.outputs.artifact }}}}
-                              GPU_DEPLOY_HOST: ${{{{ secrets.GPU_DEPLOY_HOST }}}}
-                              GPU_DEPLOY_PORT: ${{{{ secrets.GPU_DEPLOY_PORT }}}}
-                              GPU_DEPLOY_USER: ${{{{ secrets.GPU_DEPLOY_USER }}}}
-                            run: |
-                              sha="$SHA"
-                              digest="$DIGEST"
-                              artifact="$ARTIFACT"
-                              [[ "$sha" =~ ^[0-9a-f]{{40}}$ ]]
-                              [[ "$digest" =~ ^[0-9a-f]{{64}}$ ]]
-                              [[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]]
-                              [[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
-                              [[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]]
-                              target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"
-                              ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
-                              ssh "${{{{ssh_opts[@]}}}}" "$target" "upload dev $sha $digest" < "$artifact"
-                              ssh "${{{{ssh_opts[@]}}}}" "$target" "activate dev $sha $digest"
-                              ssh "${{{{ssh_opts[@]}}}}" "$target" "status dev"
-                    """,
-                    "workflow-dispatch-dev-deploy-guard",
-                    "deploy",
-                    f"extra-{extra_input}.yml",
-                )
 
     def test_rejects_gpu_live_cancel_in_progress_true(self):
         self.assert_policy_violation(
@@ -1223,19 +826,6 @@ class WorkflowPolicyTest(unittest.TestCase):
             "live-cancel-true.yml",
         )
 
-    def test_rejects_gpu_dev_extra_ssh_commands_even_with_required_forced_commands(self):
-        for filename, extra_ssh in {
-            "dev-extra-rollback.yml": 'ssh "${ssh_opts[@]}" "$target" "rollback dev"',
-            "dev-extra-uptime.yml": 'ssh "${ssh_opts[@]}" "$target" uptime',
-            "dev-extra-command-ssh.yml": 'command ssh "${ssh_opts[@]}" "$target" uptime',
-            "dev-extra-env-ssh.yml": 'env ssh "${ssh_opts[@]}" "$target" uptime',
-            "dev-extra-tab-ssh.yml": 'ssh	"${ssh_opts[@]}" "$target" uptime',
-            "dev-extra-env-assignment-ssh.yml": 'LC_ALL=C ssh "${ssh_opts[@]}" "$target" uptime',
-        }.items():
-            workflow = Path(".github/workflows/deploy-gpu-dev.yml").read_text(encoding="utf-8")
-            workflow = workflow.replace('ssh "${ssh_opts[@]}" "$target" "status dev"', 'ssh "${ssh_opts[@]}" "$target" "status dev"\n          ' + extra_ssh)
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(workflow, "workflow-dispatch-dev-deploy-guard", "deploy", filename)
 
     def test_rejects_gpu_live_extra_ssh_commands_even_with_required_forced_commands(self):
         for filename, extra_ssh in {
@@ -1251,20 +841,6 @@ class WorkflowPolicyTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
 
-    def test_rejects_any_extra_executable_line_in_canonical_gpu_dev_deploy_step(self):
-        extras = {
-            "dev-extra-true.yml": "true",
-            "dev-extra-bash-c-ssh.yml": "bash -c 'ssh example.invalid uptime'",
-            "dev-extra-variable-ssh.yml": "s=ssh; $s example.invalid uptime",
-            "dev-extra-eval.yml": "eval 'echo no'",
-            "dev-extra-python.yml": "python3.12 -c 'print(1)'",
-        }
-        base = Path(".github/workflows/deploy-gpu-dev.yml").read_text(encoding="utf-8")
-        marker = '          ssh "${ssh_opts[@]}" "$target" "status dev"'
-        for filename, extra in extras.items():
-            workflow = base.replace(marker, marker + "\n          " + extra)
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(workflow, "workflow-dispatch-dev-deploy-guard", "deploy", filename)
 
     def test_rejects_any_extra_executable_line_in_canonical_gpu_live_deploy_step(self):
         extras = {
@@ -1281,35 +857,27 @@ class WorkflowPolicyTest(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
 
+    def test_rejects_gpu_live_deploy_step_missing_current_main_recheck_lines(self):
+        required_lines = (
+            '          GH_TOKEN: ${{ github.token }}',
+            "          current_main_sha=$(gh api \\",
+            "            -H \"Accept: application/vnd.github+json\" \\",
+            "            \"/repos/$GITHUB_REPOSITORY/git/ref/heads/main\" \\",
+            '            --jq .object.sha)',
+            '          [[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid current main SHA" >&2; exit 1; }',
+            '          [[ "$current_main_sha" == "$sha" ]] || { echo "workflow SHA is no longer current main" >&2; exit 1; }',
+        )
+        base = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
+        for line in required_lines:
+            with self.subTest(removed=line):
+                self.assertIn(line, base)
+                workflow = "".join(base.rsplit(line + "\n", 1))
+                self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", "live-missing-current-main.yml")
+
     def test_rejects_gpu_deployment_workflows_with_storage_coupling(self):
-        for filename, event in (("dev-storage.yml", "workflow_dispatch"), ("live-storage.yml", "workflow_run")):
-            with self.subTest(filename=filename):
-                if event == "workflow_dispatch":
-                    body = """
-                    on:
-                      workflow_dispatch:
-                        inputs:
-                          pr_number:
-                            required: true
-                    concurrency:
-                      group: gpu-dev
-                      cancel-in-progress: true
-                    jobs:
-                      deploy:
-                        runs-on: ubuntu-24.04
-                        environment: gpu-dev
-                        steps:
-                          - run: gh api repos/${{ github.repository }}/pulls/$pr_number && ci/required
-                          - run: echo storage-monitor
-                          - run: ssh "$target" "upload dev $sha $digest" < "$artifact"
-                    """
-                    rule = "workflow-dispatch-dev-deploy-guard"
-                    job = "deploy"
-                else:
-                    body = self.split_authorized_live_workflow(extra_deploy_step="- run: echo storage-monitor")
-                    rule = "gpu-deploy-storage-coupling"
-                    job = None
-                self.assert_policy_violation(body, rule, job, filename)
+        body = self.split_authorized_live_workflow(extra_deploy_step="- run: echo storage-monitor")
+        self.assert_policy_violation(body, "gpu-deploy-storage-coupling", None, "live-storage.yml")
+
 
     def test_rejects_environment_bearing_release_named_job_without_deploy_token(self):
         self.assert_policy_violation(

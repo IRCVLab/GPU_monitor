@@ -588,44 +588,6 @@ def top_level_block(lines: list[SourceLine], key: str) -> list[SourceLine]:
 
 
 
-def workflow_dispatch_input_names(lines: list[SourceLine]) -> set[str]:
-    event = top_level_event_block(lines, "workflow_dispatch")
-    if event is None:
-        return set()
-    event_index, event_line = event
-    in_inputs = False
-    inputs_indent: int | None = None
-    names: set[str] = set()
-    for line in lines[event_index + 1 :]:
-        if line.indent <= event_line.indent:
-            break
-        parsed = key_value(line.text)
-        if parsed and parsed[0] == "inputs":
-            in_inputs = True
-            inputs_indent = line.indent
-            continue
-        if in_inputs and inputs_indent is not None:
-            if line.indent <= inputs_indent:
-                break
-            if parsed and line.indent == inputs_indent + 2:
-                names.add(parsed[0])
-    return names
-
-
-def has_workflow_dispatch_pr_number_input(lines: list[SourceLine]) -> bool:
-    event = top_level_event_block(lines, "workflow_dispatch")
-    if event is None:
-        return False
-    event_index, event_line = event
-    for line in lines[event_index + 1 :]:
-        if line.indent <= event_line.indent:
-            break
-        parsed = key_value(line.text)
-        if parsed and parsed[0] == "pr_number":
-            return True
-    return False
-
-
 def has_top_level_concurrency(lines: list[SourceLine], *, group: str, cancel_in_progress: str) -> bool:
     block = top_level_block(lines, "concurrency")
     if not block:
@@ -655,6 +617,10 @@ def workflow_text_from_lines(lines: list[SourceLine]) -> str:
 def workflow_mentions_storage(lines: list[SourceLine]) -> bool:
     return "storage" in workflow_text_from_lines(lines).lower()
 
+
+def workflow_mentions_retired_gpu_dev(lines: list[SourceLine]) -> bool:
+    retired = ("gpu-dev", "upload dev ", "activate dev ", "status dev", "rollback dev")
+    return any(token in line.text for line in lines for token in retired)
 
 
 def executable_lines(command: str | None) -> list[str]:
@@ -709,36 +675,6 @@ def has_checkout_ref(job: JobBlock, expected_ref: str) -> bool:
     return False
 
 
-def has_dev_resolve_step(job: JobBlock) -> bool:
-    for block in step_blocks(job):
-        if step_property_value(block, "id") != "resolve":
-            continue
-        lines = executable_lines(run_command_value(block))
-        return all(
-            (
-                line_contains(lines, "pr_number=", "PR_NUMBER"),
-                line_contains(lines, '[[ "$pr_number"', "^[1-9][0-9]*$"),
-                line_contains(lines, "pr_json=", "gh api", "pulls/$pr_number"),
-                line_contains(lines, "state=", "json.load", "state"),
-                line_contains(lines, '[[ "$state" == open ]]'),
-                line_contains(lines, "base_repo=", "base", "repo", "full_name"),
-                line_contains(lines, '[[ "$base_repo" == "$GITHUB_REPOSITORY" ]]'),
-                line_contains(lines, "head_repo=", "head", "repo", "full_name"),
-                line_contains(lines, '[[ "$head_repo" == "$GITHUB_REPOSITORY" ]]'),
-                line_contains(lines, "sha=", "head", "sha"),
-                line_contains(lines, '[[ "$sha"', "^[0-9a-f]{40}$"),
-                line_contains(lines, "checks_json=", "gh api", "--paginate", "--slurp", "check-runs"),
-                line_contains(lines, "completed_at"),
-                line_contains(lines, "check_id"),
-                line_contains(lines, "latest", "max"),
-                line_contains(lines, "status", "completed"),
-                line_contains(lines, "conclusion", "success"),
-                line_contains(lines, "ci/required"),
-            )
-        )
-    return False
-
-
 def has_build_step(job: JobBlock, expected_sha_source: str) -> bool:
     for block in step_blocks(job):
         if step_property_value(block, "id") != "build":
@@ -754,7 +690,7 @@ def has_build_step(job: JobBlock, expected_sha_source: str) -> bool:
 
 
 def canonical_deploy_lines(lane: str) -> list[str]:
-    return [
+    lines = [
         "set -euo pipefail",
         'sha="$SHA"',
         'digest="$DIGEST"',
@@ -777,9 +713,25 @@ def canonical_deploy_lines(lane: str) -> list[str]:
         '[[ -s "$known_hosts" ]] || { echo "known_hosts is empty" >&2; exit 1; }',
         'ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")',
         f'ssh "${{ssh_opts[@]}}" "$target" "upload {lane} $sha $digest" < "$artifact"',
-        f'ssh "${{ssh_opts[@]}}" "$target" "activate {lane} $sha $digest"',
-        f'ssh "${{ssh_opts[@]}}" "$target" "status {lane}"',
     ]
+    if lane == "live":
+        lines.extend(
+            [
+                "current_main_sha=$(gh api \\",
+                '-H "Accept: application/vnd.github+json" \\',
+                '"/repos/$GITHUB_REPOSITORY/git/ref/heads/main" \\',
+                "--jq .object.sha)",
+                '[[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid current main SHA" >&2; exit 1; }',
+                '[[ "$current_main_sha" == "$sha" ]] || { echo "workflow SHA is no longer current main" >&2; exit 1; }',
+            ]
+        )
+    lines.extend(
+        [
+            f'ssh "${{ssh_opts[@]}}" "$target" "activate {lane} $sha $digest"',
+            f'ssh "${{ssh_opts[@]}}" "$target" "status {lane}"',
+        ]
+    )
+    return lines
 
 def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -> bool:
     for block in step_blocks(job):
@@ -794,29 +746,13 @@ def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -
                 ("GPU_DEPLOY_USER", "${{ secrets.GPU_DEPLOY_USER }}"),
                 ("GPU_DEPLOY_SSH_KEY", "${{ secrets.GPU_DEPLOY_SSH_KEY }}"),
                 ("GPU_DEPLOY_KNOWN_HOSTS", "${{ secrets.GPU_DEPLOY_KNOWN_HOSTS }}"),
+                ("GH_TOKEN", "${{ github.token }}"),
             )
         ):
             continue
         if executable_lines(run_command_value(block)) == canonical_deploy_lines(lane):
             return True
     return False
-
-def has_gpu_dev_dispatch_guard(lines: list[SourceLine], job: JobBlock, events: set[str], runner_labels: set[str]) -> bool:
-    return (
-        "workflow_dispatch" in events
-        and not ({"push", "pull_request", "pull_request_target", "workflow_run"} & events)
-        and direct_job_value(job, "environment") == "gpu-dev"
-        and runner_labels == {"ubuntu-24.04"}
-        and workflow_dispatch_input_names(lines) == {"pr_number"}
-        and has_workflow_dispatch_pr_number_input(lines)
-        and has_top_level_concurrency(lines, group="gpu-dev", cancel_in_progress="true")
-        and has_dev_resolve_step(job)
-        and has_checkout_ref(job, "${{ steps.resolve.outputs.sha }}")
-        and has_build_step(job, "${{ steps.resolve.outputs.sha }}")
-        and has_forced_deploy_step(job, "dev", "${{ steps.resolve.outputs.sha }}")
-        and not workflow_mentions_storage(lines)
-    )
-
 
 def has_workflow_run_head_sha_authorization(job: JobBlock) -> bool:
     for block in step_blocks(job):
@@ -1199,17 +1135,16 @@ def validate_workflow(path: Path) -> list[Violation]:
                 )
 
         deploy_job = is_deploy_job(job)
-        is_workflow_dispatch_dev_deploy = deploy_job and "workflow_dispatch" in events
         if deploy_job and workflow_mentions_storage(lines):
             violations.append(
                 Violation(path, "gpu-deploy-storage-coupling", "GPU deployment workflows must not reference Storage paths or services", job.job_id)
             )
-        if is_workflow_dispatch_dev_deploy and not has_gpu_dev_dispatch_guard(lines, job, events, runner_labels):
+        if deploy_job and workflow_mentions_retired_gpu_dev(lines):
             violations.append(
                 Violation(
                     path,
-                    "workflow-dispatch-dev-deploy-guard",
-                    "workflow_dispatch GPU development deployments must select an open same-repo PR, require ci/required on its exact head SHA, use gpu-dev concurrency/environment, and use the forced SSH protocol",
+                    "retired-gpu-dev-deployment",
+                    "permanent GPU development deployment is retired; develop locally and deploy only gpu-live",
                     job.job_id,
                 )
             )
@@ -1246,8 +1181,6 @@ def validate_workflow(path: Path) -> list[Violation]:
                         job.job_id,
                     )
                 )
-        elif is_workflow_dispatch_dev_deploy:
-            pass
         elif deploy_job and not has_main_guard(job):
             violations.append(
                 Violation(path, "deploy-main-guard", "deploy jobs must have a main-branch if guard", job.job_id)

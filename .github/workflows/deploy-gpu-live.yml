@@ -8,7 +8,6 @@ on:
 permissions:
   contents: read
   checks: read
-  pull-requests: read
 
 defaults:
   run:
@@ -87,6 +86,7 @@ jobs:
           GPU_DEPLOY_USER: ${{ secrets.GPU_DEPLOY_USER }}
           GPU_DEPLOY_SSH_KEY: ${{ secrets.GPU_DEPLOY_SSH_KEY }}
           GPU_DEPLOY_KNOWN_HOSTS: ${{ secrets.GPU_DEPLOY_KNOWN_HOSTS }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           sha="$SHA"
@@ -112,5 +112,11 @@ jobs:
           ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")
 
           ssh "${ssh_opts[@]}" "$target" "upload live $sha $digest" < "$artifact"
+          current_main_sha=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" \
+            --jq .object.sha)
+          [[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid current main SHA" >&2; exit 1; }
+          [[ "$current_main_sha" == "$sha" ]] || { echo "workflow SHA is no longer current main" >&2; exit 1; }
           ssh "${ssh_opts[@]}" "$target" "activate live $sha $digest"
           ssh "${ssh_opts[@]}" "$target" "status live"

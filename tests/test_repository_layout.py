@@ -381,64 +381,21 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertIn("Historical rationale", old_monorepo_design)
 
 
-    def test_gpu_deployment_workflow_files_exist_with_environment_contracts(self):
-        dev = workflow_text(".github/workflows/deploy-gpu-dev.yml")
+    def test_gpu_deployment_workflow_is_live_only(self):
+        self.assertFalse(Path(".github/workflows/deploy-gpu-dev.yml").exists())
         live = workflow_text(".github/workflows/deploy-gpu-live.yml")
-
-        self.assertIn("workflow_dispatch:", dev)
-        self.assertIn("pr_number:", dev)
-        self.assertNotIn("workflow_run:", dev)
-        self.assertIn("environment: gpu-dev", dev)
-        self.assertIn("group: gpu-dev", dev)
-        self.assertIn("cancel-in-progress: true", dev)
-        self.assertIn("ci/required", dev)
-        self.assertIn("ref: ${{ steps.resolve.outputs.sha }}", dev)
-        self.assertIn("upload dev $sha $digest", dev)
-        self.assertIn("activate dev $sha $digest", dev)
-        self.assertIn("status dev", dev)
-
         self.assertIn("workflow_run:", live)
         self.assertIn('workflows: ["ci"]', live)
         self.assertIn("types: [completed]", live)
-        self.assertIn("authorize:", live)
-        self.assertIn("deploy:", live)
-        self.assertIn("needs: authorize", live)
         self.assertIn("environment: gpu-live", live)
         self.assertIn("group: gpu-live", live)
         self.assertIn("cancel-in-progress: false", live)
         self.assertIn("github.event.workflow_run.head_sha", live)
-        self.assertIn("ref: ${{ github.event.workflow_run.head_sha }}", live)
-        self.assertIn("python3.12 scripts/authorize_gpu_release.py", live)
-        self.assertIn("upload live $sha $digest", live)
-        self.assertIn("activate live $sha $digest", live)
-        self.assertIn("status live", live)
+        self.assertNotIn("pull-requests: read", live)
+        self.assertNotIn("gpu-dev", live)
+        self.assertIn("/git/ref/heads/main", live)
+        self.assertIn('[[ "$current_main_sha" == "$sha" ]]', live)
 
-        for name, body in (("dev", dev), ("live", live)):
-            self.assertIn("runs-on: ubuntu-24.04", body, name)
-            self.assertIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", body, name)
-            self.assertIn(
-                "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                body,
-                name,
-            )
-            self.assertIn("node-version: '22.14.0'", body, name)
-            self.assertIn(
-                "cache-dependency-path: apps/gpu-monitor/frontend/package-lock.json",
-                body,
-                name,
-            )
-            self.assertNotIn("self-hosted", body, name)
-            self.assertNotIn("storage", body.lower(), name)
-            self.assertNotIn("Storage", body, name)
-            self.assertIn("GPU_DEPLOY_HOST", body, name)
-            self.assertIn("GPU_DEPLOY_PORT", body, name)
-            self.assertIn("GPU_DEPLOY_USER", body, name)
-            self.assertIn("GPU_DEPLOY_SSH_KEY", body, name)
-            self.assertIn("GPU_DEPLOY_KNOWN_HOSTS", body, name)
-            self.assertIn("StrictHostKeyChecking=yes", body, name)
-            self.assertIn("UserKnownHostsFile", body, name)
-            self.assertIn("IdentitiesOnly=yes", body, name)
-            self.assertIn('-p "$GPU_DEPLOY_PORT"', body, name)
 
     def test_gpu_deployment_documentation_covers_operator_contracts(self):
         cicd = Path("docs/operations/github-cicd.md").read_text(encoding="utf-8")
