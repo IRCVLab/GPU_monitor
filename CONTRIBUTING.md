@@ -18,12 +18,12 @@ This monorepo preserves two independent products. Keep changes scoped to the app
 
 ## Deployment boundary
 
-Deployment remains application-specific. In the supported policy, local development is the default path:
+Deployment remains application-specific. Local development is the default path:
 
-`local development -> optional PR or direct main push -> main CI -> exact successful SHA live deployment`
+`local development -> optional PR or trusted direct main push -> main CI -> outbound server puller -> exact successful SHA live activation`
 
-Contributors may use optional pull requests or push directly to `main`. A successful same-repository `main` CI determines the exact SHA to deploy, and only that SHA is deployed to live.
+Pull requests are optional. Trusted team members may push directly to `main`; this is a team trust policy, not a defense against malicious or compromised trusted writers. Branch protection with required review remains the stronger future control when the GitHub plan allows it.
 
-Pull requests are optional. A failed `main` CI does not change the current live release, even though the failed commit remains in Git history.
+GPU Live does not use GitHub-hosted inbound SSH deployment, `gpu-live` deployment secrets, or self-hosted runners. The server runs a five-minute systemd timer, calls the public GitHub API, requires successful `ci/required` for the exact current `main` SHA through `scripts/authorize_gpu_release.py`, builds from a clean exact-SHA checkout as the dedicated non-login builder, and activates locally as `gpu-deploy-live`. Failed CI, a changed `main`, failed authorization, failed build, or failed activation leaves Live unchanged; authorized release failures use persistent exponential retry backoff.
 
-Pull-request and deployment workflows use GitHub-hosted runners. Self-hosted production runners remain disabled while branch protection is unavailable. The deployment credential must be environment-scoped and accepted only by a server-side forced-command wrapper that cannot execute arbitrary repository-provided shell. Direct-main automatic deployment is a trusted-team policy: trusted writers can modify candidate code, CI, workflows, and the authorizer, so these repository-side checks reduce accidents but are not protection against malicious or compromised trusted writers. Branch protection with required review is the stronger future control when the plan allows it.
+Storage is not part of the GPU Live deployment path. The old forced-command SSH wrapper may remain for manual emergency `status live` or `rollback live`, but it is not the GitHub automatic deployment transport.

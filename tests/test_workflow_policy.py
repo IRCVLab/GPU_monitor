@@ -635,25 +635,46 @@ class WorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
-    def test_canonical_gpu_live_jobs_bind_workflow_run_to_ci_file_path(self):
-        workflow = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
-        for job_id in ("authorize", "deploy"):
-            with self.subTest(job_id=job_id):
-                self.assertRegex(
-                    workflow,
-                    rf"(?s)\n  {job_id}:.*?\n    if: [^\n]*{WORKFLOW_PATH_CLAUSE.replace(".", r"\.")}",
-                )
 
-    def test_rejects_gpu_live_jobs_missing_or_changing_workflow_path_guard(self):
-        base = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
-        self.assertIn(WORKFLOW_PATH_CLAUSE, base)
-        mutations = {
-            "live-missing-workflow-path.yml": base.replace(f" && {WORKFLOW_PATH_CLAUSE}", ""),
-            "live-wrong-workflow-path.yml": base.replace(WORKFLOW_PATH_CLAUSE, "github.event.workflow_run.path == '.github/workflows/build.yml'"),
-        }
-        for filename, workflow in mutations.items():
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
+
+    def test_repository_has_no_github_hosted_gpu_live_ssh_deployment_workflow(self):
+        workflow = REPO_ROOT / ".github/workflows/deploy-gpu-live.yml"
+        self.assertFalse(workflow.exists(), "retired GitHub-hosted SSH deployment workflow must be removed")
+
+    def test_rejects_any_github_gpu_live_deployment_job(self):
+        self.assert_policy_violation(
+            """
+            on: push
+            jobs:
+              deploy-gpu-live:
+                if: github.ref == 'refs/heads/main'
+                runs-on: ubuntu-24.04
+                environment: gpu-live
+                steps:
+                  - run: ./deploy.sh
+            """,
+            "retired-gpu-live-workflow",
+            "deploy-gpu-live",
+            "retired-gpu-live.yml",
+        )
+
+    def test_rejects_retired_gpu_live_ssh_deployment_secrets_or_forced_commands(self):
+        for command in ("upload live $sha $digest", "activate live $sha $digest", "status live", "rollback live"):
+            with self.subTest(command=command):
+                self.assert_policy_violation(
+                    f"""
+                    on: push
+                    jobs:
+                      authorize-gpu-live:
+                        if: github.ref == 'refs/heads/main'
+                        runs-on: ubuntu-24.04
+                        steps:
+                          - run: ssh "$target" "{command}"
+                    """,
+                    "retired-gpu-ssh-deployment",
+                    None,
+                    "retired-gpu-live-ssh.yml",
+                )
 
     def test_rejects_retired_gpu_dev_references_in_non_deploy_workflow(self):
         for command in (
@@ -892,56 +913,18 @@ class WorkflowPolicyTest(unittest.TestCase):
         )
 
 
-    def test_rejects_gpu_live_extra_ssh_commands_even_with_required_forced_commands(self):
-        for filename, extra_ssh in {
-            "live-extra-rollback.yml": 'ssh "${ssh_opts[@]}" "$target" "rollback live"',
-            "live-extra-uptime.yml": 'ssh "${ssh_opts[@]}" "$target" uptime',
-            "live-extra-command-ssh.yml": 'command ssh "${ssh_opts[@]}" "$target" uptime',
-            "live-extra-env-ssh.yml": 'env ssh "${ssh_opts[@]}" "$target" uptime',
-            "live-extra-tab-ssh.yml": 'ssh	"${ssh_opts[@]}" "$target" uptime',
-            "live-extra-env-assignment-ssh.yml": 'LC_ALL=C ssh "${ssh_opts[@]}" "$target" uptime',
-        }.items():
-            workflow = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
-            workflow = workflow.replace('ssh "${ssh_opts[@]}" "$target" "status live"', 'ssh "${ssh_opts[@]}" "$target" "status live"\n          ' + extra_ssh)
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
-
-
-    def test_rejects_any_extra_executable_line_in_canonical_gpu_live_deploy_step(self):
-        extras = {
-            "live-extra-true.yml": "true",
-            "live-extra-bash-c-ssh.yml": "bash -c 'ssh example.invalid uptime'",
-            "live-extra-variable-ssh.yml": "s=ssh; $s example.invalid uptime",
-            "live-extra-source.yml": "source ./deploy.env",
-            "live-extra-python.yml": "python3.12 -c 'print(1)'",
-        }
-        base = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
-        marker = '          ssh "${ssh_opts[@]}" "$target" "status live"'
-        for filename, extra in extras.items():
-            workflow = base.replace(marker, marker + "\n          " + extra)
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", filename)
-
-    def test_rejects_gpu_live_deploy_step_missing_current_main_recheck_lines(self):
-        required_lines = (
-            '          GH_TOKEN: ${{ github.token }}',
-            "          current_main_sha=$(gh api \\",
-            "            -H \"Accept: application/vnd.github+json\" \\",
-            "            \"/repos/$GITHUB_REPOSITORY/git/ref/heads/main\" \\",
-            '            --jq .object.sha)',
-            '          [[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid current main SHA" >&2; exit 1; }',
-            '          [[ "$current_main_sha" == "$sha" ]] || { echo "workflow SHA is no longer current main" >&2; exit 1; }',
-        )
-        base = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
-        for line in required_lines:
-            with self.subTest(removed=line):
-                self.assertIn(line, base)
-                workflow = "".join(base.rsplit(line + "\n", 1))
-                self.assert_policy_violation(workflow, "workflow-run-deploy-guard", "deploy", "live-missing-current-main.yml")
-
     def test_rejects_gpu_deployment_workflows_with_storage_coupling(self):
-        body = self.split_authorized_live_workflow(extra_deploy_step="- run: echo storage-monitor")
-        self.assert_policy_violation(body, "gpu-deploy-storage-coupling", None, "live-storage.yml")
+        body = """
+        on: push
+        jobs:
+          deploy-gpu:
+            if: github.ref == 'refs/heads/main'
+            runs-on: ubuntu-24.04
+            environment: gpu-live
+            steps:
+              - run: echo storage-monitor
+        """
+        self.assert_policy_violation(body, "gpu-deploy-storage-coupling", "deploy-gpu", "live-storage.yml")
 
 
     def test_rejects_environment_bearing_release_named_job_without_deploy_token(self):
@@ -1115,52 +1098,6 @@ class WorkflowPolicyTest(unittest.TestCase):
             "pr-secrets",
             "unit",
         )
-
-    def test_accepts_sha_pinned_authorized_workflow_run_live_deployment(self):
-        result = self.run_validator({"gpu-live.yml": self.split_authorized_live_workflow()})
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-
-
-
-    def split_authorized_live_workflow(self, *, extra_deploy_step: str = "", auth_continue: str | None = None) -> str:
-        workflow = Path(".github/workflows/deploy-gpu-live.yml").read_text(encoding="utf-8")
-        if auth_continue:
-            workflow = workflow.replace(
-                "      - name: Authorize deployment\n",
-                f"      - name: Authorize deployment\n        continue-on-error: {auth_continue}\n",
-            )
-        if extra_deploy_step:
-            extra = textwrap.indent(textwrap.dedent(extra_deploy_step).strip("\n"), "          ")
-            workflow = workflow.replace(
-                '          ssh "${ssh_opts[@]}" "$target" "status live"',
-                '          ssh "${ssh_opts[@]}" "$target" "status live"\n' + extra,
-            )
-        return workflow
-
-
-
-
-    def guarded_workflow_run(self, run_step: str, *, step_prefix: str = "- name: Authorize deployment", extra_job: str = "") -> str:
-        run_step = textwrap.indent(textwrap.dedent(run_step).strip("\n"), "                        ")
-        extra_job = textwrap.indent(textwrap.dedent(extra_job).strip("\n"), "                    ") if extra_job else ""
-        if extra_job:
-            extra_job = "\n" + extra_job
-        return f"""
-            on:
-              workflow_run:
-                workflows: [ci]
-                types: [completed]
-            jobs:
-              release-gpu:
-                if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
-                runs-on: ubuntu-24.04
-                environment: gpu-live{extra_job}
-                steps:
-                  {step_prefix}
-{run_step}
-        """
 
     def test_rejects_workflow_run_provenance_guard_or_quoted_dead_branch_and_extra_clause_bypasses(self):
         workflows = {
@@ -1454,6 +1391,27 @@ class WorkflowPolicyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+
+    def guarded_workflow_run(self, run_step: str, *, step_prefix: str = "- name: Authorize deployment", extra_job: str = "") -> str:
+        run_step = textwrap.indent(textwrap.dedent(run_step).strip("\n"), "                        ")
+        extra_job = textwrap.indent(textwrap.dedent(extra_job).strip("\n"), "                    ") if extra_job else ""
+        if extra_job:
+            extra_job = "\n" + extra_job
+        return f"""
+            on:
+              workflow_run:
+                workflows: [ci]
+                types: [completed]
+            jobs:
+              release-gpu:
+                if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+                runs-on: ubuntu-24.04
+                environment: gpu-live{extra_job}
+                steps:
+                  {step_prefix}
+{run_step}
+        """
+
     def test_rejects_authorization_command_that_is_not_strict_gate(self):
         workflows = {
             "or-mask.yml": self.guarded_workflow_run("run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo || true"),
@@ -1488,48 +1446,6 @@ class WorkflowPolicyTest(unittest.TestCase):
         for filename, body in workflows.items():
             with self.subTest(filename=filename):
                 self.assert_policy_violation(body, "workflow-run-deploy-guard", "release-gpu", filename)
-
-    def test_accepts_safe_multiline_authorization_run_block(self):
-        result = self.run_validator({"gpu-live.yml": self.split_authorized_live_workflow()})
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-
-
-    def test_continue_on_error_must_be_explicitly_absent_or_false_for_authorization(self):
-        rejected_values = {
-            "yes.yml": "yes",
-            "on.yml": "on",
-            "one.yml": "1",
-            "spaced-true-expression.yml": "${{ true }}",
-            "dynamic-expression.yml": "${{ always() }}",
-            "unknown-expression.yml": "${{ github.ref == 'refs/heads/main' }}",
-            "arbitrary-word.yml": "maybe",
-        }
-        for filename, value in rejected_values.items():
-            with self.subTest(filename=filename):
-                self.assert_policy_violation(
-                    self.guarded_workflow_run(
-                        f"""
-                        continue-on-error: {value}
-                        run: python3.12 scripts/authorize_gpu_release.py --repo owner/repo
-                        """
-                    ),
-                    "workflow-run-deploy-guard",
-                    "release-gpu",
-                    filename,
-                )
-
-        accepted_values = {
-            "false.yml": "false",
-            "false-expression.yml": "${{ false }}",
-        }
-        for filename, value in accepted_values.items():
-            with self.subTest(filename=filename):
-                result = self.run_validator(
-                    {filename: self.split_authorized_live_workflow(auth_continue=value)}
-                )
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_deployment_name_exceptions_are_field_local_only(self):
         workflows = {

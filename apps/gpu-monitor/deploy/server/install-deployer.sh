@@ -206,6 +206,7 @@ fi
 script_dir=${BASH_SOURCE[0]%/*}
 [[ "$script_dir" != "${BASH_SOURCE[0]}" ]] || script_dir=.
 script_dir=$(cd -- "$script_dir" && /bin/pwd -P)
+source_root=$(cd -- "$script_dir/../../../.." && /bin/pwd -P)
 
 install_file() {
   local mode=$1 source=$2 destination=$3
@@ -243,6 +244,43 @@ ensure_deploy_and_runtime_users() {
   password_hash=$(printf '%s' "$random_password" | /usr/bin/openssl passwd -6 -stdin)
   /usr/sbin/usermod --password "$password_hash" "$deploy_user"
   /usr/sbin/usermod -L "$runtime_user"
+}
+
+
+validate_builder_identity_separation() {
+  /usr/bin/python3 - <<'PY'
+import grp, pwd
+builder = pwd.getpwnam("gpu-monitor-builder")
+if 0 in (builder.pw_uid, builder.pw_gid):
+    raise SystemExit("ERROR: builder id must be nonzero")
+if builder.pw_dir != "/var/lib/gpu-monitor/builder" or builder.pw_shell != "/usr/sbin/nologin":
+    raise SystemExit("ERROR: builder has unexpected home or shell")
+protected_names = ("gpu-deploy-dev", "gpu-deploy-live", "gpu-monitor-dev", "gpu-monitor-live")
+protected_accounts = []
+for other in protected_names:
+    try:
+        account = pwd.getpwnam(other)
+    except KeyError:
+        continue
+    protected_accounts.append(account)
+    if builder.pw_uid == account.pw_uid or builder.pw_gid == account.pw_gid:
+        raise SystemExit("ERROR: builder identity overlaps " + other)
+builder_group_ids = {builder.pw_gid}
+protected_group_ids = {account.pw_gid for account in protected_accounts}
+for group in grp.getgrall():
+    members = set(group.gr_mem)
+    if "gpu-monitor-builder" in members:
+        builder_group_ids.add(group.gr_gid)
+    if any(other in members for other in protected_names):
+        protected_group_ids.add(group.gr_gid)
+shared_group_ids = builder_group_ids.intersection(protected_group_ids)
+if shared_group_ids:
+    names = sorted(
+        group.gr_name for group in grp.getgrall()
+        if group.gr_gid in shared_group_ids
+    )
+    raise SystemExit("ERROR: builder shares protected group(s): " + ",".join(names))
+PY
 }
 
 validate_identity_separation() {
@@ -353,6 +391,21 @@ for child in generations.iterdir():
 PY
 }
 
+# Dedicated outbound puller/builder state. The builder is non-login and must not
+# have access to /etc/gpu-monitor/live.env; it only receives managed Node on PATH.
+builder_home="$prefix/var/lib/gpu-monitor/builder"
+puller_state="$prefix/var/lib/gpu-monitor/puller"
+mkdir -p "$builder_home/work" "$puller_state"
+chmod 0750 "$builder_home" "$builder_home/work"
+chmod 0700 "$puller_state"
+if [[ "$dry_run" == false ]]; then
+  ensure_identity gpu-monitor-builder /var/lib/gpu-monitor/builder /usr/sbin/nologin true
+  /usr/sbin/usermod -L gpu-monitor-builder
+  validate_builder_identity_separation
+  chown -R gpu-monitor-builder:gpu-monitor-builder "$builder_home"
+  chown -R root:root "$puller_state"
+fi
+
 for environment in dev live; do
   deploy_user="gpu-deploy-$environment"
   runtime_user="gpu-monitor-$environment"
@@ -408,9 +461,14 @@ fi
 
 install_file 0755 "$script_dir/gpu-monitor-deploy-command" "$prefix/usr/local/libexec/gpu-monitor-deploy-command"
 install_file 0755 "$script_dir/activate-release.sh" "$prefix/usr/local/libexec/activate-release.sh"
+install_file 0755 "$script_dir/gpu-monitor-release-puller.py" "$prefix/usr/local/libexec/gpu-monitor-release-puller.py"
+install_file 0755 "$source_root/scripts/authorize_gpu_release.py" "$prefix/usr/local/libexec/authorize_gpu_release.py"
 install_file 0755 "$script_dir/health-check.sh" "$prefix/usr/local/libexec/health-check.sh"
 install_file 0755 "$script_dir/gpu-monitor-restart-broker" "$prefix/usr/local/libexec/gpu-monitor-restart-broker"
 for unit in "$script_dir"/systemd/*.service; do
+  install_file 0644 "$unit" "$prefix/etc/systemd/system/${unit##*/}"
+done
+for unit in "$script_dir"/systemd/*.timer; do
   install_file 0644 "$unit" "$prefix/etc/systemd/system/${unit##*/}"
 done
 install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-dev" "$prefix/etc/sudoers.d/gpu-monitor-deploy-dev"

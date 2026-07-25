@@ -686,6 +686,7 @@ test_forced_command_rejects_open_grammar_and_env_crossing() {
     "status dev now" \
     "upload dev ABC3456789abcdef0123456789abcdef01234567 $digest" \
     "upload dev $sha ${digest}00" \
+    "discard dev $sha $digest" \
     "activate dev $sha $digest; id" \
     "rollback ../live"; do
     if run_forced_command "$prefix" "$cmd" "$artifact" >/"$tmp/bad.out" 2>/"$tmp/bad.err"; then
@@ -1027,7 +1028,7 @@ test_directory_mutations_are_fsynced() {
 }
 
 test_isolated_identities_broker_and_descriptor_extraction_contract() {
-  for unit in "$SERVER_DIR"/systemd/*.service; do
+  for unit in "$SERVER_DIR"/systemd/gpu-monitor-backend@.service "$SERVER_DIR"/systemd/gpu-monitor-bridge@.service "$SERVER_DIR"/systemd/gpu-monitor-frontend@.service; do
     grep -Fq 'User=gpu-monitor-%i' "$unit" || fail "$unit does not use environment-specific runtime user"
     grep -Fq 'Group=gpu-monitor-%i' "$unit" || fail "$unit does not use environment-specific runtime group"
     grep -Fq 'ProtectProc=invisible' "$unit" || fail "$unit does not hide unrelated processes where systemd supports it"
@@ -1351,6 +1352,16 @@ test_incoming_content_addressing_quotas_and_success_cleanup() {
   if run_forced_command "$prefix" "upload dev $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz" "$quota_env"; then
     fail "dev incoming count quota accepted count limit + 1"
   fi
+  env -i PATH=/usr/bin:/bin PREFIX="$prefix" \
+    GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    GPU_MONITOR_INTERNAL_PYTHON="$(command -v python3)" \
+    "$ACTIVATE_SCRIPT" --test-mode dev discard "$sha2" "$digest2"
+  [[ ! -e "$prefix/srv/gpu-monitor/dev/incoming/$sha2/$digest2.tar.gz" ]] ||
+    fail "discard did not remove the exact inactive artifact"
+  [[ -e "$prefix/srv/gpu-monitor/dev/incoming/$sha1/$digest1.tar.gz" ]] ||
+    fail "discard removed a different inactive artifact"
+  run_forced_command "$prefix" "upload dev $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz" "$quota_env" ||
+    fail "discard did not release incoming quota"
   run_forced_command "$prefix" "upload live $sha3 $digest3" "$tmp/a3/gpu-monitor-$sha3.tar.gz" "$quota_env" live ||
     fail "dev quota incorrectly consumed live quota"
   mkdir -p "$prefix/srv/gpu-monitor/dev/tmp"
@@ -2053,6 +2064,67 @@ PYBAD
   log "archive validation, retention, and status contract are enforced"
 }
 
+
+test_installer_installs_outbound_puller_builder_state_authorizer_and_units() {
+  local tmp prefix key
+  tmp=$(mktemp_dir gpu-release-puller-installer)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/install"
+  key='ssh-ed25519 AAAAPULLERINSTALLKEY0000000000000000000000000000000000000 puller'
+
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" >"$tmp/install.out"
+
+  [[ -x "$prefix/usr/local/libexec/gpu-monitor-release-puller.py" ]] || fail "installer did not install release puller"
+  [[ -x "$prefix/usr/local/libexec/authorize_gpu_release.py" ]] || fail "installer did not install canonical authorizer"
+  [[ -f "$prefix/etc/systemd/system/gpu-monitor-release-puller.service" ]] || fail "installer did not install puller service"
+  [[ -f "$prefix/etc/systemd/system/gpu-monitor-release-puller.timer" ]] || fail "installer did not install puller timer"
+  [[ -d "$prefix/var/lib/gpu-monitor/puller" ]] || fail "installer did not create puller state dir"
+  [[ -d "$prefix/var/lib/gpu-monitor/builder/work" ]] || fail "installer did not create builder work state dir"
+  assert_mode "$prefix/var/lib/gpu-monitor/builder" 0750
+  assert_mode "$prefix/var/lib/gpu-monitor/builder/work" 0750
+  assert_mode "$prefix/var/lib/gpu-monitor/puller" 0700
+  ! grep -Eq 'systemctl (enable|start).*gpu-monitor-release-puller' "$INSTALLER_SCRIPT" ||
+    fail "installer enables or starts puller services despite install-only contract"
+  grep -Fq 'ensure_identity gpu-monitor-builder /var/lib/gpu-monitor/builder /usr/sbin/nologin' "$INSTALLER_SCRIPT" ||
+    fail "installer does not create a non-login builder identity"
+  grep -Fq '/usr/sbin/usermod -L gpu-monitor-builder' "$INSTALLER_SCRIPT" ||
+    fail "installer does not lock the builder identity"
+  grep -Fq 'validate_builder_identity_separation' "$INSTALLER_SCRIPT" ||
+    fail "installer does not validate builder uid/gid/home/shell/supplemental-group separation"
+  grep -Fq 'builder_group_ids.intersection(protected_group_ids)' "$INSTALLER_SCRIPT" ||
+    fail "installer does not reject builder membership in protected primary or supplemental groups"
+  grep -Fq 'chown -R gpu-monitor-builder:gpu-monitor-builder "$builder_home"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not make builder work tree builder-owned in real install"
+  grep -Fq 'chown -R root:root "$puller_state"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not keep puller state root-owned in real install"
+  log "installer installs outbound puller, canonical authorizer, builder state, and units without enabling services"
+}
+
+test_puller_systemd_timer_hardening_contract() {
+  local service timer
+  service="$SERVER_DIR/systemd/gpu-monitor-release-puller.service"
+  timer="$SERVER_DIR/systemd/gpu-monitor-release-puller.timer"
+  grep -Fq 'Type=oneshot' "$service" || fail "puller service is not oneshot"
+  grep -Fq 'Nice=10' "$service" || fail "puller service lacks low CPU priority"
+  grep -Fq 'IOSchedulingClass=idle' "$service" || fail "puller service lacks low IO priority"
+  grep -Fq 'TimeoutStartSec=30min' "$service" || fail "puller service timeout is too short for build plus activation"
+  grep -Fq 'UMask=0077' "$service" || fail "puller service does not keep state/build scratch private by default"
+  ! grep -Fq 'NoNewPrivileges=yes' "$service" || fail "puller service sets NoNewPrivileges and would block activator sudo broker"
+  ! grep -Fq 'MemoryDenyWriteExecute=yes' "$service" ||
+    fail "puller service blocks Node/V8 JIT memory required by the release build"
+  grep -Fq 'ProtectSystem=strict' "$service" || fail "puller service lacks strict filesystem protection"
+  grep -Fq 'ReadWritePaths=/var/lib/gpu-monitor/puller /var/lib/gpu-monitor/builder /srv/gpu-monitor/live /var/lock/gpu-monitor/live' "$service" ||
+    fail "puller service write paths are not tightly scoped to puller/builder/live activation state"
+  ! grep -Eiq 'storage' "$service" || fail "puller service references Storage"
+  grep -Fq 'OnCalendar=*:0/5' "$timer" || fail "puller timer is not on a persistent five-minute wall-clock cadence"
+  ! grep -Fq 'OnUnitActiveSec=' "$timer" ||
+    fail "puller timer uses a monotonic trigger for which Persistent has no effect"
+  grep -Fq 'Persistent=true' "$timer" || fail "puller timer is not persistent"
+  grep -Fq 'RandomizedDelaySec=' "$timer" || fail "puller timer lacks randomized delay"
+  ! grep -Eiq 'storage' "$timer" || fail "puller timer references Storage"
+  log "puller service/timer hardening and cadence contract is enforced"
+}
+
 run_test test_server_scripts_exist_before_security_tests
 run_test test_forced_command_rejects_open_grammar_and_env_crossing
 run_test test_production_mode_scrubs_hostile_environment_before_dispatch
@@ -2091,3 +2163,5 @@ run_test test_installer_reconciles_published_modes_without_exposing_hidden_candi
 run_test test_installer_materializes_and_validates_managed_node_runtime
 run_test test_omitted_live_key_blocks_conflicting_dev_rotation_before_mutation
 run_test test_archive_validation_retention_status_and_installer
+run_test test_installer_installs_outbound_puller_builder_state_authorizer_and_units
+run_test test_puller_systemd_timer_hardening_contract

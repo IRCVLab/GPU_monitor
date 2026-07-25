@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -573,39 +572,6 @@ def has_completed_ci_workflow_run_trigger(lines: list[SourceLine]) -> bool:
     )
 
 
-def top_level_block(lines: list[SourceLine], key: str) -> list[SourceLine]:
-    for index, line in enumerate(lines):
-        parsed = key_value(line.text)
-        if parsed and line.indent == 0 and parsed[0] == key and not parsed[1]:
-            block = [line]
-            for child in lines[index + 1 :]:
-                if child.indent <= line.indent:
-                    break
-                block.append(child)
-            return block
-    return []
-
-
-
-
-def has_top_level_concurrency(lines: list[SourceLine], *, group: str, cancel_in_progress: str) -> bool:
-    block = top_level_block(lines, "concurrency")
-    if not block:
-        return False
-    found_group = False
-    found_cancel = False
-    for line in block[1:]:
-        parsed = key_value(line.text)
-        if not parsed:
-            continue
-        key, value = parsed
-        if key == "group" and unquote(value) == group:
-            found_group = True
-        if key == "cancel-in-progress" and unquote(value).lower() == cancel_in_progress:
-            found_cancel = True
-    return found_group and found_cancel
-
-
 def job_text(job: JobBlock) -> str:
     return "\n".join(line.text for line in job.lines)
 
@@ -624,182 +590,20 @@ RETIRED_GPU_DEV_COMMAND_RE = re.compile(
 )
 
 
+RETIRED_GPU_SSH_DEPLOY_RE = re.compile(
+    r"GPU_DEPLOY_(?:HOST|PORT|USER|SSH_KEY|KNOWN_HOSTS)"
+    r"|forced SSH"
+    r"|ssh\b.*\b(?:upload|activate|status|rollback)\s+live\b"
+)
+
+
+def workflow_mentions_retired_gpu_ssh_deploy(lines: list[SourceLine]) -> bool:
+    return any(RETIRED_GPU_SSH_DEPLOY_RE.search(line.text) for line in lines)
+
 def workflow_mentions_retired_gpu_dev(lines: list[SourceLine]) -> bool:
     return any(
         RETIRED_GPU_DEV_LANE_RE.search(line.text) or RETIRED_GPU_DEV_COMMAND_RE.search(line.text)
         for line in lines
-    )
-
-
-def executable_lines(command: str | None) -> list[str]:
-    if command is None:
-        return []
-    return [line.strip() for line in command.splitlines() if line.strip() and not line.strip().startswith("#")]
-
-
-def line_contains(lines: list[str], *needles: str) -> bool:
-    return any(all(needle in line for needle in needles) for line in lines)
-
-
-def step_nested_value(block: list[SourceLine], parent_key: str, child_key: str) -> str | None:
-    found = step_property(block, parent_key)
-    if found is None:
-        return None
-    index, line, value = found
-    if value:
-        return None
-    for child in block[index + 1 :]:
-        if child.indent <= line.indent:
-            break
-        parsed = key_value(child.text)
-        if parsed and parsed[0] == child_key:
-            return unquote(parsed[1])
-    return None
-
-
-def step_has_env(block: list[SourceLine], key: str, expected: str) -> bool:
-    found = step_property(block, "env")
-    if found is None:
-        return False
-    index, line, value = found
-    if value:
-        return False
-    for child in block[index + 1 :]:
-        if child.indent <= line.indent:
-            break
-        parsed = key_value(child.text)
-        if parsed and parsed[0] == key and unquote(parsed[1]) == expected:
-            return True
-    return False
-
-
-def has_checkout_ref(job: JobBlock, expected_ref: str) -> bool:
-    for block in step_blocks(job):
-        uses = step_property_value(block, "uses")
-        if uses is None or not PINNED_ACTION_RE.search(uses) or not uses.startswith("actions/checkout@"):
-            continue
-        if step_nested_value(block, "with", "ref") == expected_ref:
-            return True
-    return False
-
-
-def has_build_step(job: JobBlock, expected_sha_source: str) -> bool:
-    for block in step_blocks(job):
-        if step_property_value(block, "id") != "build":
-            continue
-        if not step_has_env(block, "SHA", expected_sha_source):
-            continue
-        lines = executable_lines(run_command_value(block))
-        if line_contains(lines, 'sha="$SHA"') and line_contains(lines, '[[ "$sha"', "^[0-9a-f]{40}$"):
-            return True
-    return False
-
-
-
-
-def canonical_deploy_lines(lane: str) -> list[str]:
-    lines = [
-        "set -euo pipefail",
-        'sha="$SHA"',
-        'digest="$DIGEST"',
-        'artifact="$ARTIFACT"',
-        '[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid SHA" >&2; exit 1; }',
-        '[[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid digest" >&2; exit 1; }',
-        '[[ -f "$artifact" ]] || { echo "artifact missing" >&2; exit 1; }',
-        '[[ "$GPU_DEPLOY_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid host" >&2; exit 1; }',
-        '[[ "$GPU_DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid user" >&2; exit 1; }',
-        '[[ "$GPU_DEPLOY_PORT" =~ ^[0-9]+$ ]] && (( GPU_DEPLOY_PORT >= 1 && GPU_DEPLOY_PORT <= 65535 )) || { echo "invalid port" >&2; exit 1; }',
-        'target="$GPU_DEPLOY_USER@$GPU_DEPLOY_HOST"',
-        '[[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]] || { echo "invalid target" >&2; exit 1; }',
-        'key_file=$(mktemp)',
-        'known_hosts=$(mktemp)',
-        'cleanup() { rm -f "$key_file" "$known_hosts"; }',
-        'trap cleanup EXIT',
-        'printf \'%s\\n\' "$GPU_DEPLOY_SSH_KEY" > "$key_file"',
-        'chmod 600 "$key_file"',
-        'printf \'%s\\n\' "$GPU_DEPLOY_KNOWN_HOSTS" > "$known_hosts"',
-        '[[ -s "$known_hosts" ]] || { echo "known_hosts is empty" >&2; exit 1; }',
-        'ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o IdentitiesOnly=yes -i "$key_file" -p "$GPU_DEPLOY_PORT")',
-        f'ssh "${{ssh_opts[@]}}" "$target" "upload {lane} $sha $digest" < "$artifact"',
-    ]
-    if lane == "live":
-        lines.extend(
-            [
-                "current_main_sha=$(gh api \\",
-                '-H "Accept: application/vnd.github+json" \\',
-                '"/repos/$GITHUB_REPOSITORY/git/ref/heads/main" \\',
-                "--jq .object.sha)",
-                '[[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid current main SHA" >&2; exit 1; }',
-                '[[ "$current_main_sha" == "$sha" ]] || { echo "workflow SHA is no longer current main" >&2; exit 1; }',
-            ]
-        )
-    lines.extend(
-        [
-            f'ssh "${{ssh_opts[@]}}" "$target" "activate {lane} $sha $digest"',
-            f'ssh "${{ssh_opts[@]}}" "$target" "status {lane}"',
-        ]
-    )
-    return lines
-
-def has_forced_deploy_step(job: JobBlock, lane: str, expected_sha_source: str) -> bool:
-    for block in step_blocks(job):
-        if not all(
-            step_has_env(block, name, value)
-            for name, value in (
-                ("SHA", expected_sha_source),
-                ("DIGEST", "${{ steps.build.outputs.digest }}"),
-                ("ARTIFACT", "${{ steps.build.outputs.artifact }}"),
-                ("GPU_DEPLOY_HOST", "${{ secrets.GPU_DEPLOY_HOST }}"),
-                ("GPU_DEPLOY_PORT", "${{ secrets.GPU_DEPLOY_PORT }}"),
-                ("GPU_DEPLOY_USER", "${{ secrets.GPU_DEPLOY_USER }}"),
-                ("GPU_DEPLOY_SSH_KEY", "${{ secrets.GPU_DEPLOY_SSH_KEY }}"),
-                ("GPU_DEPLOY_KNOWN_HOSTS", "${{ secrets.GPU_DEPLOY_KNOWN_HOSTS }}"),
-                ("GH_TOKEN", "${{ github.token }}"),
-            )
-        ):
-            continue
-        if executable_lines(run_command_value(block)) == canonical_deploy_lines(lane):
-            return True
-    return False
-
-def has_workflow_run_head_sha_authorization(job: JobBlock) -> bool:
-    for block in step_blocks(job):
-        command = run_command_value(block)
-        if command is None or not run_executes_authorize_gpu_release(command):
-            continue
-        if "github.event.workflow_run.head_sha" not in command and "github.event_path" not in command:
-            continue
-        return True
-    return False
-
-
-def has_split_live_authorization(lines: list[SourceLine], jobs: list[JobBlock], deploy_job: JobBlock) -> bool:
-    needed = set(direct_job_values(deploy_job, "needs"))
-    if needed != {"authorize"}:
-        return False
-    auth_jobs = [job for job in jobs if job.job_id == "authorize"]
-    if len(auth_jobs) != 1:
-        return False
-    for auth_job in auth_jobs:
-        runner_labels = {label.lower() for label in direct_job_values(auth_job, "runs-on")}
-        if runner_labels != {"ubuntu-24.04"}:
-            continue
-        if direct_job_value(auth_job, "environment") is not None:
-            continue
-        if job_references_secrets(auth_job):
-            continue
-        if not has_workflow_run_provenance_guard(auth_job):
-            continue
-        if has_authorization_step(auth_job) and has_workflow_run_head_sha_authorization(auth_job):
-            return True
-    return False
-
-
-def live_deploy_job_uses_forced_protocol(job: JobBlock) -> bool:
-    return (
-        has_checkout_ref(job, "${{ github.event.workflow_run.head_sha }}")
-        and has_build_step(job, "${{ github.event.workflow_run.head_sha }}")
-        and has_forced_deploy_step(job, "live", "${{ github.event.workflow_run.head_sha }}")
     )
 
 
@@ -840,163 +644,6 @@ def has_workflow_run_provenance_guard(job: JobBlock) -> bool:
         "github.event.workflow_run.path=='.github/workflows/ci.yml'",
     }
     return set(clauses) == required
-
-
-def step_blocks(job: JobBlock) -> list[list[SourceLine]]:
-    steps_line = direct_job_line(job, "steps")
-    if steps_line is None:
-        return []
-    parent_line, _value = steps_line
-    children: list[SourceLine] = []
-    for line in job.lines:
-        if line.number <= parent_line.number:
-            continue
-        if line.indent <= parent_line.indent:
-            break
-        children.append(line)
-    blocks: list[list[SourceLine]] = []
-    current: list[SourceLine] = []
-    current_indent: int | None = None
-    for line in children:
-        if line.text.startswith("-") and current_indent is None:
-            current = [line]
-            current_indent = line.indent
-            continue
-        if line.text.startswith("-") and current_indent is not None and line.indent <= current_indent:
-            blocks.append(current)
-            current = [line]
-            current_indent = line.indent
-            continue
-        if current_indent is not None:
-            current.append(line)
-    if current:
-        blocks.append(current)
-    return blocks
-
-
-def shell_words(value: str) -> list[str]:
-    try:
-        return shlex.split(value)
-    except ValueError:
-        return []
-
-
-def step_direct_indent(block: list[SourceLine]) -> int | None:
-    direct_indent: int | None = None
-    if not block:
-        return None
-    item_indent = block[0].indent
-    for line in block[1:]:
-        parsed = key_value(line.text)
-        if not parsed or line.indent <= item_indent:
-            continue
-        if direct_indent is None or line.indent < direct_indent:
-            direct_indent = line.indent
-    return direct_indent
-
-
-def step_property(block: list[SourceLine], key: str) -> tuple[int, SourceLine, str] | None:
-    direct_indent = step_direct_indent(block)
-    for index, line in enumerate(block):
-        parsed = key_value(line.text)
-        if not parsed or parsed[0] != key:
-            continue
-        if line is block[0] and line.text.startswith("-"):
-            return index, line, unquote(parsed[1])
-        if direct_indent is not None and line.indent == direct_indent:
-            return index, line, unquote(parsed[1])
-    return None
-
-
-def step_property_value(block: list[SourceLine], key: str) -> str | None:
-    found = step_property(block, key)
-    if found is None:
-        return None
-    _index, _line, value = found
-    return value
-
-
-def run_command_value(block: list[SourceLine]) -> str | None:
-    found = step_property(block, "run")
-    if found is None:
-        return None
-    index, line, value = found
-    if strip_comment(value).strip() in {"|", ">", "|-", ">-", "|+", ">+"}:
-        commands: list[str] = []
-        for child in block[index + 1 :]:
-            if child.indent <= line.indent:
-                break
-            commands.append(strip_comment(child.text).strip())
-        return "\n".join(command for command in commands if command)
-    return value
-
-
-def command_has_shell_control(value: str) -> bool:
-    in_single = False
-    in_double = False
-    escaped = False
-    index = 0
-    while index < len(value):
-        char = value[index]
-        if escaped:
-            escaped = False
-            index += 1
-            continue
-        if char == "\\" and not in_single:
-            escaped = True
-            index += 1
-            continue
-        if char == "'" and not in_double:
-            in_single = not in_single
-            index += 1
-            continue
-        if char == '"' and not in_single:
-            in_double = not in_double
-            index += 1
-            continue
-        if in_single or in_double:
-            index += 1
-            continue
-        if value.startswith("$(", index):
-            return True
-        if char in {"&", ";", "|", ">", "<", "`"}:
-            return True
-        index += 1
-    return False
-
-
-def run_executes_authorize_gpu_release(value: str) -> bool:
-    commands = [line.strip() for line in value.splitlines() if line.strip()]
-    if len(commands) != 1:
-        return False
-    command = commands[0]
-    if command_has_shell_control(command):
-        return False
-    words = shell_words(command)
-    return len(words) >= 2 and words[0] == "python3.12" and words[1] == "scripts/authorize_gpu_release.py"
-
-
-def continue_on_error_allows_authorization(value: str | None) -> bool:
-    if value is None or value == "":
-        return True
-    normalized = re.sub(r"\s+", "", unquote(value).lower())
-    return normalized in {"false", "${{false}}"}
-
-
-def has_authorization_step(job: JobBlock) -> bool:
-    for block in step_blocks(job):
-        command = run_command_value(block)
-        if command is None or not run_executes_authorize_gpu_release(command):
-            continue
-        if step_property_value(block, "if") is not None:
-            continue
-        if not continue_on_error_allows_authorization(step_property_value(block, "continue-on-error")):
-            continue
-        working_directory = step_property_value(block, "working-directory")
-        if working_directory not in {None, "", "."}:
-            continue
-        return True
-    return False
 
 
 SECRETS_CONTEXT_RE = re.compile(r"(?<![A-Za-z0-9_])secrets(?![A-Za-z0-9_])")
@@ -1113,6 +760,9 @@ def validate_workflow(path: Path) -> list[Violation]:
     if workflow_has_pr_secrets:
         violations.append(Violation(path, "pr-secrets", "pull_request workflows must not reference GitHub secrets"))
     jobs = find_jobs(lines)
+    if workflow_mentions_retired_gpu_ssh_deploy(lines):
+        violations.append(Violation(path, "retired-gpu-ssh-deployment", "GitHub-hosted SSH gpu-live deployment is retired; server puller is sole deployer"))
+
     if not any(is_deploy_job(job) for job in jobs) and workflow_mentions_retired_gpu_dev(lines):
         violations.append(
             Violation(
@@ -1157,6 +807,15 @@ def validate_workflow(path: Path) -> list[Violation]:
             violations.append(
                 Violation(path, "gpu-deploy-storage-coupling", "GPU deployment workflows must not reference Storage paths or services", job.job_id)
             )
+        if deploy_job and direct_job_value(job, "environment") == "gpu-live":
+            violations.append(
+                Violation(
+                    path,
+                    "retired-gpu-live-workflow",
+                    "GitHub-hosted gpu-live deployment jobs are retired; the server puller is the sole automatic GPU Live deployer",
+                    job.job_id,
+                )
+            )
         if deploy_job and workflow_mentions_retired_gpu_dev(lines):
             violations.append(
                 Violation(
@@ -1185,17 +844,13 @@ def validate_workflow(path: Path) -> list[Violation]:
         if deploy_job and "workflow_run" in events:
             if not (
                 has_completed_ci_workflow_run_trigger(lines)
-                and has_top_level_concurrency(lines, group="gpu-live", cancel_in_progress="false")
                 and has_workflow_run_provenance_guard(job)
-                and direct_job_value(job, "environment") == "gpu-live"
-                and has_split_live_authorization(lines, jobs, job)
-                and live_deploy_job_uses_forced_protocol(job)
             ):
                 violations.append(
                     Violation(
                         path,
                         "workflow-run-deploy-guard",
-                        "workflow_run deployment jobs must require completed ci on main push from the same repo, success, separate non-secret authorization, gpu-live concurrency/environment, and forced SSH deployment",
+                        "workflow_run deployment jobs must require completed ci on a successful main push from the same repository",
                         job.job_id,
                     )
                 )

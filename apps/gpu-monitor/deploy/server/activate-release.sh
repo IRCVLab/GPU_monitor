@@ -31,7 +31,7 @@ if [[ "${1:-}" == --test-mode ]]; then
   temp_max_age=${GPU_MONITOR_UPLOAD_TEMP_MAX_AGE:-$PRODUCTION_TEMP_MAX_AGE}
   failed_max_count=${GPU_MONITOR_FAILED_ARTIFACT_MAX_COUNT:-$PRODUCTION_FAILED_MAX_COUNT}
   case "$action:$argument_count" in
-    status:3|status-inner:3|rollback:3|rollback-inner:3|upload:5|upload-inner:5|activate:5|activate-inner:5) ;;
+    status:3|status-inner:3|rollback:3|rollback-inner:3|upload:5|upload-inner:5|discard:5|discard-inner:5|activate:5|activate-inner:5) ;;
     *) fail "invalid test-mode arguments" ;;
   esac
 else
@@ -47,15 +47,15 @@ else
   temp_max_age=$PRODUCTION_TEMP_MAX_AGE
   failed_max_count=$PRODUCTION_FAILED_MAX_COUNT
   case "$action:$argument_count" in
-    status:2|status-inner:2|rollback:2|rollback-inner:2|upload:4|upload-inner:4|activate:4|activate-inner:4) ;;
+    status:2|status-inner:2|rollback:2|rollback-inner:2|upload:4|upload-inner:4|discard:4|discard-inner:4|activate:4|activate-inner:4) ;;
     *) fail "invalid production arguments" ;;
   esac
 fi
 
 case "$env_name" in dev|live) ;; *) fail "invalid environment" ;; esac
-case "$action" in status|status-inner|upload|upload-inner|activate|activate-inner|rollback|rollback-inner) ;; *) fail "invalid action" ;; esac
+case "$action" in status|status-inner|upload|upload-inner|discard|discard-inner|activate|activate-inner|rollback|rollback-inner) ;; *) fail "invalid action" ;; esac
 case "$action" in
-  upload|upload-inner|activate|activate-inner)
+  upload|upload-inner|discard|discard-inner|activate|activate-inner)
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "invalid sha"
     [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || fail "invalid sha256"
     ;;
@@ -474,6 +474,17 @@ finally: os.close(directory_fd)
 PY
   fsync_directory "$tmp_root"
   printf '{"environment":"%s","sha":"%s","sha256":"%s","status":"uploaded"}\n' "$env_name" "$sha" "$digest"
+}
+
+do_discard() {
+  local object_dir="$incoming/$sha" artifact="$incoming/$sha/$digest.tar.gz"
+  if [[ -d "$object_dir" ]]; then
+    rm -f -- "$artifact" "${artifact}.failed"
+    fsync_directory "$object_dir"
+    rmdir "$object_dir" 2>/dev/null || true
+  fi
+  fsync_directory "$incoming"
+  printf '{"environment":"%s","sha":"%s","sha256":"%s","status":"discarded"}\n' "$env_name" "$sha" "$digest"
 }
 
 validate_and_extract() {
@@ -966,7 +977,7 @@ PY
 }
 
 case "$action" in
-  status|upload|activate|rollback)
+  status|upload|discard|activate|rollback)
     if [[ "$action" == status ]]; then
       if [[ "$test_mode" != true && ! -d "$lock_dir" ]]; then
         do_status
@@ -998,6 +1009,7 @@ os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
     ;;
   status-inner) do_status ;;
   upload-inner) do_upload ;;
+  discard-inner) do_discard ;;
   activate-inner) prune_temps; do_activate ;;
   rollback-inner) prune_temps; do_rollback ;;
 esac

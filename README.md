@@ -52,22 +52,26 @@ STORAGE_VIZ_PORT=8088 \
 python3 viewer/serve.py
 ```
 
-## Continuous integration
+## Continuous integration and GPU Live release
 
-Local development is the default and supported path. Contributors may use optional pull requests or direct pushes to `main`. The supported release contract is:
+Local development is the default path. Contributors may open pull requests when review is useful, and trusted team members may also push directly to `main`.
 
-`local development -> optional PR or direct main push -> main CI -> exact successful SHA live deployment`
+The supported GPU Live release contract is:
 
-`ci/required` gates required repository checks on CI; a failed `main` CI leaves the current live release unchanged even though the failed commit remains in Git history.
+`local development -> optional PR or trusted direct main push -> main CI -> outbound server puller -> exact successful SHA live activation`
 
-See `docs/operations/github-cicd.md` for the live authorization contract, current status checks, secrets/runner constraints, and status/rollback commands.
+Automatic deployment does not accept GitHub-hosted inbound SSH. A systemd timer on the server uses a five-minute base interval with bounded jitter, reads public GitHub API evidence for the current `main` SHA, reuses `scripts/authorize_gpu_release.py` to require successful `ci/required` on that exact SHA, builds from a clean exact-SHA checkout as the dedicated non-login builder, then runs the local `activate-release.sh` path as `gpu-deploy-live` (`upload` -> `activate` -> `status`). Failed CI, a changed `main`, build failure, authorization failure, or activation failure leaves the current Live release unchanged; authorized release failures use persistent exponential retry backoff rather than restarting Live every timer tick.
+
+Storage is independent and is not deployed by the GPU Live path. There is no self-hosted runner and no always-on development server.
+
+See `docs/operations/github-cicd.md` for the outbound-only deployment contract, migration notes, and emergency status/rollback boundary.
 
 ## Repository rules
 
 - Keep generated, collected, runtime, cache, database, browser-output, virtual-environment, and dependency-install data out of Git.
 - Privacy-safe Storage sample fixtures under `apps/storage-monitor/data/` are allowed because they are reviewed sample data, not collected runtime snapshots.
 - Keep setup, tests, and runtime assumptions application-local unless a root migration or governance file explicitly says otherwise.
-- Direct pushes to `main` (or optional merged PRs) are the supported entry points into this contract; the same failure rule applies if CI fails after either path.
-- Production deployment follows the optional PR/direct `main` contract and the successful same-repository `main` deployment rules in `docs/operations/github-cicd.md`.
+- Direct pushes to `main` and optional merged PRs are supported entry points into the GPU Live contract; the same fail-closed rule applies after either path.
+- Production GPU deployment is server-pulled and outbound-only. The GitHub-hosted SSH workflow has been removed; its obsolete GitHub environment/secrets are deleted after outbound rollout verification.
 
 See `docs/history-migration.md` for migration evidence and history-preservation details.

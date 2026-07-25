@@ -1,0 +1,30 @@
+[Unit]
+Description=GPU monitor outbound release puller
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/gpu-monitor-release-puller.py
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+CPUWeight=20
+IOWeight=20
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/gpu-monitor/puller /var/lib/gpu-monitor/builder /srv/gpu-monitor/live /var/lock/gpu-monitor/live
+ReadOnlyPaths=/usr/local/libexec /opt/gpu-monitor/node
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -157,7 +157,7 @@ class RepositoryLayoutTest(unittest.TestCase):
     def test_root_makefile_exposes_exact_application_command_contracts(self):
         self.assertEqual("SHELL := /bin/bash", makefile_text().splitlines()[0])
         self.assertEqual(
-            ["layout-test", "history-test"],
+            ["layout-test", "history-test", "release-puller-test"],
             make_target_dependencies("test"),
         )
         self.assertEqual(
@@ -192,10 +192,13 @@ class RepositoryLayoutTest(unittest.TestCase):
             ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_history_inventory -v"],
             make_target_recipe("history-test"),
         )
-
+        self.assertEqual(
+            ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_gpu_release_puller -v"],
+            make_target_recipe("release-puller-test"),
+        )
         root_python_recipes = {
             target: recipe
-            for target in ("layout-test", "history-test")
+            for target in ("layout-test", "history-test", "release-puller-test")
             for recipe in make_target_recipe(target)
         }
         self.assertTrue(root_python_recipes)
@@ -364,9 +367,9 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertIn("direct push", workflow_design.lower())
         self.assertIn("This design is superseded for current release policy by", workflow_design)
         self.assertIn("docs/superpowers/specs/2026-07-25-local-development-live-release-design.md", workflow_design)
-        self.assertIn("GitHub-hosted", github_cicd)
+        self.assertIn("GitHub-hosted inbound SSH", github_cicd)
         self.assertIn("forced-command", github_cicd)
-        self.assertIn("Storage agents remain manual", github_cicd)
+        self.assertIn("Storage agents and dashboards remain manual/tagged", github_cicd)
         self.assertIn(
             '"runner_availability": runner_check(metadata)',
             deploy_checker,
@@ -376,11 +379,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             github_cicd,
         )
         self.assertIn(
-            "not the authorization gate for live deployment in the current contract",
-            github_cicd,
-        )
-        self.assertIn(
-            "Legacy readiness checks are retained",
+            "not the current GPU Live authorization gate",
             github_cicd,
         )
         self.assertIn("Historical design artifact (superseded).", workflow_design)
@@ -390,18 +389,27 @@ class RepositoryLayoutTest(unittest.TestCase):
 
     def test_gpu_deployment_workflow_is_live_only(self):
         self.assertFalse(Path(".github/workflows/deploy-gpu-dev.yml").exists())
-        live = workflow_text(".github/workflows/deploy-gpu-live.yml")
-        self.assertIn("workflow_run:", live)
-        self.assertIn('workflows: ["ci"]', live)
-        self.assertIn("types: [completed]", live)
-        self.assertIn("environment: gpu-live", live)
-        self.assertIn("group: gpu-live", live)
-        self.assertIn("cancel-in-progress: false", live)
-        self.assertIn("github.event.workflow_run.head_sha", live)
-        self.assertNotIn("pull-requests: read", live)
-        self.assertNotIn("gpu-dev", live)
-        self.assertIn("/git/ref/heads/main", live)
-        self.assertIn('[[ "$current_main_sha" == "$sha" ]]', live)
+        self.assertFalse(Path(".github/workflows/deploy-gpu-live.yml").exists())
+        self.assertTrue(
+            Path("apps/gpu-monitor/deploy/server/gpu-monitor-release-puller.py").is_file()
+        )
+        self.assertTrue(
+            Path(
+                "apps/gpu-monitor/deploy/server/systemd/gpu-monitor-release-puller.service"
+            ).is_file()
+        )
+        self.assertTrue(
+            Path(
+                "apps/gpu-monitor/deploy/server/systemd/gpu-monitor-release-puller.timer"
+            ).is_file()
+        )
+        workflows = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in Path(".github/workflows").glob("*.y*ml")
+        )
+        self.assertNotIn("GPU_DEPLOY_SSH_KEY", workflows)
+        self.assertNotIn("upload live", workflows)
+        self.assertNotIn("activate live", workflows)
 
 
     def test_gpu_deployment_documentation_covers_operator_contracts(self):
@@ -409,34 +417,33 @@ class RepositoryLayoutTest(unittest.TestCase):
         development = Path("docs/development.md").read_text(encoding="utf-8")
         combined = cicd + "\n" + development
 
-        for secret in (
+        for retired_secret in (
             "GPU_DEPLOY_HOST",
             "GPU_DEPLOY_PORT",
             "GPU_DEPLOY_USER",
             "GPU_DEPLOY_SSH_KEY",
             "GPU_DEPLOY_KNOWN_HOSTS",
         ):
-            self.assertIn(secret, combined)
+            self.assertNotIn(retired_secret, combined)
         self.assertIn("Pull requests are optional", combined)
-        self.assertIn("successful same-repository `main` push", combined)
-        self.assertIn("current `main` head immediately before activation", combined)
-        self.assertIn("triggered by a completed `ci` `workflow_run`", cicd)
-        self.assertIn("fails closed unless", cicd)
-        self.assertIn("workflow `path: .github/workflows/ci.yml`", cicd)
-        self.assertIn("deployed SHA still passed `main` CI", cicd)
-        self.assertIn("trusted-team policy", combined)
-        self.assertIn("not protection against malicious or compromised trusted writers", combined)
+        self.assertIn("trusted-team direct pushes to `main`", combined)
+        self.assertIn("changed `main`", combined)
+        self.assertIn("public GitHub API", combined)
+        self.assertIn("scripts/authorize_gpu_release.py", combined)
+        self.assertIn("gpu-monitor-builder", combined)
+        self.assertIn("gpu-deploy-live", combined)
+        self.assertIn("persistent five-minute calendar cadence", combined)
+        self.assertIn("exponentially backs off retries", combined)
+        self.assertIn("not a defense against malicious or compromised trusted writers", combined)
         self.assertIn("branch protection with required review is the stronger future control", combined)
         self.assertIn("local development", combined.lower())
-        self.assertNotIn("runs only from", cicd)
-        self.assertNotIn("safeguards against accidental direct-push deployment", Path("CONTRIBUTING.md").read_text(encoding="utf-8"))
-        self.assertNotIn("run `deploy-gpu-dev`", combined)
-        self.assertNotIn("`pr_number`", combined)
-        self.assertNotIn("Required live check", cicd)
-        self.assertNotIn("Before live activation", cicd)
-        operation_section = development.split("## GPU deployment workflow operation", 1)[1].split("##", 1)[0]
-        self.assertIn("workflow `path: .github/workflows/ci.yml`", operation_section)
-        self.assertIn("immediate current `main` head recheck", operation_section)
+        self.assertIn("does not enable or start the puller timer/service", cicd.lower())
+        self.assertIn("GitHub-hosted SSH deployment workflow has been removed", combined)
+        operation_section = development.split(
+            "## GPU Live outbound deployment operation", 1
+        )[1].split("##", 1)[0]
+        self.assertIn("changed `main`", operation_section)
+        self.assertIn("status live", operation_section)
 
         for phrase in (
             "ci/required",
@@ -448,8 +455,8 @@ class RepositoryLayoutTest(unittest.TestCase):
 
     def test_readme_and_contributing_contracts_use_exact_live_release_flow(self):
         expected_flow = (
-            "local development -> optional PR or direct main push -> main CI -> "
-            "exact successful SHA live deployment"
+            "local development -> optional PR or trusted direct main push -> main CI -> "
+            "outbound server puller -> exact successful SHA live activation"
         )
         readme = Path("README.md").read_text(encoding="utf-8")
         contributing = Path("CONTRIBUTING.md").read_text(encoding="utf-8")
