@@ -41,13 +41,14 @@ make verify
 1. repository layout tests;
 2. history inventory tests;
 3. GPU frontend `npm run check`;
-4. GPU backend unit tests;
-5. GPU frontend production build;
-6. Storage tests in a disposable no-hardlinks clone under `/tmp`;
-7. JavaScript syntax checks for Storage viewer files;
-8. Storage deploy-script contract tests;
-9. Linux-only scanner checks when running on Linux, otherwise an explicit macOS skip covered by prior Linux verification;
-10. `git diff --check`.
+4. GPU frontend production build;
+5. GPU production runtime proxy tests against that build;
+6. GPU backend unit tests;
+7. Storage tests in a disposable no-hardlinks clone under `/tmp`;
+8. JavaScript syntax checks for Storage viewer files;
+9. Storage deploy-script contract tests;
+10. Linux-only scanner checks when running on Linux, otherwise an explicit macOS skip covered by prior Linux verification;
+11. `git diff --check`.
 
 On a fresh host, install application dependencies first:
 
