@@ -618,9 +618,17 @@ def workflow_mentions_storage(lines: list[SourceLine]) -> bool:
     return "storage" in workflow_text_from_lines(lines).lower()
 
 
+RETIRED_GPU_DEV_LANE_RE = re.compile(r"(?<![A-Za-z0-9_-])gpu-dev(?![A-Za-z0-9_-])")
+RETIRED_GPU_DEV_COMMAND_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:upload|activate|status|rollback)\s+dev(?![A-Za-z0-9_-])"
+)
+
+
 def workflow_mentions_retired_gpu_dev(lines: list[SourceLine]) -> bool:
-    retired = ("gpu-dev", "upload dev ", "activate dev ", "status dev", "rollback dev")
-    return any(token in line.text for line in lines for token in retired)
+    return any(
+        RETIRED_GPU_DEV_LANE_RE.search(line.text) or RETIRED_GPU_DEV_COMMAND_RE.search(line.text)
+        for line in lines
+    )
 
 
 def executable_lines(command: str | None) -> list[str]:

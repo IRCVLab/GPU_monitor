@@ -603,6 +603,8 @@ class WorkflowPolicyTest(unittest.TestCase):
             'run: echo "activate dev $sha $digest"',
             'run: echo "status dev"',
             'run: echo "rollback dev"',
+            "run: upload dev",
+            "run: activate dev",
         ):
             with self.subTest(retired=retired):
                 body = deployment_workflow_with(retired)
@@ -612,6 +614,24 @@ class WorkflowPolicyTest(unittest.TestCase):
                     "deploy",
                     "retired-dev.yml",
                 )
+
+    def test_retired_gpu_dev_detection_does_not_match_adjacent_words(self):
+        result = self.run_validator(
+            {
+                "not-retired-dev-substrings.yml": """
+                on: push
+                jobs:
+                  deploy:
+                    if: github.ref == 'refs/heads/main'
+                    runs-on: ubuntu-24.04
+                    environment: gpu-development
+                    steps:
+                      - run: echo "upload developer activate developer status device rollback device"
+                """
+            }
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_rejects_live_deployments_without_separate_non_secret_authorization_job(self):
         workflows = {
