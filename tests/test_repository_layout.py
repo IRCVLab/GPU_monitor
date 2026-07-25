@@ -376,13 +376,9 @@ class RepositoryLayoutTest(unittest.TestCase):
             "re-scoped from the legacy branch-protected/self-hosted model",
             github_cicd,
         )
-        self.assertIn("Current cutover is expected to remain non-READY", github_cicd)
-        self.assertIn(
-            "Superseded for runner and deployment policy by "
-            "`docs/superpowers/specs/2026-07-23-development-release-workflow-design.md`",
-            old_monorepo_design,
-        )
+        self.assertIn("Historical design artifact (superseded).", workflow_design)
         self.assertIn("Historical rationale", old_monorepo_design)
+        self.assertIn("Legacy", github_cicd)
 
 
     def test_gpu_deployment_workflow_is_live_only(self):
@@ -426,6 +422,19 @@ class RepositoryLayoutTest(unittest.TestCase):
             "rollback",
         ):
             self.assertIn(phrase, combined)
+
+    def test_readme_and_contributing_contracts_use_exact_live_release_flow(self):
+        expected_flow = (
+            "local development -> optional PR or direct main push -> main CI -> "
+            "exact successful SHA live deployment"
+        )
+        readme = Path("README.md").read_text(encoding="utf-8")
+        contributing = Path("CONTRIBUTING.md").read_text(encoding="utf-8")
+
+        self.assertIn(expected_flow, readme)
+        self.assertIn(expected_flow, contributing)
+        self.assertNotIn("Merging this foundation", readme)
+        self.assertNotIn("Merging this foundation", contributing)
 
 
 if __name__ == "__main__":

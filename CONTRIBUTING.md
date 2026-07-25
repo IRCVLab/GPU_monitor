@@ -18,7 +18,11 @@ This monorepo preserves two independent products. Keep changes scoped to the app
 
 ## Deployment boundary
 
-Deployment remains application-specific. In the supported policy, local development is the default path: contributors may use optional pull requests or push directly to `main`; successful same-repository `main` CI determines the exact release SHA, and only that SHA is deployed to live.
+Deployment remains application-specific. In the supported policy, local development is the default path:
+
+`local development -> optional PR or direct main push -> main CI -> exact successful SHA live deployment`
+
+Contributors may use optional pull requests or push directly to `main`. A successful same-repository `main` CI determines the exact SHA to deploy, and only that SHA is deployed to live.
 
 Pull requests are optional. A failed `main` CI does not change the current live release, even though the failed commit remains in Git history.
 

@@ -2,9 +2,9 @@
 
 ## Status
 
-Approved design for the monitoring platform repository. This document defines
-the intended branch model, shared development-server role, pull-request flow,
-and GPU live-release boundary. It does not activate deployment by itself.
+Historical design artifact (superseded). This document is preserved as
+historical evidence only and no longer reflects the current release policy.
+It does not activate deployment by itself.
 
 This design is superseded for current release policy by
 `docs/superpowers/specs/2026-07-25-local-development-live-release-design.md`.

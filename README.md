@@ -54,7 +54,11 @@ python3 viewer/serve.py
 
 ## Continuous integration
 
-Local development is the default and supported path. Contributors may use optional pull requests or direct pushes to `main`. The supported release contract is: local development -> optional PR or direct main push -> main CI -> exact successful SHA live deployment. `ci/required` gates required repository checks on CI; a failed `main` CI leaves the current live release unchanged even though the failed commit remains in Git history.
+Local development is the default and supported path. Contributors may use optional pull requests or direct pushes to `main`. The supported release contract is:
+
+`local development -> optional PR or direct main push -> main CI -> exact successful SHA live deployment`
+
+`ci/required` gates required repository checks on CI; a failed `main` CI leaves the current live release unchanged even though the failed commit remains in Git history.
 
 See `docs/operations/github-cicd.md` for the live authorization contract, current status checks, secrets/runner constraints, and status/rollback commands.
 
@@ -63,7 +67,7 @@ See `docs/operations/github-cicd.md` for the live authorization contract, curren
 - Keep generated, collected, runtime, cache, database, browser-output, virtual-environment, and dependency-install data out of Git.
 - Privacy-safe Storage sample fixtures under `apps/storage-monitor/data/` are allowed because they are reviewed sample data, not collected runtime snapshots.
 - Keep setup, tests, and runtime assumptions application-local unless a root migration or governance file explicitly says otherwise.
-- Merging this foundation to `main` is the later stage in this release contract; it does not itself replace an already-live release if CI fails.
+- Direct pushes to `main` (or optional merged PRs) are the supported entry points into this contract; the same failure rule applies if CI fails after either path.
 - Production deployment follows the optional PR/direct `main` contract and the successful same-repository `main` deployment rules in `docs/operations/github-cicd.md`.
 
 See `docs/history-migration.md` for migration evidence and history-preservation details.

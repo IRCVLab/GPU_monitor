@@ -4,9 +4,9 @@ This repository publishes source with pull-request CI and runs the live deployme
 
 `scripts/check_deploy_prerequisites.py` is the legacy branch-protected/self-hosted readiness model. It reports `READY`, `BLOCKED`, or `UNKNOWN` for repository protection, CODEOWNER enforcement, runner availability, and server reachability, then merges `protected_main`, `codeowner_enforcement`, `runner_availability`, and `server_reachability` into its default `cutover` status. It never changes GitHub settings, registers runners, copies artifacts, restarts services, or writes to the production server; malformed metadata fails closed and never falls back to live inspection. This checker is not the authorization gate for live deployment in the current contract, and it must be re-scoped for other planning models.
 
-## Current private-plan limitation
+## Legacy prerequisite checker (not a live authorization gate)
 
-`IRCVLab/GPU_monitor` is a private repository on the current GitHub plan, and `main` branch protection is unavailable/not configured for that private-plan state. That limitation remains explicit: the compensating checks below are not equivalent to branch protection against a malicious authorized writer. They prevent accidental direct-push deployment inside the trusted team model, where only authorized team members have write access.
+`IRCVLab/GPU_monitor` is a private repository on the current GitHub plan, and `main` branch protection is unavailable/not configured for that private-plan state. This section is retained as historical operational context; it is not current authorization logic.
 
 Required live check:
 
@@ -16,7 +16,7 @@ python3.12 scripts/check_deploy_prerequisites.py --repo IRCVLab/GPU_monitor
 
 The default process exit status is the legacy production `cutover` status, so missing or blocked branch protection, runner availability, or server reachability can never produce exit `0`. Use `--stage runner` only when evaluating the legacy runner-registration readiness model. `--stage publication` reports protected-CI readiness; it is not a gate for the repository's first source-only push.
 
-Current cutover is expected to remain non-READY. Expected current live result: `BLOCKED` for `protected_main`, with evidence equivalent to `private-plan branch protection unavailable or not configured for main`. Missing branch-protection evidence is `UNKNOWN` rather than `READY`; full branch-protection readiness still requires explicit evidence that administrator enforcement is enabled, force pushes are disabled, and administrator bypass is disabled. Runner enumeration in this checker is still part of the legacy cutover calculation, which is why this checker must not be treated as the new GitHub-hosted deployment authorization gate.
+Legacy cutover states are informational in this environment. In the absence of enforceable branch-protection metadata, checker output commonly remains `BLOCKED`/`UNKNOWN` for protected-main readiness. That status is expected for the legacy model and does not gate source publication or the current live deployment contract described below.
 
 ## Desired `main` protection when the plan allows it
 
@@ -100,7 +100,7 @@ Storage agents remain manual and tagged. They must not auto-deploy from `main`. 
 
 ## Server reachability and SSH timeout
 
-Server reachability is a legacy checker cutover input, not a source-publication blocker. The known production SSH route is `166.104.167.11:2200`. Bounded read-only SSH failures, including the previously observed timeout class and the current non-interactive permission-denied result from this environment, keep the legacy cutover status non-READY. They do not block publishing source, opening pull requests, or running GitHub-hosted CI.
+Server reachability is a legacy checker cutover input, not a source-publication blocker. The known production SSH route is `166.104.167.11:2200`. Bounded read-only SSH failures, including the previously observed timeout class and the non-interactive permission-denied result from this environment, are legacy status data and do not block publishing source, opening pull requests, or running GitHub-hosted CI.
 
 Only run a live host check when explicitly requested:
 
