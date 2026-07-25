@@ -570,13 +570,29 @@ install_fake_server_commands() {
   mkdir -p "$fakebin"
   printf '%s\n' "$restart_mode" > "$fakebin/restart-mode"
   printf '0\n' > "$fakebin/restart-count"
+  printf '0\n' > "$fakebin/show-count"
   printf '0\n' > "$fakebin/health-count"
+  printf '0\n' > "$fakebin/ss-count"
   cat > "$fakebin/systemctl" <<FAKE
 #!/usr/bin/env bash
 printf 'systemctl %s\\n' "\$*" >> '$log_file'
+mode=\$(cat '$fakebin/restart-mode')
+if [[ "\${1:-}" == is-active ]]; then
+  [[ "\$mode" != inactive-health ]]
+  exit
+fi
+if [[ "\${1:-}" == show ]]; then
+  count=\$((\$(cat '$fakebin/show-count') + 1))
+  printf '%s\\n' "\$count" > '$fakebin/show-count'
+  case "\$mode" in
+    pid-zero) printf '0\\n' ;;
+    pid-change) if (( count <= 3 )); then printf '4242\\n'; else printf '4343\\n'; fi ;;
+    *) printf '4242\\n' ;;
+  esac
+  exit 0
+fi
 count=\$((\$(cat '$fakebin/restart-count') + 1))
 printf '%s\\n' "\$count" > '$fakebin/restart-count'
-mode=\$(cat '$fakebin/restart-mode')
 case "\$mode" in
   fail-all) exit 1 ;;
   backend-first) [[ "\$count" == 1 && "\$*" == *backend* ]] && exit 1 ;;
@@ -584,6 +600,25 @@ case "\$mode" in
   bridge-first) [[ "\$count" == 3 && "\$*" == *bridge* ]] && exit 1 ;;
 esac
 exit 0
+FAKE
+  cat > "$fakebin/ss" <<FAKE
+#!/usr/bin/env bash
+printf 'ss %s\\n' "\$*" >> '$log_file'
+mode=\$(cat '$fakebin/restart-mode')
+count=\$((\$(cat '$fakebin/ss-count') + 1))
+printf '%s\\n' "\$count" > '$fakebin/ss-count'
+if [[ "\$mode" == listener-delayed && "\$count" == 1 ]]; then
+  exit 0
+fi
+case "\$*" in
+  *':5173'*) if [[ "\$mode" == loopback-live ]]; then host=127.0.0.1; else host=0.0.0.0; fi; port=5173 ;;
+  *':8000'*) if [[ "\$mode" == loopback-live ]]; then host=127.0.0.1; else host=0.0.0.0; fi; port=8000 ;;
+  *':8001'*) host=127.0.0.1; port=8001 ;;
+  *':5174'*) host=127.0.0.1; port=5174 ;;
+  *':8101'*) host=127.0.0.1; port=8101 ;;
+  *) exit 1 ;;
+esac
+printf 'LISTEN 0 128 %s:%s 0.0.0.0:*\\n' "\$host" "\$port"
 FAKE
   cat > "$fakebin/curl" <<FAKE
 #!/usr/bin/env bash
@@ -966,7 +1001,114 @@ test_health_checks_same_origin_api_and_websocket_paths() {
     fail "dev health omitted same-origin API proxy"
   grep -Fq 'python3 - 127.0.0.1 5174 /ws/metrics' "$log_file" ||
     fail "dev health omitted same-origin WebSocket upgrade"
+  grep -Fq 'systemctl is-active --quiet gpu-monitor-backend@dev.service' "$log_file" ||
+    fail "dev health did not require its backend systemd unit to be active"
+  grep -Fq 'systemctl is-active --quiet gpu-monitor-frontend@dev.service' "$log_file" ||
+    fail "dev health did not require its frontend systemd unit to be active"
+  grep -Fq 'ss -H -ltn sport = :8101' "$log_file" ||
+    fail "dev health did not verify the backend listener address"
+  grep -Fq 'ss -H -ltn sport = :5174' "$log_file" ||
+    fail "dev health did not verify the frontend listener address"
   log "health validates the browser-facing API and WebSocket proxy paths"
+}
+
+test_health_rejects_legacy_process_responses_when_managed_units_are_inactive() {
+  local tmp fakebin log_file
+  tmp=$(mktemp_dir gpu-release-health-unit-ownership)
+  trap 'rm -rf "$tmp"' RETURN
+  fakebin="$tmp/fakebin"
+  log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass inactive-health
+
+  if env -i \
+    PATH="/usr/bin:/bin" \
+    GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    GPU_MONITOR_HEALTH_RETRIES=1 \
+    GPU_MONITOR_HEALTH_SLEEP_SECONDS=1 \
+    "$HEALTH_SCRIPT" --test-mode live > "$tmp/health.out" 2> "$tmp/health.err"; then
+    fail "health accepted legacy endpoint responses while managed units were inactive"
+  fi
+  grep -Fq 'gpu-monitor-backend@live.service' "$tmp/health.err" ||
+    fail "inactive managed-unit failure did not identify the affected unit"
+  [[ "$(<"$fakebin/health-count")" == 0 ]] ||
+    fail "health probed legacy endpoints before proving managed units were active"
+  log "health rejects legacy-process endpoint responses unless managed units are active"
+}
+
+test_health_rejects_invalid_or_restarted_managed_main_pid() {
+  local mode tmp fakebin log_file
+  for mode in pid-zero pid-change; do
+    tmp=$(mktemp_dir "gpu-release-health-$mode")
+    fakebin="$tmp/fakebin"
+    log_file="$tmp/commands.log"
+    install_fake_server_commands "$fakebin" "$log_file" pass "$mode"
+
+    if env -i \
+      PATH="/usr/bin:/bin" \
+      GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+      GPU_MONITOR_HEALTH_RETRIES=1 \
+      GPU_MONITOR_HEALTH_SLEEP_SECONDS=1 \
+      "$HEALTH_SCRIPT" --test-mode live > "$tmp/health.out" 2> "$tmp/health.err"; then
+      fail "health accepted managed runtime mode $mode"
+    fi
+    if [[ "$mode" == pid-zero ]]; then
+      grep -Fq 'has no valid main PID' "$tmp/health.err" ||
+        fail "zero MainPID failure was not explicit"
+      [[ "$(<"$fakebin/health-count")" == 0 ]] ||
+        fail "health probed endpoints after a zero MainPID"
+    else
+      grep -Fq 'restarted during health verification' "$tmp/health.err" ||
+        fail "MainPID change failure was not explicit"
+      [[ "$(<"$fakebin/health-count")" -gt 0 ]] ||
+        fail "PID-change fixture did not exercise endpoint probes"
+    fi
+    rm -rf "$tmp"
+  done
+  log "health rejects invalid and changing managed MainPIDs"
+}
+
+test_health_rejects_loopback_only_live_public_listeners() {
+  local tmp fakebin log_file
+  tmp=$(mktemp_dir gpu-release-health-live-binding)
+  trap 'rm -rf "$tmp"' RETURN
+  fakebin="$tmp/fakebin"
+  log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass loopback-live
+
+  if env -i \
+    PATH="/usr/bin:/bin" \
+    GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    GPU_MONITOR_HEALTH_RETRIES=1 \
+    GPU_MONITOR_HEALTH_SLEEP_SECONDS=1 \
+    "$HEALTH_SCRIPT" --test-mode live > "$tmp/health.out" 2> "$tmp/health.err"; then
+    fail "health accepted loopback-only Live public listeners"
+  fi
+  grep -Fq 'live frontend listener is not bound to 0.0.0.0:5173' "$tmp/health.err" ||
+    fail "loopback-only Live listener failure was not explicit"
+  [[ "$(<"$fakebin/health-count")" == 0 ]] ||
+    fail "health probed endpoints before validating Live listener bindings"
+  log "health rejects loopback-only Live frontend and bridge bindings"
+}
+
+test_health_retries_listener_bindings_during_managed_runtime_startup() {
+  local tmp fakebin log_file backend_checks
+  tmp=$(mktemp_dir gpu-release-health-listener-startup)
+  trap 'rm -rf "$tmp"' RETURN
+  fakebin="$tmp/fakebin"
+  log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass listener-delayed
+
+  env -i \
+    PATH="/usr/bin:/bin" \
+    GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    GPU_MONITOR_HEALTH_RETRIES=2 \
+    GPU_MONITOR_HEALTH_SLEEP_SECONDS=1 \
+    "$HEALTH_SCRIPT" --test-mode dev
+
+  backend_checks=$(grep -Fc 'ss -H -ltn sport = :8101' "$log_file")
+  [[ "$backend_checks" == 2 ]] ||
+    fail "health did not retry a listener that appeared during managed runtime startup"
+  log "health tolerates bounded listener startup delay without accepting the wrong binding"
 }
 
 test_systemd_units_match_real_runtime_entrypoints() {
@@ -989,16 +1131,24 @@ assert "start" not in data["scripts"]
 PY
   grep -Fq -- '-m uvicorn backend.main:app --host 127.0.0.1 --port ${GPU_MONITOR_BACKEND_PORT}' "$backend_unit" ||
     fail "backend unit does not run the real FastAPI module through uvicorn with configured port"
-  grep -Fq -- '-m uvicorn backend.slack_bridge:app --host 127.0.0.1 --port ${GPU_MONITOR_BRIDGE_PORT}' "$bridge_unit" ||
-    fail "bridge unit does not run the real FastAPI bridge module through uvicorn with configured port"
+  grep -Fq -- '-m uvicorn backend.slack_bridge:app --host ${GPU_MONITOR_BRIDGE_HOST} --port ${GPU_MONITOR_BRIDGE_PORT}' "$bridge_unit" ||
+    fail "bridge unit does not preserve the environment-specific bridge bind host"
   grep -Fq 'ExecStart=/opt/gpu-monitor/node/bin/node /srv/gpu-monitor/%i/current/frontend/server.mjs' "$frontend_unit" ||
     fail "frontend unit does not run the same-origin runtime server with the managed Node runtime"
   grep -Fq '"frontend/server.mjs"' "$ACTIVATE_SCRIPT" ||
     fail "activation does not require the committed same-origin runtime server"
   ! grep -Fq '/usr/bin/node' "$frontend_unit" ||
     fail "frontend unit still depends on the host distribution Node runtime"
-  grep -Fq 'Environment=HOST=127.0.0.1' "$frontend_unit" ||
-    fail "frontend unit does not bind adapter-node to loopback"
+  ! grep -Fq 'Environment=HOST=' "$frontend_unit" ||
+    fail "frontend unit overrides the environment-specific HOST binding"
+  grep -Fq 'HOST=127.0.0.1' "$INSTALLER_SCRIPT" ||
+    fail "installer does not keep the development frontend on loopback"
+  grep -Fq 'HOST=0.0.0.0' "$INSTALLER_SCRIPT" ||
+    fail "installer does not preserve the existing publicly reachable Live frontend binding"
+  grep -Fq 'GPU_MONITOR_BRIDGE_HOST=127.0.0.1' "$INSTALLER_SCRIPT" ||
+    fail "installer does not keep the development bridge on loopback"
+  grep -Fq 'GPU_MONITOR_BRIDGE_HOST=0.0.0.0' "$INSTALLER_SCRIPT" ||
+    fail "installer does not preserve the existing publicly reachable Live bridge binding"
   log "systemd units match the real backend modules and built Svelte adapter-node runtime"
 }
 
@@ -1867,6 +2017,9 @@ GPU_MONITOR_BACKEND_PORT=8101
 UNRELATED_PORT=1234
 PORT=5174
 # another comment
+GPU_MONITOR_BRIDGE_PORT=8100
+GPU_MONITOR_BRIDGE_HOST=127.0.0.1
+HOST=127.0.0.1
 GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/dev
 ENV
   cmp "$expected" "$dev_env" || fail "reserved port rewrite changed unrelated bytes or retained duplicates"
@@ -1892,11 +2045,15 @@ LIVE_SECRET=preserve-this
 GPU_MONITOR_BRIDGE_PORT=8000
 GPU_MONITOR_BACKEND_PORT=8001
 PORT=5173
+GPU_MONITOR_BRIDGE_HOST=0.0.0.0
+HOST=0.0.0.0
 GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live
 ENV
   cmp "$expected" "$live_env" || fail "live reserved port rewrite changed unrelated bytes or retained duplicates"
   [[ "$(grep -c '^GPU_MONITOR_BACKEND_PORT=' "$live_env")" == 1 ]] || fail "live backend port was not deduplicated"
   [[ "$(grep -c '^GPU_MONITOR_BRIDGE_PORT=' "$live_env")" == 1 ]] || fail "live bridge port was not deduplicated"
+  [[ "$(grep -c '^GPU_MONITOR_BRIDGE_HOST=' "$live_env")" == 1 ]] || fail "live bridge host was not deduplicated"
+  [[ "$(grep -c '^HOST=' "$live_env")" == 1 ]] || fail "live frontend host was not deduplicated"
   [[ "$(grep -c '^PORT=' "$live_env")" == 1 ]] || fail "live frontend port was not deduplicated"
 
   grep -Fxq "restrict,command=\"/usr/local/libexec/gpu-monitor-deploy-command dev\" ssh-ed25519 $dev_blob" \
@@ -2134,6 +2291,10 @@ run_test test_activation_dev_live_boundaries_pointers_units_and_rollback
 run_test test_first_activation_failure_restores_absent_pointer_state
 run_test test_health_test_overrides_are_positive_and_bounded
 run_test test_health_checks_same_origin_api_and_websocket_paths
+run_test test_health_rejects_legacy_process_responses_when_managed_units_are_inactive
+run_test test_health_rejects_invalid_or_restarted_managed_main_pid
+run_test test_health_rejects_loopback_only_live_public_listeners
+run_test test_health_retries_listener_bindings_during_managed_runtime_startup
 run_test test_systemd_units_match_real_runtime_entrypoints
 run_test test_state_appends_use_crash_durable_writer
 run_test test_directory_mutations_are_fsynced

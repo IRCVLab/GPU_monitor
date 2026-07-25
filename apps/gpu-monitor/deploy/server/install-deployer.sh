@@ -475,9 +475,13 @@ install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-dev" "$prefix/etc/sudo
 install_file 0440 "$script_dir/sudoers/gpu-monitor-deploy-live" "$prefix/etc/sudoers.d/gpu-monitor-deploy-live"
 
 rewrite_reserved_env "$prefix/etc/gpu-monitor/dev.env" \
-  GPU_MONITOR_BACKEND_PORT=8101 PORT=5174 GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/dev
+  GPU_MONITOR_BACKEND_PORT=8101 GPU_MONITOR_BRIDGE_PORT=8100 \
+  GPU_MONITOR_BRIDGE_HOST=127.0.0.1 HOST=127.0.0.1 PORT=5174 \
+  GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/dev
 rewrite_reserved_env "$prefix/etc/gpu-monitor/live.env" \
-  GPU_MONITOR_BACKEND_PORT=8001 GPU_MONITOR_BRIDGE_PORT=8000 PORT=5173 GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live
+  GPU_MONITOR_BACKEND_PORT=8001 GPU_MONITOR_BRIDGE_PORT=8000 \
+  GPU_MONITOR_BRIDGE_HOST=0.0.0.0 HOST=0.0.0.0 PORT=5173 \
+  GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live
 if [[ "$dry_run" == false ]]; then
   chown root:gpu-deploy-dev "$prefix/etc/gpu-monitor/dev.env"
   chown root:gpu-deploy-live "$prefix/etc/gpu-monitor/live.env"

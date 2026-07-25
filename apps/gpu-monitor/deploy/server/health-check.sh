@@ -17,6 +17,8 @@ case "$#:${1:-}" in
     test_mode=true
     env_name=$2
     command_path=${GPU_MONITOR_TEST_PATH:-$PRODUCTION_PATH}
+    systemctl_command=systemctl
+    ss_command=ss
     retries=${GPU_MONITOR_HEALTH_RETRIES:-5}
     sleep_seconds=${GPU_MONITOR_HEALTH_SLEEP_SECONDS:-2}
     ;;
@@ -24,6 +26,10 @@ case "$#:${1:-}" in
     fail "usage: health-check.sh <dev|live> | --test-mode <dev|live>"
     ;;
 esac
+if [[ "$test_mode" != true ]]; then
+  systemctl_command=/usr/bin/systemctl
+  ss_command=/usr/bin/ss
+fi
 
 unset \
   BASH_ENV ENV CDPATH GLOBIGNORE PREFIX GPU_MONITOR_ALLOWED_ENV \
@@ -130,15 +136,63 @@ PY
   return 1
 }
 
+managed_unit_snapshot() {
+  local unit pid snapshot=
+  local units=(
+    "gpu-monitor-backend@${env_name}.service"
+    "gpu-monitor-frontend@${env_name}.service"
+  )
+  if [[ "$env_name" == live ]]; then
+    units+=("gpu-monitor-bridge@live.service")
+  fi
+  for unit in "${units[@]}"; do
+    "$systemctl_command" is-active --quiet "$unit" ||
+      fail "managed runtime unit is not active: $unit"
+    pid=$("$systemctl_command" show "$unit" --property MainPID --value) ||
+      fail "managed runtime unit PID is unavailable: $unit"
+    [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]] ||
+      fail "managed runtime unit has no valid main PID: $unit"
+    snapshot+="${unit}:${pid}"$'\n'
+  done
+  printf '%s' "$snapshot"
+}
+
+check_listener_binding() {
+  local expected_host=$1 port=$2 label=$3 output attempt=1
+  local state recv_q send_q local_address peer_address remainder
+  while (( attempt <= retries )); do
+    output=$("$ss_command" -H -ltn "sport = :$port") ||
+      fail "$label listener inspection failed"
+    while read -r state recv_q send_q local_address peer_address remainder; do
+      [[ "$local_address" == "$expected_host:$port" ]] && return 0
+    done <<< "$output"
+    if (( attempt < retries )); then
+      sleep "$sleep_seconds"
+    fi
+    attempt=$((attempt + 1))
+  done
+  fail "$label listener is not bound to $expected_host:$port"
+}
+
+before_units=$(managed_unit_snapshot)
 if [[ "$env_name" == dev ]]; then
+  check_listener_binding 127.0.0.1 8101 "dev backend"
+  check_listener_binding 127.0.0.1 5174 "dev frontend"
   check_url http://127.0.0.1:8101/health || fail "dev backend health failed"
   check_url http://127.0.0.1:5174/ || fail "dev frontend health failed"
   check_url http://127.0.0.1:5174/api/health || fail "dev frontend API proxy health failed"
   check_websocket 127.0.0.1 5174 /ws/metrics || fail "dev frontend WebSocket proxy health failed"
 else
+  check_listener_binding 127.0.0.1 8001 "live backend"
+  check_listener_binding 0.0.0.0 5173 "live frontend"
+  check_listener_binding 0.0.0.0 8000 "live bridge"
   check_url http://127.0.0.1:8001/health || fail "live backend health failed"
   check_url http://127.0.0.1:5173/ || fail "live frontend health failed"
   check_url http://127.0.0.1:5173/api/health || fail "live frontend API proxy health failed"
   check_websocket 127.0.0.1 5173 /ws/metrics || fail "live frontend WebSocket proxy health failed"
   check_url http://127.0.0.1:8000/health || fail "live bridge health failed"
 fi
+sleep 1
+after_units=$(managed_unit_snapshot)
+[[ "$after_units" == "$before_units" ]] ||
+  fail "managed runtime units restarted during health verification"

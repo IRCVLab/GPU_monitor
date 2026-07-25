@@ -8,7 +8,6 @@ User=gpu-monitor-%i
 Group=gpu-monitor-%i
 WorkingDirectory=/srv/gpu-monitor/%i/current/frontend
 EnvironmentFile=/etc/gpu-monitor/%i.env
-Environment=HOST=127.0.0.1
 ExecStart=/opt/gpu-monitor/node/bin/node /srv/gpu-monitor/%i/current/frontend/server.mjs
 Restart=on-failure
 ProtectProc=invisible

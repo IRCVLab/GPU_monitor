@@ -96,15 +96,20 @@ On every install, the installer atomically rewrites and deduplicates only the ex
 ```text
 # /etc/gpu-monitor/dev.env
 GPU_MONITOR_BACKEND_PORT=8101
+GPU_MONITOR_BRIDGE_PORT=8100
+GPU_MONITOR_BRIDGE_HOST=127.0.0.1
+HOST=127.0.0.1
 PORT=5174
 
 # /etc/gpu-monitor/live.env
 GPU_MONITOR_BACKEND_PORT=8001
 GPU_MONITOR_BRIDGE_PORT=8000
+GPU_MONITOR_BRIDGE_HOST=0.0.0.0
+HOST=0.0.0.0
 PORT=5173
 ```
 
-Before enabling units, operators must add the application secrets and runtime settings required by the backend (including `SECRET_KEY`, `ADMIN_PASSWORD`, and a server-local writable `DATABASE_URL`) to the selected environment file. The backend and bridge templates run `backend.main:app` and `backend.slack_bridge:app` through uvicorn. The frontend template runs the packaged `frontend/server.mjs` with the managed Node runtime and binds it to loopback. That server delegates normal page and asset requests to the generated adapter-node handler, strips only the exact `/api` prefix while proxying HTTP requests to the environment-local backend, and preserves `/ws` paths while tunnelling WebSocket upgrades. The proxy target defaults to `127.0.0.1:$GPU_MONITOR_BACKEND_PORT` and rejects non-loopback targets. Activation health checks exercise the browser-facing `/api/health` and `/ws/metrics` paths through the frontend port in addition to checking each backend directly, so a missing production proxy cannot pass release activation.
+Before enabling units, operators must add the application secrets and runtime settings required by the backend (including `SECRET_KEY`, `ADMIN_PASSWORD`, and a server-local writable `DATABASE_URL`) to the selected environment file. The backend and bridge templates run `backend.main:app` and `backend.slack_bridge:app` through uvicorn. The frontend template runs the packaged `frontend/server.mjs` with the managed Node runtime. Installer-owned environment tokens keep Dev frontend/bridge listeners on loopback while preserving the existing Live listeners on `0.0.0.0:5173` and `0.0.0.0:8000`; the backend remains loopback-only. The frontend server delegates normal page and asset requests to the generated adapter-node handler, strips only the exact `/api` prefix while proxying HTTP requests to the environment-local backend, and preserves `/ws` paths while tunnelling WebSocket upgrades. The proxy target defaults to `127.0.0.1:$GPU_MONITOR_BACKEND_PORT` and rejects non-loopback targets. Activation health checks require the expected systemd units, exact listener addresses, and stable main PIDs before and after exercising the browser-facing `/api/health` and `/ws/metrics` paths, so responses from unmanaged legacy processes or loopback-only Live regressions cannot pass release activation.
 
 The automatic outbound puller uses these activation forms locally as `gpu-deploy-live`; this is not an inbound GitHub SSH transport:
 
