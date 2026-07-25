@@ -24,17 +24,15 @@ RFC3339_RE = re.compile(
 class Authorization:
     authorized: bool
     sha: str
-    pr_number: int | None
     reason: str
-    reviewer: str | None
 
 
 class MalformedInput(ValueError):
     pass
 
 
-def denied(reason: str, sha: str = "", pr_number: int | None = None, reviewer: str | None = None) -> Authorization:
-    return Authorization(False, sha, pr_number, reason, reviewer)
+def denied(reason: str, sha: str = "") -> Authorization:
+    return Authorization(False, sha, reason)
 
 
 def nested(mapping: dict[str, object], *keys: str) -> object:
@@ -83,65 +81,6 @@ def parse_github_timestamp(value: object, field_name: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def normalize_login(value: object) -> str | None:
-    if isinstance(value, str) and value:
-        return value.casefold()
-    return None
-
-
-def display_login(value: object) -> str | None:
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def has_valid_merge_evidence(pull_request: dict[str, object]) -> bool:
-    if "merged_at" in pull_request:
-        merged_at = pull_request.get("merged_at")
-        if merged_at is not None:
-            parse_github_timestamp(merged_at, "merged_at")
-            return True
-    merged = pull_request.get("merged")
-    if merged is True:
-        return True
-    if "merged" in pull_request and merged not in (None, False):
-        raise MalformedInput("merged must be boolean true when used as merge evidence")
-    return False
-
-
-def is_merged_main_pr(pull_request: dict[str, object]) -> bool:
-    return string_field(pull_request, "base", "ref") == "main" and has_valid_merge_evidence(pull_request)
-
-
-def review_order(review: dict[str, object]) -> tuple[datetime, int]:
-    submitted_at = string_field(review, "submitted_at") or string_field(review, "submittedAt")
-    review_id = int_field(review, "id")
-    if review_id is None:
-        raise MalformedInput("review id must be numeric")
-    return parse_github_timestamp(submitted_at, "submitted_at"), review_id
-
-
-def validated_review_identity(review: dict[str, object]) -> tuple[str, str]:
-    login = normalize_login(nested(review, "user", "login")) or normalize_login(review.get("author"))
-    state = string_field(review, "state")
-    if login is None:
-        raise MalformedInput("review login must be non-empty")
-    if state is None:
-        raise MalformedInput("review state must be non-empty")
-    review_order(review)
-    return login, state
-
-
-def latest_effective_reviews(reviews: list[dict[str, object]]) -> dict[str, dict[str, object]]:
-    latest: dict[str, dict[str, object]] = {}
-    for review in reviews:
-        login, _state = validated_review_identity(review)
-        previous = latest.get(login)
-        if previous is None or review_order(review) >= review_order(previous):
-            latest[login] = review
-    return latest
-
-
 def matching_required_checks(check_runs: list[dict[str, object]], *, sha: str, required_check: str) -> list[dict[str, object]]:
     return [
         check_run
@@ -179,10 +118,9 @@ def required_check_is_successful(check_runs: list[dict[str, object]], *, sha: st
 
 def authorize_release(
     workflow_run: dict[str, object],
-    pull_requests: list[dict[str, object]],
-    reviews: list[dict[str, object]],
     check_runs: list[dict[str, object]],
     *,
+    current_main_sha: str,
     repository: str,
     required_check: str = "ci/required",
 ) -> Authorization:
@@ -190,53 +128,29 @@ def authorize_release(
         validate_repository(repository)
         if not isinstance(workflow_run, dict):
             return denied("malformed_input")
-        if not isinstance(pull_requests, list) or not isinstance(reviews, list) or not isinstance(check_runs, list):
-            return denied("malformed_input")
-        if not all(isinstance(item, dict) for item in pull_requests + reviews + check_runs):
+        if not isinstance(check_runs, list) or not all(isinstance(item, dict) for item in check_runs):
             return denied("malformed_input")
 
         sha = string_field(workflow_run, "head_sha") or ""
         validate_sha(sha)
+        if string_field(workflow_run, "name") != "ci":
+            return denied("workflow_name_mismatch", sha)
         if string_field(workflow_run, "event") != "push":
             return denied("workflow_event_not_push", sha)
         if string_field(workflow_run, "head_branch") != "main":
             return denied("workflow_branch_not_main", sha)
-        if string_field(workflow_run, "conclusion") != "success":
-            return denied("workflow_conclusion_not_success", sha)
         if string_field(workflow_run, "status") != "completed":
             return denied("workflow_status_not_completed", sha)
+        if string_field(workflow_run, "conclusion") != "success":
+            return denied("workflow_conclusion_not_success", sha)
         if string_field(workflow_run, "head_repository", "full_name") != repository:
             return denied("workflow_repository_mismatch", sha)
-
-        merged_main_prs = [pull_request for pull_request in pull_requests if is_merged_main_pr(pull_request)]
-        if not merged_main_prs:
-            return denied("missing_merged_main_pr", sha)
-        if len(merged_main_prs) != 1:
-            return denied("ambiguous_merged_main_pr", sha)
-
-        pull_request = merged_main_prs[0]
-        pr_number = int_field(pull_request, "number")
-        if pr_number is None:
-            return denied("malformed_input", sha)
-        author = normalize_login(nested(pull_request, "user", "login"))
-        if author is None:
-            return denied("malformed_input", sha, pr_number)
-
-        reviewer: str | None = None
-        effective_reviews = latest_effective_reviews(reviews)
-        for login in sorted(effective_reviews):
-            review = effective_reviews[login]
-            state = (string_field(review, "state") or "").upper()
-            if state == "APPROVED" and login != author:
-                reviewer = display_login(nested(review, "user", "login")) or display_login(review.get("author"))
-                break
-        if reviewer is None:
-            return denied("missing_non_author_approval", sha, pr_number)
-
+        validate_sha(current_main_sha)
+        if sha != current_main_sha:
+            return denied("workflow_sha_not_current_main", sha)
         if not required_check_is_successful(check_runs, sha=sha, required_check=required_check):
-            return denied("required_check_not_successful", sha, pr_number, reviewer)
-
-        return Authorization(True, sha, pr_number, "authorized", reviewer)
+            return denied("required_check_not_successful", sha)
+        return Authorization(True, sha, "authorized")
     except MalformedInput:
         return denied("malformed_input")
     except Exception:
@@ -254,15 +168,6 @@ def list_payload(value: Any, key: str) -> list[dict[str, object]]:
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
         raise ValueError(f"{key} payload must be a list of objects")
     return value
-
-
-def flatten_list_pages(value: Any, key: str) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        raise ValueError(f"paginated {key} payload must be a list of pages")
-    flattened: list[dict[str, object]] = []
-    for page in value:
-        flattened.extend(list_payload(page, key))
-    return flattened
 
 
 def flatten_object_pages(value: Any, key: str) -> list[dict[str, object]]:
@@ -296,30 +201,48 @@ def gh_api_paginated(path: str) -> Any:
     return json.loads(result.stdout)
 
 
-def fetch_live_inputs(repository: str, workflow_run: dict[str, object]) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+def gh_api_object(path: str) -> dict[str, object]:
+    result = subprocess.run(
+        ["gh", "api", "-H", "Accept: application/vnd.github+json", path],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gh api {path} failed: {result.stderr.strip()}")
+    payload = json.loads(result.stdout)
+    if not isinstance(payload, dict):
+        raise ValueError(f"gh api {path} payload must be an object")
+    return payload
+
+
+def fetch_live_evidence(
+    repository: str,
+    workflow_run: dict[str, object],
+) -> tuple[list[dict[str, object]], str]:
     validate_repository(repository)
     sha = string_field(workflow_run, "head_sha") if isinstance(workflow_run, dict) else None
     if sha is None:
         raise ValueError("workflow run is missing head_sha")
     validate_sha(sha)
-    pulls = flatten_list_pages(gh_api_paginated(f"/repos/{repository}/commits/{sha}/pulls"), "pulls")
-    checks = flatten_object_pages(gh_api_paginated(f"/repos/{repository}/commits/{sha}/check-runs"), "check_runs")
-    merged_main_prs = [pull_request for pull_request in pulls if is_merged_main_pr(pull_request)]
-    reviews: list[dict[str, object]] = []
-    if len(merged_main_prs) == 1:
-        pr_number = int_field(merged_main_prs[0], "number")
-        if pr_number is not None:
-            reviews = flatten_list_pages(gh_api_paginated(f"/repos/{repository}/pulls/{pr_number}/reviews"), "reviews")
-    return pulls, reviews, checks
+    checks = flatten_object_pages(
+        gh_api_paginated(f"/repos/{repository}/commits/{sha}/check-runs"),
+        "check_runs",
+    )
+    main_ref = gh_api_object(f"/repos/{repository}/git/ref/heads/main")
+    current_main_sha = string_field(main_ref, "object", "sha")
+    if current_main_sha is None:
+        raise ValueError("main ref is missing object.sha")
+    validate_sha(current_main_sha)
+    return checks, current_main_sha
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--workflow-run-file", required=True)
-    parser.add_argument("--pulls-file")
-    parser.add_argument("--reviews-file")
     parser.add_argument("--checks-file")
+    parser.add_argument("--current-main-sha")
     parser.add_argument("--required-check", default="ci/required")
     parser.add_argument("--live", action="store_true")
     return parser.parse_args(argv)
@@ -330,18 +253,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         workflow_run = workflow_payload(read_json_file(args.workflow_run_file))
         if args.live:
-            pull_requests, reviews, check_runs = fetch_live_inputs(args.repository, workflow_run)
+            check_runs, current_main_sha = fetch_live_evidence(args.repository, workflow_run)
         else:
-            if args.pulls_file is None or args.reviews_file is None or args.checks_file is None:
-                raise ValueError("--pulls-file, --reviews-file, and --checks-file are required without --live")
-            pull_requests = list_payload(read_json_file(args.pulls_file), "pulls")
-            reviews = list_payload(read_json_file(args.reviews_file), "reviews")
+            if args.checks_file is None or args.current_main_sha is None:
+                raise ValueError("--checks-file and --current-main-sha are required without --live")
             check_runs = list_payload(read_json_file(args.checks_file), "check_runs")
+            current_main_sha = args.current_main_sha
         authorization = authorize_release(
             workflow_run,
-            pull_requests,
-            reviews,
             check_runs,
+            current_main_sha=current_main_sha,
             repository=args.repository,
             required_check=args.required_check,
         )
