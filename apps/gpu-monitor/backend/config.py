@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # Development-safe switches. They default to false so production behavior is unchanged.
     monitoring_disable_collectors: bool = False
     monitoring_disable_slack: bool = False
+    monitoring_expected_server_count: int = 0
+    monitoring_database_backup_dir: str = ""
+    monitoring_database_backup_keep: int = 5
 
     @field_validator("secret_key")
     @classmethod
@@ -51,6 +54,32 @@ class Settings(BaseSettings):
                 "ADMIN_PASSWORD must be set to a non-trivial password in .env"
             )
         return v
+
+    @field_validator(
+        "collect_interval",
+        "archive_interval",
+        "history_days",
+        "monitoring_expected_server_count",
+        "monitoring_database_backup_keep",
+    )
+    @classmethod
+    def integer_fields_must_be_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("must be non-negative")
+        return v
+
+    @field_validator("monitoring_database_backup_dir")
+    @classmethod
+    def normalize_backup_dir(cls, v: str) -> str:
+        return v.strip()
+
+    @model_validator(mode="after")
+    def validate_backup_retention(self) -> "Settings":
+        if self.monitoring_database_backup_dir and self.monitoring_database_backup_keep < 1:
+            raise ValueError(
+                "MONITORING_DATABASE_BACKUP_KEEP must be at least 1 when MONITORING_DATABASE_BACKUP_DIR is configured"
+            )
+        return self
 
     class Config:
         env_file = str(_ENV_FILE)

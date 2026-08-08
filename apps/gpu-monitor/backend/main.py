@@ -11,11 +11,13 @@ from sqlalchemy import delete
 try:
     from .config import get_settings
     from .database import AsyncSessionLocal, init_db
+    from .live_database import prepare_live_database
     from .models import EventLog
     from .note_expiry import delete_expired_notes
 except ImportError:  # pragma: no cover - direct execution fallback
     from config import get_settings
     from database import AsyncSessionLocal, init_db
+    from live_database import prepare_live_database
     from models import EventLog
     from note_expiry import delete_expired_notes
 
@@ -65,11 +67,25 @@ async def _note_cleanup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    if settings.monitoring_expected_server_count > 0:
+        logger.info("Starting up — preflighting live database before schema initialization")
+        snapshot = await asyncio.to_thread(
+            prepare_live_database,
+            settings.database_url,
+            settings.monitoring_expected_server_count,
+            settings.monitoring_database_backup_dir or None,
+            settings.monitoring_database_backup_keep,
+        )
+        logger.info(
+            "Live database preflight passed with %d registered server(s)",
+            snapshot.server_count,
+        )
+
     logger.info("Starting up — initialising database")
     await init_db()
     slack_socket_service = None
 
-    settings = get_settings()
     if settings.monitoring_disable_collectors:
         logger.info("Collector manager disabled by MONITORING_DISABLE_COLLECTORS")
     else:

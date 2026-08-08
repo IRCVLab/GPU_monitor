@@ -5,17 +5,15 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionm
 
 try:
     from .config import get_settings
+    from .live_database import LiveDatabaseError, sqlite_path_from_url
     from .models import Base
 except ImportError:  # pragma: no cover - direct execution fallback
     from config import get_settings
+    from live_database import LiveDatabaseError, sqlite_path_from_url
     from models import Base
 
 
 settings = get_settings()
-
-# data/ 디렉토리 자동 생성
-db_path = settings.database_url.replace("sqlite+aiosqlite:///", "")
-Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 engine = create_async_engine(
     settings.database_url,
@@ -54,6 +52,13 @@ async def ensure_notes_expiry_schema(conn: AsyncConnection) -> None:
 
 async def init_db():
     """앱 시작 시 테이블 생성 + WAL 모드 활성화."""
+    try:
+        db_path = sqlite_path_from_url(settings.database_url)
+    except LiveDatabaseError:
+        db_path = None
+    if db_path is not None:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
     async with engine.begin() as conn:
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA synchronous=NORMAL"))
