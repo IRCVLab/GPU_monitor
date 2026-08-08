@@ -178,12 +178,24 @@ function sendHandlerFailure(res) {
 	res.end('Internal Server Error');
 }
 
+function sendNotFound(res) {
+	res.writeHead(404, {
+		'cache-control': 'no-store',
+		'content-type': 'text/plain; charset=utf-8'
+	});
+	res.end('Not found');
+}
+
 export function createMonitoringServer({ handler, backendTarget }) {
 	if (typeof handler !== 'function') {
 		throw new TypeError('handler must be a function');
 	}
 	const target = parseBackendTarget(backendTarget);
 	const server = http.createServer((req, res) => {
+		if (matchesPrefix(req.url, '/debug')) {
+			sendNotFound(res);
+			return;
+		}
 		if (matchesPrefix(req.url, '/api')) {
 			proxyHttp(req, res, target);
 			return;

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
+	import { browser, dev } from '$app/environment';
 	import { tick, untrack } from 'svelte';
 	import { cubicOut } from 'svelte/easing';
 	import { writable, derived, get } from 'svelte/store';
@@ -62,7 +62,6 @@
 	type Tab = 'internal' | 'all' | 'external';
 	const TAB_COOKIE = 'activeTab';
 	const tabOrder: readonly Tab[] = ['internal', 'external', 'all'];
-	const devMode = import.meta.env.DEV;
 	const devScenarioLabels: Record<Exclude<DevScenario, 'normal'>, string> = {
 		stale: '갱신 지연',
 		io: 'I/O 병목',
@@ -897,7 +896,7 @@
 
 	const displayServers = derived(
 		[currentServers, activeDevScenario],
-		([$servers, $scenario]) => applyDevScenario($servers, $scenario, Date.now())
+		([$servers, $scenario]) => dev ? applyDevScenario($servers, $scenario, Date.now()) : $servers
 	);
 
 	const globalOrderedIds = derived([allServers, serverOrder], ([$servers, $order]) =>
@@ -1299,7 +1298,7 @@
 					</div>
 					<div class="relative ops-admin-control" bind:this={actionsMenuEl}>
 						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
-						{#if actionsMenuOpen}<div class="ops-overflow-menu"><button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button><a class="ops-menu-link" href="/logs">이벤트 로그</a><a class="ops-menu-link" href="/debug">개발 진단</a><button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
+						{#if actionsMenuOpen}<div class="ops-overflow-menu"><button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button><a class="ops-menu-link" href="/logs">이벤트 로그</a>{#if dev}<a class="ops-menu-link" href="/debug">개발 진단</a>{/if}<button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
 					</div>
 					<button bind:this={themeModeButtonElement} class="ops-mode-action" onclick={() => void runThemeModeReveal(themeModeButtonElement)} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'} aria-busy={themeRevealLocked} aria-keyshortcuts="C" data-shortcut-tooltip="C 명암">
 						<span class="ops-mode-icon-stack" aria-hidden="true">
@@ -1319,7 +1318,7 @@
 	</div>
 
 	<main class={pageMainClass}>
-		{#if devMode && $activeDevScenario !== 'normal'}
+		{#if dev && $activeDevScenario !== 'normal'}
 			<aside class="monitor-dev-simulation" role="status" aria-live="polite">
 				<div class="monitor-dev-simulation__copy">
 					<strong>SIMULATION · {devScenarioLabels[$activeDevScenario]}</strong>
