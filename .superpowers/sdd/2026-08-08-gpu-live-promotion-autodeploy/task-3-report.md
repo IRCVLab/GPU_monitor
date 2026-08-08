@@ -168,4 +168,4 @@ Result: `Ran 77 tests ... OK`
 
 ### Commit evidence
 
-- Round 1 coverage fix commit: pending commit hash to be appended after `git commit`
+- Round 1 coverage fix commit: `b525b89` (`test: cover gpu live startup lifespan ordering`)
