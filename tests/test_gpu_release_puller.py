@@ -141,7 +141,85 @@ class GpuReleasePullerTest(unittest.TestCase):
         self.assertGreaterEqual(github.calls.count("/repos/IRCVLab/GPU_monitor/git/ref/heads/main"), 2)
         self.assertEqual(deployed_state, SHA1)
 
-    def test_uploads_inactive_artifact_then_aborts_if_main_advances_before_activation(self):
+    def test_matching_live_digest_records_new_sha_without_upload_or_activation(self):
+        puller = load_puller()
+        events = []
+        live_digest = hashlib.sha256(b"artifact").hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self.config(tmp)
+            cfg.state_dir.mkdir(parents=True)
+            (cfg.state_dir / "current-live-sha").write_text(SHA2 + "\n", encoding="utf-8")
+            (cfg.state_dir / "failed-release.json").write_text(
+                json.dumps({"failures": 2, "retry_after": 1.0, "sha": SHA1}) + "\n",
+                encoding="utf-8",
+            )
+            github = FakeGitHub(SHA1)
+
+            def run_command(argv, **kwargs):
+                rendered = " ".join(argv)
+                if "activate-release.sh status live" in rendered:
+                    events.append("status")
+                    return CompletedProcess(
+                        argv,
+                        0,
+                        json.dumps({
+                            "current": f"releases/{SHA2}",
+                            "current_sha256": live_digest,
+                            "environment": "live",
+                            "previous": "",
+                        }) + "\n",
+                        "",
+                    )
+                if argv[0] == "python3" and str(cfg.authorizer) in argv:
+                    events.append("authorize")
+                    return CompletedProcess(
+                        argv,
+                        0,
+                        json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}) + "\n",
+                        "",
+                    )
+                if "git clone" in rendered:
+                    events.append("checkout")
+                if any(str(part).endswith("build-release.sh") for part in argv):
+                    events.append("build")
+                    outdir = Path(argv[argv.index("--output-dir") + 1])
+                    outdir.mkdir(parents=True, exist_ok=True)
+                    artifact = outdir / f"gpu-monitor-{SHA1}.tar.gz"
+                    artifact.write_bytes(b"artifact")
+                    (outdir / f"gpu-monitor-{SHA1}.sha256").write_text(
+                        f"{live_digest}  {artifact.name}\n",
+                        encoding="utf-8",
+                    )
+                    (outdir / "release-manifest.json").write_text(
+                        json.dumps({
+                            "application": "gpu-monitor",
+                            "artifact": artifact.name,
+                            "git_sha": SHA1,
+                            "schema": 1,
+                            "sha256": live_digest,
+                        }),
+                        encoding="utf-8",
+                    )
+                if "activate-release.sh upload live" in rendered:
+                    self.fail("matching live digest must not upload")
+                if "activate-release.sh activate live" in rendered:
+                    self.fail("matching live digest must not activate")
+                return CompletedProcess(argv, 0, "", "")
+
+            result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
+
+            self.assertEqual(result, "unchanged-artifact")
+            self.assertEqual(
+                (cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip(),
+                SHA1,
+            )
+            self.assertFalse((cfg.state_dir / "failed-release.json").exists())
+            self.assertFalse((cfg.work_dir / "out").exists())
+
+        self.assertEqual(events, ["status", "authorize", "checkout", "build", "authorize", "status"])
+        self.assertGreaterEqual(github.calls.count("/repos/IRCVLab/GPU_monitor/git/ref/heads/main"), 3)
+
+    def test_aborts_without_upload_if_main_advances_before_final_authorization(self):
         puller = load_puller()
         github = FakeGitHub(SHA1)
         main_calls = 0
@@ -178,8 +256,8 @@ class GpuReleasePullerTest(unittest.TestCase):
             with self.assertRaises(puller.PullError):
                 puller.run_once(cfg, get_json=get_json, run_command=run_command)
 
-        self.assertTrue(any("activate-release.sh upload live" in " ".join(c) for c in commands))
-        self.assertTrue(any("activate-release.sh discard live" in " ".join(c) for c in commands))
+        self.assertFalse(any("activate-release.sh upload live" in " ".join(c) for c in commands))
+        self.assertFalse(any("activate-release.sh discard live" in " ".join(c) for c in commands))
         self.assertFalse(any("activate-release.sh activate live" in " ".join(c) for c in commands))
 
     def test_default_command_runner_accepts_binary_upload_input(self):

@@ -302,6 +302,29 @@ PY
   log "release artifact contract is satisfied"
 }
 
+test_documentation_only_commit_keeps_runtime_artifact_digest() {
+  local tmp repo out1 out2 sha1 sha2 digest1 digest2
+  tmp=$(mktemp_dir gpu-release-cross-commit)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  repo="$tmp/repo"; out1="$tmp/out1"; out2="$tmp/out2"
+  make_fixture_repo "$repo"
+  sha1=$(git -C "$repo" rev-parse HEAD)
+
+  run_builder "$repo" "$out1" "$sha1"
+  digest1=$(sha256_file "$out1/gpu-monitor-$sha1.tar.gz" | awk '{print $1}')
+
+  printf 'documentation-only change\n' > "$repo/NO_RUNTIME_CHANGE.md"
+  git -C "$repo" add NO_RUNTIME_CHANGE.md
+  git -C "$repo" commit -q -m 'docs: no runtime change'
+  sha2=$(git -C "$repo" rev-parse HEAD)
+
+  run_builder "$repo" "$out2" "$sha2"
+  digest2=$(sha256_file "$out2/gpu-monitor-$sha2.tar.gz" | awk '{print $1}')
+  [[ "$digest1" == "$digest2" ]] ||
+    fail "documentation-only commit changed runtime artifact digest"
+  log "documentation-only commits keep runtime artifact digest stable"
+}
+
 test_failed_build_leaves_no_partial_outputs_and_works_from_any_cwd() {
   local tmp repo out sha fakebin
   tmp=$(mktemp_dir gpu-release-partial)
@@ -525,6 +548,7 @@ run_test test_rejects_untracked_nonignored_sources_before_build
 run_test test_build_does_not_mutate_checkout_node_modules_or_build
 run_test test_post_temp_output_failure_cleans_tmp_outputs
 run_test test_build_outputs_contract
+run_test test_documentation_only_commit_keeps_runtime_artifact_digest
 run_test test_failed_build_leaves_no_partial_outputs_and_works_from_any_cwd
 
 SERVER_DIR="$SOURCE_ROOT/apps/gpu-monitor/deploy/server"
@@ -889,6 +913,13 @@ test_activation_dev_live_boundaries_pointers_units_and_rollback() {
   : > "$log_file"
   run_forced_command "$prefix" "status dev" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" dev >/"$tmp/status-dev.out" 2>/"$tmp/status-dev.err"
   grep -q "flock .*dev" "$log_file" || fail "status did not use the dev env-specific flock"
+  python3 - "$tmp/status-dev.out" "$sha1" "$digest1" <<'PY'
+import json, sys
+status_path, sha, digest = sys.argv[1:]
+data = json.load(open(status_path, encoding="utf-8"))
+assert data["current"] == f"releases/{sha}", data
+assert data["current_sha256"] == digest, data
+PY
 
   run_forced_command "$prefix" "upload live $sha2 $digest2" "$tmp/a2/gpu-monitor-$sha2.tar.gz" "" live
   run_forced_command "$prefix" "activate live $sha2 $digest2" /dev/null "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" live >/"$tmp/act-live.out" 2>/"$tmp/act-live.err"

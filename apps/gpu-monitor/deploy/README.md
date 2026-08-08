@@ -67,9 +67,10 @@ The current automatic Live path is server-pulled, not GitHub-pushed:
 3. The puller reuses the installed canonical `authorize_gpu_release.py` and requires successful `ci/required` for that exact SHA.
 4. The dedicated non-login `gpu-monitor-builder` user creates a clean exact-SHA checkout and builds the release artifact with managed Node on `PATH`.
 5. The builder environment is scrubbed and must not read `/etc/gpu-monitor/live.env`.
-6. The puller validates the artifact digest and manifest, then invokes local activation as `gpu-deploy-live`.
-7. An authorized SHA that fails checkout/build/upload/activation is recorded in `/var/lib/gpu-monitor/puller/failed-release.json`; retries back off exponentially from 15 minutes to 6 hours, and a new `main` SHA clears the record automatically.
-8. A failed final evidence recheck after upload discards only that exact inactive object under the activation lock, preventing abandoned candidates from exhausting incoming quota.
+6. The puller validates the artifact digest and manifest, rechecks authorization for the exact `main` SHA, then reads `status live`.
+7. If `status live.current_sha256` already equals the newly built artifact digest, the puller records the new `current-live-sha`, clears failed-release state, removes build output, and skips upload/activation so Live is not restarted for an unchanged runtime payload.
+8. Otherwise the puller invokes local activation as `gpu-deploy-live`.
+9. An authorized SHA that fails checkout/build/upload/activation is recorded in `/var/lib/gpu-monitor/puller/failed-release.json`; retries back off exponentially from 15 minutes to 6 hours, and a new `main` SHA clears the record automatically.
 
 Local activation reuses the existing script path rather than an inbound GitHub SSH transport:
 

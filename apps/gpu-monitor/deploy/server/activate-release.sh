@@ -968,10 +968,24 @@ do_rollback() {
 }
 
 do_status() {
-  "$INTERNAL_PYTHON" - "$env_name" "$(current_target)" "$(previous_target)" "$state" <<'PY'
+  "$INTERNAL_PYTHON" - "$env_name" "$(current_target)" "$(previous_target)" "$state" "$releases" <<'PY'
 import json, sys
-print(json.dumps({"environment":sys.argv[1],"current":sys.argv[2],
-                  "previous":sys.argv[3],"state":sys.argv[4]},
+from pathlib import Path
+
+environment, current, previous, state, releases = sys.argv[1:]
+current_sha256 = ""
+if current.startswith("releases/"):
+    release_sha = current.removeprefix("releases/")
+    manifest = Path(releases) / release_sha / "release-manifest.json"
+    try:
+        payload = json.load(open(manifest, encoding="utf-8"))
+    except FileNotFoundError:
+        payload = {}
+    digest = payload.get("sha256")
+    if isinstance(digest, str):
+        current_sha256 = digest
+print(json.dumps({"current":current,"current_sha256":current_sha256,
+                  "environment":environment,"previous":previous,"state":state},
                  sort_keys=True,separators=(",",":")))
 PY
 }

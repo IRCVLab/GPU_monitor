@@ -72,9 +72,8 @@ for path in "${required_tracked[@]}"; do
   [[ -e "$source_root/$path" ]] || fail "required runtime input is absent from committed HEAD tree: $path"
 done
 
-release_now=$((16#${sha:0:12}))
 cat > "$tmpdir/fixed-date.cjs" <<EOF_DATE
-const fixedNow = $release_now;
+const fixedNow = 0;
 Date.now = () => fixedNow;
 EOF_DATE
 

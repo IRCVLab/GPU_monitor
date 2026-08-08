@@ -421,6 +421,13 @@ def live_status(config: Config, run_command=default_run_command) -> dict[str, st
             value.removeprefix("releases/"),
             f"live status {key}",
         )
+    current_sha256 = payload.get("current_sha256", "")
+    if current_sha256 == "":
+        normalized["current_sha256"] = ""
+    else:
+        if not isinstance(current_sha256, str) or DIGEST_RE.fullmatch(current_sha256) is None:
+            raise PullError("malformed live status current_sha256")
+        normalized["current_sha256"] = current_sha256
     return normalized
 
 
@@ -472,13 +479,14 @@ def run_once(
             checkout = clean_checkout(config, sha, run_command)
             outdir = build_release(config, checkout, sha, run_command)
             artifact, digest = validate_artifact(outdir, sha)
+            workflow_run, check_runs, _current = fetch_evidence(config, sha, get_json)
+            authorize(config, sha, workflow_run, check_runs, run_command)
+            if live_status(config, run_command)["current_sha256"] == digest:
+                write_state_sha(config, sha)
+                clear_failed_release(config)
+                shutil.rmtree(config.work_dir / "out", ignore_errors=True)
+                return "unchanged-artifact"
             upload_artifact(config, sha, digest, artifact, run_command)
-            try:
-                workflow_run, check_runs, _current = fetch_evidence(config, sha, get_json)
-                authorize(config, sha, workflow_run, check_runs, run_command)
-            except (PullError, OSError, subprocess.SubprocessError, shutil.Error):
-                discard_artifact(config, sha, digest, run_command)
-                raise
             activate_uploaded(config, sha, digest, run_command)
         except (PullError, OSError, subprocess.SubprocessError, shutil.Error) as error:
             failures = int(failure["failures"]) + 1 if failure is not None else 1
