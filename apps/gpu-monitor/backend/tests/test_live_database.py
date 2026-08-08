@@ -1,6 +1,9 @@
+from contextlib import asynccontextmanager
 import importlib
+import os
 import sqlite3
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
 from time import sleep
 import unittest
@@ -77,6 +80,45 @@ def create_legacy_live_db(path: Path, *, server_names=SERVER_NAMES) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+@asynccontextmanager
+async def import_backend_main_for_env(env: dict[str, str]):
+    module_names = (
+        "backend.main",
+        "backend.database",
+        "backend.config",
+        "backend.live_database",
+    )
+    previous_values = {key: os.environ.get(key) for key in env}
+
+    existing_database_module = sys.modules.get("backend.database")
+    if existing_database_module is not None and hasattr(existing_database_module, "engine"):
+        await existing_database_module.engine.dispose()
+
+    for key, value in env.items():
+        os.environ[key] = value
+
+    for module_name in module_names:
+        sys.modules.pop(module_name, None)
+
+    try:
+        main_module = importlib.import_module("backend.main")
+        live_database_module = importlib.import_module("backend.live_database")
+        yield main_module, live_database_module
+    finally:
+        reloaded_database_module = sys.modules.get("backend.database")
+        if reloaded_database_module is not None and hasattr(reloaded_database_module, "engine"):
+            await reloaded_database_module.engine.dispose()
+
+        for module_name in module_names:
+            sys.modules.pop(module_name, None)
+
+        for key, previous_value in previous_values.items():
+            if previous_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous_value
 
 
 class LiveDatabasePathTests(unittest.TestCase):
@@ -267,6 +309,82 @@ class LiveDatabasePrepareTests(unittest.TestCase):
             self.assertEqual(server_count, 8)
             self.assertNotIn("priority", columns)
             self.assertNotIn("display_name", columns)
+
+
+class LiveDatabaseLifespanTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lifespan_missing_database_fails_before_init_db_creates_file(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "missing.db"
+            backup_dir = root / "backups"
+
+            env = {
+                "SECRET_KEY": "0123456789abcdef0123456789abcdef",
+                "ADMIN_PASSWORD": "safe-admin-password",
+                "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
+                "MONITORING_EXPECTED_SERVER_COUNT": "9",
+                "MONITORING_DATABASE_BACKUP_DIR": str(backup_dir),
+                "MONITORING_DATABASE_BACKUP_KEEP": "1",
+                "MONITORING_DISABLE_COLLECTORS": "true",
+                "MONITORING_DISABLE_SLACK": "true",
+            }
+
+            async with import_backend_main_for_env(env) as (main_module, live_database_module):
+                with self.assertRaisesRegex(live_database_module.LiveDatabaseError, "missing"):
+                    async with main_module.app.router.lifespan_context(main_module.app):
+                        pass
+
+            self.assertFalse(db_path.exists())
+            self.assertFalse(backup_dir.exists())
+
+    async def test_lifespan_legacy_database_backs_up_before_migration_and_preserves_rows(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "gpu-monitor.db"
+            backup_dir = root / "backups"
+            create_legacy_live_db(db_path)
+
+            env = {
+                "SECRET_KEY": "0123456789abcdef0123456789abcdef",
+                "ADMIN_PASSWORD": "safe-admin-password",
+                "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
+                "MONITORING_EXPECTED_SERVER_COUNT": "9",
+                "MONITORING_DATABASE_BACKUP_DIR": str(backup_dir),
+                "MONITORING_DATABASE_BACKUP_KEEP": "1",
+                "MONITORING_DISABLE_COLLECTORS": "true",
+                "MONITORING_DISABLE_SLACK": "true",
+            }
+
+            async with import_backend_main_for_env(env) as (main_module, _):
+                async with main_module.app.router.lifespan_context(main_module.app):
+                    pass
+
+            backups = sorted(backup_dir.glob("gpu-monitor-*.db"))
+            self.assertEqual(len(backups), 1)
+
+            with sqlite3.connect(backups[0]) as backup_conn:
+                backup_columns = {row[1] for row in backup_conn.execute("PRAGMA table_info(notes)").fetchall()}
+                backup_server_count = backup_conn.execute("SELECT COUNT(*) FROM servers").fetchone()[0]
+                backup_note_count = backup_conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+
+            self.assertEqual(backup_server_count, 9)
+            self.assertEqual(backup_note_count, 1)
+            self.assertNotIn("priority", backup_columns)
+            self.assertNotIn("display_name", backup_columns)
+            self.assertNotIn("kind", backup_columns)
+            self.assertNotIn("gpu_indices", backup_columns)
+            self.assertNotIn("expires_at", backup_columns)
+
+            with sqlite3.connect(db_path) as live_conn:
+                live_columns = {row[1] for row in live_conn.execute("PRAGMA table_info(notes)").fetchall()}
+                live_server_count = live_conn.execute("SELECT COUNT(*) FROM servers").fetchone()[0]
+                live_note_count = live_conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+
+            self.assertEqual(live_server_count, 9)
+            self.assertEqual(live_note_count, 1)
+            self.assertTrue(
+                {"display_name", "priority", "kind", "gpu_indices", "expires_at"}.issubset(live_columns)
+            )
 
 
 class LiveDatabaseSettingsTests(unittest.TestCase):

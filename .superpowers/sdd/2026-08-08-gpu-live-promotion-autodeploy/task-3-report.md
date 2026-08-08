@@ -112,3 +112,60 @@ Result: `Ran 75 tests ... OK`
 - Backup creation only runs when `MONITORING_DATABASE_BACKUP_DIR` is configured; operators should set it in production before enabling `MONITORING_EXPECTED_SERVER_COUNT`.
 - Relative SQLite paths still resolve relative to the process working directory; the default repository configuration uses an absolute path, and production should prefer absolute `DATABASE_URL` values.
 - Backend regression output still contains pre-existing `datetime.utcnow()` deprecation warnings in `backend/collectors/gpu.py`; this task did not change that code path.
+
+## Fix Round 1 — Lifespan integration coverage
+
+### Finding addressed
+
+- `[MEDIUM] Tests call prepare_live_database() and ensure_notes_expiry_schema_sync() directly but do not enter backend.main.lifespan(), so preflight-before-init_db ordering is not protected at the actual async startup boundary.`
+
+### Files changed
+
+- `apps/gpu-monitor/backend/tests/test_live_database.py`
+- `.superpowers/sdd/2026-08-08-gpu-live-promotion-autodeploy/task-3-report.md`
+
+### Test-first coverage change
+
+- Added two real lifespan integration tests that reload `backend.main` under a temporary environment and enter `main.app.router.lifespan_context(main.app)` with collectors and Slack disabled:
+  - missing DB with `MONITORING_EXPECTED_SERVER_COUNT=9` fails before `init_db()` creates the file
+  - legacy DB startup publishes a backup before schema migration, then preserves nine server rows and note rows while adding the newer note columns
+
+### RED
+
+Ran the new lifespan tests immediately after adding them:
+
+```bash
+cd apps/gpu-monitor
+SECRET_KEY=baseline-test-key-1234 ADMIN_PASSWORD=baseline-test-password \
+  python3.12 -m unittest backend.tests.test_live_database -v
+```
+
+Result: `Ran 14 tests ... OK`
+
+Interpretation: the production startup boundary was already correct; this finding was a missing integration-coverage gap rather than a runtime defect. No backend behavior change was required beyond adding the real lifespan tests.
+
+### GREEN
+
+Re-ran the same targeted suite after keeping the new tests:
+
+```bash
+cd apps/gpu-monitor
+SECRET_KEY=baseline-test-key-1234 ADMIN_PASSWORD=baseline-test-password \
+  python3.12 -m unittest backend.tests.test_live_database -v
+```
+
+Result: `Ran 14 tests ... OK`
+
+Then re-ran backend regression coverage:
+
+```bash
+cd apps/gpu-monitor
+SECRET_KEY=baseline-test-key-1234 ADMIN_PASSWORD=baseline-test-password \
+  python3.12 -m unittest discover -s backend/tests -v
+```
+
+Result: `Ran 77 tests ... OK`
+
+### Commit evidence
+
+- Round 1 coverage fix commit: pending commit hash to be appended after `git commit`
