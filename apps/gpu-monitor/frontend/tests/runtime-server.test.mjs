@@ -168,6 +168,9 @@ test('non-proxy requests are delegated to the adapter-node handler', async () =>
 	const frontendPort = await listen(frontend);
 
 	try {
+		const baseUrl = `http://127.0.0.1:${frontendPort}`;
+		const debugResponse = await fetch(`${baseUrl}/debug`, { redirect: 'manual' });
+		assert.equal(debugResponse.status, 404);
 		const response = await request(frontendPort, '/dashboard');
 		assert.equal(response.statusCode, 200);
 		assert.equal(response.body, 'adapter:/dashboard');

@@ -345,6 +345,30 @@ class RepositoryLayoutTest(unittest.TestCase):
         disallowed = [path for path in tracked_paths() if is_disallowed_tracked_path(path)]
         self.assertEqual([], disallowed)
 
+    def test_gpu_tree_excludes_development_output_and_obsolete_review_files(self):
+        result = subprocess.run(
+            ["git", "ls-files", "apps/gpu-monitor"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        tracked_gpu_paths = [line for line in result.stdout.splitlines() if line]
+        obsolete_root_files = {
+            "apps/gpu-monitor/BACKEND_REVIEW.md",
+            "apps/gpu-monitor/FRONTEND_REVIEW.md",
+            "apps/gpu-monitor/PLAN.md",
+            "apps/gpu-monitor/PLAN_REVIEW.md",
+            "apps/gpu-monitor/GIT_CONVENTIONS.md",
+        }
+        disallowed = [
+            path
+            for path in tracked_gpu_paths
+            if path.startswith("apps/gpu-monitor/output/") or path in obsolete_root_files
+        ]
+
+        self.assertEqual([], disallowed)
+
     def test_diff_check_accepts_an_explicit_committed_range(self):
         recipe = normalized_make_recipe("diff-check")
         self.assertIn("DIFF_CHECK_BASE", recipe)
