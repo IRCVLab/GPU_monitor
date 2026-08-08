@@ -30,6 +30,7 @@ if [[ "$test_mode" != true ]]; then
   systemctl_command=/usr/bin/systemctl
   ss_command=/usr/bin/ss
 fi
+test_prefix=${PREFIX:-}
 
 unset \
   BASH_ENV ENV CDPATH GLOBIGNORE PREFIX GPU_MONITOR_ALLOWED_ENV \
@@ -68,6 +69,82 @@ check_url() {
     attempt=$((attempt + 1))
   done
   return 1
+}
+
+fetch_url() {
+  local url=$1 attempt=1 output
+  while (( attempt <= retries )); do
+    if output=$(curl -fsS --max-time 2 "$url"); then
+      printf '%s' "$output"
+      return 0
+    fi
+    if (( attempt < retries )); then
+      sleep "$sleep_seconds"
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+load_runtime_env() {
+  local env_file=$1
+  [[ -e "$env_file" ]] || return 0
+  /usr/bin/python3 - "$env_file" <<'PY'
+import shlex
+import sys
+
+wanted = {
+    "MONITORING_EXPECTED_SERVER_COUNT",
+    "GPU_MONITOR_BACKEND_PORT",
+}
+values = {}
+with open(sys.argv[1], "r", encoding="utf-8") as source:
+    for raw_line in source:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if key not in wanted:
+            continue
+        try:
+            parts = shlex.split(raw_value, posix=True)
+        except ValueError:
+            raise SystemExit(f"ERROR: invalid runtime env value for {key}")
+        if len(parts) > 1:
+            raise SystemExit(f"ERROR: invalid runtime env value for {key}")
+        value = parts[0] if parts else ""
+        if any(ch in value for ch in "\r\n"):
+            raise SystemExit(f"ERROR: invalid runtime env value for {key}")
+        values[key] = value
+for key, value in values.items():
+    print(f"{key}={shlex.quote(value)}")
+PY
+}
+
+require_server_floor() {
+  local expected=$1 backend_port=$2 label=$3 response
+  [[ "$expected" =~ ^[0-9]+$ ]] || fail "$label server floor is not a non-negative integer"
+  (( expected == 0 )) && return 0
+  response=$(fetch_url "http://127.0.0.1:${backend_port}/servers") ||
+    fail "$label server inventory fetch failed"
+  SERVER_INVENTORY_RESPONSE=$response /usr/bin/python3 - "$expected" <<'PY' ||
+import os
+import json
+import sys
+
+expected = int(sys.argv[1])
+try:
+    payload = json.loads(os.environ["SERVER_INVENTORY_RESPONSE"])
+except json.JSONDecodeError:
+    raise SystemExit("server inventory is not valid JSON")
+if not isinstance(payload, list):
+    raise SystemExit("server inventory is not a JSON array")
+actual = len(payload)
+if actual < expected:
+    raise SystemExit(f"server inventory has {actual} registered servers, expected at least {expected}")
+PY
+    fail "$label server inventory is below MONITORING_EXPECTED_SERVER_COUNT=$expected"
 }
 
 check_websocket() {
@@ -174,23 +251,54 @@ check_listener_binding() {
   fail "$label listener is not bound to $expected_host:$port"
 }
 
+env_root=/
+if [[ "$test_mode" == true && -n "$test_prefix" ]]; then
+  [[ "$test_prefix" == /* && -d "$test_prefix" ]] ||
+    fail "test PREFIX must be an existing absolute directory"
+  env_root=$test_prefix
+fi
+runtime_env_file="$env_root/etc/gpu-monitor/$env_name.env"
+expected_server_count=0
+backend_port=
+if runtime_env_output=$(load_runtime_env "$runtime_env_file"); then
+  eval "$runtime_env_output"
+else
+  exit 1
+fi
+if [[ -e "$runtime_env_file" ]]; then
+  [[ ${MONITORING_EXPECTED_SERVER_COUNT+x} ]] ||
+    fail "$env_name runtime env is missing MONITORING_EXPECTED_SERVER_COUNT"
+  [[ ${GPU_MONITOR_BACKEND_PORT+x} ]] ||
+    fail "$env_name runtime env is missing GPU_MONITOR_BACKEND_PORT"
+fi
+expected_server_count=${MONITORING_EXPECTED_SERVER_COUNT:-0}
+backend_port=${GPU_MONITOR_BACKEND_PORT:-}
+[[ -z "$backend_port" || "$backend_port" =~ ^[0-9]+$ ]] ||
+  fail "$env_name backend port is not a positive integer"
+[[ -z "$backend_port" || ( "$backend_port" -ge 1 && "$backend_port" -le 65535 ) ]] ||
+  fail "$env_name backend port is outside the TCP port range"
+
 before_units=$(managed_unit_snapshot)
 if [[ "$env_name" == dev ]]; then
-  check_listener_binding 127.0.0.1 8101 "dev backend"
+  backend_port=${backend_port:-8101}
+  check_listener_binding 127.0.0.1 "$backend_port" "dev backend"
   check_listener_binding 127.0.0.1 5174 "dev frontend"
-  check_url http://127.0.0.1:8101/health || fail "dev backend health failed"
+  check_url "http://127.0.0.1:${backend_port}/health" || fail "dev backend health failed"
   check_url http://127.0.0.1:5174/ || fail "dev frontend health failed"
   check_url http://127.0.0.1:5174/api/health || fail "dev frontend API proxy health failed"
   check_websocket 127.0.0.1 5174 /ws/metrics || fail "dev frontend WebSocket proxy health failed"
+  require_server_floor "$expected_server_count" "$backend_port" "dev backend"
 else
-  check_listener_binding 127.0.0.1 8001 "live backend"
+  backend_port=${backend_port:-8001}
+  check_listener_binding 127.0.0.1 "$backend_port" "live backend"
   check_listener_binding 0.0.0.0 5173 "live frontend"
   check_listener_binding 0.0.0.0 8000 "live bridge"
-  check_url http://127.0.0.1:8001/health || fail "live backend health failed"
+  check_url "http://127.0.0.1:${backend_port}/health" || fail "live backend health failed"
   check_url http://127.0.0.1:5173/ || fail "live frontend health failed"
   check_url http://127.0.0.1:5173/api/health || fail "live frontend API proxy health failed"
   check_websocket 127.0.0.1 5173 /ws/metrics || fail "live frontend WebSocket proxy health failed"
   check_url http://127.0.0.1:8000/health || fail "live bridge health failed"
+  require_server_floor "$expected_server_count" "$backend_port" "live backend"
 fi
 sleep 1
 after_units=$(managed_unit_snapshot)

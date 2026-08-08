@@ -566,7 +566,7 @@ make_release_artifact() {
 }
 
 install_fake_server_commands() {
-  local fakebin=$1 log_file=$2 health_mode=${3:-pass} restart_mode=${4:-pass}
+  local fakebin=$1 log_file=$2 health_mode=${3:-pass} restart_mode=${4:-pass} servers_mode=${5:-nine}
   mkdir -p "$fakebin"
   printf '%s\n' "$restart_mode" > "$fakebin/restart-mode"
   printf '0\n' > "$fakebin/restart-count"
@@ -627,6 +627,15 @@ count=\$((\$(cat '$fakebin/health-count') + 1))
 printf '%s\\n' "\$count" > '$fakebin/health-count'
 if [[ '$health_mode' == fail || '$health_mode' == fail-all ]]; then exit 22; fi
 if [[ '$health_mode' == fail-first && "\$count" == 1 ]]; then exit 22; fi
+if [[ "\$*" == *'/servers'* ]]; then
+  case '$servers_mode' in
+    empty) printf '[]\\n' ;;
+    malformed) printf '{"servers":' ;;
+    few) printf '[{},{},{},{},{},{},{},{}]\\n' ;;
+    nine) printf '[{},{},{},{},{},{},{},{},{}]\\n' ;;
+    *) exit 22 ;;
+  esac
+fi
 exit 0
 FAKE
   cat > "$fakebin/python3" <<FAKE
@@ -1010,6 +1019,79 @@ test_health_checks_same_origin_api_and_websocket_paths() {
   grep -Fq 'ss -H -ltn sport = :5174' "$log_file" ||
     fail "dev health did not verify the frontend listener address"
   log "health validates the browser-facing API and WebSocket proxy paths"
+}
+
+write_health_env() {
+  local prefix=$1 environment=$2 expected_count=$3 backend_port frontend_port bridge_port bridge_host host
+  case "$environment" in
+    dev)
+      backend_port=8101
+      frontend_port=5174
+      bridge_port=8100
+      bridge_host=127.0.0.1
+      host=127.0.0.1
+      ;;
+    live)
+      backend_port=8001
+      frontend_port=5173
+      bridge_port=8000
+      bridge_host=0.0.0.0
+      host=0.0.0.0
+      ;;
+    *) fail "unsupported health env fixture: $environment" ;;
+  esac
+  mkdir -p "$prefix/etc/gpu-monitor"
+  cat > "$prefix/etc/gpu-monitor/$environment.env" <<ENV
+MONITORING_EXPECTED_SERVER_COUNT=$expected_count
+GPU_MONITOR_BACKEND_PORT=$backend_port
+GPU_MONITOR_BRIDGE_PORT=$bridge_port
+GPU_MONITOR_BRIDGE_HOST=$bridge_host
+HOST=$host
+PORT=$frontend_port
+ENV
+}
+
+test_health_enforces_configured_server_floor_after_endpoint_health() {
+  local mode tmp fakebin log_file
+  for mode in empty malformed few; do
+    tmp=$(mktemp_dir "gpu-release-health-servers-$mode")
+    fakebin="$tmp/fakebin"
+    log_file="$tmp/commands.log"
+    install_fake_server_commands "$fakebin" "$log_file" pass pass "$mode"
+    write_health_env "$tmp/prefix" live 9
+
+    if env -i \
+      PATH="/usr/bin:/bin" \
+      PREFIX="$tmp/prefix" \
+      GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+      GPU_MONITOR_HEALTH_RETRIES=1 \
+      GPU_MONITOR_HEALTH_SLEEP_SECONDS=1 \
+      "$HEALTH_SCRIPT" --test-mode live > "$tmp/health.out" 2> "$tmp/health.err"; then
+      fail "health accepted /servers response below MONITORING_EXPECTED_SERVER_COUNT=9: $mode"
+    fi
+    grep -Fq 'http://127.0.0.1:8001/health' "$log_file" ||
+      fail "server floor fixture did not first exercise live backend health"
+    grep -Fq 'http://127.0.0.1:8001/servers' "$log_file" ||
+      fail "server floor fixture did not probe the managed backend /servers endpoint"
+    rm -rf "$tmp"
+  done
+
+  tmp=$(mktemp_dir gpu-release-health-servers-nine)
+  fakebin="$tmp/fakebin"
+  log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass pass nine
+  write_health_env "$tmp/prefix" live 9
+  env -i \
+    PATH="/usr/bin:/bin" \
+    PREFIX="$tmp/prefix" \
+    GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    GPU_MONITOR_HEALTH_RETRIES=1 \
+    GPU_MONITOR_HEALTH_SLEEP_SECONDS=1 \
+    "$HEALTH_SCRIPT" --test-mode live > "$tmp/health.out" 2> "$tmp/health.err"
+  grep -Fq 'http://127.0.0.1:8001/servers' "$log_file" ||
+    fail "passing server floor fixture did not probe /servers"
+  rm -rf "$tmp"
+  log "health enforces the configured server floor after endpoint health succeeds"
 }
 
 test_health_rejects_legacy_process_responses_when_managed_units_are_inactive() {
@@ -2001,6 +2083,10 @@ test_installer_runtime_traversal_ports_and_key_material_contract() {
   cat > "$dev_env" <<'ENV'
 # operator comment stays exactly here
 SECRET_TOKEN=alpha=beta
+DATABASE_URL=sqlite:////srv/operator/live.db
+MONITORING_EXPECTED_SERVER_COUNT=9
+MONITORING_DATABASE_BACKUP_DIR=/srv/operator/backups
+MONITORING_DATABASE_BACKUP_KEEP=42
 GPU_MONITOR_BACKEND_PORT=9999
 UNRELATED_PORT=1234
 GPU_MONITOR_BACKEND_PORT=9998
@@ -2013,6 +2099,10 @@ ENV
   cat > "$expected" <<'ENV'
 # operator comment stays exactly here
 SECRET_TOKEN=alpha=beta
+DATABASE_URL=sqlite:////srv/operator/live.db
+MONITORING_EXPECTED_SERVER_COUNT=9
+MONITORING_DATABASE_BACKUP_DIR=/srv/operator/backups
+MONITORING_DATABASE_BACKUP_KEEP=42
 GPU_MONITOR_BACKEND_PORT=8101
 UNRELATED_PORT=1234
 PORT=5174
@@ -2030,6 +2120,10 @@ ENV
   cat > "$live_env" <<'ENV'
 # live comment
 LIVE_SECRET=preserve-this
+DATABASE_URL=postgresql://operator:secret@db/live
+MONITORING_EXPECTED_SERVER_COUNT=9
+MONITORING_DATABASE_BACKUP_DIR=/srv/operator/live-backups
+MONITORING_DATABASE_BACKUP_KEEP=99
 GPU_MONITOR_BRIDGE_PORT=7000
 GPU_MONITOR_BACKEND_PORT=7001
 PORT=7002
@@ -2042,6 +2136,10 @@ ENV
   cat > "$expected" <<'ENV'
 # live comment
 LIVE_SECRET=preserve-this
+DATABASE_URL=postgresql://operator:secret@db/live
+MONITORING_EXPECTED_SERVER_COUNT=9
+MONITORING_DATABASE_BACKUP_DIR=/srv/operator/live-backups
+MONITORING_DATABASE_BACKUP_KEEP=99
 GPU_MONITOR_BRIDGE_PORT=8000
 GPU_MONITOR_BACKEND_PORT=8001
 PORT=5173
@@ -2055,6 +2153,14 @@ ENV
   [[ "$(grep -c '^GPU_MONITOR_BRIDGE_HOST=' "$live_env")" == 1 ]] || fail "live bridge host was not deduplicated"
   [[ "$(grep -c '^HOST=' "$live_env")" == 1 ]] || fail "live frontend host was not deduplicated"
   [[ "$(grep -c '^PORT=' "$live_env")" == 1 ]] || fail "live frontend port was not deduplicated"
+  grep -Fxq 'MONITORING_EXPECTED_SERVER_COUNT=9' "$live_env" ||
+    fail "installer changed the operator server-count invariant"
+  grep -Fxq 'MONITORING_DATABASE_BACKUP_DIR=/srv/operator/live-backups' "$live_env" ||
+    fail "installer changed the operator backup directory"
+  grep -Fxq 'MONITORING_DATABASE_BACKUP_KEEP=99' "$live_env" ||
+    fail "installer changed the operator backup retention"
+  grep -Fxq 'DATABASE_URL=postgresql://operator:secret@db/live' "$live_env" ||
+    fail "installer changed the operator database URL"
 
   grep -Fxq "restrict,command=\"/usr/local/libexec/gpu-monitor-deploy-command dev\" ssh-ed25519 $dev_blob" \
     "$prefix/home/gpu-deploy-dev/.ssh/authorized_keys" ||
@@ -2291,6 +2397,7 @@ run_test test_activation_dev_live_boundaries_pointers_units_and_rollback
 run_test test_first_activation_failure_restores_absent_pointer_state
 run_test test_health_test_overrides_are_positive_and_bounded
 run_test test_health_checks_same_origin_api_and_websocket_paths
+run_test test_health_enforces_configured_server_floor_after_endpoint_health
 run_test test_health_rejects_legacy_process_responses_when_managed_units_are_inactive
 run_test test_health_rejects_invalid_or_restarted_managed_main_pid
 run_test test_health_rejects_loopback_only_live_public_listeners

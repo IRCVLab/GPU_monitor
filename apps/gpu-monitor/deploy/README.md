@@ -91,7 +91,7 @@ sudo systemctl enable --now gpu-monitor-release-puller.timer
 
 That command is a rollout action, not an installer side effect.
 
-On every install, the installer atomically rewrites and deduplicates only the exact reserved port keys below while preserving comments, unrelated settings, and secrets byte-for-byte:
+On every install, the installer atomically rewrites and deduplicates only the exact reserved runtime keys below while preserving comments, unrelated settings, `MONITORING_EXPECTED_SERVER_COUNT`, database backup settings, `DATABASE_URL`, and secrets byte-for-byte:
 
 ```text
 # /etc/gpu-monitor/dev.env
@@ -100,6 +100,7 @@ GPU_MONITOR_BRIDGE_PORT=8100
 GPU_MONITOR_BRIDGE_HOST=127.0.0.1
 HOST=127.0.0.1
 PORT=5174
+GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/dev
 
 # /etc/gpu-monitor/live.env
 GPU_MONITOR_BACKEND_PORT=8001
@@ -107,9 +108,10 @@ GPU_MONITOR_BRIDGE_PORT=8000
 GPU_MONITOR_BRIDGE_HOST=0.0.0.0
 HOST=0.0.0.0
 PORT=5173
+GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live
 ```
 
-Before enabling units, operators must add the application secrets and runtime settings required by the backend (including `SECRET_KEY`, `ADMIN_PASSWORD`, and a server-local writable `DATABASE_URL`) to the selected environment file. The backend and bridge templates run `backend.main:app` and `backend.slack_bridge:app` through uvicorn. The frontend template runs the packaged `frontend/server.mjs` with the managed Node runtime. Installer-owned environment tokens keep Dev frontend/bridge listeners on loopback while preserving the existing Live listeners on `0.0.0.0:5173` and `0.0.0.0:8000`; the backend remains loopback-only. The frontend server delegates normal page and asset requests to the generated adapter-node handler, strips only the exact `/api` prefix while proxying HTTP requests to the environment-local backend, and preserves `/ws` paths while tunnelling WebSocket upgrades. The proxy target defaults to `127.0.0.1:$GPU_MONITOR_BACKEND_PORT` and rejects non-loopback targets. Activation health checks require the expected systemd units, exact listener addresses, and stable main PIDs before and after exercising the browser-facing `/api/health` and `/ws/metrics` paths, so responses from unmanaged legacy processes or loopback-only Live regressions cannot pass release activation.
+Before enabling units, operators must add the application secrets and runtime settings required by the backend (including `SECRET_KEY`, `ADMIN_PASSWORD`, a server-local writable `DATABASE_URL`, and `MONITORING_EXPECTED_SERVER_COUNT`) to the selected environment file. The backend and bridge templates run `backend.main:app` and `backend.slack_bridge:app` through uvicorn. The frontend template runs the packaged `frontend/server.mjs` with the managed Node runtime. Installer-owned environment tokens keep Dev frontend/bridge listeners on loopback while preserving the existing Live listeners on `0.0.0.0:5173` and `0.0.0.0:8000`; the backend remains loopback-only. The frontend server delegates normal page and asset requests to the generated adapter-node handler, strips only the exact `/api` prefix while proxying HTTP requests to the environment-local backend, and preserves `/ws` paths while tunnelling WebSocket upgrades. The proxy target defaults to `127.0.0.1:$GPU_MONITOR_BACKEND_PORT` and rejects non-loopback targets. Activation health checks require the expected systemd units, exact listener addresses, successful backend `/health`, frontend `/api/health`, frontend `/ws/metrics`, and a managed backend `/servers` JSON array with at least `MONITORING_EXPECTED_SERVER_COUNT` rows before taking the final stable-PID snapshot, so responses from unmanaged legacy processes, loopback-only Live regressions, or an empty registered-server inventory cannot pass release activation. Set `MONITORING_EXPECTED_SERVER_COUNT=0` only to intentionally skip the server inventory floor.
 
 The automatic outbound puller uses these activation forms locally as `gpu-deploy-live`; this is not an inbound GitHub SSH transport:
 
