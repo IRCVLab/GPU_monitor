@@ -516,4 +516,3 @@ Remove temporary candidate files and failed-release state only when no failure i
 - The first cutover has a legacy fallback; later releases use immutable pointer rollback.
 - No task requires GitHub deployment secrets or inbound SSH.
 - All code changes use focused failing tests before implementation.
-

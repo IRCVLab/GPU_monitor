@@ -303,10 +303,10 @@ PY
 }
 
 test_documentation_only_commit_keeps_runtime_artifact_digest() {
-  local tmp repo out1 out2 sha1 sha2 digest1 digest2
+  local tmp repo out1 out2 out3 sha1 sha2 sha3 digest1 digest2 digest3
   tmp=$(mktemp_dir gpu-release-cross-commit)
   trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
-  repo="$tmp/repo"; out1="$tmp/out1"; out2="$tmp/out2"
+  repo="$tmp/repo"; out1="$tmp/out1"; out2="$tmp/out2"; out3="$tmp/out3"
   make_fixture_repo "$repo"
   sha1=$(git -C "$repo" rev-parse HEAD)
 
@@ -322,7 +322,16 @@ test_documentation_only_commit_keeps_runtime_artifact_digest() {
   digest2=$(sha256_file "$out2/gpu-monitor-$sha2.tar.gz" | awk '{print $1}')
   [[ "$digest1" == "$digest2" ]] ||
     fail "documentation-only commit changed runtime artifact digest"
-  log "documentation-only commits keep runtime artifact digest stable"
+
+  printf '\n# storage-only runtime probe\n' >> "$repo/apps/storage-monitor/collector/store.py"
+  git -C "$repo" add apps/storage-monitor/collector/store.py
+  git -C "$repo" commit -q -m 'test: storage-only runtime change'
+  sha3=$(git -C "$repo" rev-parse HEAD)
+  run_builder "$repo" "$out3" "$sha3"
+  digest3=$(sha256_file "$out3/gpu-monitor-$sha3.tar.gz" | awk '{print $1}')
+  [[ "$digest2" == "$digest3" ]] ||
+    fail "Storage-only commit changed GPU runtime artifact digest"
+  log "documentation-only and Storage-only commits keep GPU runtime artifact digest stable"
 }
 
 test_failed_build_leaves_no_partial_outputs_and_works_from_any_cwd() {
@@ -994,6 +1003,34 @@ test_first_activation_failure_restores_absent_pointer_state() {
   [[ "$(grep -c '^curl ' "$log_file")" -eq 1 ]] ||
     fail "absent deployment recovery ran health checks after removing current"
   log "failed first activation restores absent pointers, stops failed units, and records rollback_succeeded"
+}
+
+test_activation_rolls_back_when_runtime_server_floor_is_not_met() {
+  local tmp prefix fakebin log_file sha digest
+  tmp=$(mktemp_dir gpu-release-server-floor-rollback)
+  trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' RETURN
+  prefix="$tmp/prefix"
+  fakebin="$tmp/fakebin"
+  log_file="$tmp/commands.log"
+  install_fake_server_commands "$fakebin" "$log_file" pass pass few
+  write_health_env "$prefix" live 9
+  sha=abababababababababababababababababababab
+  mkdir -p "$tmp/artifact"
+  make_release_artifact "$tmp/artifact" "$sha" server-floor
+  digest=$(cat "$tmp/artifact/digest")
+
+  run_forced_command "$prefix" "upload live $sha $digest" "$tmp/artifact/gpu-monitor-$sha.tar.gz" "" live
+  if run_forced_command "$prefix" "activate live $sha $digest" /dev/null \
+    "GPU_MONITOR_TEST_PATH=$fakebin:/usr/bin:/bin" live > "$tmp/activate.out" 2> "$tmp/activate.err"; then
+    fail "activation succeeded with fewer registered servers than the configured floor"
+  fi
+  [[ ! -e "$prefix/srv/gpu-monitor/live/current" ]] ||
+    fail "server-floor activation failure left a current pointer"
+  grep -Fq 'http://127.0.0.1:8001/servers' "$log_file" ||
+    fail "activation did not enforce MONITORING_EXPECTED_SERVER_COUNT through the prefixed runtime env"
+  grep -Fq '"status":"rollback_succeeded"' "$prefix/srv/gpu-monitor/live/deployments.jsonl" ||
+    fail "server-floor activation failure did not complete rollback"
+  log "activation enforces the prefixed runtime server floor and rolls back"
 }
 
 test_health_test_overrides_are_positive_and_bounded() {
@@ -2426,6 +2463,7 @@ run_test test_production_activator_rejects_mismatched_caller_before_root_mutatio
 run_test test_upload_is_bounded_digest_verified_and_cleans_failures
 run_test test_activation_dev_live_boundaries_pointers_units_and_rollback
 run_test test_first_activation_failure_restores_absent_pointer_state
+run_test test_activation_rolls_back_when_runtime_server_floor_is_not_met
 run_test test_health_test_overrides_are_positive_and_bounded
 run_test test_health_checks_same_origin_api_and_websocket_paths
 run_test test_health_enforces_configured_server_floor_after_endpoint_health

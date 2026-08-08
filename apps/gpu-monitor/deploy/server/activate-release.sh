@@ -396,7 +396,7 @@ stop_units() {
 
 run_health() {
   if [[ "$test_mode" == true ]]; then
-    env -i PATH="$PATH" GPU_MONITOR_TEST_PATH="$PATH" \
+    env -i PATH="$PATH" PREFIX="$prefix" GPU_MONITOR_TEST_PATH="$PATH" \
       GPU_MONITOR_HEALTH_RETRIES="$health_retries" GPU_MONITOR_HEALTH_SLEEP_SECONDS="$health_sleep_seconds" \
       "$script_dir/health-check.sh" --test-mode "$env_name"
   else

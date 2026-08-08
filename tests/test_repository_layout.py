@@ -346,14 +346,9 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertEqual([], disallowed)
 
     def test_gpu_tree_excludes_development_output_and_obsolete_review_files(self):
-        result = subprocess.run(
-            ["git", "ls-files", "apps/gpu-monitor"],
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        tracked_gpu_paths = [line for line in result.stdout.splitlines() if line]
+        tracked_gpu_paths = [
+            path for path in tracked_paths() if path.startswith("apps/gpu-monitor/")
+        ]
         obsolete_root_files = {
             "apps/gpu-monitor/BACKEND_REVIEW.md",
             "apps/gpu-monitor/FRONTEND_REVIEW.md",
@@ -437,9 +432,18 @@ class RepositoryLayoutTest(unittest.TestCase):
 
 
     def test_gpu_deployment_documentation_covers_operator_contracts(self):
+        root_readme = Path("README.md").read_text(encoding="utf-8")
+        contributing = Path("CONTRIBUTING.md").read_text(encoding="utf-8")
+        gpu_readme = Path("apps/gpu-monitor/README.md").read_text(encoding="utf-8")
         cicd = Path("docs/operations/github-cicd.md").read_text(encoding="utf-8")
         development = Path("docs/development.md").read_text(encoding="utf-8")
-        combined = cicd + "\n" + development
+        architecture = Path("docs/architecture.md").read_text(encoding="utf-8")
+        combined = "\n".join(
+            [root_readme, contributing, gpu_readme, cicd, development, architecture]
+        )
+        operation_section = development.split(
+            "## GPU Live outbound deployment operation", 1
+        )[1].split("##", 1)[0]
 
         for retired_secret in (
             "GPU_DEPLOY_HOST",
@@ -463,11 +467,29 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertIn("local development", combined.lower())
         self.assertIn("does not enable or start the puller timer/service", cicd.lower())
         self.assertIn("GitHub-hosted SSH deployment workflow has been removed", combined)
-        operation_section = development.split(
-            "## GPU Live outbound deployment operation", 1
-        )[1].split("##", 1)[0]
-        self.assertIn("changed `main`", operation_section)
+        self.assertIn("MONITORING_EXPECTED_SERVER_COUNT=9", combined)
+        self.assertIn("MONITORING_DATABASE_BACKUP_DIR=/var/lib/gpu-monitor/live/backups", combined)
+        self.assertIn("MONITORING_DATABASE_BACKUP_KEEP=5", combined)
+        self.assertIn("disposable online backup", combined)
+        self.assertIn("candidate copy", combined)
+        self.assertIn("collectors and Slack disabled", combined)
+        self.assertIn("same GPU release digest", combined)
+        self.assertIn("does not restart Live", combined)
+        self.assertIn("Storage-only change", combined)
+        self.assertIn("cannot restart GPU Live", combined)
+        self.assertIn("systemctl status gpu-monitor-release-puller.timer", combined)
+        self.assertIn("journalctl -u gpu-monitor-release-puller.service", combined)
+        self.assertIn("systemctl status gpu-monitor-backend@live.service", combined)
+        self.assertIn("systemctl status gpu-monitor-frontend@live.service", combined)
+        self.assertIn("systemctl status gpu-monitor-bridge@live.service", combined)
+        self.assertIn("status live", combined)
+        self.assertIn("rollback live", combined)
+        self.assertIn("current-live-sha", combined)
         self.assertIn("status live", operation_section)
+        self.assertIn("first managed cutover", combined)
+        self.assertIn("legacy tmux stack", combined)
+        self.assertIn("until the first promoted release and one subsequent no-op puller cycle", combined)
+        self.assertIn("changed `main`", operation_section)
 
         for phrase in (
             "ci/required",

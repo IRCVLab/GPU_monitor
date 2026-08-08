@@ -219,6 +219,35 @@ class GpuReleasePullerTest(unittest.TestCase):
         self.assertEqual(events, ["status", "authorize", "checkout", "build", "authorize", "status"])
         self.assertGreaterEqual(github.calls.count("/repos/IRCVLab/GPU_monitor/git/ref/heads/main"), 3)
 
+    def test_live_status_missing_digest_cannot_noop_and_malformed_digest_fails_closed(self):
+        puller = load_puller()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self.config(tmp)
+
+            def status(payload):
+                return puller.live_status(
+                    cfg,
+                    lambda argv, **kwargs: CompletedProcess(
+                        argv, 0, json.dumps(payload) + "\n", ""
+                    ),
+                )
+
+            self.assertEqual(
+                status({
+                    "current": f"releases/{SHA2}",
+                    "environment": "live",
+                    "previous": "",
+                })["current_sha256"],
+                "",
+            )
+            with self.assertRaisesRegex(puller.PullError, "malformed live status current_sha256"):
+                status({
+                    "current": f"releases/{SHA2}",
+                    "current_sha256": "not-a-sha256",
+                    "environment": "live",
+                    "previous": "",
+                })
+
     def test_aborts_without_upload_if_main_advances_before_final_authorization(self):
         puller = load_puller()
         github = FakeGitHub(SHA1)

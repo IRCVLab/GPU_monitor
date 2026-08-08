@@ -41,3 +41,37 @@ cd apps/gpu-monitor
 ```
 
 These scripts manage tmux sessions and application ports. Do not run them as part of repository verification unless you explicitly intend to inspect or change a local runtime stack.
+
+## Production release boundary
+
+GPU Live promotion follows the repository contract:
+
+`local development -> optional PR or trusted direct main push -> main CI -> outbound server puller -> exact successful SHA live activation`
+
+There is no permanent Dev server. Local tmux scripts are for inspection and development only; production Live is managed by systemd after the guarded cutover.
+
+The Live environment must keep production database invariants in `/etc/gpu-monitor/live.env`:
+
+```text
+MONITORING_EXPECTED_SERVER_COUNT=9
+MONITORING_DATABASE_BACKUP_DIR=/var/lib/gpu-monitor/live/backups
+MONITORING_DATABASE_BACKUP_KEEP=5
+```
+
+Before first managed activation, validate a candidate copy made from a disposable online backup of the restored Live SQLite database. Run candidate services on non-production ports with collectors and Slack disabled, verify the nine registered server identities and readable notes, then publish the verified database to the managed Live path.
+
+Documentation-only or Storage-only commits can pass CI without changing the GPU runtime payload. If the candidate artifact has the same GPU release digest as the active release, the puller advances `current-live-sha` and does not restart Live.
+
+Useful server inspection commands after installation:
+
+```bash
+sudo systemctl status gpu-monitor-release-puller.timer
+sudo systemctl status gpu-monitor-release-puller.service
+sudo journalctl -u gpu-monitor-release-puller.service
+sudo systemctl status gpu-monitor-backend@live.service
+sudo systemctl status gpu-monitor-frontend@live.service
+sudo systemctl status gpu-monitor-bridge@live.service
+sudo -u gpu-deploy-live /usr/local/libexec/activate-release.sh status live
+```
+
+During the first managed cutover only, the legacy tmux stack remains the emergency fallback until the first promoted release and one subsequent no-op puller cycle are verified. The exact manual emergency forced-command forms are `status live` and `rollback live`; they are not the automatic deployment transport.

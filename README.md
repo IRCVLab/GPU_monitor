@@ -62,7 +62,11 @@ The supported GPU Live release contract is:
 
 Automatic deployment does not accept GitHub-hosted inbound SSH. A systemd timer on the server uses a five-minute base interval with bounded jitter, reads public GitHub API evidence for the current `main` SHA, reuses `scripts/authorize_gpu_release.py` to require successful `ci/required` on that exact SHA, builds from a clean exact-SHA checkout as the dedicated non-login builder, then runs the local `activate-release.sh` path as `gpu-deploy-live` (`upload` -> `activate` -> `status`). Failed CI, a changed `main`, build failure, authorization failure, or activation failure leaves the current Live release unchanged; authorized release failures use persistent exponential retry backoff rather than restarting Live every timer tick.
 
-Storage is independent and is not deployed by the GPU Live path. There is no self-hosted runner and no always-on development server.
+Before the first managed cutover, operators validate a candidate copy made from a disposable online backup of the Live SQLite database with collectors and Slack disabled. Live promotion uses `MONITORING_EXPECTED_SERVER_COUNT=9`, `MONITORING_DATABASE_BACKUP_DIR=/var/lib/gpu-monitor/live/backups`, and `MONITORING_DATABASE_BACKUP_KEEP=5` in `/etc/gpu-monitor/live.env`.
+
+Documentation-only and Storage-only changes may advance `main`, but a Storage-only change cannot restart GPU Live. When a newer successful SHA has the same GPU release digest as the active release, the puller records the new SHA and does not restart Live.
+
+Storage is independent and is not deployed by the GPU Live path. There is no self-hosted runner and no permanent Dev server.
 
 See `docs/operations/github-cicd.md` for the outbound-only deployment contract, migration notes, and emergency status/rollback boundary.
 
@@ -72,6 +76,6 @@ See `docs/operations/github-cicd.md` for the outbound-only deployment contract, 
 - Privacy-safe Storage sample fixtures under `apps/storage-monitor/data/` are allowed because they are reviewed sample data, not collected runtime snapshots.
 - Keep setup, tests, and runtime assumptions application-local unless a root migration or governance file explicitly says otherwise.
 - Direct pushes to `main` and optional merged PRs are supported entry points into the GPU Live contract; the same fail-closed rule applies after either path.
-- Production GPU deployment is server-pulled and outbound-only. The GitHub-hosted SSH workflow has been removed; its obsolete GitHub environment/secrets are deleted after outbound rollout verification.
+- Production GPU deployment is server-pulled and outbound-only. The GitHub-hosted SSH workflow has been removed; do not create or maintain a GitHub Environment or deployment secrets for GPU Live.
 
 See `docs/history-migration.md` for migration evidence and history-preservation details.

@@ -1,6 +1,6 @@
 # GPU Live Promotion and Automatic Deployment Design
 
-**Date:** 2026-08-08  
+**Date:** 2026-08-08
 **Status:** Approved for implementation
 
 ## Objective
@@ -207,4 +207,3 @@ data.
 - Successful future GPU changes on `main` automatically deploy after CI.
 - Storage-only and documentation-only changes do not restart GPU Live.
 - Storage Monitor remains healthy and unchanged during the migration.
-

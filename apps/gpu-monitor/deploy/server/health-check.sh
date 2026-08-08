@@ -266,7 +266,7 @@ else
   exit 1
 fi
 if [[ -e "$runtime_env_file" ]]; then
-  [[ ${MONITORING_EXPECTED_SERVER_COUNT+x} ]] ||
+  [[ "$env_name" != live || ${MONITORING_EXPECTED_SERVER_COUNT+x} ]] ||
     fail "$env_name runtime env is missing MONITORING_EXPECTED_SERVER_COUNT"
   [[ ${GPU_MONITOR_BACKEND_PORT+x} ]] ||
     fail "$env_name runtime env is missing GPU_MONITOR_BACKEND_PORT"

@@ -33,6 +33,8 @@ Failed CI, missing `ci/required`, public API failure, authorization denial, chan
 
 The failure backoff prevents a deterministic bad release from repeatedly restarting Live every five minutes. For an intentional manual retry of the unchanged SHA, remove `/var/lib/gpu-monitor/puller/failed-release.json` and start `gpu-monitor-release-puller.service`; otherwise the next eligible retry happens automatically. Do not remove `current-live-sha`.
 
+If `status live.current_sha256` matches the newly built artifact digest, the puller records the newer SHA in `/var/lib/gpu-monitor/puller/current-live-sha`, clears failed-release state, and exits without upload or activation. The same GPU release digest path does not restart Live and is expected for documentation-only or policy-only commits that leave the GPU runtime payload unchanged.
+
 ## Development and branch policy
 
 Local development is the default. Pull requests are optional when review is useful. Trusted repository writers may push directly to `main`; this is a trust policy for a small team, not a defense against malicious or compromised trusted writers.
@@ -46,8 +48,8 @@ When the GitHub plan allows enforceable branch protection, the stronger future c
 - Pull-request CI uses GitHub-hosted runners.
 - GPU Live deployment does not use GitHub-hosted inbound SSH.
 - GPU Live deployment does not use self-hosted runners.
-- GPU Live deployment does not require `gpu-live` GitHub environment secrets.
-- The old `.github/workflows/deploy-gpu-live.yml` GitHub-hosted SSH workflow has been removed. The obsolete `gpu-live` GitHub environment/secrets are deleted after outbound rollout verification.
+- GPU Live deployment does not require a GitHub Environment or `gpu-live` GitHub deployment secrets.
+- The old `.github/workflows/deploy-gpu-live.yml` GitHub-hosted SSH workflow has been removed. Do not recreate a GitHub Environment or secret setup for GPU Live deployment.
 - Server communication with GitHub is outbound HTTPS to the public GitHub API.
 - Server Live activation is local and uses the existing `activate-release.sh` path as `gpu-deploy-live`.
 - Secret values stay in GitHub or server secret stores; never commit them or include them in runbooks, logs, artifacts, or reports.
@@ -61,7 +63,7 @@ After installation, the operator must verify at least:
 - installed `gpu-monitor-release-puller.py`, `activate-release.sh`, and `authorize_gpu_release.py` paths;
 - `gpu-monitor-builder` is a dedicated non-login builder and cannot read `/etc/gpu-monitor/live.env`;
 - `gpu-deploy-live` remains the Live activation identity;
-- `/etc/gpu-monitor/live.env` contains required Live runtime secrets and server-local settings;
+- `/etc/gpu-monitor/live.env` contains required Live runtime secrets and server-local settings, including `MONITORING_EXPECTED_SERVER_COUNT=9`, `MONITORING_DATABASE_BACKUP_DIR=/var/lib/gpu-monitor/live/backups`, and `MONITORING_DATABASE_BACKUP_KEEP=5`;
 - the managed Node runtime is present;
 - manual emergency `status live` and `rollback live` are available if the SSH forced-command key is retained;
 - `gpu-monitor-release-puller.service` and `gpu-monitor-release-puller.timer` are installed but not active until explicitly enabled.
@@ -73,6 +75,24 @@ sudo systemctl enable --now gpu-monitor-release-puller.timer
 ```
 
 That command is an operator action on the server; it is not run by the installer and was not run during documentation updates.
+
+Inspect deployment state and active services with:
+
+```bash
+sudo systemctl status gpu-monitor-release-puller.timer
+sudo systemctl status gpu-monitor-release-puller.service
+sudo journalctl -u gpu-monitor-release-puller.service
+sudo systemctl status gpu-monitor-backend@live.service
+sudo systemctl status gpu-monitor-frontend@live.service
+sudo systemctl status gpu-monitor-bridge@live.service
+sudo -u gpu-deploy-live /usr/local/libexec/activate-release.sh status live
+```
+
+`status live` reports the active release pointer and manifest digest. The puller state file `current-live-sha` records the latest authorized SHA handled by the outbound loop.
+
+## Candidate-copy validation
+
+Before the first managed Live activation, create a disposable online backup from the restored Live SQLite database and run the candidate against that candidate copy only. Candidate validation runs on non-production ports with collectors and Slack disabled. It must verify SQLite integrity, at least nine registered servers, existing notes readability, `/debug` 404, WebSocket health, and no writes to the production database inode before the managed database is published.
 
 ## Emergency status and rollback
 
@@ -87,9 +107,11 @@ rollback live
 
 Rollback is local to GPU Live. Storage is not rolled back or restarted by GPU Live rollback.
 
+During the first managed cutover, the legacy tmux stack is the emergency fallback until the first promoted release and one subsequent no-op puller cycle are verified. After that first-cutover boundary, ordinary GPU rollback uses immutable release pointers and `rollback live`.
+
 ## Storage boundary
 
-GPU and Storage are independent products. The GPU Live puller deploys only GPU Monitor. Storage agents and dashboards remain manual/tagged or app-local according to their own operational runbooks, and must not auto-deploy from GPU `main` release polling.
+GPU and Storage are independent products. The GPU Live puller deploys only GPU Monitor. Storage agents and dashboards remain manual/tagged or app-local according to their own operational runbooks, and must not auto-deploy from GPU `main` release polling. A Storage-only change cannot restart GPU Live.
 
 A failed GPU activation must not roll back Storage. Shared repository governance changes are not a runtime rollback mechanism.
 
@@ -104,8 +126,9 @@ Migration procedure:
 1. Keep local development and optional PR/direct-main CI as the source integration path.
 2. Install outbound puller assets on the server without enabling or starting the timer/service.
 3. Verify builder isolation, canonical authorizer installation, Live runtime secrets, managed Node, and manual emergency rollback/status.
-4. Confirm `.github/workflows/deploy-gpu-live.yml` is absent and remove the obsolete `gpu-live` environment secrets/environment after outbound rollout verification.
-5. Explicitly enable/start `gpu-monitor-release-puller.timer` only after operator verification.
-6. Observe the first real Live activation from a successful `main` SHA and record only actual evidence.
+4. Confirm `.github/workflows/deploy-gpu-live.yml` is absent and do not maintain a GitHub Environment or deployment secrets for GPU Live.
+5. Validate the candidate copy from a disposable online backup with collectors and Slack disabled.
+6. Explicitly enable/start `gpu-monitor-release-puller.timer` only after operator verification.
+7. Observe the first real Live activation from a successful `main` SHA and record only actual evidence.
 
 Rollout is not yet recorded as complete in this documentation set.

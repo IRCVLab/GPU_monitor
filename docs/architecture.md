@@ -67,10 +67,29 @@ The live GPU branch remains reachable under `refs/heads/archive/gpu-live/main`; 
 
 ## Deployment architecture status
 
-Deployment automation is intentionally not configured by this foundation task. Before deployment work begins, separate plans must cover:
+GPU Live deployment is server-pulled and outbound-only after promotion. The architecture is:
 
-1. CI and contribution controls;
-2. central-service deployment;
-3. Storage-agent rollout.
+1. local development;
+2. optional pull request or trusted direct `main` push;
+3. path-aware `main` CI with `ci/required`;
+4. exact-SHA authorization through `scripts/authorize_gpu_release.py`;
+5. clean exact-SHA GPU artifact build by `gpu-monitor-builder`;
+6. candidate copy validation from a disposable online backup with collectors and Slack disabled;
+7. local activation by `gpu-deploy-live`;
+8. health checks against managed systemd units and the registered-server floor.
 
-Until those plans are reviewed and implemented, this repository is a verified local monorepo foundation, not a production deployment system.
+Live data remains server-local and outside release artifacts. Production uses:
+
+```text
+MONITORING_EXPECTED_SERVER_COUNT=9
+MONITORING_DATABASE_BACKUP_DIR=/var/lib/gpu-monitor/live/backups
+MONITORING_DATABASE_BACKUP_KEEP=5
+```
+
+The active release is inspected with `status live`, the `current` generation pointer under `/srv/gpu-monitor/live`, and `/var/lib/gpu-monitor/puller/current-live-sha`. Operators inspect service state with `systemctl status gpu-monitor-release-puller.timer`, `systemctl status gpu-monitor-backend@live.service`, `systemctl status gpu-monitor-frontend@live.service`, and `systemctl status gpu-monitor-bridge@live.service`; puller logs come from `journalctl -u gpu-monitor-release-puller.service`.
+
+If a newer successful `main` SHA builds to the same GPU release digest, the puller records the SHA and does not restart Live. Documentation-only and Storage-only changes therefore cannot restart GPU Live when the GPU runtime payload is unchanged.
+
+Storage remains a separate deployment architecture. Storage-only changes may run Storage CI, but they never enter the GPU Live puller and cannot restart GPU Live.
+
+The legacy tmux stack is retained only as the first managed cutover fallback until the first promoted release and one subsequent no-op puller cycle are verified. After that first-cutover boundary, GPU rollback uses immutable release pointers and the exact emergency command `rollback live`; emergency inspection uses `status live`.
