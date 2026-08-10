@@ -22,10 +22,10 @@ if (storageAnchors.length === 0) {
   throw new Error("Expected +page.svelte to contain a Storage anchor.");
 }
 
-const storageAnchor = storageAnchors.find((anchor) => /\bhref\s*=\s*(["'])http:\/\/127\.0\.0\.1:8088\/\1/i.test(anchor));
+const storageAnchor = storageAnchors.find((anchor) => /\bhref\s*=\s*(["'])http:\/\/166\.104\.167\.11:505\/\1/i.test(anchor));
 
 if (!storageAnchor) {
-  throw new Error("Expected Storage anchor href to be http://127.0.0.1:8088/.");
+  throw new Error("Expected Storage anchor href to be http://166.104.167.11:505/.");
 }
 
 if (/\btarget\s*=\s*(["'])_blank\1/i.test(storageAnchor)) {

@@ -8,7 +8,7 @@ const pageSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf
 test('header exposes Storage directly and view menu exposes the live width control', () => {
 	assert.match(
 		pageSource,
-		/<a class="ops-utility-action ops-suite-link" href="http:\/\/127\.0\.0\.1:8088\/">Storage<\/a>/
+		/<a class="ops-utility-action ops-suite-link" href="http:\/\/166\.104\.167\.11:505\/">Storage<\/a>/
 	);
 	assert.match(pageSource, /role="group" aria-label="레이아웃 폭"/);
 	assert.match(pageSource, /<span>폭<\/span>/);

@@ -1250,7 +1250,7 @@
 				</nav>
 
 				<div class="ops-actions">
-					<a class="ops-utility-action ops-suite-link" href="http://127.0.0.1:8088/">Storage</a>
+					<a class="ops-utility-action ops-suite-link" href="http://166.104.167.11:505/">Storage</a>
 					<div class="relative ops-direct-control" bind:this={viewMenuEl}>
 						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen} aria-keyshortcuts="V">{dashboardViewLabel($dashboardView)} <span aria-hidden="true">⌄</span></button>
 						{#if viewMenuOpen}
