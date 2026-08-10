@@ -131,4 +131,7 @@ Migration procedure:
 6. Explicitly enable/start `gpu-monitor-release-puller.timer` only after operator verification.
 7. Observe the first real Live activation from a successful `main` SHA and record only actual evidence.
 
-Rollout is not yet recorded as complete in this documentation set.
+The initial managed GPU Live activation was verified on 2026-08-10 at commit
+`77b0fc2fa2b961e6657515a5ebd6d57a7cccda03`. The nine registered servers and
+existing notes were preserved, the outbound puller timer was enabled, and the
+Storage Monitor process remained unchanged during cutover.
