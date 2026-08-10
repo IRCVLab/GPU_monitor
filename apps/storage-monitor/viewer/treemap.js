@@ -350,7 +350,9 @@ function renderTreemap() {
   const m = (DATA.mounts || [])[currentMountIdx];
   const el = document.getElementById("treemap");
   if (!m || !m.tree) { el.innerHTML = '<div class="empty">No tree data for this mount.</div>'; return; }
-  if (!treemapStack.length || treemapStack[0].mount !== m.path) treemapStack = [{ node: m.tree, name: m.path, mount: m.path }];
+  if (!treemapStack.length || treemapStack[0].mount !== m.path || treemapStack[0].snapshot !== DATA) {
+    treemapStack = [{ node: m.tree, name: m.path, mount: m.path, snapshot: DATA }];
+  }
   renderTreemapLegend();
   const H = sizeTreemap(), W = el.clientWidth;
   el.innerHTML = "";

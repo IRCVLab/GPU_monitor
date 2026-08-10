@@ -360,7 +360,8 @@ function renderAll() {
     renderTreemap();
     if (currentTab === "users") renderUsersWhenReady();
     renderTopFiles();
-    prepStale();
+    if (currentTab === "stale") renderStale();
+    else prepStale();
   });
 }
 
@@ -807,6 +808,12 @@ async function refreshOverviewData(options) {
     startOverviewSnapshotHydration(bootstrap, generation);
     const expectedRouteStillActive = !opts.expectedServerId || opts.expectedServerId === selectedServerId;
     if (navigationChanged || !expectedRouteStillActive) {
+      if (selectedServerId && DATA) {
+        clearDetailLoading();
+        clearDetailError();
+        renderAll();
+        updateLastUpdated();
+      }
       syncRescanButton();
       return { ok: true, preservedRoute: true };
     }

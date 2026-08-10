@@ -271,7 +271,7 @@ open_i = body.find("open(")
 fstat_i = body.find("fstat(dirfd")
 getdents_i = body.find("SYS_getdents64")
 mismatch_i = body.find("dst.st_dev != c->root_dev")
-blocked_i = body.find("blocked_add", mismatch_i)
+blocked_i = body.find("record_scan_error", mismatch_i)
 close_i = body.find("close(dirfd)", mismatch_i)
 if not (open_i != -1 and fstat_i != -1 and getdents_i != -1 and open_i < fstat_i < getdents_i):
     raise SystemExit(f"open={open_i} fstat={fstat_i} getdents={getdents_i}")
@@ -279,6 +279,19 @@ if not (mismatch_i != -1 and blocked_i != -1 and close_i != -1 and mismatch_i < 
     raise SystemExit("process_dir device mismatch must increment visible blocked/error state before close")
 PYEOF
 pass "source-order contract fstat(dirfd) before getdents64 is present"
+
+$PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "transient disappearance contract violated: ENOENT races must not become blocked scan errors"
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+if not re.search(r"static bool\s+record_scan_error\s*\([^)]*\)\s*\{[\s\S]*?if\s*\(err\s*==\s*ENOENT\)\s*return false;", s):
+    raise SystemExit("record_scan_error must ignore ENOENT from entries that disappear during a concurrent scan")
+start = s.find("static void process_dir(")
+end = s.find("static void *worker_main(", start)
+body = s[start:end]
+if body.count("record_scan_error(w, ") < 4:
+    raise SystemExit("all process_dir read/open/stat failures must use the centralized transient-race filter")
+PYEOF
+pass "transient ENOENT scan races are excluded from blocked/error state"
 
 $PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "root preflight contract violated: open+fstat must happen before root node creation"
 import sys

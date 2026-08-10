@@ -161,6 +161,7 @@ function loadViewer() {
     setInterval,
     clearInterval,
     requestAnimationFrame: (fn) => fn(),
+    getComputedStyle: () => ({ paddingTop: '0', paddingBottom: '0' }),
     window: {
       innerWidth: 1200,
       innerHeight: 800,
@@ -1387,6 +1388,66 @@ async function testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders() {
   assert.strictEqual(viewer.document.getElementById('detailPanels').hidden, false, 'next server panels must become visible after rendering');
 }
 
+function testTreemapDoesNotKeepPreviousSnapshotItems() {
+  const viewer = loadViewer();
+  const snapshot = (serverId, itemName) => ({
+    server_id: serverId,
+    hostname: serverId,
+    scan_started_unix: 100,
+    mounts: [{
+      path: '/data',
+      tree: {
+        name: '/data',
+        bytes: 1024,
+        uid: 1000,
+        other_bytes: 0,
+        children: [{ name: itemName, kind: 'directory', bytes: 1024, uid: 1000, other_bytes: 0, children: [] }],
+      },
+    }],
+    users: [{ uid: 1000, name: 'researcher', bytes: 1024, by_mount: { '/data': 1024 } }],
+    top_files: [],
+    stale: [],
+    blocked: [],
+  });
+  viewer.rememberBootstrap(apiBootstrapForRescan([
+    { id: 'alpha-1', snapshot: snapshot('alpha-1', 'alpha-only'), error: null },
+    { id: 'beta-2', snapshot: snapshot('beta-2', 'beta-only'), error: null },
+  ]));
+
+  viewer.navigateToServer('alpha-1', { skipHistory: true });
+  const treemap = viewer.document.getElementById('treemap');
+  assert.match(textTree(treemap), /alpha-only/, 'alpha detail must render alpha snapshot items');
+
+  viewer.navigateToServer('beta-2', { skipHistory: true });
+  const betaText = textTree(treemap);
+  assert.match(betaText, /beta-only/, 'switching to beta must render beta snapshot items even when the mount path is unchanged');
+  assert.doesNotMatch(betaText, /alpha-only/, 'switching servers must discard the previous snapshot treemap root');
+}
+
+function testTransientDisappearedPathsDoNotRaiseUnreadableWarning() {
+  const viewer = loadViewer();
+  const snapshot = {
+    server_id: 'alpha-1',
+    hostname: 'alpha-1',
+    mounts: [],
+    users: [],
+    top_files: [],
+    stale: [],
+    blocked: [
+      { path: '/home/researcher/.cache/tool/.lock_iops', reason: 'No such file or directory' },
+      { path: '/home/researcher/.cache/tool/.lock_datetime', reason: 'ENOENT' },
+      { path: '/home/researcher/private', reason: 'EACCES' },
+    ],
+  };
+  viewer.rememberBootstrap(apiBootstrapForRescan([{ id: 'alpha-1', snapshot, error: null }]));
+  viewer.navigateToServer('alpha-1', { skipHistory: true });
+
+  const warning = viewer.document.getElementById('warnBanner');
+  assert.match(warning.innerHTML, /1 directory could not be read/, 'only persistent unreadable paths should count as scan warnings');
+  assert.match(warning.innerHTML, /private \(EACCES\)/, 'permission failures must remain visible and actionable');
+  assert.doesNotMatch(warning.innerHTML, /lock_iops|lock_datetime|No such file|ENOENT/, 'normal concurrent file disappearance must not alarm users');
+}
+
 function testRescanButtonExposesPersistentActivityCue() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.setRescanActivityState, 'function', 'rescan activity state helper must be exposed');
@@ -1453,21 +1514,32 @@ async function testRescanPollingIsBoundToOriginAndStopsOnNavigation() {
 async function testOverviewRefreshDoesNotRestoreAStaleRoute() {
   const viewer = loadViewer();
   assert.strictEqual(typeof viewer.refreshOverviewData, 'function');
-  const snapshot = id => ({ server_id: id, hostname: id, mounts: [], users: [], top_files: [], stale: [] });
+  const snapshot = (id, staleName) => ({
+    server_id: id,
+    hostname: id,
+    mounts: [],
+    users: [],
+    top_files: [],
+    stale: staleName ? [{ path: '/' + staleName, bytes: 1024, uid: 1000, owner: 'researcher', age_days: 90, mtime: 1 }] : [],
+  });
   viewer.rememberBootstrap(apiBootstrapForRescan([
-    { id: 'alpha-1', snapshot: snapshot('alpha-1'), error: null },
-    { id: 'beta-2', snapshot: snapshot('beta-2'), error: null },
+    { id: 'alpha-1', snapshot: snapshot('alpha-1', 'alpha-old'), error: null },
+    { id: 'beta-2', snapshot: snapshot('beta-2', 'beta-old'), error: null },
   ]));
-  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.navigateToServer('alpha-1', { skipHistory: true, tab: 'stale' });
   const pending = deferred();
   const refresh = viewer.refreshOverviewData({ bootstrapLoader: () => pending.promise, forceReload: true, expectedServerId: 'alpha-1' });
-  viewer.applyRouteState({ serverId: 'beta-2', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.navigateToServer('beta-2', { skipHistory: true, tab: 'stale' });
+  assert.match(viewer.document.getElementById('staleRows').innerHTML, /beta-old/, 'beta cached detail must render before the pending overview refresh resolves');
   pending.resolve(apiBootstrapForRescan([
-    { id: 'alpha-1', snapshot: snapshot('alpha-new'), error: null },
-    { id: 'beta-2', snapshot: snapshot('beta-new'), error: null },
+    { id: 'alpha-1', snapshot: snapshot('alpha-1', 'alpha-new'), error: null },
+    { id: 'beta-2', snapshot: snapshot('beta-2', 'beta-new'), error: null },
   ]));
   await refresh;
   assert.strictEqual(viewer.getCurrentDetailDebugState().currentServerId, 'beta-2', 'refresh completion must preserve the route selected while bootstrap was pending');
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.server_id, 'beta-2', 'the selected route must own the refreshed detail snapshot');
+  assert.match(viewer.document.getElementById('staleRows').innerHTML, /beta-new/, 'the selected route must rerender from its refreshed snapshot');
+  assert.doesNotMatch(viewer.document.getElementById('staleRows').innerHTML, /beta-old|alpha-old/, 'no prior snapshot rows may remain after refresh reconciliation');
 }
 
 async function testFastFailedRescanShowsRecoverableFailure() {
@@ -2471,6 +2543,8 @@ async function main() {
   testSuccessfulOverviewSuppressesServerCountLiveLead();
   testMountCentricResponsiveCssContract();
   await testServerSwitchHidesPreviousDetailUntilNextSnapshotRenders();
+  testTreemapDoesNotKeepPreviousSnapshotItems();
+  testTransientDisappearedPathsDoNotRaiseUnreadableWarning();
   testRescanButtonExposesPersistentActivityCue();
   await testRescanPollingIsBoundToOriginAndStopsOnNavigation();
   await testOverviewRefreshDoesNotRestoreAStaleRoute();

@@ -578,6 +578,15 @@ struct worker_arg {
     uint64_t bytes, files, dirs, errs;
 };
 
+/* Entries can legitimately disappear between directory enumeration and the
+ * later stat/open while the scanned tree remains in active use. */
+static bool record_scan_error(struct worker_arg *w, const char *path, int err) {
+    if (err == ENOENT) return false;
+    w->errs++;
+    blocked_add(path, err);
+    return true;
+}
+
 static void ctx_flush_stats(struct scan_ctx *c, struct worker_arg *w) {
     pthread_mutex_lock(&c->stat_lock);
     c->scanned_bytes += w->bytes;
@@ -598,8 +607,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
     int dirfd = open(it->path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (dirfd == -1) {
         int e = errno;
-        w->errs++;
-        blocked_add(it->path, e);
+        record_scan_error(w, it->path, e);
         if (e == EMFILE || e == ENFILE) {
             /* Should not happen with the path-based queue; flag loudly if it
              * ever does so an undercount is never silent. */
@@ -611,14 +619,12 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
 
     struct stat dst;
     if (fstat(dirfd, &dst) != 0) {
-        w->errs++;
-        blocked_add(it->path, errno);
+        record_scan_error(w, it->path, errno);
         close(dirfd);
         return;
     }
     if (dst.st_dev != c->root_dev) {
-        w->errs++;
-        blocked_add(it->path, EXDEV);
+        record_scan_error(w, it->path, EXDEV);
         close(dirfd);
         return;
     }
@@ -628,8 +634,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
     for (;;) {
         long nread = syscall(SYS_getdents64, dirfd, buf, GETDENTS_BUFSZ);
         if (nread == -1) {
-            w->errs++;
-            blocked_add(it->path, errno);
+            record_scan_error(w, it->path, errno);
             break;
         }
         if (nread == 0) break;
@@ -649,9 +654,8 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
              * this is required for exact du parity. */
             struct stat st;
             if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-                w->errs++;
                 char *p = path_join(it->path, name);
-                blocked_add(p, errno);
+                record_scan_error(w, p, errno);
                 free(p);
                 continue;
             }

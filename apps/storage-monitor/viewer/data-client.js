@@ -289,6 +289,10 @@ function detailCapacityPercent(mount, usedBytes, totalBytes) {
   if (usedBytes != null && totalBytes > 0) return Math.max(0, Math.min(100, Math.round(usedBytes / totalBytes * 100)));
   return null;
 }
+function isTransientBlockedEntry(entry) {
+  const reason = String(entry && entry.reason || '').trim().toLowerCase();
+  return reason === 'enoent' || reason === 'no such file or directory';
+}
 function renderHeader() {
   document.getElementById("h-host").textContent = DATA.hostname || "—";
   document.getElementById("h-scan").textContent = fmtDate(DATA.scan_started_unix) +
@@ -299,9 +303,10 @@ function renderHeader() {
   const warn = document.getElementById("warnBanner");
   const msgs = [];
   if (DATA.run_as_root === false) msgs.push("run_as_root=false → some directories were not scanned and are hidden from totals.");
-  const nB = (DATA.blocked || []).length;
+  const blocked = (DATA.blocked || []).filter(entry => !isTransientBlockedEntry(entry));
+  const nB = blocked.length;
   if (nB > 0) {
-    const list = DATA.blocked.slice(0, 6).map(b => b.path + " (" + b.reason + ")").join(", ");
+    const list = blocked.slice(0, 6).map(b => b.path + " (" + b.reason + ")").join(", ");
     msgs.push(nB + " director" + (nB === 1 ? "y" : "ies") + " could not be read: " + escapeHtml(list) + (nB > 6 ? " …" : ""));
   }
   warn.classList.toggle("show", msgs.length > 0);
