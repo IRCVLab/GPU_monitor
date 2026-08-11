@@ -23,6 +23,10 @@ let detailRequestVersions = new Map();
 let themeRevealLocked = false;
 let overviewLoadGeneration = 0;
 let echartsLoadPromise = null;
+let automaticApiRefreshTimer = null;
+let automaticApiRefreshInFlight = false;
+
+const AUTOMATIC_API_REFRESH_MS = 15 * 60 * 1000;
 
 
 function readThemeModeCookie() {
@@ -837,6 +841,36 @@ async function refreshOverviewData(options) {
   }
 }
 
+function isDocumentHidden() {
+  return !!(typeof document !== "undefined" && (document.hidden || document.visibilityState === "hidden"));
+}
+
+async function runAutomaticApiRefresh() {
+  if (currentDataSource !== "api" || automaticApiRefreshInFlight || isDocumentHidden()) return { skipped: true };
+  automaticApiRefreshInFlight = true;
+  try {
+    return await refreshOverviewData({
+      forceReload: !!currentServerId,
+      expectedServerId: currentServerId || null,
+    });
+  } finally {
+    automaticApiRefreshInFlight = false;
+  }
+}
+
+function startAutomaticApiRefresh() {
+  if (automaticApiRefreshTimer || currentDataSource !== "api") return;
+  automaticApiRefreshTimer = setInterval(() => {
+    void runAutomaticApiRefresh();
+  }, AUTOMATIC_API_REFRESH_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (!isDocumentHidden()) void runAutomaticApiRefresh();
+  });
+  window.addEventListener("focus", () => {
+    void runAutomaticApiRefresh();
+  });
+}
+
 async function pollRescanJob(serverId, generation) {
   const btn = document.getElementById("rescanBtn");
   const targetServerId = serverId || rescanServerId;
@@ -1064,6 +1098,7 @@ async function init() {
   if (rb) rb.onclick = triggerRescan;
   syncRescanButton();
   setInterval(updateLastUpdated, 30000);
+  startAutomaticApiRefresh();
 
   if (initialRoute.serverId) navigateToServer(initialRoute.serverId, { skipHistory: true, tab: initialRoute.tab });
   else navigateToOverview({ skipHistory: true });

@@ -85,7 +85,7 @@ class FakeElement {
   querySelector() { return null; }
 }
 
-function loadViewer() {
+function loadViewer(options = {}) {
   const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
   const scriptFiles = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)]
     .map(m => m[1])
@@ -127,11 +127,15 @@ function loadViewer() {
   };
   const historyCalls = [];
   const docListeners = new Map();
+  const windowListeners = new Map();
+  const intervals = [];
   const documentElement = new FakeElement('html', doc);
   documentElement.dataset = {};
   doc = {
     documentElement,
     cookie: '',
+    hidden: false,
+    visibilityState: 'visible',
     createElement: (tag) => new FakeElement(tag, doc),
     createDocumentFragment: () => new FakeElement('fragment', doc),
     getElementById: getEl,
@@ -158,8 +162,12 @@ function loadViewer() {
     URLSearchParams,
     setTimeout,
     clearTimeout,
-    setInterval,
-    clearInterval,
+    setInterval: (handler, delay) => {
+      const timer = { handler, delay, cleared: false };
+      intervals.push(timer);
+      return timer;
+    },
+    clearInterval: (timer) => { if (timer) timer.cleared = true; },
     requestAnimationFrame: (fn) => fn(),
     getComputedStyle: () => ({ paddingTop: '0', paddingBottom: '0' }),
     window: {
@@ -170,12 +178,20 @@ function loadViewer() {
         pushState: (_state, _title, href) => { historyCalls.push(['push', href]); const [pathAndQuery, hash = ''] = String(href).split('#'); const [pathname, search = ''] = pathAndQuery.split('?'); context.window.location.pathname = pathname; context.window.location.search = search ? '?' + search : ''; context.window.location.hash = hash ? '#' + hash : ''; },
         replaceState: (_state, _title, href) => { historyCalls.push(['replace', href]); const [pathAndQuery, hash = ''] = String(href).split('#'); const [pathname, search = ''] = pathAndQuery.split('?'); context.window.location.pathname = pathname; context.window.location.search = search ? '?' + search : ''; context.window.location.hash = hash ? '#' + hash : ''; },
       },
-      addEventListener() {},
+      addEventListener(type, handler) {
+        const list = windowListeners.get(type) || [];
+        list.push(handler);
+        windowListeners.set(type, list);
+      },
+      dispatchEvent(event) {
+        const list = windowListeners.get(event && event.type) || [];
+        for (const handler of list) handler(event);
+      },
       matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
     },
     document: doc,
     navigator: { clipboard: { writeText: async () => undefined } },
-    fetch: async () => ({ ok: false, json: async () => ({}) }),
+    fetch: options.fetch || (async () => ({ ok: false, json: async () => ({}) })),
     echarts: { init: () => ({ setOption() {}, off() {}, on() {}, resize() {}, dispose() {} }) },
   };
   context.global = context;
@@ -187,6 +203,8 @@ function loadViewer() {
   context.__elements = elements;
   context.__historyCalls = historyCalls;
   context.__docListeners = docListeners;
+  context.__windowListeners = windowListeners;
+  context.__intervals = intervals;
   return context;
 }
 
@@ -231,8 +249,19 @@ async function flushPromises() {
   await Promise.resolve();
   await Promise.resolve();
 }
+async function flushViewerAsync() {
+  for (let i = 0; i < 100; i += 1) await Promise.resolve();
+}
 function hangulString(text) {
   return /[가-힣]/.test(text || '');
+}
+
+function apiResponse(body, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  };
 }
 
 function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
@@ -1781,6 +1810,102 @@ async function testFailedSameServerForceReloadKeepsCachedDetailVisible() {
   assert.match(warning.textContent || '', /existing data/i);
 }
 
+async function testApiModeAutoRefreshRefetchesAndPreservesCurrentDetail() {
+  const serverSummary = {
+    id: 'alpha-1',
+    display_name: 'alpha',
+    mount_count: 1,
+    snapshot_availability: 'available',
+    freshness: 'fresh',
+    latest_pull_status: 'succeeded',
+    latest_scan_result: 'complete',
+    configuration_sync: 'in_sync',
+    active_job: null,
+    overview_snapshot: { server_id: 'alpha-1', hostname: 'alpha', mounts: [], users: [], top_files: [], stale: [] },
+  };
+  const snapshot = (scan, staleName) => ({
+    server_id: 'alpha-1',
+    hostname: 'alpha',
+    scan_started_unix: scan,
+    mounts: [],
+    users: [],
+    top_files: [],
+    stale: [{ path: '/' + staleName, bytes: 1024, uid: 1000, owner: 'researcher', age_days: 90, mtime: 1 }],
+  });
+  const pendingServers = deferred();
+  const calls = [];
+  let sessionLoads = 0;
+  let serverLoads = 0;
+  let snapshotLoads = 0;
+  let rescanPosts = 0;
+  const viewer = loadViewer({
+    fetch: async (url, options) => {
+      calls.push([url, options && options.method ? options.method : 'GET']);
+      if (url === '/api/session') {
+        sessionLoads += 1;
+        return apiResponse({ authenticated: true, can_rescan: true, csrf_token: 'csrf' });
+      }
+      if (url === '/api/servers') {
+        serverLoads += 1;
+        if (serverLoads === 2) await pendingServers.promise;
+        return apiResponse({ data_mode: 'inventory', servers: [serverSummary] });
+      }
+      if (url === '/api/servers/alpha-1/snapshot') {
+        snapshotLoads += 1;
+        return apiResponse(snapshot(snapshotLoads === 1 ? 100 : 200, snapshotLoads === 1 ? 'old-auto-refresh-row' : 'new-auto-refresh-row'));
+      }
+      if (url === '/api/servers/alpha-1/rescan') {
+        rescanPosts += 1;
+        return apiResponse({ status: 'started' });
+      }
+      throw new Error('unexpected fetch ' + url);
+    },
+  });
+  viewer.window.location.search = '?server=alpha-1';
+  viewer.window.location.hash = '#stale';
+
+  viewer.document.dispatchEvent({ type: 'DOMContentLoaded' });
+  await flushViewerAsync();
+
+  assert.strictEqual(serverLoads, 1, 'initial API bootstrap must fetch /api/servers once');
+  assert.strictEqual(snapshotLoads, 1, 'initial detail route must load the selected server snapshot once');
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.scan_started_unix, 100, 'the initial detail route renders old data before auto refresh');
+
+  const autoRefreshTimer = viewer.__intervals.find(timer => timer.delay === 900000);
+  assert.ok(autoRefreshTimer, 'API-backed init must schedule a restrained automatic refresh interval');
+
+  viewer.document.hidden = true;
+  viewer.document.visibilityState = 'hidden';
+  autoRefreshTimer.handler();
+  await flushViewerAsync();
+  assert.strictEqual(sessionLoads, 1, 'automatic refresh must skip API work while the document is hidden');
+
+  viewer.document.hidden = false;
+  viewer.document.visibilityState = 'visible';
+  autoRefreshTimer.handler();
+  await flushViewerAsync();
+  assert.strictEqual(sessionLoads, 2, 'visible automatic refresh must begin a new API bootstrap');
+  assert.strictEqual(serverLoads, 2, 'visible automatic refresh must refetch /api/servers');
+
+  autoRefreshTimer.handler();
+  viewer.window.dispatchEvent({ type: 'focus' });
+  viewer.document.dispatchEvent({ type: 'visibilitychange' });
+  await flushViewerAsync();
+  assert.strictEqual(sessionLoads, 2, 'automatic refresh must avoid overlapping interval, focus, and visibility requests');
+
+  pendingServers.resolve();
+  await flushViewerAsync();
+
+  assert.strictEqual(snapshotLoads, 2, 'refreshing the selected detail must fetch a fresh snapshot without starting a scan');
+  assert.strictEqual(rescanPosts, 0, 'automatic refresh must never post to the rescan endpoint');
+  assert.deepStrictEqual(calls.filter(([url, method]) => url.includes('/rescan') || method === 'POST'), [], 'automatic refresh must remain read-only');
+  assert.strictEqual(viewer.window.location.search, '?server=alpha-1', 'automatic refresh must preserve the selected server route');
+  assert.strictEqual(viewer.window.location.hash, '#stale', 'automatic refresh must preserve the current detail tab');
+  assert.strictEqual(viewer.getCurrentDetailDebugState().currentServerId, 'alpha-1');
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.scan_started_unix, 200, 'automatic refresh must replace stale detail data with the refreshed snapshot');
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.stale[0].path, '/new-auto-refresh-row', 'the open detail view must rerender from the refreshed data');
+}
+
 
 function overviewRowText(viewer, serverId) {
   const list = viewer.document.getElementById('overviewList');
@@ -2559,6 +2684,7 @@ async function main() {
   await testOverviewRefreshPreservesOtherServerSnapshotCache();
   await testForcedOverviewRefreshWaitsForFreshDetailSnapshot();
   await testFailedSameServerForceReloadKeepsCachedDetailVisible();
+  await testApiModeAutoRefreshRefetchesAndPreservesCurrentDetail();
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
