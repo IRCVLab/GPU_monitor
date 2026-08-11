@@ -372,6 +372,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _direct_loopback_origin(self) -> str | None:
         if not DIRECT_LOOPBACK_RESCAN:
             return None
+        # Requests that traversed any proxy are not direct loopback clients,
+        # even when a caller spoofs a loopback Host header.
+        if self.headers.get("X-Forwarded-For", "").strip():
+            return None
         host = self.headers.get("Host", "").strip()
         if not host or any(c in host for c in "\r\n/\\"):
             return None

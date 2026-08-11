@@ -25,8 +25,13 @@ let overviewLoadGeneration = 0;
 let echartsLoadPromise = null;
 let automaticApiRefreshTimer = null;
 let automaticApiRefreshInFlight = false;
+let automaticApiRefreshLastStartedAt = 0;
+let automaticVisibilityHandler = null;
+let automaticFocusHandler = null;
+let automaticUnloadHandler = null;
 
 const AUTOMATIC_API_REFRESH_MS = 15 * 60 * 1000;
+const AUTOMATIC_API_REFRESH_MIN_GAP_MS = 60 * 1000;
 
 
 function readThemeModeCookie() {
@@ -845,8 +850,12 @@ function isDocumentHidden() {
   return !!(typeof document !== "undefined" && (document.hidden || document.visibilityState === "hidden"));
 }
 
-async function runAutomaticApiRefresh() {
+async function runAutomaticApiRefresh(options) {
+  const opts = options || {};
+  const now = Date.now();
   if (currentDataSource !== "api" || automaticApiRefreshInFlight || isDocumentHidden()) return { skipped: true };
+  if (opts.respectMinGap && now - automaticApiRefreshLastStartedAt < AUTOMATIC_API_REFRESH_MIN_GAP_MS) return { skipped: true };
+  automaticApiRefreshLastStartedAt = now;
   automaticApiRefreshInFlight = true;
   try {
     return await refreshOverviewData({
@@ -859,16 +868,33 @@ async function runAutomaticApiRefresh() {
 }
 
 function startAutomaticApiRefresh() {
-  if (automaticApiRefreshTimer || currentDataSource !== "api") return;
+  if (automaticApiRefreshTimer !== null || currentDataSource !== "api") return;
+  automaticApiRefreshLastStartedAt = Date.now();
   automaticApiRefreshTimer = setInterval(() => {
     void runAutomaticApiRefresh();
   }, AUTOMATIC_API_REFRESH_MS);
-  document.addEventListener("visibilitychange", () => {
-    if (!isDocumentHidden()) void runAutomaticApiRefresh();
-  });
-  window.addEventListener("focus", () => {
-    void runAutomaticApiRefresh();
-  });
+  automaticVisibilityHandler = () => {
+    if (!isDocumentHidden()) void runAutomaticApiRefresh({ respectMinGap: true });
+  };
+  automaticFocusHandler = () => {
+    void runAutomaticApiRefresh({ respectMinGap: true });
+  };
+  automaticUnloadHandler = () => stopAutomaticApiRefresh();
+  document.addEventListener("visibilitychange", automaticVisibilityHandler);
+  window.addEventListener("focus", automaticFocusHandler);
+  window.addEventListener("beforeunload", automaticUnloadHandler);
+}
+
+function stopAutomaticApiRefresh() {
+  if (automaticApiRefreshTimer !== null) clearInterval(automaticApiRefreshTimer);
+  automaticApiRefreshTimer = null;
+  if (automaticVisibilityHandler) document.removeEventListener("visibilitychange", automaticVisibilityHandler);
+  if (automaticFocusHandler) window.removeEventListener("focus", automaticFocusHandler);
+  if (automaticUnloadHandler) window.removeEventListener("beforeunload", automaticUnloadHandler);
+  automaticVisibilityHandler = null;
+  automaticFocusHandler = null;
+  automaticUnloadHandler = null;
+  automaticApiRefreshLastStartedAt = 0;
 }
 
 async function pollRescanJob(serverId, generation) {
@@ -1139,6 +1165,7 @@ if (typeof globalThis !== "undefined") Object.assign(globalThis, {
   clearRescanPoll,
   getRescanDebugState,
   refreshOverviewData,
+  stopAutomaticApiRefresh,
   triggerRescan,
   applyStoredThemeMode,
   toggleThemeMode,

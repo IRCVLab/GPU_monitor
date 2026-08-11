@@ -146,6 +146,10 @@ function loadViewer(options = {}) {
       list.push(handler);
       docListeners.set(type, list);
     },
+    removeEventListener(type, handler) {
+      const list = docListeners.get(type) || [];
+      docListeners.set(type, list.filter(candidate => candidate !== handler));
+    },
     dispatchEvent(event) {
       const list = docListeners.get(event && event.type) || [];
       for (const handler of list) handler(event);
@@ -182,6 +186,10 @@ function loadViewer(options = {}) {
         const list = windowListeners.get(type) || [];
         list.push(handler);
         windowListeners.set(type, list);
+      },
+      removeEventListener(type, handler) {
+        const list = windowListeners.get(type) || [];
+        windowListeners.set(type, list.filter(candidate => candidate !== handler));
       },
       dispatchEvent(event) {
         const list = windowListeners.get(event && event.type) || [];
@@ -1896,6 +1904,12 @@ async function testApiModeAutoRefreshRefetchesAndPreservesCurrentDetail() {
   pendingServers.resolve();
   await flushViewerAsync();
 
+  viewer.window.dispatchEvent({ type: 'focus' });
+  await flushViewerAsync();
+  viewer.document.dispatchEvent({ type: 'visibilitychange' });
+  await flushViewerAsync();
+  assert.strictEqual(sessionLoads, 2, 'focus and visibility events immediately after a refresh must be throttled');
+
   assert.strictEqual(snapshotLoads, 2, 'refreshing the selected detail must fetch a fresh snapshot without starting a scan');
   assert.strictEqual(rescanPosts, 0, 'automatic refresh must never post to the rescan endpoint');
   assert.deepStrictEqual(calls.filter(([url, method]) => url.includes('/rescan') || method === 'POST'), [], 'automatic refresh must remain read-only');
@@ -1904,6 +1918,13 @@ async function testApiModeAutoRefreshRefetchesAndPreservesCurrentDetail() {
   assert.strictEqual(viewer.getCurrentDetailDebugState().currentServerId, 'alpha-1');
   assert.strictEqual(viewer.getCurrentDetailDebugState().data.scan_started_unix, 200, 'automatic refresh must replace stale detail data with the refreshed snapshot');
   assert.strictEqual(viewer.getCurrentDetailDebugState().data.stale[0].path, '/new-auto-refresh-row', 'the open detail view must rerender from the refreshed data');
+
+  const focusListenerCount = (viewer.__windowListeners.get('focus') || []).length;
+  const visibilityListenerCount = (viewer.__docListeners.get('visibilitychange') || []).length;
+  viewer.window.dispatchEvent({ type: 'beforeunload' });
+  assert.strictEqual(autoRefreshTimer.cleared, true, 'page teardown must clear the automatic refresh interval');
+  assert.strictEqual((viewer.__windowListeners.get('focus') || []).length, focusListenerCount - 1, 'page teardown must remove the auto-refresh focus listener');
+  assert.strictEqual((viewer.__docListeners.get('visibilitychange') || []).length, visibilityListenerCount - 1, 'page teardown must remove the auto-refresh visibility listener');
 }
 
 
