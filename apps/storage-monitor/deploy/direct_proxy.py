@@ -20,6 +20,7 @@ PORT = int(os.environ.get("STORAGE_VIZ_PROXY_PORT", "8088"))
 UPSTREAM_HOST = os.environ.get("STORAGE_VIZ_PROXY_UPSTREAM_HOST", "127.0.0.1")
 UPSTREAM_PORT = int(os.environ.get("STORAGE_VIZ_PROXY_UPSTREAM_PORT", "8088"))
 UPSTREAM_AUTHORITY = f"{UPSTREAM_HOST}:{UPSTREAM_PORT}"
+UNTRUSTED_LOOPBACK_HOST = "storage-viz-proxy.invalid"
 RESPONSE_CHUNK_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = int(os.environ.get("STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES", str(512 * 1024 * 1024)))
 if not 1 <= MAX_RESPONSE_BYTES <= 512 * 1024 * 1024:
@@ -49,8 +50,11 @@ def _header(source: Mapping[str, str], name: str, default: str = "") -> str:
 
 
 def build_upstream_headers(source: Mapping[str, str], *, method: str) -> dict[str, str]:
+    forwarded_host = _header(source, "Host", UNTRUSTED_LOOPBACK_HOST)
+    if forwarded_host.lower() in {UPSTREAM_AUTHORITY.lower(), f"localhost:{UPSTREAM_PORT}"}:
+        forwarded_host = UNTRUSTED_LOOPBACK_HOST
     headers = {
-        "Host": _header(source, "Host", UPSTREAM_AUTHORITY),
+        "Host": forwarded_host,
         "Accept": _header(source, "Accept", "*/*"),
         "Accept-Encoding": _header(source, "Accept-Encoding", "identity"),
         "User-Agent": _header(source, "User-Agent", "storage-viz-direct-proxy"),

@@ -29,6 +29,13 @@ class HeaderForwardingTests(unittest.TestCase):
         self.assertEqual(headers["Cookie"], "storage_viz_session=abc")
         self.assertNotIn("Origin", headers)
 
+    def test_lan_request_cannot_spoof_the_loopback_upstream_host(self) -> None:
+        headers = proxy.build_upstream_headers(
+            {"Host": proxy.UPSTREAM_AUTHORITY},
+            method="GET",
+        )
+        self.assertEqual(headers["Host"], "storage-viz-proxy.invalid")
+
     def test_lan_proxy_has_no_rescan_post_handler(self) -> None:
         self.assertIs(proxy.Handler.do_POST, proxy.Handler._method_not_allowed)
 
