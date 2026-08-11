@@ -509,6 +509,7 @@ class ScanRunnerTests(unittest.TestCase):
                 mi(2, 1, "8:1", "/", "/mnt/root-bind", "rw", "ext4", "/dev/sda1"),
                 mi(3, 1, "0:3", "/", "/net", "rw", "nfs", "server:/net"),
                 mi(4, 1, "0:4", "/", "/mystery", "rw", "weirdfs", "mystery"),
+                mi(5, 1, "0:5", "net:[4026534808]", "/run/docker/netns/demo", "rw", "nsfs", "nsfs"),
             ])
             def fake(argv, **kwargs):
                 pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home")), encoding="utf-8")
@@ -528,6 +529,7 @@ class ScanRunnerTests(unittest.TestCase):
                     self.assertEqual(roots[scan_root]["scanned_files"], 0)
                     self.assertEqual(roots[scan_root]["scanned_dirs"], 0)
             self.assertEqual([m["scan_root"] for m in payload["mounts"]], ["/home"])
+            self.assertEqual(roots["/run/docker/netns/demo"]["mount_root"], "/")
 
 
     def test_duplicate_skipped_mountpoints_are_reported_once(self):

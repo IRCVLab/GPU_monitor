@@ -701,7 +701,10 @@ def _skipped_record(skipped: mount_policy.SkippedMount, media: Optional[MediaRes
             "mount_id": _skipped_mount_id(skipped),
             "major_minor": entry.major_minor,
             "mount_source": entry.source,
-            "mount_root": entry.root,
+            # Some virtual filesystems (notably nsfs) expose opaque mountinfo
+            # roots such as ``net:[4026534808]``. Skipped roots are retained
+            # for diagnostics, but schema-v1 still requires an absolute path.
+            "mount_root": entry.root if entry.root.startswith("/") else "/",
             "mountpoint": entry.mountpoint,
             "scan_root": skipped.mountpoint,
             "fstype": entry.fstype,
