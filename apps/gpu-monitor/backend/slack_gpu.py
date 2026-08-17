@@ -7,7 +7,6 @@ from zoneinfo import ZoneInfo
 _KST = ZoneInfo("Asia/Seoul")
 _MAX_SERVERS = 12
 _MAX_GPU_FIELDS = 8
-_STATUS_ORDER = {"offline": 0, "degraded": 1, "unknown": 2, "online": 3}
 _STATUS_ICON = {"online": "•", "offline": "×", "degraded": "!", "unknown": "?"}
 _SCOPE_LABELS = {
     "internal": "Internal",
@@ -58,13 +57,6 @@ def _format_memory_gb(used_mb: int | None, total_mb: int | None) -> str:
     return f"{used:.1f}/{total:.1f}GB"
 
 
-def _format_memory_compact(used_mb: int | None, total_mb: int | None) -> str:
-    used = (used_mb or 0) / 1024
-    total = (total_mb or 0) / 1024
-    total_text = f"{int(total)}" if float(total).is_integer() else f"{total:.1f}"
-    return f"{used:.1f}/{total_text}G"
-
-
 def _format_users(users: list[str]) -> str:
     if not users:
         return "idle"
@@ -81,25 +73,16 @@ def _is_gpu_active(gpu: dict) -> bool:
     return bool(users) or utilization >= 10 or power_draw >= 60 or memory_used >= 1024
 
 
-def _gpu_icon(gpu: dict) -> str:
-    if not _is_gpu_active(gpu):
-        return "○"
-    utilization = int(gpu.get("utilization") or 0)
-    total = int(gpu.get("memory_total") or 0)
-    used = int(gpu.get("memory_used") or 0)
-    memory_ratio = (used / total) if total else 0.0
-    score = max(utilization / 100.0, memory_ratio)
-    if score >= 0.9:
-        return "●"
-    if score >= 0.6:
-        return "◐"
-    return "◔"
+def _available_gpu_count(info: dict) -> int:
+    if info.get("status") != "online":
+        return 0
+    return sum(1 for gpu in info.get("gpus") or [] if not _is_gpu_active(gpu))
 
 
 def _sort_servers(info: dict) -> tuple:
     return (
-        _STATUS_ORDER.get(info.get("status", "unknown"), 9),
         int(info.get("display_order") or 0),
+        int(info.get("server_id") or 0),
         str(info.get("server_name") or "").lower(),
         int(info.get("port") or 0),
     )
@@ -155,6 +138,7 @@ def _scope_title(scope: str) -> str:
 def _summary_stats(servers: list[dict]) -> dict:
     counts = {"online": 0, "degraded": 0, "offline": 0, "unknown": 0}
     active_gpus = 0
+    available_gpus = 0
     total_gpus = 0
     latest_seen: str | None = None
 
@@ -165,6 +149,7 @@ def _summary_stats(servers: list[dict]) -> dict:
             total_gpus += 1
             if _is_gpu_active(gpu):
                 active_gpus += 1
+        available_gpus += _available_gpu_count(info)
         seen = info.get("last_seen")
         if seen and (latest_seen is None or seen > latest_seen):
             latest_seen = seen
@@ -172,6 +157,7 @@ def _summary_stats(servers: list[dict]) -> dict:
     return {
         "counts": counts,
         "active_gpus": active_gpus,
+        "available_gpus": available_gpus,
         "total_gpus": total_gpus,
         "latest_seen": latest_seen,
     }
@@ -180,20 +166,15 @@ def _summary_stats(servers: list[dict]) -> dict:
 def _summary_line(scope: str, servers: list[dict]) -> str:
     stats = _summary_stats(servers)
     counts = stats["counts"]
+    available_gpus = stats["available_gpus"]
     parts = [
-        f"scope={scope}",
-        f"servers={len(servers)}",
-        f"online={counts['online']}",
-        f"degraded={counts['degraded']}",
-        f"offline={counts['offline']}",
+        f"GPU Monitor · {_scope_title(scope)}",
+        f"{available_gpus}/{stats['total_gpus']} available",
+        f"{len(servers)} servers",
     ]
-    if counts["unknown"]:
-        parts.append(f"unknown={counts['unknown']}")
-    if stats["total_gpus"]:
-        parts.append(f"busy_gpus={stats['active_gpus']}/{stats['total_gpus']}")
-    latest_seen = stats["latest_seen"]
-    if latest_seen:
-        parts.append(f"updated_at={_format_absolute_time(latest_seen)}")
+    issue_count = counts["degraded"] + counts["offline"] + counts["unknown"]
+    if issue_count:
+        parts.append(f"{issue_count} issues")
     return " · ".join(parts)
 
 
@@ -268,11 +249,38 @@ def _server_fallback_text(info: dict) -> str:
 
 def _gpu_chip_text(gpu: dict) -> str:
     index = gpu.get("index", "?")
-    utilization = int(gpu.get("utilization") or 0)
-    memory = _format_memory_compact(gpu.get("memory_used"), gpu.get("memory_total"))
-    users = _format_users(gpu.get("users") or [])
-    user_text = _escape_mrkdwn(users)
-    return f"`{_gpu_icon(gpu)} G{index} {utilization}% {memory}` {user_text}"
+    if not _is_gpu_active(gpu):
+        return f"`○ G{index} FREE`"
+    raw_users = gpu.get("users") or []
+    users = _escape_mrkdwn(_format_users(raw_users) if raw_users else "BUSY")
+    return f"`● G{index} {users}`"
+
+
+def _gpu_fallback_label(gpu: dict) -> str:
+    users = gpu.get("users") or []
+    if users:
+        return "/".join(users)
+    return "BUSY" if _is_gpu_active(gpu) else "FREE"
+
+
+def _server_overview_fallback_text(info: dict) -> str:
+    status = str(info.get("status") or "unknown")
+    icon = _STATUS_ICON.get(status, "?")
+    server_name = str(info.get("server_name") or f"Server {info.get('server_id')}")
+    gpus = info.get("gpus") or []
+    available_count = _available_gpu_count(info)
+    line = f"{icon} {server_name} · {available_count}/{len(gpus)} available"
+    gpu_line = ""
+    if status == "online":
+        gpu_line = " · ".join(
+            f"G{gpu.get('index', '?')} {_gpu_fallback_label(gpu)}"
+            for gpu in gpus[:_MAX_GPU_FIELDS]
+        )
+    if status in {"offline", "degraded", "unknown"}:
+        reason = str((info.get("status_reason") or {}).get("message") or "").strip()
+        if reason:
+            line += f" · {reason}"
+    return f"{line}\n{gpu_line}" if gpu_line else line
 
 
 def _server_meta_line(info: dict, active_count: int, total_count: int) -> str:
@@ -305,7 +313,36 @@ def _chunk_text_lines(items: list[str], size: int = 2) -> list[str]:
     return lines
 
 
-def _server_block(info: dict) -> dict:
+def _server_overview_block(info: dict) -> dict:
+    status = str(info.get("status") or "unknown")
+    icon = _STATUS_ICON.get(status, "?")
+    server_name = _escape_mrkdwn(str(info.get("server_name") or f"Server {info.get('server_id')}"))
+    gpus = info.get("gpus") or []
+    available_count = _available_gpu_count(info)
+    text_lines = [f"{icon} *{server_name}*  ·  *{available_count} / {len(gpus)} available*"]
+
+    if status != "online":
+        reason = str((info.get("status_reason") or {}).get("message") or "").strip()
+        default_reason = "Server offline" if status == "offline" else "Status unavailable"
+        text_lines.append(f"_{_escape_mrkdwn(reason or default_reason)}_")
+    else:
+        text_lines.extend(
+            _chunk_text_lines(
+                [_gpu_chip_text(gpu) for gpu in gpus[:_MAX_GPU_FIELDS]],
+                size=4,
+            )
+        )
+        remaining = len(gpus) - min(len(gpus), _MAX_GPU_FIELDS)
+        if remaining > 0:
+            text_lines.append(f"_+{remaining} GPUs_")
+
+    return {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "\n".join(text_lines)},
+    }
+
+
+def _server_detail_block(info: dict) -> dict:
     status = str(info.get("status") or "unknown")
     icon = _STATUS_ICON.get(status, "?")
     server_name = _escape_mrkdwn(str(info.get("server_name") or f"Server {info.get('server_id')}"))
@@ -373,28 +410,33 @@ def build_gpu_command_payload(state: dict, text: str) -> dict:
 
     summary_line = _summary_line(scope, servers)
     stats = _summary_stats(servers)
-    latest_seen = stats["latest_seen"]
-    updated_text = _format_compact_time(latest_seen) if latest_seen else "-"
+    available_gpus = stats["available_gpus"]
+    issue_count = (
+        stats["counts"]["degraded"]
+        + stats["counts"]["offline"]
+        + stats["counts"]["unknown"]
+    )
+    detailed = scope.startswith("query=")
 
     fallback_lines = [f"[GPU] {summary_line}"]
     blocks: list[dict] = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"GPU Snapshot · {_scope_title(scope)}"},
+            "text": {"type": "plain_text", "text": f"GPU Monitor · {_scope_title(scope)}"},
         },
         {
             "type": "context",
             "elements": [
-                {"type": "mrkdwn", "text": f"`{len(servers)} servers`"},
-                {"type": "mrkdwn", "text": f"`{stats['active_gpus']}/{stats['total_gpus'] or 0} busy`"},
-                {
-                    "type": "mrkdwn",
-                    "text": f"`on {stats['counts']['online']} / deg {stats['counts']['degraded']} / off {stats['counts']['offline']}`",
-                },
-                {"type": "mrkdwn", "text": f"`upd {updated_text}`"},
+                {"type": "mrkdwn", "text": f"*{available_gpus} / {stats['total_gpus']} available*"},
+                {"type": "mrkdwn", "text": f"{len(servers)} servers"},
+                {"type": "mrkdwn", "text": "`○ available`  `● occupied`"},
             ],
         },
     ]
+    if issue_count:
+        blocks[1]["elements"].append(
+            {"type": "mrkdwn", "text": f"*{issue_count} issue{'s' if issue_count != 1 else ''}*"}
+        )
 
     if not servers:
         empty_text = f"조건에 맞는 서버가 없습니다.\n{_usage_text()}"
@@ -413,8 +455,12 @@ def build_gpu_command_payload(state: dict, text: str) -> dict:
 
     shown = servers[:_MAX_SERVERS]
     for info in shown:
-        fallback_lines.append(_server_fallback_text(info))
-        blocks.append(_server_block(info))
+        if detailed:
+            fallback_lines.append(_server_fallback_text(info))
+            blocks.append(_server_detail_block(info))
+        else:
+            fallback_lines.append(_server_overview_fallback_text(info))
+            blocks.append(_server_overview_block(info))
 
     remaining = len(servers) - len(shown)
     if remaining > 0:
