@@ -32,7 +32,10 @@ class SlackSocketService:
             logger.info("Slack Socket Mode disabled: token/app_token not configured")
             return
 
-        app = App(token=settings.slack_bot_token)
+        app = App(
+            token=settings.slack_bot_token,
+            request_verification_enabled=False,
+        )
 
         @app.command("/gpu")
         @app.command("/status")
