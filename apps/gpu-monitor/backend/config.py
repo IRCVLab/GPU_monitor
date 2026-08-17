@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_signing_secret: str = ""
+    storage_monitor_api_url: str = "http://127.0.0.1:8088/api/servers"
     slack_log_channel: str = Field(
         default="#gpu-monitor",
         validation_alias=AliasChoices("SLACK_LOG_CHANNEL", "SLACK_LOG_CHANNEL_ID"),
