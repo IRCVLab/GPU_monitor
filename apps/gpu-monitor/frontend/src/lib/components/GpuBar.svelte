@@ -93,6 +93,7 @@
           class={`monitor-gpu-row__hold-cue ${primaryPriorityMeta?.className ?? ''}`}
           aria-hidden="true"
         >
+          <span class="monitor-gpu-row__hold-kind">HOLD</span>
           <span class="monitor-gpu-row__hold-owner">{primaryHoldDisplayName}</span>
           {#if priorityNudge}
             <span class="monitor-gpu-row__hold-nudge">{priorityNudge}</span>

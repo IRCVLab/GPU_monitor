@@ -22,7 +22,7 @@
 	const HOLD_PRIORITY_OPTIONS: { value: NotePriority; label: string; description: string }[] = [
 		{ value: 'normal', label: '보통', description: '일정 조정 가능 · 다른 사용 계획과 협의할 수 있습니다.' },
 		{ value: 'high', label: '높음', description: '일정 변경이 어려움 · 변경 전 등록자 확인이 필요합니다.' },
-		{ value: 'urgent', label: '개초비상', description: '즉시 대응 필요 · 충돌하면 등록자에게 바로 연락해야 합니다.' }
+		{ value: 'urgent', label: '개초비상', description: '긴급 · 지금 당장 사용해야 합니다.' }
 	];
 
 	let username = $state('');
@@ -30,7 +30,6 @@
 	let content = $state('');
 	let displayName = $state('');
 	let priority = $state<NotePriority>('normal');
-	let priorityHelpValue = $state<NotePriority | null>(null);
 	let loading = $state(false);
 	let error = $state('');
 	let nowMs = $state(Date.now());
@@ -49,7 +48,7 @@
 		};
 	});
 	const activePriorityOption = $derived(
-		HOLD_PRIORITY_OPTIONS.find((option) => option.value === (priorityHelpValue ?? priority)) ?? HOLD_PRIORITY_OPTIONS[0]
+		HOLD_PRIORITY_OPTIONS.find((option) => option.value === priority) ?? HOLD_PRIORITY_OPTIONS[0]
 	);
 
 	function pad(value: number): string {
@@ -227,10 +226,6 @@
 								class="note-form-priority-chip"
 								data-selected={priority === option.value ? 'true' : 'false'}
 								aria-pressed={priority === option.value}
-								onmouseenter={() => (priorityHelpValue = option.value)}
-								onfocus={() => (priorityHelpValue = option.value)}
-								onmouseleave={() => (priorityHelpValue = null)}
-								onblur={() => (priorityHelpValue = null)}
 								onclick={() => (priority = option.value)}
 							>
 								{option.label}

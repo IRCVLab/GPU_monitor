@@ -426,6 +426,14 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
   color: color-mix(in srgb, #ef4444 82%, var(--ops-fg));
 }
 
+.monitor-gpu-row__hold-kind {
+  flex: 0 0 auto;
+  font-size: 0.56rem;
+  font-weight: 760;
+  letter-spacing: 0.055em;
+  opacity: 0.68;
+}
+
 .monitor-gpu-row__hold-nudge {
   flex: 0 0 auto;
   display: inline-grid;
