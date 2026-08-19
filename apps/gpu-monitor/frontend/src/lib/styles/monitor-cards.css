@@ -1680,24 +1680,12 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
   color: color-mix(in srgb, var(--ops-fg) 52%, transparent);
 }
 
-.monitor-note-item__gpu-chips {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  vertical-align: middle;
-}
-
-.monitor-note-item__gpu-chip {
+.monitor-note-item__gpu-count {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 1.2rem;
-  padding: 0.08rem 0.38rem;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
-  background: color-mix(in srgb, var(--ops-muted) 70%, var(--ops-card));
-  color: color-mix(in srgb, var(--ops-fg) 72%, transparent);
-  font-size: 0.68rem;
+  color: color-mix(in srgb, var(--ops-fg) 62%, transparent);
+  font-size: 0.65rem;
+  font-weight: 620;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }

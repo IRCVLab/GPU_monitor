@@ -5,10 +5,12 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('./ServerCard.svelte', import.meta.url), 'utf8');
 
-test('ServerCard renders advisory hold chips, wires the dense NoteForm props, and keeps only concise composer guidance', () => {
+test('ServerCard renders a concise advisory hold count, wires the dense NoteForm props, and keeps only concise composer guidance', () => {
 	assert.match(source, /note\.kind === 'hold'/);
 	assert.match(source, /note\.gpu_indices/);
 	assert.match(source, /monitor-note-item__kind">HOLD<\/span>/);
+	assert.match(source, /monitor-note-item__gpu-count">\{holdGpuSummary\(note\)\}<\/span>/);
+	assert.doesNotMatch(source, /monitor-note-item__gpu-chip">G\{gpuIndex\}<\/span>/);
 	assert.match(
 		source,
 		/<NoteForm[\s\S]*serverId=\{server\.server_id\}[\s\S]*gpus=\{server\.gpus\}[\s\S]*serverStatus=\{server\.status\}[\s\S]*lastSeen=\{server\.last_seen\}[\s\S]*active=\{notesExpanded\}[\s\S]*onCreated=\{onNoteCreated\}/
@@ -177,7 +179,7 @@ test('collapsed memo preview uses explicit Korean relative expiry instead of cry
 	assert.match(preview, /monitor-card__note-preview-content/);
 	assert.match(preview, /monitor-card__note-preview-expiry/);
 	assert.match(preview, /\{noteRemainingText\(previewNotes\[0\]\)\}/, 'collapsed memo preview should use explicit Korean relative expiry');
-	assert.match(preview, /monitor-card__note-preview-hold/, 'hold preview should lead with explicit HOLD GPU scope');
+	assert.match(preview, /HOLD · \{holdGpuSummary\(previewNotes\[0\]\)\}/, 'hold preview should summarize GPU scope without listing every index');
 	assert.match(preview, /@\{previewNotes\[0\]\.username\}/, 'memo owner must be unmistakable as a user identity');
 	assert.match(preview, /title=\{previewNotes\[0\]\.content\}/, 'truncated memo content must retain its full text');
 	assert.doesNotMatch(source, /notePreviewCountdownText/, 'cryptic D\/H\/M\/S countdown helper should be removed');
@@ -202,10 +204,11 @@ test('Task 4 ServerCard consumes the page shared nowMs clock and owns no interva
 	assert.doesNotMatch(source, /\bclearInterval\s*\(/, 'ServerCard should not own an interval cleanup');
 });
 
-test('ServerCard note preview and history keep concise HOLD markers and GPU chips', () => {
+test('ServerCard note preview and history keep concise HOLD markers without repeated GPU index lists', () => {
 	assert.doesNotMatch(source, /advisory soft hold/);
 	assert.match(source, /monitor-note-item__kind">HOLD<\/span>/);
-	assert.match(source, /monitor-note-item__gpu-chip">G\{gpuIndex\}<\/span>/);
+	assert.match(source, /function holdGpuSummary\(note: Note\): string \{[\s\S]*return `GPU \$\{holdGpuIndices\(note\)\.length\}개`;[\s\S]*\}/);
+	assert.doesNotMatch(source, /\{#each holdGpuIndices\((?:note|previewNotes\[0\])\)/);
 	assert.match(source, /monitor-note-item__user">@\{note\.username\}<\/span>/, 'history must distinguish author from memo copy');
 	assert.doesNotMatch(source, /monitor-note-item__user">@\{resolveDisplayName\(note\)\}<\/span>/, 'display_name must not replace username ownership or delete identity');
 });

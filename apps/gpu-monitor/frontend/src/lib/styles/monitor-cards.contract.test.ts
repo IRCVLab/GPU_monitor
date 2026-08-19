@@ -302,8 +302,9 @@ test('unified GPU selector remains chip-based, compact, and visually integrated'
 	assert.match(css, /\.note-form-gpu-chip\[aria-pressed='true'\]/);
 	assert.match(css, /\.note-form-hold-warning/);
 	assert.match(css, /\.monitor-note-item__kind/);
-	assert.match(css, /\.monitor-note-item__gpu-chips/);
-	assert.match(css, /\.monitor-note-item__gpu-chip/);
+	assert.match(css, /\.monitor-note-item__gpu-count/);
+	assert.doesNotMatch(css, /\.monitor-note-item__gpu-chips/);
+	assert.doesNotMatch(css, /\.monitor-note-item__gpu-chip\s*\{/);
 });
 
 test('GPU chip hover has focus-visible and reduced-motion coverage', () => {

@@ -202,6 +202,10 @@
     return [...new Set(note.gpu_indices.filter((value) => Number.isInteger(value) && value >= 0))].sort((a, b) => a - b);
   }
 
+  function holdGpuSummary(note: Note): string {
+    return `GPU ${holdGpuIndices(note).length}개`;
+  }
+
   function notePreviewBadgeClass(note: Note): string {
     const remainingMs = noteRemainingMs(note);
     if (remainingMs !== null && remainingMs <= ONE_HOUR_MS) return 'is-urgent';
@@ -619,7 +623,7 @@
                 <span class="monitor-card__note-preview-main">
                   {#if previewNotes[0].kind === 'hold'}
                     <span class="monitor-card__note-preview-hold">
-                      HOLD {#each holdGpuIndices(previewNotes[0]) as gpuIndex, index (gpuIndex)}{index > 0 ? '·' : ''}G{gpuIndex}{/each}
+                      HOLD · {holdGpuSummary(previewNotes[0])}
                     </span>
                   {/if}
                   <span class="monitor-card__note-preview-user">@{previewNotes[0].username}</span>
@@ -683,11 +687,7 @@
                           {#if note.kind === 'hold'}
                             <div class="monitor-note-item__hold">
                               <span class="monitor-note-item__kind">HOLD</span>
-                              <span class="monitor-note-item__gpu-chips" aria-label="Selected GPUs">
-                                {#each holdGpuIndices(note) as gpuIndex (gpuIndex)}
-                                  <span class="monitor-note-item__gpu-chip">G{gpuIndex}</span>
-                                {/each}
-                              </span>
+                              <span class="monitor-note-item__gpu-count">{holdGpuSummary(note)}</span>
                             </div>
                           {/if}
                           <p class="monitor-note-item__content">{note.content}</p>
