@@ -76,13 +76,18 @@ test('NoteForm keeps memo submission unchanged until selected GPUs reveal priori
 });
 
 test('NoteForm priority descriptions stay focused on urgency and keep hover or focus help interactions', () => {
-	for (const description of ['가벼운 작업 공유용입니다.', '곧 사용할 작업을 강조합니다.', '즉시 확인이 필요한 작업입니다.']) {
+	for (const description of [
+		'일정 조정 가능 · 다른 사용 계획과 협의할 수 있습니다.',
+		'일정 변경이 어려움 · 변경 전 등록자 확인이 필요합니다.',
+		'즉시 대응 필요 · 충돌하면 등록자에게 바로 연락해야 합니다.'
+	]) {
 		assert.ok(source.includes(description), `missing priority description: ${description}`);
 	}
 	assert.doesNotMatch(source, /예약 보장 아님/);
 	assert.match(source, /보통/);
 	assert.match(source, /높음/);
-	assert.match(source, /긴급/);
+	assert.match(source, /개초비상/);
+	assert.doesNotMatch(source, /곧 사용할 작업/);
 	assert.match(source, /onmouseenter=\{\(\)\s*=>\s*\(priorityHelpValue\s*=\s*option\.value\)\}/);
 	assert.match(source, /onfocus=\{\(\)\s*=>\s*\(priorityHelpValue\s*=\s*option\.value\)\}/);
 	assert.match(source, /onmouseleave=\{\(\)\s*=>\s*\(priorityHelpValue\s*=\s*null\)\}/);

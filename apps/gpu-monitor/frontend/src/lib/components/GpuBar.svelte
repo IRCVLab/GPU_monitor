@@ -48,6 +48,7 @@
   const primaryHold = $derived(holdAdvisory.primary);
   const primaryPriorityMeta = $derived(primaryHold ? getNotePriorityMeta(primaryHold.priority) : null);
   const primaryHoldDisplayName = $derived(primaryHold ? resolveDisplayName(primaryHold) : '');
+  const priorityNudge = $derived(primaryHold?.priority === 'urgent' ? '!!' : primaryHold?.priority === 'high' ? '!' : '');
   const compactHoldAriaText = $derived.by(() => {
     if (!primaryHold) return '';
 
@@ -92,10 +93,9 @@
           class={`monitor-gpu-row__hold-cue ${primaryPriorityMeta?.className ?? ''}`}
           aria-hidden="true"
         >
-          <span class="monitor-gpu-row__hold-kind">HOLD</span>
           <span class="monitor-gpu-row__hold-owner">{primaryHoldDisplayName}</span>
-          {#if primaryHold.priority !== 'normal'}
-            <span class="monitor-gpu-row__hold-priority">{primaryPriorityMeta?.label}</span>
+          {#if priorityNudge}
+            <span class="monitor-gpu-row__hold-nudge">{priorityNudge}</span>
           {/if}
           {#if holdAdvisory.secondarySummary}
             <span class="monitor-gpu-row__hold-more">{holdAdvisory.secondarySummary}</span>

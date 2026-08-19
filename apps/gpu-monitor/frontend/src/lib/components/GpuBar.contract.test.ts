@@ -61,11 +61,7 @@ test('GpuBar ranks advisory holds through shared noteAdvisory helpers and keeps 
 		/class="monitor-gpu-row__index" data-has-hold=\{primaryHold \? 'true' : 'false'\}/,
 		'the exact G# chip should advertise when it carries a HOLD collar'
 	);
-	assert.match(
-		source,
-		/\{#if primaryHold\.priority !== 'normal'\}[\s\S]*\{primaryPriorityMeta\??\.label\}[\s\S]*\{\/if\}/,
-		'high and urgent cues should surface visible priority text'
-	);
+	assert.match(source, /const\s+priorityNudge\s*=\s*\$derived\(primaryHold\?\.priority === 'urgent' \? '!!' : primaryHold\?\.priority === 'high' \? '!' : ''\)/);
 	assert.match(
 		source,
 		/\{holdAdvisory\.secondarySummary\}/,
@@ -73,11 +69,11 @@ test('GpuBar ranks advisory holds through shared noteAdvisory helpers and keeps 
 	);
 });
 
-test('GpuBar cue prefixes the owner with a visible HOLD label without changing telemetry truth', () => {
-	assert.match(source, /<span class="monitor-gpu-row__hold-kind">HOLD<\/span>/, 'full GPU cue should show a literal HOLD kind label');
+test('GpuBar cue leads with the owner and uses compact urgency nudges instead of repetitive HOLD text', () => {
+	assert.doesNotMatch(source, /<span class="monitor-gpu-row__hold-kind">HOLD<\/span>/, 'full GPU cue should not repeat a literal HOLD label');
 	assert.match(source, /<span class="monitor-gpu-row__hold-owner">\{primaryHoldDisplayName\}<\/span>/, 'owner label should remain separate from the HOLD kind');
-	assert.match(source, /monitor-gpu-row__hold-kind[\s\S]*monitor-gpu-row__hold-owner/, 'visible cue order should read HOLD before the display name');
-	assert.doesNotMatch(source, /<span class="monitor-gpu-row__hold-owner">HOLD \{primaryHoldDisplayName\}<\/span>/, 'owner label should not be mutated into a synthetic HOLD username');
+	assert.match(source, /monitor-gpu-row__hold-owner[\s\S]*\{#if priorityNudge\}[\s\S]*monitor-gpu-row__hold-nudge[\s\S]*\{priorityNudge\}/, 'visible cue should read owner then a compact urgency nudge');
+	assert.doesNotMatch(source, /monitor-gpu-row__hold-priority/, 'full GPU cue should not repeat a textual priority label');
 });
 
 test('GpuBar preserves telemetry truth in aria-label while adding only a concise advisory summary', () => {
@@ -102,7 +98,7 @@ test('GpuBar renders a static compact HOLD summary without interactive or duplic
 	assert.doesNotMatch(source, /role="tooltip"|monitor-gpu-row__tooltip/);
 	assert.doesNotMatch(source, /GPU G\{gpu\.index\} · \{gpu\.name\}/, 'hold cue must not repeat GPU identity or model');
 	assert.doesNotMatch(source, /entry\.remaining|entry\.note\.content/, 'hold cue must leave expiry and memo bodies to the Memo panel');
-	assert.match(source, /monitor-gpu-row__hold-kind[\s\S]*monitor-gpu-row__hold-owner[\s\S]*monitor-gpu-row__hold-priority/, 'cue should read HOLD, owner, then exceptional priority');
+	assert.match(source, /monitor-gpu-row__hold-owner[\s\S]*monitor-gpu-row__hold-nudge/, 'cue should keep the owner primary and urgency secondary');
 	assert.match(source, /\{holdAdvisory\.secondarySummary\}/, 'multiple holds should remain summarized as +N');
 	assert.match(cssRule('.monitor-gpu-row__hold-cue'), /pointer-events:\s*none/, 'static cue must not advertise a hover interaction');
 	assert.doesNotMatch(cardCss, /\.monitor-gpu-row__tooltip(?:\s|\{|[-_])/, 'obsolete tooltip styling should be removed');

@@ -35,7 +35,7 @@ test('resolveDisplayName falls back to username when raw display_name is null or
 test('priority metadata returns semantic labels and classes', () => {
 	assert.deepEqual(getNotePriorityMeta('normal'), { label: '보통', className: 'note-priority--normal' });
 	assert.deepEqual(getNotePriorityMeta('high'), { label: '높음', className: 'note-priority--high' });
-	assert.deepEqual(getNotePriorityMeta('urgent'), { label: '긴급', className: 'note-priority--urgent' });
+	assert.deepEqual(getNotePriorityMeta('urgent'), { label: '개초비상', className: 'note-priority--urgent' });
 });
 
 test('hold ranking is deterministic by priority, soonest expiry, and stable tie-break', () => {

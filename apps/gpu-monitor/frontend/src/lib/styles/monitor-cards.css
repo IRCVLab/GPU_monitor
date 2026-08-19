@@ -426,10 +426,28 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
   color: color-mix(in srgb, #ef4444 82%, var(--ops-fg));
 }
 
-.monitor-gpu-row__hold-priority,
-.monitor-gpu-row__hold-kind {
+.monitor-gpu-row__hold-nudge {
   flex: 0 0 auto;
-  text-transform: uppercase;
+  display: inline-grid;
+  place-items: center;
+  min-width: 0.92rem;
+  height: 0.92rem;
+  padding: 0 0.18rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ops-fg) 72%, transparent);
+  color: var(--ops-card);
+  font-size: 0.56rem;
+  font-weight: 850;
+  letter-spacing: -0.08em;
+  line-height: 1;
+}
+
+.monitor-gpu-row__hold-cue.note-priority--high .monitor-gpu-row__hold-nudge {
+  background: #f59e0b;
+}
+
+.monitor-gpu-row__hold-cue.note-priority--urgent .monitor-gpu-row__hold-nudge {
+  background: #ef4444;
 }
 
 .monitor-gpu-row__hold-owner,

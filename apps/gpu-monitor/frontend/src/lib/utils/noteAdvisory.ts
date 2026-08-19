@@ -15,7 +15,7 @@ export interface HoldAdvisory {
 const NOTE_PRIORITY_META: Record<NotePriority, NotePriorityMeta> = {
 	normal: { label: '보통', className: 'note-priority--normal' },
 	high: { label: '높음', className: 'note-priority--high' },
-	urgent: { label: '긴급', className: 'note-priority--urgent' }
+	urgent: { label: '개초비상', className: 'note-priority--urgent' }
 };
 
 const NOTE_PRIORITY_RANK: Record<NotePriority, number> = {

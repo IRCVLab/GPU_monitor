@@ -20,9 +20,9 @@
 	const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 	const MIN_FUTURE_MS = 60 * 1000;
 	const HOLD_PRIORITY_OPTIONS: { value: NotePriority; label: string; description: string }[] = [
-		{ value: 'normal', label: '보통', description: '가벼운 작업 공유용입니다.' },
-		{ value: 'high', label: '높음', description: '곧 사용할 작업을 강조합니다.' },
-		{ value: 'urgent', label: '긴급', description: '즉시 확인이 필요한 작업입니다.' }
+		{ value: 'normal', label: '보통', description: '일정 조정 가능 · 다른 사용 계획과 협의할 수 있습니다.' },
+		{ value: 'high', label: '높음', description: '일정 변경이 어려움 · 변경 전 등록자 확인이 필요합니다.' },
+		{ value: 'urgent', label: '개초비상', description: '즉시 대응 필요 · 충돌하면 등록자에게 바로 연락해야 합니다.' }
 	];
 
 	let username = $state('');
