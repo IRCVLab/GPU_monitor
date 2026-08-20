@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import { prefersReducedMotion } from 'svelte/motion';
   import { fly } from 'svelte/transition';
@@ -46,9 +47,82 @@
   });
   const holdAdvisory = $derived(buildHoldAdvisory(advisoryHolds.map(({ note }) => note)));
   const primaryHold = $derived(holdAdvisory.primary);
+  const secondaryHolds = $derived(holdAdvisory.ordered.slice(1));
   const primaryPriorityMeta = $derived(primaryHold ? getNotePriorityMeta(primaryHold.priority) : null);
   const primaryHoldDisplayName = $derived(primaryHold ? resolveDisplayName(primaryHold) : '');
   const priorityNudge = $derived(primaryHold?.priority === 'urgent' ? '!!' : primaryHold?.priority === 'high' ? '!' : '');
+  let secondaryHoldsOpen = $state(false);
+  let secondaryPopoverReady = $state(false);
+  let secondaryMoreButton = $state<HTMLButtonElement | undefined>();
+  let secondaryPopover = $state<HTMLDivElement | undefined>();
+  let secondaryPopoverLeft = $state(0);
+  let secondaryPopoverTop = $state(0);
+  let secondaryPopoverFrame: number | null = null;
+  const secondaryHoldAriaLabel = $derived.by(() =>
+    secondaryHolds
+      .map((note) => {
+        const meta = getNotePriorityMeta(note.priority);
+        return `${resolveDisplayName(note)}, ${meta.label}`;
+      })
+      .join(', ')
+  );
+
+  function getPriorityNudge(priority: Note['priority']): string {
+    return priority === 'urgent' ? '!!' : priority === 'high' ? '!' : '';
+  }
+
+  function cancelSecondaryPopoverFrame(): void {
+    if (secondaryPopoverFrame === null) return;
+    cancelAnimationFrame(secondaryPopoverFrame);
+    secondaryPopoverFrame = null;
+  }
+
+  function openSecondaryHolds(): void {
+    if (!secondaryMoreButton || !secondaryPopover || secondaryHolds.length === 0) return;
+
+    secondaryHoldsOpen = true;
+    secondaryPopoverReady = false;
+    if (typeof secondaryPopover.showPopover === 'function' && !secondaryPopover.matches(':popover-open')) {
+      secondaryPopover.showPopover();
+    }
+
+    cancelSecondaryPopoverFrame();
+    secondaryPopoverFrame = requestAnimationFrame(() => {
+      if (!secondaryHoldsOpen || !secondaryMoreButton || !secondaryPopover) return;
+
+      const triggerRect = secondaryMoreButton.getBoundingClientRect();
+      const popoverRect = secondaryPopover.getBoundingClientRect();
+      const gutter = 8;
+      const maxLeft = Math.max(gutter, window.innerWidth - popoverRect.width - gutter);
+      const preferredLeft = triggerRect.right - popoverRect.width;
+      const preferredTop = triggerRect.top - popoverRect.height - gutter;
+
+      secondaryPopoverLeft = Math.min(Math.max(gutter, preferredLeft), maxLeft);
+      const maxTop = Math.max(gutter, window.innerHeight - popoverRect.height - gutter);
+      secondaryPopoverTop = preferredTop >= gutter
+        ? preferredTop
+        : Math.min(triggerRect.bottom + gutter, maxTop);
+      secondaryPopoverReady = true;
+      secondaryPopoverFrame = null;
+    });
+  }
+
+  function closeSecondaryHolds(): void {
+    secondaryHoldsOpen = false;
+    secondaryPopoverReady = false;
+    cancelSecondaryPopoverFrame();
+    if (secondaryPopover && typeof secondaryPopover.hidePopover === 'function' && secondaryPopover.matches(':popover-open')) {
+      secondaryPopover.hidePopover();
+    }
+  }
+
+  function handleSecondaryHoldsKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape') return;
+    closeSecondaryHolds();
+    secondaryMoreButton?.blur();
+  }
+
+  onDestroy(cancelSecondaryPopoverFrame);
   const compactHoldAriaText = $derived.by(() => {
     if (!primaryHold) return '';
 
@@ -91,15 +165,45 @@
       {#if primaryHold}
         <span
           class={`monitor-gpu-row__hold-cue ${primaryPriorityMeta?.className ?? ''}`}
-          aria-hidden="true"
         >
-          <span class="monitor-gpu-row__hold-kind">HOLD</span>
-          <span class="monitor-gpu-row__hold-owner">{primaryHoldDisplayName}</span>
+          <span class="monitor-gpu-row__hold-kind" aria-hidden="true">HOLD</span>
+          <span class="monitor-gpu-row__hold-owner" aria-hidden="true">{primaryHoldDisplayName}</span>
           {#if priorityNudge}
-            <span class="monitor-gpu-row__hold-nudge">{priorityNudge}</span>
+            <span class="monitor-gpu-row__hold-nudge" aria-hidden="true">{priorityNudge}</span>
           {/if}
           {#if holdAdvisory.secondarySummary}
-            <span class="monitor-gpu-row__hold-more">{holdAdvisory.secondarySummary}</span>
+            <span class="monitor-gpu-row__hold-more-wrap">
+              <button
+                bind:this={secondaryMoreButton}
+                type="button"
+                class="monitor-gpu-row__hold-more"
+                aria-label={`다른 HOLD ${holdAdvisory.secondaryCount}개: ${secondaryHoldAriaLabel}`}
+                onmouseenter={openSecondaryHolds}
+                onmouseleave={closeSecondaryHolds}
+                onfocus={openSecondaryHolds}
+                onblur={closeSecondaryHolds}
+                onkeydown={handleSecondaryHoldsKeydown}
+              >{holdAdvisory.secondarySummary}</button>
+              <div
+                bind:this={secondaryPopover}
+                class="monitor-gpu-row__hold-popover"
+                popover="manual"
+                role="tooltip"
+                data-open={secondaryHoldsOpen && secondaryPopoverReady ? 'true' : 'false'}
+                style={`--hold-popover-left: ${secondaryPopoverLeft}px; --hold-popover-top: ${secondaryPopoverTop}px;`}
+              >
+                {#each secondaryHolds as note (note.id)}
+                  {@const meta = getNotePriorityMeta(note.priority)}
+                  {@const nudge = getPriorityNudge(note.priority)}
+                  <span class={`monitor-gpu-row__hold-popover-entry ${meta.className}`}>
+                    <span class="monitor-gpu-row__hold-popover-owner">{resolveDisplayName(note)}</span>
+                    {#if nudge}
+                      <span class="monitor-gpu-row__hold-popover-nudge" aria-label={meta.label}>{nudge}</span>
+                    {/if}
+                  </span>
+                {/each}
+              </div>
+            </span>
           {/if}
         </span>
       {/if}

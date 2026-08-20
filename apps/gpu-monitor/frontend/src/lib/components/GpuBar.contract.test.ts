@@ -70,8 +70,8 @@ test('GpuBar ranks advisory holds through shared noteAdvisory helpers and keeps 
 });
 
 test('GpuBar cue keeps the concise HOLD owner prefix and uses compact urgency nudges', () => {
-	assert.match(source, /<span class="monitor-gpu-row__hold-kind">HOLD<\/span>/, 'full GPU cue should identify the advisory as HOLD');
-	assert.match(source, /<span class="monitor-gpu-row__hold-owner">\{primaryHoldDisplayName\}<\/span>/, 'owner label should remain separate from the HOLD kind');
+	assert.match(source, /<span class="monitor-gpu-row__hold-kind"[^>]*>HOLD<\/span>/, 'full GPU cue should identify the advisory as HOLD');
+	assert.match(source, /<span class="monitor-gpu-row__hold-owner"[^>]*>\{primaryHoldDisplayName\}<\/span>/, 'owner label should remain separate from the HOLD kind');
 	assert.match(source, /monitor-gpu-row__hold-kind[\s\S]*monitor-gpu-row__hold-owner[\s\S]*\{#if priorityNudge\}[\s\S]*monitor-gpu-row__hold-nudge[\s\S]*\{priorityNudge\}/, 'visible cue should read HOLD, owner, then a compact urgency nudge');
 	assert.doesNotMatch(source, /monitor-gpu-row__hold-priority/, 'full GPU cue should not repeat a textual priority label');
 });
@@ -89,19 +89,30 @@ test('GpuBar preserves telemetry truth in aria-label while adding only a concise
 	assert.doesNotMatch(source, /entry\.note\.content/, 'GPU row aria must not repeat memo bodies');
 });
 
-test('GpuBar renders a static compact HOLD summary without interactive or duplicate detail UI', () => {
+test('GpuBar keeps one compact HOLD owner and reveals ranked secondary owners from +N on hover or focus', () => {
 	assert.match(source, /<span[\s\S]*class=\{`monitor-gpu-row__hold-cue/);
-	assert.match(source, /class=\{`monitor-gpu-row__hold-cue[\s\S]*aria-hidden="true"/, 'visible cue should not duplicate the row-level accessible summary');
-	assert.doesNotMatch(source, /<button[\s\S]*class=\{`monitor-gpu-row__hold-cue/);
-	assert.doesNotMatch(source, /tooltipOpen|tooltipId|openTooltip|closeTooltip|handleTooltipKeydown/);
-	assert.doesNotMatch(source, /onmouseenter=|onmouseleave=|onfocus=|onblur=|onkeydown=/);
-	assert.doesNotMatch(source, /role="tooltip"|monitor-gpu-row__tooltip/);
+	assert.match(source, /const\s+secondaryHolds\s*=\s*\$derived\(holdAdvisory\.ordered\.slice\(1\)\)/);
+	assert.match(source, /let\s+secondaryHoldsOpen\s*=\s*\$state\(false\)/);
+	assert.match(source, /<button[\s\S]*class="monitor-gpu-row__hold-more"[\s\S]*\{holdAdvisory\.secondarySummary\}[\s\S]*<\/button>/);
+	assert.match(source, /onmouseenter=\{openSecondaryHolds\}/);
+	assert.match(source, /onmouseleave=\{closeSecondaryHolds\}/);
+	assert.match(source, /onfocus=\{openSecondaryHolds\}/);
+	assert.match(source, /onblur=\{closeSecondaryHolds\}/);
+	assert.match(source, /onkeydown=\{handleSecondaryHoldsKeydown\}/);
+	assert.match(source, /role="tooltip"/);
+	assert.match(source, /\{#each secondaryHolds as note \(note\.id\)\}/, 'popover should preserve the shared ranked order');
+	assert.match(source, /resolveDisplayName\(note\)/, 'popover should identify every remaining owner');
+	assert.match(source, /getPriorityNudge\(note\.priority\)/, 'popover should retain urgency distinctions');
 	assert.doesNotMatch(source, /GPU G\{gpu\.index\} · \{gpu\.name\}/, 'hold cue must not repeat GPU identity or model');
-	assert.doesNotMatch(source, /entry\.remaining|entry\.note\.content/, 'hold cue must leave expiry and memo bodies to the Memo panel');
+	assert.doesNotMatch(source, /entry\.remaining|entry\.note\.content|note\.content|expires_at/, 'hold popover must leave expiry and memo bodies to the Memo panel');
 	assert.match(source, /monitor-gpu-row__hold-kind[\s\S]*monitor-gpu-row__hold-owner[\s\S]*monitor-gpu-row__hold-nudge/, 'cue should keep HOLD and owner primary with urgency secondary');
 	assert.match(source, /\{holdAdvisory\.secondarySummary\}/, 'multiple holds should remain summarized as +N');
-	assert.match(cssRule('.monitor-gpu-row__hold-cue'), /pointer-events:\s*none/, 'static cue must not advertise a hover interaction');
-	assert.doesNotMatch(cardCss, /\.monitor-gpu-row__tooltip(?:\s|\{|[-_])/, 'obsolete tooltip styling should be removed');
+	assert.match(cssRule('.monitor-gpu-row__hold-cue'), /position:\s*relative/);
+	assert.match(cssRule('.monitor-gpu-row__hold-cue'), /pointer-events:\s*auto/);
+	assert.match(cssRule('.monitor-gpu-row__hold-popover'), /position:\s*fixed/);
+	assert.match(cssRule('.monitor-gpu-row__hold-popover'), /inset:\s*auto/);
+	assert.match(cssRule('.monitor-gpu-row__hold-popover'), /z-index:/);
+	assert.match(cardCss, /\.monitor-gpu-row__hold-popover\[data-open='true'\][\s\S]*opacity:\s*1/);
 
 	const gpuListRule = cssRule('.monitor-card__gpu-list');
 	assertDeclaration(gpuListRule, 'padding-top', '0.4rem');

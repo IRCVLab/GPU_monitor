@@ -28,9 +28,8 @@ function priorityRank(priority: NotePriority): number {
 	return NOTE_PRIORITY_RANK[priority];
 }
 
-function expiryRank(expiresAt: string | null): number {
-	if (!expiresAt) return Number.POSITIVE_INFINITY;
-	const parsed = Date.parse(expiresAt);
+function createdRank(createdAt: string): number {
+	const parsed = Date.parse(createdAt);
 	return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
 }
 
@@ -50,7 +49,7 @@ export function rankHoldNotes(notes: readonly Note[]): Note[] {
 		.sort((a, b) => {
 			return (
 				priorityRank(a.note.priority) - priorityRank(b.note.priority) ||
-				expiryRank(a.note.expires_at) - expiryRank(b.note.expires_at) ||
+				createdRank(a.note.created_at) - createdRank(b.note.created_at) ||
 				a.index - b.index
 			);
 		})

@@ -38,26 +38,51 @@ test('priority metadata returns semantic labels and classes', () => {
 	assert.deepEqual(getNotePriorityMeta('urgent'), { label: '개초비상', className: 'note-priority--urgent' });
 });
 
-test('hold ranking is deterministic by priority, soonest expiry, and stable tie-break', () => {
-	const sameExpiryFirst = makeHoldNote({ id: 21, priority: 'urgent', expires_at: '2026-07-15T02:00:00Z' });
-	const normalSoon = makeHoldNote({ id: 22, priority: 'normal', expires_at: '2026-07-15T01:00:00Z' });
-	const urgentEarlier = makeHoldNote({ id: 23, priority: 'urgent', expires_at: '2026-07-15T01:00:00Z' });
-	const highSoon = makeHoldNote({ id: 24, priority: 'high', expires_at: '2026-07-15T00:30:00Z' });
-	const sameExpirySecond = makeHoldNote({ id: 25, priority: 'urgent', expires_at: '2026-07-15T02:00:00Z' });
+test('hold ranking prefers higher priority then first-created hold regardless of expiry', () => {
+	const urgentFirst = makeHoldNote({
+		id: 21,
+		priority: 'urgent',
+		created_at: '2026-07-15T00:01:00Z',
+		expires_at: '2026-07-15T04:00:00Z'
+	});
+	const normalFirst = makeHoldNote({
+		id: 22,
+		priority: 'normal',
+		created_at: '2026-07-14T23:00:00Z',
+		expires_at: '2026-07-15T00:05:00Z'
+	});
+	const urgentSecond = makeHoldNote({
+		id: 23,
+		priority: 'urgent',
+		created_at: '2026-07-15T00:02:00Z',
+		expires_at: '2026-07-15T00:10:00Z'
+	});
+	const highFirst = makeHoldNote({
+		id: 24,
+		priority: 'high',
+		created_at: '2026-07-14T23:30:00Z',
+		expires_at: '2026-07-15T00:01:00Z'
+	});
+	const urgentSameTime = makeHoldNote({
+		id: 25,
+		priority: 'urgent',
+		created_at: '2026-07-15T00:02:00Z',
+		expires_at: '2026-07-15T00:03:00Z'
+	});
 	const memoNoise = { ...makeHoldNote({ id: 26, kind: 'memo', priority: 'urgent' }), gpu_indices: [] };
 
 	const ranked = rankHoldNotes([
-		sameExpiryFirst,
-		normalSoon,
-		sameExpirySecond,
-		urgentEarlier,
-		highSoon,
+		urgentFirst,
+		normalFirst,
+		urgentSameTime,
+		urgentSecond,
+		highFirst,
 		memoNoise
 	]);
 
 	assert.deepEqual(
 		ranked.map((note) => note.id),
-		[23, 21, 25, 24, 22]
+		[21, 25, 23, 24, 22]
 	);
 });
 

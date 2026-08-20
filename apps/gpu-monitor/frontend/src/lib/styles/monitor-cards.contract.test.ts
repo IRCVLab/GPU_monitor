@@ -317,8 +317,13 @@ test('GPU advisory hold cue stays dense while the exact index gets a visible hol
 	assert.match(cueRule, /display:\s*inline-flex/);
 	assert.match(cueRule, /font-size:\s*0\.6[0-9]rem/);
 	assert.match(cueRule, /line-height:\s*1/);
-	assert.match(cueRule, /pointer-events:\s*none/, 'static cue must never open detail UI or move the card');
+	assert.match(cueRule, /pointer-events:\s*auto/, 'the compact +N affordance must accept hover and keyboard focus');
 	assert.doesNotMatch(cueRule, /#f59e0b|#ef4444/, 'base cue should remain neutral');
+
+	const popoverRule = cssRule('.monitor-gpu-row__hold-popover');
+	assert.match(popoverRule, /position:\s*fixed/, 'secondary owner detail must use the top layer instead of moving or clipping inside the card');
+	assert.match(popoverRule, /inset:\s*auto/, 'browser popover centering defaults must not override the measured trigger position');
+	assert.match(popoverRule, /pointer-events:\s*none/, 'the read-only hover detail must not introduce nested actions');
 
 	const normalRule = cssRule('.monitor-gpu-row__hold-cue.note-priority--normal');
 	assert.doesNotMatch(normalRule, /#f59e0b|#ef4444/, 'normal priority must remain neutral');
