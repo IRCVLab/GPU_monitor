@@ -40,6 +40,22 @@ The overview reports **managed local storage**: unique filesystem capacity for s
 
 Media labels come from the backing leaf block devices resolved through Linux sysfs. `Mixed` means both SSD and HDD leaves back that mount. `Unknown` means topology or rotational data could not be resolved safely. Both states are expected safe outcomes, not scanner failures. Existing policy still excludes network, distributed, virtual, and container mounts from collection.
 
+## Storage Live automatic deployment
+
+Storage Live deploys from the shared monorepo described in the root CI/CD runbook. GPU Live and Storage Live use the same approval condition for deployment: the exact current `main` SHA must have a successful `ci.yml` push run and a successful `ci/required` check run. There is no GitHub Environment approval step or manual tagged-release approval in the Storage path.
+
+Storage keeps independent runtime ownership even though the approval condition matches GPU Live:
+
+- Puller timer/service: `storage-monitor-release-puller.timer` and `storage-monitor-release-puller.service`
+- Runtime services: `storage-viz-dashboard.service` on `127.0.0.1:8088` and `storage-viz-proxy.service` on public port `505`
+- Runtime path: `/opt/storage-viz-dashboard`
+- Release path: `/srv/storage-viz-dashboard/releases/<sha>/storage-monitor`
+- Puller/build/state paths: `/var/lib/storage-viz-dashboard/puller`, `/var/lib/storage-viz-dashboard/builder`, and `/var/lib/storage-viz-dashboard/activation-state.json`
+
+The server-side puller uses the same outbound-only hardening pattern as GPU Live: the server polls GitHub over outbound HTTPS on a five-minute timer, checks exact-SHA CI evidence, builds as the unprivileged `storage-viz-builder` user, activates locally, and backs off failed SHAs. Expected convergence is roughly CI/build time plus one five-minute puller cadence.
+
+Central Storage deployment changes only the central dashboard/proxy release. It never changes the GPU application and never installs, restarts, enables, disables, or rewrites remote `storage-viz-scan.service` or `storage-viz-scan.timer` agents.
+
 ## Central install
 
 ```bash

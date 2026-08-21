@@ -111,7 +111,11 @@ During the first managed cutover, the legacy tmux stack is the emergency fallbac
 
 ## Storage boundary
 
-GPU and Storage are independent products. The GPU Live puller deploys only GPU Monitor. Storage agents and dashboards remain manual/tagged or app-local according to their own operational runbooks, and must not auto-deploy from GPU `main` release polling. A Storage-only change cannot restart GPU Live.
+GPU and Storage are independent products inside the same monorepo, `IRCVLab/GPU_monitor`. GPU Live and Storage Live use the same deployment approval condition: the exact current `main` SHA must have a successful `ci.yml` push run and a successful `ci/required` check run. Neither product uses a GitHub Environment approval step for the current outbound-puller path.
+
+The two products do not share runtime deployment surfaces. The GPU Live puller deploys only GPU Monitor. The Storage puller uses its own five-minute outbound timer, builder user, artifact, activation state, `/opt/storage-viz-dashboard` runtime path, `/srv/storage-viz-dashboard/releases` release path, `storage-viz-dashboard.service`, and `storage-viz-proxy.service`. A Storage-only change cannot restart GPU Live, and GPU Live release polling cannot install, restart, enable, disable, or rewrite Storage Dashboard or remote `storage-viz-scan.service`/`storage-viz-scan.timer` agents.
+
+The historical policy sentence `Storage agents and dashboards remain manual/tagged` is obsolete for the central dashboard. Remote scan agents still remain independent from central dashboard deployment.
 
 A failed GPU activation must not roll back Storage. Shared repository governance changes are not a runtime rollback mechanism.
 

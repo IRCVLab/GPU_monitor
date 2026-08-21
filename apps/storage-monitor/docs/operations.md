@@ -7,6 +7,152 @@ This project has two independent runtime surfaces:
 
 The central installer and docs are intentionally separate from any unrelated monitoring stack. Storage Dashboard uses its own service names, paths, state, and loopback port; do not reuse unrelated services, ports, credentials, or paths, and do not restart or modify unrelated monitoring services for Storage Dashboard work.
 
+## Storage Live automatic deployment
+
+Storage Live is released from the shared monorepo described in the root CI/CD runbook. It uses the same deployment approval condition as GPU Live: the server must observe the exact current `main` SHA, a successful `ci.yml` push run for that SHA, and a successful `ci/required` check run for that SHA. There is no approval step after CI succeeds.
+
+The Storage release path is independent from the GPU application. Storage uses its own service names, users, paths, state files, ports, and health gate:
+
+| Surface | Storage value | Notes |
+| --- | --- | --- |
+| Puller timer | `storage-monitor-release-puller.timer` | Five-minute outbound polling cadence with persistence and jitter. |
+| Puller service | `storage-monitor-release-puller.service` | Root orchestration with systemd hardening; builds as `storage-viz-builder`. |
+| Dashboard service | `storage-viz-dashboard.service` | Serves the dashboard on `127.0.0.1:8088`. |
+| Public proxy service | `storage-viz-proxy.service` | Owns public port `505` after bootstrap. |
+| Runtime symlink | `/opt/storage-viz-dashboard` | Points at the active immutable release after cutover. |
+| Release root | `/srv/storage-viz-dashboard/releases/<sha>/storage-monitor` | Immutable central dashboard release content. |
+| Puller state | `/var/lib/storage-viz-dashboard/puller` | `current-live-sha`, `puller-state.json`, and `failed-release.json`. |
+| Activation state | `/var/lib/storage-viz-dashboard/activation-state.json` | Active, previous, digest, and rollback metadata. |
+
+Expected Live convergence is roughly CI/build time plus one five-minute puller cadence. A timer run that finds `current-live-sha` already equal to the current `main` SHA exits `already-current` after only reading the GitHub main ref; it does not build, restart, or touch dashboard/proxy services. If a built artifact digest already matches the active release digest, the puller records the new SHA and clears failed-release state without activation.
+
+A failed checkout, build, authorization, activation, or health check writes `/var/lib/storage-viz-dashboard/puller/failed-release.json` and backs off retries from 15 minutes up to 6 hours. A newer `main` SHA clears that failed-SHA backoff automatically. To intentionally retry the same failed SHA after fixing local server conditions, remove only `failed-release.json` and start one puller run. Do not remove `current-live-sha`.
+
+Automatic central deployment never changes the GPU application and never changes remote Storage scan agents, inventories, SSH keys, scan data, or `storage-viz-scan.service`/`storage-viz-scan.timer` on storage servers. Remote collection remains governed by the existing six-hour per-server agent timer and explicit manual rescan path.
+
+Useful Storage Live commands on the central host:
+
+```bash
+sudo systemctl status storage-monitor-release-puller.timer
+sudo systemctl status storage-monitor-release-puller.service
+sudo journalctl -u storage-monitor-release-puller.service
+sudo systemctl status storage-viz-dashboard.service
+sudo systemctl status storage-viz-proxy.service
+sudo journalctl -u storage-viz-dashboard.service
+sudo journalctl -u storage-viz-proxy.service
+sudo cat /var/lib/storage-viz-dashboard/puller/current-live-sha
+sudo python3 -m json.tool /var/lib/storage-viz-dashboard/puller/puller-state.json
+sudo python3 -m json.tool /var/lib/storage-viz-dashboard/activation-state.json
+test ! -e /var/lib/storage-viz-dashboard/puller/failed-release.json || sudo python3 -m json.tool /var/lib/storage-viz-dashboard/puller/failed-release.json
+```
+
+Manual rollback is an operator action on the Storage central host. It rolls back only Storage Dashboard state and services:
+
+```bash
+sudo /usr/local/libexec/storage-dashboard-activate.py \
+  --rollback-state \
+  --restart-argv /usr/bin/systemctl restart storage-viz-dashboard.service storage-viz-proxy.service
+sudo /usr/local/libexec/storage-dashboard-health-check.py
+```
+
+## One-time bootstrap cutover
+
+The installer has two safe phases. Normal install copies Storage-owned deployer assets, users, directories, and systemd units, but it does not enable or start the release puller timer and does not start the managed proxy before cutover:
+
+```bash
+./deploy/server/install-dashboard-deployer.sh --dry-run --prefix /tmp/storage-dashboard-install-check
+sudo ./deploy/server/install-dashboard-deployer.sh
+```
+
+The first live cutover is a separate, approved-candidate action. It requires an exact candidate SHA, expected artifact digest, artifact, and metadata:
+
+```bash
+sudo ./deploy/server/install-dashboard-deployer.sh \
+  --bootstrap-cutover \
+  --candidate-sha <40-lowercase-hex-main-sha> \
+  --expected-digest <64-lowercase-hex-sha256> \
+  --artifact /path/to/storage-monitor-dashboard-<sha>.tar.gz \
+  --metadata /path/to/storage-monitor-dashboard-<sha>.sha256.json
+```
+
+Bootstrap preserves the existing live dashboard on `127.0.0.1:8088` and existing public proxy on `:505` until a candidate topology passes the non-mutating health probe. The candidate dashboard listens only on `127.0.0.1:18088`, uses isolated temporary data/state, and runs in preflight mode. The candidate proxy listens only on `127.0.0.1:1505` and forwards to the candidate dashboard while preserving the configured public Host/Origin.
+
+Only after the candidate `can_rescan`, inventory, and `UNKNOWN_SERVER` probe passes does bootstrap identify and stop the exact process that owns `:505`, stop the validated legacy `8088` owner, activate the prepared release, and start `storage-viz-dashboard.service` plus `storage-viz-proxy.service`. If cutover fails after live owners are stopped, the managed rollback path restores the protected legacy dashboard/proxy target, starts Storage services under systemd, and requires previous dashboard/inventory health before reporting rollback success. The puller timer is enabled only after the first managed release passes production health.
+
+This branch documents the bootstrap procedure; it does not claim Storage Live has already been bootstrapped.
+
+## Post-bootstrap verification
+
+After a successful bootstrap, verify the managed central surface from the Storage host. The bundled health checker performs the required non-mutating session, inventory, cookie, CSRF, and `UNKNOWN_SERVER` readiness checks through public port `505`:
+
+```bash
+sudo /usr/local/libexec/storage-dashboard-health-check.py
+```
+
+Use this expanded probe when you need visible evidence for each contract. It must return `can_rescan: true`, `data_mode: inventory`, enabled server IDs in `/etc/storage-viz/servers.json` order, and HTTP `404` with `UNKNOWN_SERVER` for a guaranteed absent server id. The final POST sends `{}` with the authenticated session cookie, CSRF token, exact `Host`, and exact `Origin`; it does not start a real scan.
+
+```bash
+PUBLIC_ORIGIN="$(awk -F= '$1 == "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN" { print substr($0, index($0, "=") + 1) }' /etc/storage-viz/proxy.env)"
+PUBLIC_HOST="${PUBLIC_ORIGIN#http://}"
+VERIFY_TMP="$(mktemp -d)"
+
+curl -sS -D "$VERIFY_TMP/session.headers" \
+  -H "Host: $PUBLIC_HOST" \
+  -H 'X-Forwarded-User: fixed-proxy-operator' \
+  "http://127.0.0.1:505/api/session" \
+  -o "$VERIFY_TMP/session.json"
+python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert data["can_rescan"] is True; assert isinstance(data["csrf_token"], str) and data["csrf_token"]; print("can_rescan=true")' "$VERIFY_TMP/session.json"
+
+COOKIE="$(awk 'BEGIN{IGNORECASE=1} /^Set-Cookie:/ { sub(/^Set-Cookie:[[:space:]]*/, ""); sub(/;.*/, ""); print; exit }' "$VERIFY_TMP/session.headers")"
+CSRF="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["csrf_token"])' "$VERIFY_TMP/session.json")"
+
+curl -sS \
+  -H "Host: $PUBLIC_HOST" \
+  -H 'X-Forwarded-User: fixed-proxy-operator' \
+  -H "Cookie: $COOKIE" \
+  "http://127.0.0.1:505/api/servers" \
+  -o "$VERIFY_TMP/servers.json"
+python3 - /etc/storage-viz/servers.json "$VERIFY_TMP/servers.json" <<'PY'
+import json, sys
+inventory = json.load(open(sys.argv[1]))
+servers = json.load(open(sys.argv[2]))
+expected = [row["id"] for row in inventory["servers"] if row.get("enabled", True) is True]
+observed = [row["id"] for row in servers["servers"]]
+assert servers["data_mode"] == "inventory", servers.get("data_mode")
+assert observed == expected, (expected, observed)
+print("inventory mode/order ok:", ",".join(observed))
+PY
+
+UNKNOWN_ID="hc-verify-$(date +%s)-$$"
+HTTP_CODE="$(curl -sS -o "$VERIFY_TMP/unknown.json" -w '%{http_code}' \
+  -X POST \
+  -H "Host: $PUBLIC_HOST" \
+  -H "Origin: $PUBLIC_ORIGIN" \
+  -H 'X-Forwarded-User: fixed-proxy-operator' \
+  -H "Cookie: $COOKIE" \
+  -H "X-CSRF-Token: $CSRF" \
+  -H 'Content-Type: application/json' \
+  --data '{}' \
+  "http://127.0.0.1:505/api/servers/$UNKNOWN_ID/rescan")"
+test "$HTTP_CODE" = 404
+python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert data["error"] == "UNKNOWN_SERVER"; print("UNKNOWN_SERVER non-mutating probe ok")' "$VERIFY_TMP/unknown.json"
+rm -rf "$VERIFY_TMP"
+```
+
+A real rescan is separate and optional after the health probe succeeds. Use the dashboard button only when `/api/session` reports `can_rescan: true`; otherwise the request cannot pass the managed proxy/session contract.
+
+## Rescan button troubleshooting
+
+The browser rescan button requires a healthy managed proxy and a valid operator session. If the button is missing, disabled, or returns a write failure:
+
+1. Confirm `storage-viz-proxy.service` and `storage-viz-dashboard.service` are active.
+2. Confirm `/etc/storage-viz/proxy.env` public origin exactly matches `STORAGE_VIZ_ALLOWED_ORIGINS` in `/etc/storage-viz/dashboard.env`.
+3. Confirm `STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator` and that operator appears in `STORAGE_VIZ_OPERATOR_ALLOWLIST`.
+4. Request `/api/session` through port `505` and verify `can_rescan: true`, a session cookie, and a CSRF token.
+5. Re-run `storage-dashboard-health-check.py`; it exercises the non-mutating authenticated POST path without starting a scan.
+
+Do not troubleshoot the button by restarting the GPU application, changing remote scan timers, or triggering a real scan before session/proxy health passes.
+
 ## Central dashboard install
 
 Run the dry-run first:
