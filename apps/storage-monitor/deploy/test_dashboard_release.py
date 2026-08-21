@@ -594,6 +594,58 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(self.health_calls, 1)
         self._assert_gpu_sentinel_preserved()
 
+    def test_rollback_cli_does_not_require_activation_metadata(self) -> None:
+        previous_target = self.release_root / self.old_sha / "storage-monitor"
+        failed_target = self.release_root / self.sha / "storage-monitor"
+        previous_target.mkdir(parents=True)
+        failed_target.mkdir(parents=True)
+        self.app_path.parent.mkdir(parents=True)
+        self.app_path.symlink_to(failed_target)
+        self.state_path.parent.mkdir(parents=True)
+        self.state_path.write_text(json.dumps({
+            "status": "active",
+            "source_sha": self.sha,
+            "archive_digest": "b" * 64,
+            "release": str(failed_target),
+            "previous": str(previous_target),
+            "legacy_backup": None,
+        }) + "\n", encoding="utf-8")
+
+        rc = self.module.main([
+            "--rollback-state",
+            "--state-path", str(self.state_path),
+            "--app-path", str(self.app_path),
+            "--release-root", str(self.release_root),
+            "--lock-path", str(self.lock_path),
+            "--incoming-dir", str(self.incoming),
+        ])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.app_path.resolve(), previous_target.resolve())
+
+    def test_rollback_contract_restores_previous_symlink_from_activation_state(self) -> None:
+        previous_target = self.release_root / self.old_sha / "storage-monitor"
+        failed_target = self.release_root / self.sha / "storage-monitor"
+        previous_target.mkdir(parents=True)
+        failed_target.mkdir(parents=True)
+        self.app_path.parent.mkdir(parents=True)
+        self.app_path.symlink_to(failed_target)
+        self.state_path.parent.mkdir(parents=True)
+        self.state_path.write_text(json.dumps({
+            "status": "active",
+            "source_sha": self.sha,
+            "archive_digest": "b" * 64,
+            "release": str(failed_target),
+            "previous": str(previous_target),
+            "legacy_backup": None,
+        }) + "\n", encoding="utf-8")
+
+        status = self.module.rollback_to_state(self._config(), restart=self._restart)
+
+        self.assertEqual(status["status"], "rolled_back")
+        self.assertEqual(self.app_path.resolve(), previous_target.resolve())
+        self.assertEqual(self.restart_calls, ["rollback"])
+
     def test_switches_valid_prior_release_symlink_atomically_and_records_previous(self) -> None:
         previous_target = self.release_root / self.old_sha / "storage-monitor"
         previous_target.mkdir(parents=True)

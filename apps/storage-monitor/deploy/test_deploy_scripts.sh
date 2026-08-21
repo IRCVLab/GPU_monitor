@@ -630,8 +630,8 @@ for src in "$STORAGE_BUILDER" "$STORAGE_ACTIVATOR" "$STORAGE_HEALTH" "$STORAGE_P
   grep -Fq "$digest" "$DASH_LOG" || fail "dashboard dry-run output missing hash for $src"
 done
 grep -Fq 'systemd action: daemon-reload' "$DASH_LOG" || fail "dashboard dry-run output missing daemon-reload action"
-grep -Fq 'systemd action: enable --now storage-viz-proxy.service' "$DASH_LOG" || fail "dashboard dry-run output missing proxy enable action"
-grep -Fq 'systemd action: enable storage-monitor-release-puller.timer only after approved health' "$DASH_LOG" || fail "dashboard dry-run output missing gated timer enable action"
+grep -Fq 'systemd action: do not enable/start storage-viz-proxy.service until approved cutover' "$DASH_LOG" || fail "dashboard dry-run output missing gated proxy start action"
+grep -Fq 'systemd action: enable --now storage-monitor-release-puller.timer only after approved production health' "$DASH_LOG" || fail "dashboard dry-run output missing gated timer enable action"
 pass "dashboard dry-run renders assets/paths/modes/hashes without mutation"
 
 SECOND_PREFIX="$TMP/dashboard-second-prefix"
@@ -640,6 +640,114 @@ for asset in storage-dashboard-build-release.py storage-dashboard-activate.py st
   cmp -s "$DASH_DRY_PREFIX/usr/local/libexec/$asset" "$SECOND_PREFIX/usr/local/libexec/$asset" || fail "dashboard dry-run is not idempotent for $asset"
 done
 pass "dashboard deployer dry-run is idempotent"
+
+DASH_CUTOVER_TMP="$TMP/dashboard-cutover"
+mkdir -p "$DASH_CUTOVER_TMP/bin" "$DASH_CUTOVER_TMP/incoming"
+DASH_ARTIFACT="$DASH_CUTOVER_TMP/incoming/storage-monitor-dashboard-1111111111111111111111111111111111111111.tar.gz"
+DASH_METADATA="$DASH_CUTOVER_TMP/incoming/storage-monitor-dashboard-1111111111111111111111111111111111111111.sha256.json"
+printf 'artifact' > "$DASH_ARTIFACT"
+printf '{"application_name":"storage-monitor"}
+' > "$DASH_METADATA"
+DASH_DIGEST="$(sha256sum "$DASH_ARTIFACT" 2>/dev/null | awk '{print $1}')"
+if [[ -z "$DASH_DIGEST" ]]; then DASH_DIGEST="$(shasum -a 256 "$DASH_ARTIFACT" | awk '{print $1}')"; fi
+cat > "$DASH_CUTOVER_TMP/bin/ss" <<'FAKE'
+#!/usr/bin/env bash
+printf 'ss %s
+' "$*" >> "${DASH_CUTOVER_LOG:?}"
+case "$*" in
+  *:505*) printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("storage-viz-proxy",pid=5050,fd=3))
+' ;;
+  *:8088*) printf 'LISTEN 0 4096 127.0.0.1:8088 0.0.0.0:* users:(("python3",pid=8088,fd=3))
+' ;;
+esac
+FAKE
+cat > "$DASH_CUTOVER_TMP/bin/systemctl" <<'FAKE'
+#!/usr/bin/env bash
+printf 'systemctl %s
+' "$*" >> "${DASH_CUTOVER_LOG:?}"
+if [[ "$*" == "start storage-viz-dashboard.service storage-viz-proxy.service" ]]; then exit "${SYSTEMCTL_START_RC:-0}"; fi
+exit 0
+FAKE
+cat > "$DASH_CUTOVER_TMP/bin/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf 'curl %s
+' "$*" >> "${DASH_CUTOVER_LOG:?}"
+if [[ "$*" == *UNKNOWN_SERVER* || "$*" == *unknown* ]]; then printf '{"error":"UNKNOWN_SERVER"}
+'; else printf '{"ok":true,"data_mode":"inventory","can_rescan":true,"csrf_token":"t"}
+'; fi
+exit "${CURL_RC:-0}"
+FAKE
+cat > "$DASH_CUTOVER_TMP/bin/python3.12" <<'FAKE'
+#!/usr/bin/env bash
+printf 'python3.12 %s
+' "$*" >> "${DASH_CUTOVER_LOG:?}"
+exit "${PYTHON_RC:-0}"
+FAKE
+cat > "$DASH_CUTOVER_TMP/bin/activate" <<'FAKE'
+#!/usr/bin/env bash
+printf 'activate %s
+' "$*" >> "${DASH_CUTOVER_LOG:?}"
+if [[ "$*" == *--rollback-state* ]]; then exit 0; fi
+cat >/dev/null
+printf '{"status":"active","source_sha":"1111111111111111111111111111111111111111","archive_digest":"%s","release":"/srv/storage-viz-dashboard/releases/1111111111111111111111111111111111111111/storage-monitor","legacy_backup":"/opt/storage-viz-dashboard.legacy"}
+' "${DASH_DIGEST:?}"
+exit 0
+FAKE
+cat > "$DASH_CUTOVER_TMP/bin/kill" <<'FAKE'
+#!/usr/bin/env bash
+printf 'kill %s
+' "$*" >> "${DASH_CUTOVER_LOG:?}"
+exit 0
+FAKE
+chmod +x "$DASH_CUTOVER_TMP/bin"/*
+DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/cutover.log"
+export DASH_CUTOVER_LOG
+DASH_DIGEST="$DASH_DIGEST" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" CURL="$DASH_CUTOVER_TMP/bin/curl" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/cutover.out"
+line_candidate=$(grep -n 'python3.12 .*18088' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_probe=$(grep -n 'curl .*1505' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_owner=$(grep -n '^ss .*:505' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_stop=$(grep -n '^kill .*5050' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_activate=$(grep -n '^activate --sha' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_start=$(grep -n '^systemctl start storage-viz-dashboard.service storage-viz-proxy.service' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_health=$(grep -n 'python3.12 /usr/local/libexec/storage-dashboard-health-check.py' "$DASH_CUTOVER_LOG" | tail -1 | cut -d: -f1)
+line_timer=$(grep -n '^systemctl enable --now storage-monitor-release-puller.timer' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+[[ -n "$line_candidate" && -n "$line_probe" && -n "$line_owner" && -n "$line_stop" && -n "$line_activate" && -n "$line_start" && -n "$line_health" && -n "$line_timer" ]] || fail "cutover log missing required action: $(cat "$DASH_CUTOVER_LOG")"
+[[ "$line_candidate" -lt "$line_probe" && "$line_probe" -lt "$line_owner" && "$line_owner" -lt "$line_stop" && "$line_stop" -lt "$line_activate" && "$line_activate" -lt "$line_start" && "$line_start" -lt "$line_health" && "$line_health" -lt "$line_timer" ]] || fail "cutover actions out of order: $(cat "$DASH_CUTOVER_LOG")"
+grep -Fq -- '--artifact-stdin' "$DASH_CUTOVER_LOG" || fail "cutover activator did not use option-style artifact stdin"
+! grep -Eq '^activate (upload|status|activate)( |$)' "$DASH_CUTOVER_LOG" || fail "cutover used legacy activator subcommands"
+pass "dashboard bootstrap cutover runs candidate probes, exact owner stops, option-style activation, managed start, health, then timer"
+
+DASH_ROLLBACK_LOG="$DASH_CUTOVER_TMP/rollback.log"
+if DASH_CUTOVER_LOG="$DASH_ROLLBACK_LOG" DASH_DIGEST="$DASH_DIGEST" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" CURL="$DASH_CUTOVER_TMP/bin/curl" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" SYSTEMCTL_START_RC=42 STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/rollback.out" 2>"$DASH_CUTOVER_TMP/rollback.err"; then
+  fail "cutover succeeded after managed service start failure"
+fi
+grep -Fq -- 'activate --rollback-state' "$DASH_ROLLBACK_LOG" || fail "rollback did not invoke activator rollback contract"
+grep -Fq -- 'systemctl start storage-viz-proxy.service' "$DASH_ROLLBACK_LOG" || fail "rollback did not start proxy for protected legacy backup"
+grep -Fq -- 'curl ' "$DASH_ROLLBACK_LOG" || fail "rollback did not require previous inventory GET health"
+grep -Eq '^kill -TERM 5050$' "$DASH_ROLLBACK_LOG" || fail "rollback/cutover did not use exact PID kill only"
+! grep -Eq 'pkill|killall|fuser -k|tmux new|new-session' "$DASH_ROLLBACK_LOG" || fail "rollback used broad kill or recreated tmux"
+pass "dashboard cutover failure invokes rollback contract and validates previous 505 health without broad kill/tmux recreate"
+
+DASH_BAD_SS="$DASH_CUTOVER_TMP/bin/ss-bad"
+cat > "$DASH_BAD_SS" <<'FAKE'
+#!/usr/bin/env bash
+printf 'ss %s
+' "$*" >> "${DASH_CUTOVER_LOG:?}"
+printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("unrelated",pid=9999,fd=3))
+'
+FAKE
+chmod +x "$DASH_BAD_SS"
+if DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/bad-owner.log" DASH_DIGEST="$DASH_DIGEST" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_BAD_SS" CURL="$DASH_CUTOVER_TMP/bin/curl" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/bad-owner.out" 2>"$DASH_CUTOVER_TMP/bad-owner.err"; then
+  fail "cutover accepted unrelated port owner"
+fi
+! grep -Eq '^kill -TERM (9999|5050)$' "$DASH_CUTOVER_TMP/bad-owner.log" || fail "cutover killed a live owner after unrelated owner rejection"
+pass "dashboard cutover rejects unrelated listener owners before stopping anything"
 
 assert_contains "$STORAGE_PULLER_TIMER" "OnBootSec=2min"
 assert_contains "$STORAGE_PULLER_TIMER" "OnCalendar=*:0/5"

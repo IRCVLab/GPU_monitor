@@ -38,6 +38,9 @@ class Config:
     work_dir: Path = Path("/var/lib/storage-viz-dashboard/builder")
     authorizer: Path = Path("/usr/local/libexec/storage-release-authorizer.py")
     activate: Path = Path("/usr/local/libexec/storage-dashboard-activate.py")
+    activation_state_path: Path = Path("/var/lib/storage-viz-dashboard/activation-state.json")
+    restart_argv: tuple[str, ...] = ("/usr/bin/systemctl", "restart", "storage-viz-dashboard.service", "storage-viz-proxy.service")
+    health_argv: tuple[str, ...] = ("/usr/local/libexec/storage-dashboard-health-check.py",)
     build_script: str = "apps/storage-monitor/deploy/build-dashboard-release.py"
     builder_user: str = "storage-viz-builder"
     node_prefix: Path = Path("/usr/local")
@@ -419,50 +422,72 @@ def activation_command(config: Config, *args: str) -> list[str]:
     return [str(config.activate), *args]
 
 
-def upload_artifact(config: Config, sha: str, digest: str, artifact: Path, run_command=default_run_command) -> None:
+def read_activation_state(config: Config) -> dict[str, str]:
+    try:
+        payload = json.loads(config.activation_state_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"current": "", "current_sha256": ""}
+    except (json.JSONDecodeError, OSError) as error:
+        raise PullError("activation state is unreadable") from error
+    if not isinstance(payload, dict):
+        raise PullError("activation state is malformed")
+    status = payload.get("status", "")
+    if status not in {"", "active"}:
+        return {"current": "", "current_sha256": ""}
+    source_sha = payload.get("source_sha", "")
+    archive_digest = payload.get("archive_digest", "")
+    current = "" if source_sha == "" else validate_sha(source_sha, "activation state source_sha")
+    digest = "" if archive_digest == "" else validate_digest(archive_digest, "activation state archive_digest")
+    return {"current": current, "current_sha256": digest}
+
+
+def _metadata_path_for_artifact(artifact: Path) -> Path:
+    name = artifact.name
+    suffix = ".tar.gz"
+    if not name.endswith(suffix):
+        raise PullError("artifact name is not a gzip tar archive")
+    return artifact.with_name(name[: -len(suffix)] + ".sha256.json")
+
+
+def _parse_activation_stdout(stdout: str, *, sha: str, digest: str) -> dict[str, object]:
+    if len(stdout.encode("utf-8")) > 8192:
+        raise PullError("activation status JSON exceeds output bound")
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        raise PullError("activation returned malformed JSON") from error
+    if not isinstance(payload, dict):
+        raise PullError("activation returned non-object JSON")
+    if payload.get("status") != "active":
+        raise PullError("activation did not report active status")
+    if payload.get("source_sha") != sha:
+        raise PullError("activation source_sha does not match requested SHA")
+    if payload.get("archive_digest") != digest:
+        raise PullError("activation archive_digest does not match artifact digest")
+    release = payload.get("release", "")
+    if not isinstance(release, str) or sha not in release:
+        raise PullError("activation release path does not identify requested SHA")
+    return payload
+
+
+def activate_release(config: Config, sha: str, digest: str, artifact: Path, run_command=default_run_command) -> dict[str, object]:
     validate_sha(sha)
     validate_digest(digest)
-    argv = activation_command(config, "upload", "live", sha, digest)
+    metadata = _metadata_path_for_artifact(artifact)
+    argv = activation_command(
+        config,
+        "--sha", sha,
+        "--expected-digest", digest,
+        "--artifact-stdin",
+        "--metadata", str(metadata),
+        "--restart-argv", *config.restart_argv,
+        "--health-argv", *config.health_argv,
+    )
     with artifact.open("rb") as input_handle:
         result = run_command(argv, stdin=input_handle, timeout=config.timeout_seconds)
     if result.returncode != 0:
         raise PullError(f"activation command failed: {' '.join(argv)}")
-
-
-def live_status(config: Config, run_command=default_run_command) -> dict[str, str]:
-    argv = activation_command(config, "status", "live")
-    result = run_command(argv, timeout=config.timeout_seconds)
-    if result.returncode != 0:
-        raise PullError(f"activation command failed: {' '.join(argv)}")
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise PullError("live status returned malformed JSON") from error
-    if not isinstance(payload, dict) or payload.get("environment") != "live":
-        raise PullError("live status returned unexpected environment")
-    normalized = {}
-    for key in ("current", "previous"):
-        value = payload.get(key)
-        if value == "":
-            normalized[key] = ""
-            continue
-        if not isinstance(value, str) or not value.startswith("releases/"):
-            raise PullError(f"malformed live status {key}")
-        normalized[key] = validate_sha(value.removeprefix("releases/"), f"live status {key}")
-    current_sha256 = payload.get("current_sha256", "")
-    normalized["current_sha256"] = "" if current_sha256 == "" else validate_digest(current_sha256, "live status current_sha256")
-    return normalized
-
-
-def activate_uploaded(config: Config, sha: str, digest: str, run_command=default_run_command) -> None:
-    validate_sha(sha)
-    validate_digest(digest)
-    argv = activation_command(config, "activate", "live", sha, digest)
-    result = run_command(argv, timeout=config.timeout_seconds)
-    if result.returncode != 0:
-        raise PullError(f"activation command failed: {' '.join(argv)}")
-    if live_status(config, run_command)["current"] != sha:
-        raise PullError("live status does not match activated SHA")
+    return _parse_activation_stdout(result.stdout, sha=sha, digest=digest)
 
 
 def run_once(config: Config, *, get_json=default_get_json, run_command=default_run_command, now_fn=time.time) -> str:
@@ -486,7 +511,8 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
         now = float(now_fn())
         if failure is not None and now < failure["retry_after"]:
             return "backoff"
-        if live_status(config, run_command)["current"] == sha:
+        activation_state = read_activation_state(config)
+        if activation_state["current"] == sha:
             write_state_sha(config, sha)
             clear_failed_release(config)
             return "reconciled-current"
@@ -498,13 +524,13 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
             artifact, digest = validate_artifact(outdir, sha)
             workflow_run, check_runs, _ = fetch_evidence(config, sha, get_json)
             authorize(config, sha, workflow_run, check_runs, run_command)
-            if live_status(config, run_command)["current_sha256"] == digest:
+            activation_state = read_activation_state(config)
+            if activation_state["current_sha256"] == digest:
                 write_state_sha(config, sha)
                 clear_failed_release(config)
                 shutil.rmtree(config.work_dir / "out", ignore_errors=True)
                 return "unchanged-artifact"
-            upload_artifact(config, sha, digest, artifact, run_command)
-            activate_uploaded(config, sha, digest, run_command)
+            activate_release(config, sha, digest, artifact, run_command)
         except (PullError, OSError, subprocess.SubprocessError, shutil.Error) as error:
             failures = int(failure["failures"]) + 1 if failure is not None else 1
             write_failed_release(config, sha, failures, float(now_fn()))
@@ -524,6 +550,9 @@ def parse_args(argv: list[str]) -> Config:
     parser.add_argument("--work-dir", type=Path, default=Config.work_dir)
     parser.add_argument("--authorizer", type=Path, default=Config.authorizer)
     parser.add_argument("--activate", type=Path, default=Config.activate)
+    parser.add_argument("--activation-state-path", type=Path, default=Config.activation_state_path)
+    parser.add_argument("--restart-argv", nargs="+", default=list(Config.restart_argv))
+    parser.add_argument("--health-argv", nargs="+", default=list(Config.health_argv))
     parser.add_argument("--builder-user", default=Config.builder_user)
     parser.add_argument("--repo-url", default=Config.repo_url)
     parser.add_argument("--timeout-seconds", type=int, default=Config.timeout_seconds)
@@ -536,6 +565,9 @@ def parse_args(argv: list[str]) -> Config:
         work_dir=args.work_dir,
         authorizer=args.authorizer,
         activate=args.activate,
+        activation_state_path=args.activation_state_path,
+        restart_argv=tuple(args.restart_argv),
+        health_argv=tuple(args.health_argv),
         builder_user=args.builder_user,
         repo_url=args.repo_url,
         timeout_seconds=args.timeout_seconds,

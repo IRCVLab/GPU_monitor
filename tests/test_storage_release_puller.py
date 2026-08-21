@@ -70,6 +70,7 @@ class StorageReleasePullerTest(unittest.TestCase):
             work_dir=Path(tmpdir) / "builder",
             authorizer=Path(tmpdir) / "storage-release-authorizer.py",
             activate=Path(tmpdir) / "storage-dashboard-activate.py",
+            activation_state_path=Path(tmpdir) / "activation-state.json",
             build_script="apps/storage-monitor/deploy/build-dashboard-release.py",
             builder_user="storage-viz-builder",
             node_prefix=Path("/usr/local"),
@@ -92,12 +93,15 @@ class StorageReleasePullerTest(unittest.TestCase):
         }, sort_keys=True) + "\n", encoding="utf-8")
         return archive, digest
 
-    def status(self, argv, current="", digest=""):
-        self.assertEqual(argv[:2], [str(argv[0]), "status"])
-        payload = {"current": current, "environment": "live", "previous": ""}
-        if digest:
-            payload["current_sha256"] = digest
-        return CompletedProcess(argv, 0, json.dumps(payload) + "\n", "")
+    def write_activation_state(self, path, *, sha="", digest=""):
+        if sha:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "status": "active",
+                "source_sha": sha,
+                "archive_digest": digest,
+                "release": f"/srv/storage-viz-dashboard/releases/{sha}/storage-monitor",
+            }) + "\n", encoding="utf-8")
 
     def test_fetches_current_main_first_and_exits_cheaply_when_already_current(self):
         puller = load_puller()
@@ -110,44 +114,52 @@ class StorageReleasePullerTest(unittest.TestCase):
         self.assertEqual(result, "already-current")
         self.assertEqual(github.calls, [f"/repos/{REPOSITORY}/git/ref/heads/main"])
 
-    def test_successful_change_authorizes_builds_validates_and_activates_in_order(self):
+    def test_successful_change_authorizes_builds_validates_and_invokes_option_style_activator_once(self):
         puller = load_puller()
         commands = []
-        activated = False
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self.config(tmp)
             github = FakeGitHub(SHA1)
 
             def run_command(argv, **kwargs):
-                nonlocal activated
                 commands.append((list(argv), kwargs))
-                rendered = " ".join(str(x) for x in argv)
-                if argv[0] == str(cfg.activate) and argv[1] == "status":
-                    current = f"releases/{SHA1}" if activated else ""
-                    return CompletedProcess(argv, 0, json.dumps({"current": current, "environment": "live", "previous": ""}) + "\n", "")
+                if argv[0] == str(cfg.activate):
+                    forbidden = {"upload", "status", "activate"}
+                    self.assertFalse(set(argv[1:]) & forbidden, f"legacy subcommand used: {argv}")
+                    self.assertIn("--sha", argv)
+                    self.assertEqual(argv[argv.index("--sha") + 1], SHA1)
+                    self.assertIn("--expected-digest", argv)
+                    self.assertIn("--artifact-stdin", argv)
+                    self.assertIn("--metadata", argv)
+                    self.assertIn("--restart-argv", argv)
+                    self.assertIn("storage-viz-dashboard.service", argv)
+                    self.assertIn("storage-viz-proxy.service", argv)
+                    self.assertIn("--health-argv", argv)
+                    self.assertNotIn("input", kwargs)
+                    artifact_bytes = kwargs["stdin"].read()
+                    digest = hashlib.sha256(artifact_bytes).hexdigest()
+                    self.assertEqual(digest, argv[argv.index("--expected-digest") + 1])
+                    return CompletedProcess(argv, 0, json.dumps({
+                        "status": "active",
+                        "source_sha": SHA1,
+                        "archive_digest": digest,
+                        "release": f"/srv/storage-viz-dashboard/releases/{SHA1}/storage-monitor",
+                    }) + "\n", "")
                 if argv[0] == "python3" and str(cfg.authorizer) in argv:
                     return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}) + "\n", "")
                 if any(str(part).endswith("build-dashboard-release.py") for part in argv):
                     outdir = Path(argv[argv.index("--output-dir") + 1])
                     self.write_artifact(outdir)
-                if argv[0] == str(cfg.activate) and argv[1] == "activate":
-                    activated = True
                 return CompletedProcess(argv, 0, "", "")
 
             result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
             deployed_state = (cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip()
 
         rendered = [" ".join(str(x) for x in c[0]) for c in commands]
-        digest = hashlib.sha256(b"artifact").hexdigest()
         self.assertEqual(result, "activated")
         self.assertLess(rendered.index(next(x for x in rendered if "git clone" in x)), rendered.index(next(x for x in rendered if "build-dashboard-release.py" in x)))
-        activation_commands = [x for x in rendered if str(cfg.activate) in x]
-        self.assertEqual(activation_commands[0], f"{cfg.activate} status live")
-        self.assertEqual(activation_commands[-3:], [
-            f"{cfg.activate} upload live {SHA1} {digest}",
-            f"{cfg.activate} activate live {SHA1} {digest}",
-            f"{cfg.activate} status live",
-        ])
+        activation_commands = [x for x in commands if x[0][0] == str(cfg.activate)]
+        self.assertEqual(len(activation_commands), 1)
         self.assertGreaterEqual(github.calls.count(f"/repos/{REPOSITORY}/git/ref/heads/main"), 2)
         self.assertEqual(deployed_state, SHA1)
 
@@ -176,7 +188,7 @@ class StorageReleasePullerTest(unittest.TestCase):
         self.assertEqual(seen["checks"]["check_runs"][0]["name"], "ci/required")
         self.assertEqual(seen["checks"]["check_runs"][0]["head_sha"], SHA1)
 
-    def test_matching_live_digest_records_new_sha_without_upload_or_activation(self):
+    def test_matching_live_digest_records_new_sha_without_invoking_activator(self):
         puller = load_puller()
         events = []
         live_digest = hashlib.sha256(b"artifact").hexdigest()
@@ -185,13 +197,13 @@ class StorageReleasePullerTest(unittest.TestCase):
             cfg.state_dir.mkdir(parents=True)
             (cfg.state_dir / "current-live-sha").write_text(SHA2 + "\n", encoding="utf-8")
             (cfg.state_dir / "failed-release.json").write_text(json.dumps({"failures": 2, "retry_after": 1.0, "sha": SHA1}) + "\n", encoding="utf-8")
+            self.write_activation_state(cfg.activation_state_path, sha=SHA2, digest=live_digest)
             github = FakeGitHub(SHA1)
 
             def run_command(argv, **kwargs):
                 rendered = " ".join(str(x) for x in argv)
-                if argv[0] == str(cfg.activate) and argv[1] == "status":
-                    events.append("status")
-                    return CompletedProcess(argv, 0, json.dumps({"current": f"releases/{SHA2}", "current_sha256": live_digest, "environment": "live", "previous": ""}) + "\n", "")
+                if argv[0] == str(cfg.activate):
+                    self.fail("matching live digest must not invoke activator CLI")
                 if argv[0] == "python3" and str(cfg.authorizer) in argv:
                     events.append("authorize")
                     return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}) + "\n", "")
@@ -200,8 +212,6 @@ class StorageReleasePullerTest(unittest.TestCase):
                 if any(str(part).endswith("build-dashboard-release.py") for part in argv):
                     events.append("build")
                     self.write_artifact(Path(argv[argv.index("--output-dir") + 1]))
-                if argv[0] == str(cfg.activate) and argv[1] in {"upload", "activate"}:
-                    self.fail("matching live digest must not mutate activation")
                 return CompletedProcess(argv, 0, "", "")
 
             result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
@@ -209,7 +219,7 @@ class StorageReleasePullerTest(unittest.TestCase):
             self.assertEqual((cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip(), SHA1)
             self.assertFalse((cfg.state_dir / "failed-release.json").exists())
             self.assertFalse((cfg.work_dir / "out").exists())
-        self.assertEqual(events, ["status", "authorize", "checkout", "build", "authorize", "status"])
+        self.assertEqual(events, ["authorize", "checkout", "build", "authorize"])
 
     def test_aborts_without_activation_if_main_advances_before_final_authorization(self):
         puller = load_puller()
@@ -228,8 +238,8 @@ class StorageReleasePullerTest(unittest.TestCase):
 
             def run_command(argv, **kwargs):
                 commands.append(list(argv))
-                if argv[0] == str(cfg.activate) and argv[1] == "status":
-                    return CompletedProcess(argv, 0, json.dumps({"current": "", "environment": "live", "previous": ""}) + "\n", "")
+                if argv[0] == str(cfg.activate):
+                    self.fail("activator must not run after main advances before final authorization")
                 if argv[0] == "python3" and str(cfg.authorizer) in argv:
                     return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}) + "\n", "")
                 if any(str(part).endswith("build-dashboard-release.py") for part in argv):
@@ -238,7 +248,7 @@ class StorageReleasePullerTest(unittest.TestCase):
 
             with self.assertRaisesRegex(puller.PullError, "current main changed"):
                 puller.run_once(cfg, get_json=get_json, run_command=run_command)
-        self.assertFalse(any(str(cfg.activate) in " ".join(str(x) for x in c) and c[1] in {"upload", "activate"} for c in commands))
+        self.assertFalse(any(str(cfg.activate) in " ".join(str(x) for x in c) for c in commands))
 
     def test_clean_checkout_uses_unprivileged_storage_builder_and_exact_sha_without_reset(self):
         puller = load_puller()
@@ -281,22 +291,34 @@ class StorageReleasePullerTest(unittest.TestCase):
                 with self.assertRaises(puller.PullError, msg=key):
                     puller.validate_artifact(outdir, SHA1)
 
-    def test_upload_streams_artifact_without_shell_or_buffering(self):
+    def test_activate_release_streams_artifact_to_option_style_cli_without_shell_or_buffering(self):
         puller = load_puller()
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self.config(tmp)
-            artifact = Path(tmp) / "artifact.tar.gz"
+            artifact = Path(tmp) / f"storage-monitor-dashboard-{SHA1}.tar.gz"
             artifact.write_bytes(b"streamed-artifact")
+            metadata = artifact.with_name(f"storage-monitor-dashboard-{SHA1}.sha256.json")
+            metadata.write_text("{}", encoding="utf-8")
+            digest = hashlib.sha256(b"streamed-artifact").hexdigest()
             seen = {}
 
             def run_command(argv, **kwargs):
-                self.assertEqual(argv, [str(cfg.activate), "upload", "live", SHA1, DIGEST])
+                forbidden = {"upload", "status", "activate"}
+                self.assertFalse(set(argv[1:]) & forbidden, f"legacy subcommand used: {argv}")
+                self.assertIn("--artifact-stdin", argv)
+                self.assertIn("--metadata", argv)
+                self.assertEqual(argv[argv.index("--metadata") + 1], str(metadata))
                 self.assertNotIn("input", kwargs)
                 self.assertFalse(kwargs.get("shell", False))
                 seen["payload"] = kwargs["stdin"].read()
-                return CompletedProcess(argv, 0, "", "")
+                return CompletedProcess(argv, 0, json.dumps({
+                    "status": "active",
+                    "source_sha": SHA1,
+                    "archive_digest": digest,
+                    "release": f"/srv/storage-viz-dashboard/releases/{SHA1}/storage-monitor",
+                }) + "\n", "")
 
-            puller.upload_artifact(cfg, SHA1, DIGEST, artifact, run_command)
+            puller.activate_release(cfg, SHA1, digest, artifact, run_command)
         self.assertEqual(seen["payload"], b"streamed-artifact")
 
     def test_reconciles_missing_state_when_live_current_already_matches_main(self):
@@ -305,12 +327,8 @@ class StorageReleasePullerTest(unittest.TestCase):
             cfg = self.config(tmp)
             github = FakeGitHub(SHA1)
 
-            def run_command(argv, **kwargs):
-                if argv[0] == str(cfg.activate) and argv[1] == "status":
-                    return CompletedProcess(argv, 0, json.dumps({"current": f"releases/{SHA1}", "environment": "live", "previous": f"releases/{SHA2}"}) + "\n", "")
-                self.fail(f"unexpected command: {argv}")
-
-            result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
+            self.write_activation_state(cfg.activation_state_path, sha=SHA1, digest="")
+            result = puller.run_once(cfg, get_json=github.get_json, run_command=lambda *a, **k: self.fail("unexpected command"))
             self.assertEqual(result, "reconciled-current")
             self.assertEqual((cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip(), SHA1)
 
@@ -324,8 +342,8 @@ class StorageReleasePullerTest(unittest.TestCase):
             def run_command(argv, **kwargs):
                 rendered = " ".join(str(x) for x in argv)
                 commands.append(rendered)
-                if argv[0] == str(cfg.activate) and argv[1] == "status":
-                    return CompletedProcess(argv, 0, json.dumps({"current": "", "environment": "live", "previous": ""}) + "\n", "")
+                if argv[0] == str(cfg.activate):
+                    self.fail("activator must not run after main advances before final authorization")
                 if argv[0] == "python3" and str(cfg.authorizer) in argv:
                     return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": github.sha}) + "\n", "")
                 if any(str(part).endswith("build-dashboard-release.py") for part in argv):

@@ -7,7 +7,17 @@ DEPLOY="$ROOT/deploy"
 SERVER="$DEPLOY/server"
 DRY_RUN=0
 PREFIX=""
+BOOTSTRAP_CUTOVER=0
+CANDIDATE_SHA=""
+EXPECTED_DIGEST=""
+ARTIFACT=""
+METADATA=""
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+SS="${SS:-ss}"
+CURL="${CURL:-curl}"
+PYTHON="${PYTHON:-/usr/bin/python3.12}"
+ACTIVATOR="${ACTIVATOR:-/usr/local/libexec/storage-dashboard-activate.py}"
+KILL="${KILL:-kill}"
 
 LIBEXEC_DIR="/usr/local/libexec"
 RELEASE_ROOT="/srv/storage-viz-dashboard/releases"
@@ -23,9 +33,11 @@ BUILDER_GROUP="storage-viz-builder"
 usage() {
   cat <<USAGE
 Usage: $0 [--dry-run] [--prefix PATH]
+       $0 --bootstrap-cutover --candidate-sha SHA --expected-digest SHA256 --artifact PATH --metadata PATH
 
 Installs Storage-owned dashboard release deployer assets. Real mode requires root.
 Dry-run renders files under --prefix and performs no network, systemd, user, or service actions.
+Bootstrap cutover is a separate approved-candidate path; it validates candidate 127.0.0.1:18088/1505 before touching live 8088/505.
 USAGE
 }
 
@@ -33,6 +45,11 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --prefix) PREFIX="${2:?missing --prefix value}"; shift 2 ;;
+    --bootstrap-cutover) BOOTSTRAP_CUTOVER=1; shift ;;
+    --candidate-sha) CANDIDATE_SHA="${2:?missing --candidate-sha value}"; shift 2 ;;
+    --expected-digest) EXPECTED_DIGEST="${2:?missing --expected-digest value}"; shift 2 ;;
+    --artifact) ARTIFACT="${2:?missing --artifact value}"; shift 2 ;;
+    --metadata) METADATA="${2:?missing --metadata value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -60,6 +77,130 @@ prefix_path() {
   fi
 }
 
+
+validate_hex() {
+  local value="$1" len="$2" label="$3"
+  [[ "$value" =~ ^[0-9a-f]{$len}$ ]] || { echo "invalid $label" >&2; exit 2; }
+}
+
+run_cmd() {
+  if [[ "$DRY_RUN" == 1 ]]; then
+    printf 'cutover action:'
+    printf ' %q' "$@"
+    printf '\n'
+    return 0
+  fi
+  "$@"
+}
+
+validate_candidate_args() {
+  [[ -n "$CANDIDATE_SHA" && -n "$EXPECTED_DIGEST" && -n "$ARTIFACT" && -n "$METADATA" ]] || { echo "bootstrap cutover requires candidate sha, digest, artifact, and metadata" >&2; exit 2; }
+  validate_hex "$CANDIDATE_SHA" 40 "candidate sha"
+  validate_hex "$EXPECTED_DIGEST" 64 "expected digest"
+  [[ -f "$ARTIFACT" && -f "$METADATA" ]] || { echo "candidate artifact and metadata must exist" >&2; exit 2; }
+}
+
+cleanup_candidate_topology() {
+  [[ -z "${CANDIDATE_PROXY_PID:-}" ]] || "$KILL" -TERM "$CANDIDATE_PROXY_PID" 2>/dev/null || true
+  [[ -z "${CANDIDATE_DASH_PID:-}" ]] || "$KILL" -TERM "$CANDIDATE_DASH_PID" 2>/dev/null || true
+  [[ -z "${CANDIDATE_TMP:-}" ]] || rm -rf -- "$CANDIDATE_TMP"
+}
+
+start_candidate_topology() {
+  CANDIDATE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/storage-viz-candidate.XXXXXX")"
+  trap cleanup_candidate_topology EXIT
+  mkdir -p "$CANDIDATE_TMP/data" "$CANDIDATE_TMP/state"
+  if [[ "$DRY_RUN" == 1 ]]; then
+    run_cmd "$PYTHON" "$APP_PATH/viewer/serve.py" --bind 127.0.0.1 --port 18088 --inventory "$CONFIG_DIR/servers.json" --data-dir "$CANDIDATE_TMP/data" --state-dir "$CANDIDATE_TMP/state" --preflight --no-polling --no-scans
+    STORAGE_VIZ_PROXY_BIND=127.0.0.1 STORAGE_VIZ_PROXY_PORT=1505 STORAGE_VIZ_PROXY_UPSTREAM_HOST=127.0.0.1 STORAGE_VIZ_PROXY_UPSTREAM_PORT=18088 STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator STORAGE_VIZ_PROXY_PUBLIC_ORIGIN=http://127.0.0.1:505 \
+      run_cmd "$PYTHON" "$LIBEXEC_DIR/storage-viz-proxy-launcher.py" "$APP_PATH/deploy/direct_proxy.py" --candidate --public-host 127.0.0.1:505
+    return
+  fi
+  "$PYTHON" "$APP_PATH/viewer/serve.py" --bind 127.0.0.1 --port 18088 --inventory "$CONFIG_DIR/servers.json" --data-dir "$CANDIDATE_TMP/data" --state-dir "$CANDIDATE_TMP/state" --preflight --no-polling --no-scans &
+  CANDIDATE_DASH_PID="$!"
+  STORAGE_VIZ_PROXY_BIND=127.0.0.1 STORAGE_VIZ_PROXY_PORT=1505 STORAGE_VIZ_PROXY_UPSTREAM_HOST=127.0.0.1 STORAGE_VIZ_PROXY_UPSTREAM_PORT=18088 STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator STORAGE_VIZ_PROXY_PUBLIC_ORIGIN=http://127.0.0.1:505 \
+    "$PYTHON" "$LIBEXEC_DIR/storage-viz-proxy-launcher.py" "$APP_PATH/deploy/direct_proxy.py" --candidate --public-host 127.0.0.1:505 &
+  CANDIDATE_PROXY_PID="$!"
+  sleep 0.1
+}
+
+probe_candidate() {
+  run_cmd "$CURL" -fsS -H 'Host: 127.0.0.1:505' -H 'Origin: http://127.0.0.1:505' http://127.0.0.1:1505/api/session >/dev/null
+  run_cmd "$CURL" -fsS -H 'Host: 127.0.0.1:505' http://127.0.0.1:1505/api/servers >/dev/null
+  run_cmd "$CURL" -fsS -X POST -H 'Host: 127.0.0.1:505' -H 'Origin: http://127.0.0.1:505' http://127.0.0.1:1505/api/servers/UNKNOWN_SERVER/rescan >/dev/null
+}
+
+listener_owner_pid() {
+  local port="$1" line pid name out
+  out="$($SS -H -ltnp "sport = :$port")"
+  [[ -n "$out" ]] || { echo "missing listener for :$port" >&2; return 1; }
+  [[ "$(printf '%s\n' "$out" | wc -l | awk '{print $1}')" == 1 ]] || { echo "ambiguous listener for :$port" >&2; return 1; }
+  line="$out"
+  pid="$(printf '%s' "$line" | sed -nE 's/.*pid=([0-9]+).*/\1/p')"
+  name="$(printf '%s' "$line" | sed -nE 's/.*users:\(\("?([^",]+).*/\1/p')"
+  [[ "$pid" =~ ^[0-9]+$ ]] || { echo "cannot parse listener PID for :$port" >&2; return 1; }
+  case "$name" in
+    *storage*|*python*|*direct_proxy*|*tmux*) ;;
+    *) echo "unrelated listener owner for :$port: $name" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$pid"
+}
+
+activate_candidate_release() {
+  "$ACTIVATOR" --sha "$CANDIDATE_SHA" --expected-digest "$EXPECTED_DIGEST" --artifact-stdin --metadata "$METADATA" \
+    --restart-argv /usr/bin/systemctl restart storage-viz-dashboard.service storage-viz-proxy.service \
+    --health-argv /usr/local/libexec/storage-dashboard-health-check.py <"$ARTIFACT"
+}
+
+rollback_after_post_stop_failure() {
+  "$ACTIVATOR" --rollback-state --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" || true
+  "$SYSTEMCTL" start storage-viz-proxy.service || true
+  "$CURL" -fsS -H 'Host: 127.0.0.1:505' http://127.0.0.1:505/api/servers >/dev/null || { echo "rollback previous inventory health failed" >&2; return 1; }
+}
+
+bootstrap_cutover() {
+  validate_candidate_args
+  if [[ "$DRY_RUN" != 1 && "${STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER:-0}" != 1 && "${EUID:-$(id -u)}" -ne 0 ]]; then
+    echo "bootstrap cutover requires root" >&2
+    exit 1
+  fi
+  start_candidate_topology
+  probe_candidate
+  local proxy_pid dash_pid
+  proxy_pid="$(listener_owner_pid 505)"
+  dash_pid="$(listener_owner_pid 8088)"
+  run_cmd "$KILL" -TERM "$proxy_pid"
+  run_cmd "$SYSTEMCTL" stop storage-viz-dashboard.service
+  run_cmd "$KILL" -TERM "$dash_pid"
+  set +e
+  activate_candidate_release
+  local activate_rc=$?
+  if [[ "$activate_rc" -eq 0 ]]; then
+    "$SYSTEMCTL" start storage-viz-dashboard.service storage-viz-proxy.service
+    start_rc=$?
+  else
+    start_rc=$activate_rc
+  fi
+  if [[ "$start_rc" -eq 0 ]]; then
+    "$PYTHON" /usr/local/libexec/storage-dashboard-health-check.py
+    health_rc=$?
+  else
+    health_rc=$start_rc
+  fi
+  set -e
+  if [[ "$health_rc" -ne 0 ]]; then
+    rollback_after_post_stop_failure || true
+    echo "bootstrap cutover failed after live stop; rollback attempted" >&2
+    exit "$health_rc"
+  fi
+  "$SYSTEMCTL" enable --now storage-monitor-release-puller.timer
+  printf 'bootstrap cutover complete; puller timer enabled after approved production health\n'
+}
+
+if [[ "$BOOTSTRAP_CUTOVER" == 1 ]]; then
+  bootstrap_cutover
+  exit 0
+fi
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -126,19 +267,10 @@ render_proxy_service() {
   printf 'install file: %s owner=root:root mode=0644 sha256=%s source=%s\n' "$dest" "$(sha256_file "$actual_dest")" "$SERVER/systemd/storage-viz-proxy.service"
 }
 
-# Candidate preflight/cutover contract for the first approved activation:
-# - legacy dashboard remains 127.0.0.1:8088 and current public proxy remains :505.
-# - candidate dashboard binds 127.0.0.1:18088 with production inventory, temporary data/state, and preflight mode.
-# - candidate proxy binds 127.0.0.1:1505 targeting 127.0.0.1:18088 while preserving real public Host/Origin :505.
-# - health probes are nonmutating: session, inventory, and UNKNOWN_SERVER rescan through candidate topology.
-# - first_cutover_order: stop_exact_current_505_owner -> stop_legacy_8088_dashboard -> activate_release -> start_managed_8088_505.
-# - rollback uses the recorded protected legacy backup, previous dashboard/inventory GET health on :505 is required,
-#   and rollback must not recreate tmux / do not recreate tmux.
-# - exact PID and port owner validation is required; broad process killers are forbidden.
-prepare_candidate_preflight_contract() { : candidate 18088 1505 preflight UNKNOWN_SERVER 505 127.0.0.1:8088; }
-first_cutover_order() { : stop_exact_current_505_owner stop_legacy_8088_dashboard activate_release start_managed_8088_505; }
-rollback_to_protected_legacy_backup_contract() { : rollback protected legacy backup previous dashboard/inventory GET health not recreate tmux; }
-
+# Candidate preflight/cutover executable path is implemented by --bootstrap-cutover above.
+# It preserves legacy dashboard 127.0.0.1:8088 and public proxy :505 while using candidate dashboard 127.0.0.1:18088, candidate proxy 127.0.0.1:1505, public :505 Host/Origin,
+# exact PID/port owner validation, first_cutover_order stop_exact_current_505_owner -> stop_legacy_8088_dashboard -> activate_release -> start_managed_8088_505,
+# rollback to protected legacy backup with previous dashboard/inventory GET health; do not recreate tmux.
 ensure_identity "$BUILDER_USER" "$BUILDER_GROUP" "$STATE_ROOT/builder"
 ensure_identity "$RUNTIME_USER" "$RUNTIME_GROUP" "$STATE_ROOT"
 
@@ -164,8 +296,8 @@ render_proxy_service "/etc/systemd/system/storage-viz-proxy.service"
 
 cat <<ACTIONS
 systemd action: daemon-reload
-systemd action: enable --now storage-viz-proxy.service
-systemd action: enable storage-monitor-release-puller.timer only after approved health
+systemd action: do not enable/start storage-viz-proxy.service until approved cutover
+systemd action: enable --now storage-monitor-release-puller.timer only after approved production health
 systemd action: do not start storage-monitor-release-puller.service from installer
 ACTIONS
 

@@ -714,6 +714,44 @@ def activate_release(
             raise ActivationError(str(exc)) from exc
 
 
+
+def rollback_to_state(
+    config: ActivationConfig,
+    *,
+    restart: Callable[..., object] | None = None,
+) -> dict[str, object]:
+    with _activation_lock(config.lock_path):
+        state = _read_state(config.state_path)
+        if not state:
+            raise ActivationError("activation state is unavailable for rollback")
+        previous = state.get("previous")
+        legacy_backup = state.get("legacy_backup")
+        if isinstance(previous, str) and previous:
+            target = Path(previous)
+            if not target.exists():
+                raise ActivationError("previous release target is unavailable for rollback")
+            _atomic_symlink(config.app_path, target)
+            restored = str(target)
+        elif isinstance(legacy_backup, str) and legacy_backup:
+            backup = Path(legacy_backup)
+            if not backup.is_dir():
+                raise ActivationError("legacy backup is unavailable for rollback")
+            if config.app_path.is_symlink() or config.app_path.exists():
+                if config.app_path.is_dir() and not config.app_path.is_symlink():
+                    shutil.rmtree(config.app_path)
+                else:
+                    config.app_path.unlink()
+            os.replace(backup, config.app_path)
+            _fsync_dir(config.app_path.parent)
+            restored = str(config.app_path)
+        else:
+            raise ActivationError("activation state has no previous release or legacy backup")
+        _call_restart(config, restart, "rollback")
+        status = dict(state)
+        status.update({"status": "rolled_back", "restored": restored})
+        _atomic_write_json(config.state_path, status)
+        return status
+
 def _bounded_status(payload: dict[str, object]) -> str:
     text = json.dumps(payload, sort_keys=True)
     if len(text) > 8192:
@@ -723,11 +761,11 @@ def _bounded_status(payload: dict[str, object]) -> str:
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Activate a bounded storage-monitor dashboard release")
-    parser.add_argument("--sha", required=True)
-    parser.add_argument("--expected-digest", required=True)
+    parser.add_argument("--sha")
+    parser.add_argument("--expected-digest")
     parser.add_argument("--artifact")
     parser.add_argument("--artifact-stdin", action="store_true")
-    parser.add_argument("--metadata", required=True)
+    parser.add_argument("--metadata")
     parser.add_argument("--release-root", default="/srv/storage-viz-dashboard/releases")
     parser.add_argument("--app-path", default="/opt/storage-viz-dashboard")
     parser.add_argument("--state-path", default="/var/lib/storage-viz-dashboard/activation-state.json")
@@ -739,6 +777,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--max-file-bytes", type=int, default=ActivationConfig.max_file_bytes)
     parser.add_argument("--max-total-bytes", type=int, default=ActivationConfig.max_total_bytes)
     parser.add_argument("--keep-releases", type=int, default=ActivationConfig.keep_releases)
+    parser.add_argument("--rollback-state", action="store_true")
     parser.add_argument("--restart-argv", nargs="+")
     parser.add_argument("--health-argv", nargs="+")
     return parser.parse_args(argv)
@@ -762,14 +801,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         health_argv=tuple(args.health_argv) if args.health_argv else None,
     )
     try:
-        status = activate_release(
-            config,
-            sha=args.sha,
-            expected_digest=args.expected_digest,
-            artifact_path=Path(args.artifact) if args.artifact else None,
-            artifact_stdin=sys.stdin.buffer if args.artifact_stdin else None,
-            metadata_path=Path(args.metadata),
-        )
+        if args.rollback_state:
+            status = rollback_to_state(config)
+        else:
+            if not args.sha or not args.expected_digest or not args.metadata:
+                raise ActivationError("--sha, --expected-digest, and --metadata are required for activation")
+            status = activate_release(
+                config,
+                sha=args.sha,
+                expected_digest=args.expected_digest,
+                artifact_path=Path(args.artifact) if args.artifact else None,
+                artifact_stdin=sys.stdin.buffer if args.artifact_stdin else None,
+                metadata_path=Path(args.metadata),
+            )
     except ActivationError as exc:
         print(_bounded_status({"status": "error", "error": str(exc)}), file=sys.stderr)
         return 1
