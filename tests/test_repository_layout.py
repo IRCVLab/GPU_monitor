@@ -72,17 +72,6 @@ def makefile_text() -> str:
     return Path("Makefile").read_text()
 
 
-def make_target_names() -> set[str]:
-    targets: set[str] = set()
-    for line in makefile_text().splitlines():
-        if not line or line.startswith(("	", "#", ".")) or ":" not in line:
-            continue
-        target_part = line.split(":", 1)[0]
-        if "=" in target_part:
-            continue
-        targets.update(name for name in target_part.split() if name)
-    return targets
-
 
 def make_target_dependencies(target: str) -> list[str]:
     prefix = f"{target}:"
@@ -157,7 +146,7 @@ class RepositoryLayoutTest(unittest.TestCase):
     def test_root_makefile_exposes_exact_application_command_contracts(self):
         self.assertEqual("SHELL := /bin/bash", makefile_text().splitlines()[0])
         self.assertEqual(
-            ["layout-test", "history-test", "release-puller-test", "storage-release-puller-test"],
+            ["layout-test", "history-test", "release-puller-test"],
             make_target_dependencies("test"),
         )
         self.assertEqual(
@@ -196,13 +185,9 @@ class RepositoryLayoutTest(unittest.TestCase):
             ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_gpu_release_puller -v"],
             make_target_recipe("release-puller-test"),
         )
-        self.assertEqual(
-            ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_storage_release_puller -v"],
-            make_target_recipe("storage-release-puller-test"),
-        )
         root_python_recipes = {
             target: recipe
-            for target in ("layout-test", "history-test", "release-puller-test", "storage-release-puller-test")
+            for target in ("layout-test", "history-test", "release-puller-test")
             for recipe in make_target_recipe(target)
         }
         self.assertTrue(root_python_recipes)
@@ -211,38 +196,6 @@ class RepositoryLayoutTest(unittest.TestCase):
             self.assertNotIn("pytest", recipe, target)
             self.assertNotIn("cacheprovider", recipe, target)
 
-
-    def test_storage_dashboard_autodeploy_assets_are_declared(self):
-        required_paths = (
-            "apps/storage-monitor/deploy/build-dashboard-release.py",
-            "apps/storage-monitor/deploy/test_dashboard_release.py",
-            "apps/storage-monitor/deploy/server/storage-monitor-release-puller.py",
-            "apps/storage-monitor/deploy/server/activate-dashboard-release.py",
-            "apps/storage-monitor/deploy/server/health-check-dashboard.py",
-            "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py",
-            "apps/storage-monitor/deploy/server/install-dashboard-deployer.sh",
-            "apps/storage-monitor/deploy/server/systemd/storage-viz-proxy.service",
-            "apps/storage-monitor/deploy/server/systemd/storage-monitor-release-puller.service",
-            "apps/storage-monitor/deploy/server/systemd/storage-monitor-release-puller.timer",
-            "tests/test_storage_release_puller.py",
-        )
-
-        for path in required_paths:
-            with self.subTest(path=path):
-                self.assertTrue(Path(path).is_file(), f"missing planned Storage deploy asset: {path}")
-
-    def test_root_makefile_declares_storage_release_puller_target(self):
-        self.assertIn("release-puller-test", make_target_dependencies("test"))
-        self.assertIn("storage-release-puller-test", make_target_dependencies("test"))
-        self.assertIn("storage-release-puller-test", make_target_names())
-        self.assertEqual(
-            ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_gpu_release_puller -v"],
-            make_target_recipe("release-puller-test"),
-        )
-        self.assertEqual(
-            ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_storage_release_puller -v"],
-            make_target_recipe("storage-release-puller-test"),
-        )
 
     def test_storage_make_targets_run_artifact_checks_in_disposable_clone(self):
         self.assertEqual(

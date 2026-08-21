@@ -138,10 +138,43 @@ class CiImpactTest(unittest.TestCase):
 
     def test_storage_dashboard_deployment_assets_gate_storage_dashboard_ci(self):
         dashboard_deploy_paths = (
-            "apps/storage-monitor/deploy/build-dashboard-release.py",
-            "apps/storage-monitor/deploy/test_dashboard_release.py",
             "apps/storage-monitor/deploy/direct_proxy.py",
             "apps/storage-monitor/deploy/test_direct_proxy.py",
+            "apps/storage-monitor/deploy/systemd/storage-viz-dashboard.service.in",
+            "apps/storage-monitor/install.sh",
+        )
+
+        for path in dashboard_deploy_paths:
+            with self.subTest(path=path):
+                self.assert_decisions(
+                    (path,),
+                    storage_dashboard=True,
+                    apps_required=True,
+                )
+
+    def test_storage_agent_deployment_assets_gate_storage_agent_ci(self):
+        agent_deploy_paths = (
+            "apps/storage-monitor/deploy/deploy-agent.sh",
+            "apps/storage-monitor/deploy/install-agent.sh",
+            "apps/storage-monitor/deploy/verify-linux.sh",
+            "apps/storage-monitor/deploy/test_deploy_scripts.sh",
+            "apps/storage-monitor/deploy/sudoers/storage-viz-monitoring",
+            "apps/storage-monitor/deploy/systemd/storage-viz-scan.service.in",
+            "apps/storage-monitor/deploy/systemd/storage-viz-scan.timer",
+        )
+
+        for path in agent_deploy_paths:
+            with self.subTest(path=path):
+                self.assert_decisions(
+                    (path,),
+                    storage_agent=True,
+                    apps_required=True,
+                )
+
+    def test_planned_storage_dashboard_deploy_assets_gate_storage_dashboard_ci(self):
+        planned_dashboard_deploy_paths = (
+            "apps/storage-monitor/deploy/build-dashboard-release.py",
+            "apps/storage-monitor/deploy/test_dashboard_release.py",
             "apps/storage-monitor/deploy/server/storage-monitor-release-puller.py",
             "apps/storage-monitor/deploy/server/activate-dashboard-release.py",
             "apps/storage-monitor/deploy/server/health-check-dashboard.py",
@@ -153,7 +186,7 @@ class CiImpactTest(unittest.TestCase):
             "tests/test_storage_release_puller.py",
         )
 
-        for path in dashboard_deploy_paths:
+        for path in planned_dashboard_deploy_paths:
             with self.subTest(path=path):
                 self.assert_decisions(
                     (path,),

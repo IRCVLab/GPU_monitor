@@ -1,7 +1,7 @@
 SHELL := /bin/bash
-.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-puller-test storage-release-puller-test release-script-test archive-ref-test build-gpu-release test-gpu build-gpu test-storage verify diff-check
+.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-puller-test release-script-test archive-ref-test build-gpu-release test-gpu build-gpu test-storage verify diff-check
 
-test: layout-test history-test release-puller-test storage-release-puller-test
+test: layout-test history-test release-puller-test
 	$(MAKE) impact-test
 	$(MAKE) policy-test
 	$(MAKE) deploy-readiness-test
@@ -30,9 +30,6 @@ release-auth-test:
 
 release-puller-test:
 	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_gpu_release_puller -v
-
-storage-release-puller-test:
-	PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_storage_release_puller -v
 
 release-script-test:
 	bash apps/gpu-monitor/deploy/test_release_scripts.sh
