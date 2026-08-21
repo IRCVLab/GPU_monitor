@@ -65,6 +65,34 @@ Security rules:
 - Read-only viewers may load status and snapshots after proxy authentication but cannot request rescans.
 - Do not store or document password values. Use SSH identity files and strict known-hosts entries instead.
 
+### Isolated LAN manual rescans over HTTP
+
+When the service is restricted to an isolated lab network, has no individual login system, and must expose manual rescans from the public dashboard URL, configure the loopback dashboard as a trusted proxy target with one fixed lab operator identity:
+
+```bash
+# /etc/storage-viz/dashboard.env
+STORAGE_VIZ_TRUSTED_PROXY=1
+STORAGE_VIZ_ALLOWED_ORIGINS=http://storage.internal:505
+STORAGE_VIZ_OPERATOR_ALLOWLIST=lan-operator
+STORAGE_VIZ_SESSION_COOKIE_SECURE=0
+```
+
+Run the bundled public proxy with the matching identity and exact origin:
+
+```bash
+STORAGE_VIZ_PROXY_BIND=0.0.0.0 \
+STORAGE_VIZ_PROXY_PORT=505 \
+STORAGE_VIZ_PROXY_UPSTREAM_HOST=127.0.0.1 \
+STORAGE_VIZ_PROXY_UPSTREAM_PORT=8088 \
+STORAGE_VIZ_PROXY_OPERATOR=lan-operator \
+STORAGE_VIZ_PROXY_PUBLIC_ORIGIN=http://storage.internal:505 \
+python3 deploy/direct_proxy.py
+```
+
+Both `STORAGE_VIZ_PROXY_OPERATOR` and `STORAGE_VIZ_PROXY_PUBLIC_ORIGIN` are required to enable writes. Without both, the proxy remains GET/HEAD-only. With both, it overwrites inbound identity headers, accepts only the exact same-origin per-server rescan route, requires a bounded non-empty request containing only `{}`, forwards the session cookie and CSRF header, and rejects every other POST/PUT/PATCH/DELETE request.
+
+`STORAGE_VIZ_SESSION_COOKIE_SECURE=0` is an explicit exception for isolated HTTP-only networks. Keep the default secure cookie for HTTPS deployments. Never expose this fixed-operator HTTP mode to an untrusted network.
+
 ### SSH-tunnel-only manual rescans
 
 When the dashboard is reachable only through a local SSH tunnel and the central host is trusted, direct loopback rescans can be enabled without opening POST access on the LAN proxy:

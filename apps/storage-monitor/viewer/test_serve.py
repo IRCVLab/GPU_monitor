@@ -292,6 +292,71 @@ class ApiServerTest(unittest.TestCase):
         for raw in (b"[]", b"not-json", b"{}{}", b"{\"command\":\"scan\"}", b"{\"path\":\"/tmp\"}"):
             self.assertEqual(self.request_raw("POST", "/api/servers/hinton/rescan", raw, headers={"Content-Type":"application/json", "Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 400)
 
+    def test_explicit_internal_http_proxy_mode_uses_non_secure_session_cookie_and_keeps_csrf(self):
+        inv = self.write_inventory()
+        origin = "http://166.104.167.11:505"
+        self.start_server({
+            "STORAGE_VIZ_DEV_SAMPLE_DIR":"",
+            "STORAGE_VIZ_INVENTORY":str(inv),
+            "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"),
+            "STORAGE_VIZ_TRUSTED_PROXY":"1",
+            "STORAGE_VIZ_ALLOWED_ORIGINS":origin,
+            "STORAGE_VIZ_OPERATOR_ALLOWLIST":"lan-operator",
+            "STORAGE_VIZ_SESSION_COOKIE_SECURE":"0",
+        })
+        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"lan-operator"})
+        self.assertEqual(code, 200)
+        self.assertTrue(sess["can_rescan"])
+        self.assertIn("SameSite=Strict", headers.get("Set-Cookie", ""))
+        self.assertNotIn("Secure", headers.get("Set-Cookie", ""))
+        cookie = self.cookie_value(headers)
+        post_headers = {
+            "Cookie":cookie,
+            "X-Forwarded-User":"lan-operator",
+            "Origin":origin,
+            "X-CSRF-Token":sess["csrf_token"],
+        }
+        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers=post_headers)[0], 404)
+
+    def test_session_cookie_secure_override_rejects_invalid_or_non_proxy_configuration(self):
+        inv = self.write_inventory()
+        base = {
+            "STORAGE_VIZ_DEV_SAMPLE_DIR":"",
+            "STORAGE_VIZ_INVENTORY":str(inv),
+            "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"),
+        }
+        for overrides in (
+            {"STORAGE_VIZ_SESSION_COOKIE_SECURE":"sometimes"},
+            {"STORAGE_VIZ_SESSION_COOKIE_SECURE":"0"},
+        ):
+            with self.subTest(overrides=overrides):
+                self.start_server({**base, **overrides}, expect_exit=True)
+                self._stop(); self.proc = None
+
+    def test_non_secure_proxy_rejects_non_exact_http_origins(self):
+        inv = self.write_inventory()
+        base = {
+            "STORAGE_VIZ_DEV_SAMPLE_DIR":"",
+            "STORAGE_VIZ_INVENTORY":str(inv),
+            "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"),
+            "STORAGE_VIZ_TRUSTED_PROXY":"1",
+            "STORAGE_VIZ_OPERATOR_ALLOWLIST":"lan-operator",
+            "STORAGE_VIZ_SESSION_COOKIE_SECURE":"0",
+        }
+        for origin in (
+            "",
+            "https://storage.test",
+            "http://user@storage.test",
+            "http://storage.test/path",
+            "http://storage.test?query=1",
+            "http://storage.test#fragment",
+            "http://storage.test:notaport",
+            "http://storage.test:",
+        ):
+            with self.subTest(origin=origin):
+                self.start_server({**base, "STORAGE_VIZ_ALLOWED_ORIGINS":origin}, expect_exit=True)
+                self._stop(); self.proc = None
+
 
     def test_dev_sample_requires_valid_manifest_and_files(self):
         for rows in (

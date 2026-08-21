@@ -46,6 +46,7 @@ DIRECT_LOOPBACK_RESCAN = os.environ.get("STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN", ""
 IDENTITY_HEADER = os.environ.get("STORAGE_VIZ_IDENTITY_HEADER", "X-Forwarded-User")
 ALLOWED_ORIGINS = frozenset(v.strip() for v in os.environ.get("STORAGE_VIZ_ALLOWED_ORIGINS", "").split(",") if v.strip())
 OPERATORS = frozenset(v.strip() for v in os.environ.get("STORAGE_VIZ_OPERATOR_ALLOWLIST", "").split(",") if v.strip())
+SESSION_COOKIE_SECURE_RAW = os.environ.get("STORAGE_VIZ_SESSION_COOKIE_SECURE")
 DEV_SAMPLE_DIR = os.environ.get("STORAGE_VIZ_DEV_SAMPLE_DIR", "").strip()
 STATE_DIR = Path(os.environ.get("STORAGE_VIZ_STATE_DIR", PROJECT_ROOT / ".storage-viz-state")).resolve()
 INVENTORY_PATH = os.environ.get("STORAGE_VIZ_INVENTORY", "").strip()
@@ -53,6 +54,24 @@ CSRF_SECRET = os.environ.get("STORAGE_VIZ_CSRF_SECRET", secrets.token_hex(32))
 SESSION_TTL_SECONDS = int(os.environ.get("STORAGE_VIZ_SESSION_TTL_SECONDS", "3600"))
 COOLDOWN_SECONDS = int(os.environ.get("STORAGE_VIZ_RESCAN_COOLDOWN_SECONDS", "900"))
 MAX_CONCURRENT_RESCANS = int(os.environ.get("STORAGE_VIZ_RESCAN_MAX_CONCURRENT", "2"))
+
+
+def _parse_bool_setting(name: str, raw: str | None, *, default: bool) -> bool:
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise SystemExit(f"{name} must be a boolean")
+
+
+SESSION_COOKIE_SECURE = _parse_bool_setting(
+    "STORAGE_VIZ_SESSION_COOKIE_SECURE",
+    SESSION_COOKIE_SECURE_RAW,
+    default=TRUSTED_PROXY,
+)
 
 
 def _is_loopback(bind: str) -> bool:
@@ -77,12 +96,35 @@ def _is_loopback_origin(origin: str) -> bool:
     )
 
 
+def _is_exact_http_origin(origin: str) -> bool:
+    try:
+        parsed = urlsplit(origin)
+        parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and bool(parsed.hostname)
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.netloc.endswith(":")
+        and parsed.path == ""
+        and parsed.query == ""
+        and parsed.fragment == ""
+    )
+
+
 if TRUSTED_PROXY and not _is_loopback(BIND):
     raise SystemExit("trusted-proxy mode requires a loopback bind")
 if TRUSTED_PROXY and DEV_SAMPLE_DIR:
     raise SystemExit("dev sample mode is rejected in trusted-proxy production mode")
 if TRUSTED_PROXY and OPERATORS and not ALLOWED_ORIGINS:
     raise SystemExit("trusted-proxy operator mode requires at least one exact allowed origin")
+if SESSION_COOKIE_SECURE_RAW is not None and not TRUSTED_PROXY:
+    raise SystemExit("STORAGE_VIZ_SESSION_COOKIE_SECURE is only valid in trusted-proxy mode")
+if TRUSTED_PROXY and not SESSION_COOKIE_SECURE:
+    if not ALLOWED_ORIGINS or not all(_is_exact_http_origin(origin) for origin in ALLOWED_ORIGINS):
+        raise SystemExit("non-secure trusted-proxy sessions require exact HTTP origins")
 if DIRECT_LOOPBACK_RESCAN:
     if TRUSTED_PROXY:
         raise SystemExit("direct loopback rescan mode cannot be combined with trusted-proxy mode")
@@ -394,7 +436,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             new_cookie = None
         else:
             cookie_value = _make_session_cookie(actor)
-            attrs = "Path=/; SameSite=Strict; HttpOnly; Secure" if TRUSTED_PROXY else "Path=/; SameSite=Lax; HttpOnly"
+            same_site = "Strict" if TRUSTED_PROXY else "Lax"
+            attrs = f"Path=/; SameSite={same_site}; HttpOnly"
+            if SESSION_COOKIE_SECURE:
+                attrs += "; Secure"
             new_cookie = f"storage_viz_session={cookie_value}; {attrs}"
         direct_origin = self._direct_loopback_origin()
         can_rescan = RESCAN_API_ENABLED and actor in OPERATORS and bool(ALLOWED_ORIGINS) and (TRUSTED_PROXY or direct_origin is not None)
