@@ -66,6 +66,8 @@ Immutable releases live under `/srv/storage-viz-dashboard/releases/<sha>/storage
 
 The existing `/opt/storage-viz-dashboard` runtime path becomes a symlink to the active immutable release. This preserves the current dashboard systemd unit path and avoids coupling deployment to GPU paths. The first activation safely retains the previous `/opt/storage-viz-dashboard` directory as a legacy rollback target.
 
+For the first activation, a pre-existing real `/opt/storage-viz-dashboard` directory is atomically renamed on the same filesystem to `/opt/storage-viz-dashboard.legacy.<timestamp>`. Deployment state records it as `legacy_backup`, not as a release SHA. The new `/opt/storage-viz-dashboard` symlink is then installed. If restart or health validation fails, the symlink is removed, the legacy directory is atomically renamed back to the original path, and the old services are restarted. After a successful migration the legacy directory remains protected from automatic release pruning and is removed only by an explicit documented operator cleanup after a later release and rollback rehearsal.
+
 Activation:
 
 1. reads a bounded artifact from stdin;
@@ -80,9 +82,13 @@ If restart or health validation fails, the active pointer is restored and both s
 
 ### Managed public proxy
 
-`storage-viz-proxy.service` replaces tmux ownership of port 505. It executes the active release's `deploy/direct_proxy.py` and reads `/etc/storage-viz/proxy.env`.
+`storage-viz-proxy.service` replaces tmux ownership of port 505. It executes an installed root-owned launcher that resolves a deployment-state proxy target only under the active immutable release or the protected legacy backup, then drops to the Storage service identity and executes that target's `deploy/direct_proxy.py` with `/etc/storage-viz/proxy.env`.
 
 The proxy remains independent from GPU Monitor and accepts only GET/HEAD plus the exact bounded manual-rescan POST contract already implemented. Other writes remain blocked.
+
+Bootstrap and every activation fail closed unless `/etc/storage-viz/proxy.env` and `/etc/storage-viz/dashboard.env` form one coherent deployment: proxy port `505`, upstream `127.0.0.1:8088`, an exact HTTP public origin whose authority equals the browser Host, a fixed proxy operator present in the dashboard operator allowlist, trusted-proxy mode enabled, non-secure session cookies explicitly enabled for the internal HTTP origin, and development sample mode absent. Missing, duplicate, malformed, or conflicting keys reject activation rather than falling back to defaults.
+
+The first proxy cutover does not discard the tmux fallback before proving the replacement. With the legacy dashboard still on `127.0.0.1:8088` and tmux proxy still serving port 505, bootstrap starts the candidate dashboard on `127.0.0.1:18088` and candidate proxy on `127.0.0.1:1505`. Temporary validated proxy settings target 18088 while requests still carry the real configured public Host/Origin. Candidate dashboard preflight mode is loopback-only, requires production inventory, uses isolated temporary data/state, disables background polling and real rescan job execution, and exists only to exercise candidate startup, routing, session, CSRF, inventory, and bounded POST authorization without touching Live or remote servers. Only after that topology passes does bootstrap stop the exact process owning 505, stop the legacy 8088 dashboard, switch the release, and start the managed 8088/505 services. Deployment state retains the protected legacy proxy target. If the managed proxy cannot bind or post-cutover health fails, the launcher target is switched to the legacy backup, the legacy dashboard directory is restored, the managed proxy is started with the legacy code, and rollback verifies port 505 can again serve the previous dashboard and inventory. The old tmux session itself is not recreated; equivalent previous proxy code/config is restored under systemd ownership.
 
 ### Preserved state
 
@@ -104,9 +110,10 @@ Activation succeeds only when all of the following hold:
 
 1. dashboard and proxy services are active;
 2. public proxy `/api/session` returns valid JSON and `can_rescan: true`;
-3. `/api/servers` reports `data_mode: inventory`;
-4. enabled server IDs from `/etc/storage-viz/servers.json` are present in the API response in inventory order;
-5. no sample-only server list has replaced production inventory.
+3. the health checker retains the session cookie and CSRF token, then sends `{}` through port 505 to a guaranteed-nonexistent but syntactically valid server ID with the exact configured Host and Origin; health requires backend `404 {"error":"UNKNOWN_SERVER"}`, proving the proxy POST allowlist, fixed identity, cookie, CSRF, Origin, and backend authorization without starting a scan;
+4. `/api/servers` reports `data_mode: inventory`;
+5. enabled server IDs from `/etc/storage-viz/servers.json` are present in the API response in inventory order;
+6. no sample-only server list has replaced production inventory.
 
 This health gate directly covers the recurring manual-rescan-disabled and stale-server-list failures.
 
@@ -121,8 +128,11 @@ This health gate directly covers the recurring manual-rescan-disabled and stale-
 - activator archive traversal/type/size rejection, pointer switch, rollback, and state persistence;
 - systemd/install asset contracts and strict Storage/GPU path isolation;
 - health-check rejection of read-only sessions, sample mode, missing/reordered servers, and dead services;
+- environment-pair rejection for incomplete or conflicting proxy/dashboard settings;
 - full `make test`, `make test-storage`, workflow validation, and diff checks.
+
+Deployment assets live under `apps/storage-monitor/deploy/server/` plus `apps/storage-monitor/deploy/build-dashboard-release.py`, `apps/storage-monitor/deploy/direct_proxy.py`, and their tests. `scripts/ci_impact.py` explicitly classifies each of those exact app-local paths as `storage_dashboard`, with regression tests for every path, so `ci/storage` and `ci/required` cannot approve an untested Storage deployment-code change.
 
 ## Initial rollout
 
-The repository change can be merged and CI-validated without touching Live. Installing the puller on the Storage host is a separate one-time privileged bootstrap. The bootstrap inspects and preserves the existing runtime/configuration, replaces the tmux proxy with systemd, activates the approved `main` release, verifies port 505 and a real bounded rescan request, then enables the timer.
+The repository change can be merged and CI-validated without touching Live. Installing the puller on the Storage host is a separate one-time privileged bootstrap. The bootstrap inspects and preserves the existing runtime/configuration, performs the preflight and rollback-safe tmux-to-systemd proxy cutover, activates the approved `main` release, verifies port 505 with the non-mutating authenticated `UNKNOWN_SERVER` POST readiness probe, then enables the timer. A real scan is never started by deployment health checks; an operator may separately request one after deployment if operationally desired.
