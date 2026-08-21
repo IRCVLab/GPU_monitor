@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -409,26 +410,44 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             )
         self.assertFalse(self.app_path.exists())
 
-    def test_rejects_artifact_or_metadata_paths_outside_private_incoming_dir(self) -> None:
+    def test_rejects_external_artifact_but_safely_accepts_regular_external_metadata(self) -> None:
         archive, metadata, digest = self._archive()
         outside_archive = self.root / "outside.tar.gz"
         outside_archive.write_bytes(archive.read_bytes())
         outside_metadata = self.root / "outside.json"
         outside_metadata.write_bytes(metadata.read_bytes())
 
-        for artifact_path, metadata_path in [(outside_archive, metadata), (archive, outside_metadata)]:
-            with self.subTest(artifact=artifact_path, metadata=metadata_path):
-                with self.assertRaises(self.module.ActivationError):
-                    self.module.activate_release(
-                        self._config(),
-                        sha=self.sha,
-                        expected_digest=digest,
-                        artifact_path=artifact_path,
-                        metadata_path=metadata_path,
-                        restart=self._restart,
-                        health=self._health,
-                    )
+        with self.assertRaises(self.module.ActivationError):
+            self.module.activate_release(
+                self._config(),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_path=outside_archive,
+                metadata_path=metadata,
+                restart=self._restart,
+                health=self._health,
+            )
+
+        status = self.module.prepare_release(
+            self._config(),
+            sha=self.sha,
+            expected_digest=digest,
+            artifact_path=archive,
+            metadata_path=outside_metadata,
+        )
+        self.assertEqual(status["status"], "prepared")
         self.assertFalse(self.app_path.exists())
+
+        metadata_link = self.root / "metadata-link.json"
+        metadata_link.symlink_to(outside_metadata)
+        with self.assertRaises(self.module.ActivationError):
+            self.module.prepare_release(
+                self._config(),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_path=archive,
+                metadata_path=metadata_link,
+            )
 
     def test_extracts_private_verified_bytes_when_original_artifact_is_swapped_after_validation(self) -> None:
         original_files = self._runtime_files()
@@ -594,6 +613,47 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(self.health_calls, 1)
         self._assert_gpu_sentinel_preserved()
 
+    def test_prepare_only_cli_extracts_supplied_release_without_switch_restart_or_state(self) -> None:
+        self.app_path.mkdir(parents=True)
+        (self.app_path / "legacy-sentinel.txt").write_bytes(b"legacy bytes")
+        archive, metadata, digest = self._archive()
+        stdout = io.StringIO()
+
+        with mock.patch("sys.stdout", stdout):
+            rc = self.module.main([
+                "--prepare-only",
+                "--sha", self.sha,
+                "--expected-digest", digest,
+                "--artifact", str(archive),
+                "--metadata", str(metadata),
+                "--release-root", str(self.release_root),
+                "--app-path", str(self.app_path),
+                "--state-path", str(self.state_path),
+                "--lock-path", str(self.lock_path),
+                "--incoming-dir", str(self.incoming),
+                "--restart-argv", "/bin/false",
+                "--health-argv", "/bin/false",
+            ])
+
+        self.assertEqual(rc, 0)
+        status = json.loads(stdout.getvalue())
+        prepared = self.release_root / self.sha / "storage-monitor"
+        self.assertEqual(status, {
+            "archive_digest": digest,
+            "candidate_release": str(prepared),
+            "source_sha": self.sha,
+            "status": "prepared",
+        })
+        self.assertTrue(prepared.is_dir())
+        self.assertEqual((prepared / "viewer/app.js").stat().st_mode & 0o222, 0)
+        self.assertFalse(self.app_path.is_symlink())
+        self.assertEqual((self.app_path / "legacy-sentinel.txt").read_bytes(), b"legacy bytes")
+        self.assertFalse(self.state_path.exists())
+
+        activated = self._activate(archive, metadata, digest)
+        self.assertEqual(activated["release"], str(prepared))
+        self.assertEqual(self.app_path.resolve(), prepared.resolve())
+
     def test_rollback_cli_does_not_require_activation_metadata(self) -> None:
         previous_target = self.release_root / self.old_sha / "storage-monitor"
         failed_target = self.release_root / self.sha / "storage-monitor"
@@ -626,7 +686,10 @@ class DashboardReleaseActivationTest(unittest.TestCase):
     def test_rollback_contract_restores_previous_symlink_from_activation_state(self) -> None:
         previous_target = self.release_root / self.old_sha / "storage-monitor"
         failed_target = self.release_root / self.sha / "storage-monitor"
-        previous_target.mkdir(parents=True)
+        previous_proxy = previous_target / "deploy/direct_proxy.py"
+        previous_proxy.parent.mkdir(parents=True)
+        previous_proxy.write_bytes(b"old proxy")
+        previous_proxy.chmod(0o555)
         failed_target.mkdir(parents=True)
         self.app_path.parent.mkdir(parents=True)
         self.app_path.symlink_to(failed_target)
@@ -638,6 +701,10 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "release": str(failed_target),
             "previous": str(previous_target),
             "legacy_backup": None,
+            "failed_release": str(failed_target),
+            "failed_source_sha": self.sha,
+            "failed_archive_digest": "b" * 64,
+            "activation_error": "candidate failed",
         }) + "\n", encoding="utf-8")
 
         status = self.module.rollback_to_state(self._config(), restart=self._restart)
@@ -645,6 +712,66 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(status["status"], "rolled_back")
         self.assertEqual(self.app_path.resolve(), previous_target.resolve())
         self.assertEqual(self.restart_calls, ["rollback"])
+        persisted = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["release"], str(previous_target))
+        self.assertEqual(persisted["current"], str(previous_target))
+        self.assertEqual(persisted["source_sha"], self.old_sha)
+        for key in ("failed_release", "failed_source_sha", "failed_archive_digest", "activation_error", "rollback_restart_error"):
+            self.assertNotIn(key, persisted)
+
+    def test_legacy_rollback_preserves_backup_restores_real_opt_and_launcher_accepts_target(self) -> None:
+        failed_target = self.release_root / self.sha / "storage-monitor"
+        failed_target.mkdir(parents=True)
+        self.app_path.parent.mkdir(parents=True)
+        self.app_path.symlink_to(failed_target)
+        backup = self.app_path.with_name("storage-viz-dashboard.legacy.protected")
+        proxy = backup / "deploy/direct_proxy.py"
+        proxy.parent.mkdir(parents=True)
+        proxy.write_bytes(b"#!/usr/bin/env python3\nprint('legacy')\n")
+        proxy.chmod(0o755)
+        (backup / "legacy-sentinel.bin").write_bytes(b"\x00legacy\xffbytes")
+        self.state_path.parent.mkdir(parents=True)
+        self.state_path.write_text(json.dumps({
+            "status": "active",
+            "source_sha": self.sha,
+            "archive_digest": "b" * 64,
+            "release": str(failed_target),
+            "previous": None,
+            "legacy_backup": str(backup),
+            "failed_release": str(failed_target),
+            "failed_source_sha": self.sha,
+        }) + "\n", encoding="utf-8")
+
+        status = self.module.rollback_to_state(self._config(), restart=self._restart)
+
+        self.assertFalse(self.app_path.is_symlink())
+        self.assertEqual((self.app_path / "legacy-sentinel.bin").read_bytes(), b"\x00legacy\xffbytes")
+        self.assertEqual((backup / "legacy-sentinel.bin").read_bytes(), b"\x00legacy\xffbytes")
+        self.assertEqual(status["protected_legacy_backup"], str(backup))
+        self.assertEqual(status["restored_legacy_target"], str(self.app_path))
+        self.assertEqual(status["managed_legacy_proxy_target"], str(self.app_path / "deploy/direct_proxy.py"))
+        self.assertNotIn("failed_release", status)
+        self.assertNotIn("failed_source_sha", status)
+
+        launcher = self._load_named_module(
+            "storage_viz_proxy_launcher_rollback",
+            REPO_ROOT / "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py",
+        )
+        accepted = launcher.validate_proxy_target(
+            self.app_path / "deploy/direct_proxy.py",
+            launcher.LauncherConfig(release_root=self.release_root, state_path=self.state_path),
+        )
+        self.assertEqual(accepted, (self.app_path / "deploy/direct_proxy.py").resolve())
+
+    def _load_named_module(self, name: str, path: Path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        return module
 
     def test_switches_valid_prior_release_symlink_atomically_and_records_previous(self) -> None:
         previous_target = self.release_root / self.old_sha / "storage-monitor"
@@ -945,6 +1072,92 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         self.assertEqual(requests[2][2]["Host"], "166.104.167.11:505")
         self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
 
+    def test_candidate_override_connects_to_loopback_1505_without_systemd_and_keeps_public_semantics(self) -> None:
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(
+            dashboard_env=dash,
+            proxy_env=proxy,
+            connect_host="127.0.0.1",
+            connect_port=1505,
+        )
+        connections: list[tuple[str, int, int]] = []
+        requests: list[tuple[str, str, dict[str, str]]] = []
+
+        class FakeResponse:
+            def __init__(self, status, body, headers=None):
+                self.status = status
+                self._body = json.dumps(body).encode()
+                self._headers = headers or {}
+
+            def read(self):
+                return self._body
+
+            def getheaders(self):
+                return list(self._headers.items())
+
+        responses = [
+            FakeResponse(200, {"can_rescan": True, "csrf_token": "candidate-csrf"}, {"Set-Cookie": "storage_viz_session=candidate; Path=/"}),
+            FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
+            FakeResponse(404, {"error": "UNKNOWN_SERVER"}),
+        ]
+
+        class FakeConnection:
+            def __init__(self, host, port, timeout):
+                connections.append((host, port, timeout))
+
+            def request(self, method, path, body=None, headers=None):
+                requests.append((method, path, dict(headers or {})))
+
+            def getresponse(self):
+                return responses.pop(0)
+
+            def close(self):
+                pass
+
+        def forbidden_runner(*args, **kwargs):
+            raise AssertionError("candidate health must skip systemd service checks")
+
+        self.module.run_health_check(
+            contract,
+            skip_service_check=True,
+            runner=forbidden_runner,
+            connection_factory=FakeConnection,
+            sleep=lambda _: None,
+        )
+
+        self.assertEqual(connections, [("127.0.0.1", 1505, 5)] * 3)
+        self.assertEqual([request[:2] for request in requests], [
+            ("GET", "/api/session"),
+            ("GET", "/api/servers"),
+            ("POST", requests[2][1]),
+        ])
+        self.assertTrue(all(request[2]["Host"] == "166.104.167.11:505" for request in requests))
+        self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
+        self.assertEqual(requests[2][2]["Cookie"], "storage_viz_session=candidate")
+        self.assertEqual(requests[2][2]["X-CSRF-Token"], "candidate-csrf")
+
+    def test_candidate_cli_exposes_bounded_connection_override_and_skip_service_flag(self) -> None:
+        dash, proxy, _ = self._write_envs()
+        observed: dict[str, object] = {}
+
+        def capture(contract, **kwargs):
+            observed["contract"] = contract
+            observed.update(kwargs)
+
+        with mock.patch.object(self.module, "run_health_check", side_effect=capture):
+            rc = self.module.main([
+                "--dashboard-env", str(dash),
+                "--proxy-env", str(proxy),
+                "--connect-host", "127.0.0.1",
+                "--connect-port", "1505",
+                "--skip-service-check",
+            ])
+
+        self.assertEqual(rc, 0)
+        contract = observed["contract"]
+        self.assertEqual((contract.connect_host, contract.connect_port), ("127.0.0.1", 1505))
+        self.assertIs(observed["skip_service_check"], True)
+
     def test_probe_rejects_code_only_unknown_server_response(self) -> None:
         dash, proxy, _ = self._write_envs()
         contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
@@ -1021,20 +1234,38 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
         target.chmod(0o555)
         return target
 
-    def test_accepts_only_immutable_active_release_or_recorded_legacy_proxy(self) -> None:
+    def test_accepts_only_immutable_active_release_or_coherent_restored_legacy_proxy(self) -> None:
         target = self._target()
         state = self.root / "state.json"
-        state.write_text(json.dumps({"release": str(target.parents[1]), "legacy_backup": str(self.root / "legacy_backup")}), encoding="utf-8")
+        state.write_text(json.dumps({"status": "active", "release": str(target.parents[1])}), encoding="utf-8")
         cfg = self.module.LauncherConfig(release_root=self.root / "srv/storage-viz-dashboard/releases", state_path=state)
         self.assertEqual(self.module.validate_proxy_target(target, cfg), target.resolve())
 
-        legacy = self.root / "legacy_backup/deploy/direct_proxy.py"
-        legacy.parent.mkdir(parents=True); legacy.write_text("print('legacy')\n", encoding="utf-8"); legacy.chmod(0o555)
+        backup = self.root / "legacy_backup"
+        backup_proxy = backup / "deploy/direct_proxy.py"
+        backup_proxy.parent.mkdir(parents=True); backup_proxy.write_text("print('legacy')\n", encoding="utf-8"); backup_proxy.chmod(0o755)
+        restored = self.root / "opt/storage-viz-dashboard"
+        legacy = restored / "deploy/direct_proxy.py"
+        legacy.parent.mkdir(parents=True); legacy.write_bytes(backup_proxy.read_bytes()); legacy.chmod(0o755)
+        state.write_text(json.dumps({
+            "status": "rolled_back",
+            "release": str(restored),
+            "current": str(restored),
+            "restored_legacy_target": str(restored),
+            "managed_legacy_proxy_target": str(legacy),
+            "protected_legacy_backup": str(backup),
+        }), encoding="utf-8")
         self.assertEqual(self.module.validate_proxy_target(legacy, cfg), legacy.resolve())
+
+        legacy.write_text("print('tampered')\n", encoding="utf-8")
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(legacy, cfg)
+        legacy.write_bytes(backup_proxy.read_bytes())
 
         bads = [
             self.root / "srv/gpu-dashboard/releases" / target.parent.name / "direct_proxy.py",
             self.root / "tmp/direct_proxy.py",
+            backup_proxy,
         ]
         writable = self._target("1111111111111111111111111111111111111111"); writable.chmod(0o755); bads.append(writable)
         link = self.root / "link.py"; link.symlink_to(target); bads.append(link)

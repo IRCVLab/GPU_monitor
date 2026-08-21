@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -39,7 +40,7 @@ def _state(config: LauncherConfig) -> dict[str, object]:
     return raw
 
 
-def _immutable_file(path: Path) -> Path:
+def _regular_file(path: Path) -> Path:
     if path.is_symlink():
         raise LauncherError("proxy target must not be a symlink")
     try:
@@ -48,6 +49,11 @@ def _immutable_file(path: Path) -> Path:
         raise LauncherError("proxy target is missing or broken") from exc
     if resolved.name != "direct_proxy.py" or resolved.is_symlink() or not resolved.is_file():
         raise LauncherError("proxy target must be direct_proxy.py")
+    return resolved
+
+
+def _immutable_file(path: Path) -> Path:
+    resolved = _regular_file(path)
     mode = resolved.stat().st_mode
     if mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
         raise LauncherError("proxy target must be immutable/non-writable")
@@ -68,17 +74,31 @@ def _active_release_target(resolved: Path, config: LauncherConfig, state: dict[s
 
 
 def _legacy_target(resolved: Path, state: dict[str, object]) -> bool:
-    legacy_backup = state.get("legacy_backup")
-    if not isinstance(legacy_backup, str) or not legacy_backup:
+    restored = state.get("restored_legacy_target")
+    managed = state.get("managed_legacy_proxy_target")
+    protected = state.get("protected_legacy_backup")
+    if (
+        state.get("status") != "rolled_back"
+        or not isinstance(restored, str)
+        or not isinstance(managed, str)
+        or not isinstance(protected, str)
+    ):
         return False
-    expected = Path(legacy_backup).resolve(strict=False) / "deploy/direct_proxy.py"
-    return resolved == expected
+    expected = Path(restored).resolve(strict=False) / "deploy/direct_proxy.py"
+    if resolved != expected or resolved != Path(managed).resolve(strict=False):
+        return False
+    backup_proxy = Path(protected).resolve(strict=False) / "deploy/direct_proxy.py"
+    if backup_proxy.is_symlink() or not backup_proxy.is_file():
+        return False
+    return hashlib.sha256(resolved.read_bytes()).digest() == hashlib.sha256(backup_proxy.read_bytes()).digest()
 
 
 def validate_proxy_target(target: str | Path, config: LauncherConfig = LauncherConfig()) -> Path:
-    resolved = _immutable_file(Path(target))
+    resolved = _regular_file(Path(target))
     state = _state(config)
-    if _active_release_target(resolved, config, state) or _legacy_target(resolved, state):
+    if _active_release_target(resolved, config, state):
+        return _immutable_file(resolved)
+    if _legacy_target(resolved, state):
         return resolved
     raise LauncherError("proxy target is not the active storage release or recorded legacy backup")
 

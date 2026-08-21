@@ -122,13 +122,21 @@ def _validate_digest(value: str, label: str = "digest") -> None:
 
 
 def _read_json_file(path: Path, max_bytes: int) -> dict[str, object]:
-    if not path.is_file():
-        raise ActivationError(f"metadata not found: {path}")
-    if path.stat().st_size > max_bytes:
-        raise ActivationError("metadata exceeds configured input bound")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as handle:
+            metadata_stat = os.fstat(handle.fileno())
+            if not stat.S_ISREG(metadata_stat.st_mode):
+                raise ActivationError("metadata must be a regular file")
+            if metadata_stat.st_size > max_bytes:
+                raise ActivationError("metadata exceeds configured input bound")
+            raw = handle.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                raise ActivationError("metadata exceeds configured input bound")
+        data = json.loads(raw.decode("utf-8"))
+    except ActivationError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ActivationError(f"invalid metadata JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ActivationError("metadata must be a JSON object")
@@ -340,7 +348,6 @@ def _prepare_archive(
     staged_file: BinaryIO | None = None
     staged_path: Path | None = None
     metadata_path = Path(metadata_path)
-    _require_private_incoming_path(config, metadata_path, "metadata")
     if artifact_path is None:
         if artifact_stdin is None:
             raise ActivationError("artifact path or artifact stdin is required")
@@ -714,6 +721,74 @@ def activate_release(
             raise ActivationError(str(exc)) from exc
 
 
+def prepare_release(
+    config: ActivationConfig,
+    *,
+    sha: str,
+    expected_digest: str,
+    metadata_path: Path,
+    artifact_path: Path | None = None,
+    artifact_stdin: BinaryIO | None = None,
+) -> dict[str, object]:
+    """Validate and extract an immutable candidate without changing live state."""
+    with _activation_lock(config.lock_path):
+        archive = _prepare_archive(
+            config,
+            sha=sha,
+            expected_digest=expected_digest,
+            artifact_path=artifact_path,
+            metadata_path=metadata_path,
+            artifact_stdin=artifact_stdin,
+        )
+        try:
+            target = _extract_private(config, archive, sha)
+        finally:
+            archive.staged_file.close()
+        return {
+            "status": "prepared",
+            "candidate_release": str(target),
+            "source_sha": sha,
+            "archive_digest": archive.digest,
+        }
+
+
+def _clear_failed_candidate_fields(status: dict[str, object]) -> None:
+    for key in (
+        "failed_release",
+        "failed_source_sha",
+        "failed_archive_digest",
+        "activation_error",
+        "rollback_restart_error",
+    ):
+        status.pop(key, None)
+
+
+def _replace_with_legacy_copy(app_path: Path, backup: Path) -> None:
+    temp = app_path.with_name(f".{app_path.name}.restore.{os.getpid()}")
+    with contextlib.suppress(FileNotFoundError):
+        if temp.is_dir() and not temp.is_symlink():
+            shutil.rmtree(temp)
+        else:
+            temp.unlink()
+    try:
+        shutil.copytree(backup, temp, symlinks=True, copy_function=shutil.copy2)
+        _fsync_tree(temp)
+        if app_path.is_symlink() or app_path.exists():
+            if app_path.is_dir() and not app_path.is_symlink():
+                shutil.rmtree(app_path)
+            else:
+                app_path.unlink()
+        os.replace(temp, app_path)
+        _fsync_dir(app_path.parent)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            if temp.is_dir() and not temp.is_symlink():
+                shutil.rmtree(temp)
+            else:
+                temp.unlink()
+        raise
+
+
 
 def rollback_to_state(
     config: ActivationConfig,
@@ -728,28 +803,51 @@ def rollback_to_state(
         legacy_backup = state.get("legacy_backup")
         if isinstance(previous, str) and previous:
             target = Path(previous)
-            if not target.exists():
+            expected = _release_target(config, target.parent.name)
+            if not SHA_RE.fullmatch(target.parent.name) or target != expected or not target.is_dir():
                 raise ActivationError("previous release target is unavailable for rollback")
             _atomic_symlink(config.app_path, target)
             restored = str(target)
+            status = dict(state)
+            status.update(
+                {
+                    "status": "rolled_back",
+                    "release": restored,
+                    "current": restored,
+                    "source_sha": target.parent.name,
+                    "previous": None,
+                    "legacy_backup": None,
+                    "restored": restored,
+                }
+            )
+            status.pop("archive_digest", None)
         elif isinstance(legacy_backup, str) and legacy_backup:
             backup = Path(legacy_backup)
             if not backup.is_dir():
                 raise ActivationError("legacy backup is unavailable for rollback")
-            if config.app_path.is_symlink() or config.app_path.exists():
-                if config.app_path.is_dir() and not config.app_path.is_symlink():
-                    shutil.rmtree(config.app_path)
-                else:
-                    config.app_path.unlink()
-            os.replace(backup, config.app_path)
-            _fsync_dir(config.app_path.parent)
+            _replace_with_legacy_copy(config.app_path, backup)
             restored = str(config.app_path)
+            status = dict(state)
+            status.update(
+                {
+                    "status": "rolled_back",
+                    "release": restored,
+                    "current": restored,
+                    "previous": None,
+                    "legacy_backup": str(backup),
+                    "protected_legacy_backup": str(backup),
+                    "restored_legacy_target": restored,
+                    "managed_legacy_proxy_target": str(config.app_path / "deploy/direct_proxy.py"),
+                    "restored": restored,
+                }
+            )
+            status.pop("source_sha", None)
+            status.pop("archive_digest", None)
         else:
             raise ActivationError("activation state has no previous release or legacy backup")
-        _call_restart(config, restart, "rollback")
-        status = dict(state)
-        status.update({"status": "rolled_back", "restored": restored})
+        _clear_failed_candidate_fields(status)
         _atomic_write_json(config.state_path, status)
+        _call_restart(config, restart, "rollback")
         return status
 
 def _bounded_status(payload: dict[str, object]) -> str:
@@ -778,6 +876,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--max-total-bytes", type=int, default=ActivationConfig.max_total_bytes)
     parser.add_argument("--keep-releases", type=int, default=ActivationConfig.keep_releases)
     parser.add_argument("--rollback-state", action="store_true")
+    parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--restart-argv", nargs="+")
     parser.add_argument("--health-argv", nargs="+")
     return parser.parse_args(argv)
@@ -801,12 +900,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         health_argv=tuple(args.health_argv) if args.health_argv else None,
     )
     try:
+        if args.rollback_state and args.prepare_only:
+            raise ActivationError("--rollback-state and --prepare-only are mutually exclusive")
         if args.rollback_state:
             status = rollback_to_state(config)
         else:
             if not args.sha or not args.expected_digest or not args.metadata:
                 raise ActivationError("--sha, --expected-digest, and --metadata are required for activation")
-            status = activate_release(
+            operation = prepare_release if args.prepare_only else activate_release
+            status = operation(
                 config,
                 sha=args.sha,
                 expected_digest=args.expected_digest,

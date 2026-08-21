@@ -52,6 +52,8 @@ class HealthContract:
     upstream_host: str = "127.0.0.1"
     upstream_port: int = 8088
     public_port: int = 505
+    connect_host: str | None = None
+    connect_port: int | None = None
 
 
 def parse_environment_file(path: Path) -> dict[str, str]:
@@ -133,7 +135,13 @@ def _load_enabled_server_ids(path: Path) -> list[str]:
     return ids
 
 
-def load_contract(*, dashboard_env: Path = Path("/etc/storage-viz/dashboard.env"), proxy_env: Path = Path("/etc/storage-viz/proxy.env")) -> HealthContract:
+def load_contract(
+    *,
+    dashboard_env: Path = Path("/etc/storage-viz/dashboard.env"),
+    proxy_env: Path = Path("/etc/storage-viz/proxy.env"),
+    connect_host: str | None = None,
+    connect_port: int | None = None,
+) -> HealthContract:
     dash = parse_environment_file(Path(dashboard_env))
     proxy = parse_environment_file(Path(proxy_env))
     for key in (
@@ -179,7 +187,20 @@ def load_contract(*, dashboard_env: Path = Path("/etc/storage-viz/dashboard.env"
     inventory_path = Path(dash["STORAGE_VIZ_INVENTORY"])
     if inventory_path.name != "servers.json":
         raise HealthCheckError("production inventory path must end in servers.json")
-    return HealthContract(dash, proxy, inventory_path, _load_enabled_server_ids(inventory_path), public_origin, host)
+    if (connect_host is None) != (connect_port is None):
+        raise HealthCheckError("candidate connection override requires both host and port")
+    if connect_host is not None and (connect_host != "127.0.0.1" or connect_port != 1505):
+        raise HealthCheckError("candidate connection override must be exactly 127.0.0.1:1505")
+    return HealthContract(
+        dash,
+        proxy,
+        inventory_path,
+        _load_enabled_server_ids(inventory_path),
+        public_origin,
+        host,
+        connect_host=connect_host,
+        connect_port=connect_port,
+    )
 
 
 def _json_response(response: Any) -> tuple[int, Mapping[str, str], Any]:
@@ -200,7 +221,9 @@ def _unknown_id(absent_from: set[str]) -> str:
 
 
 def _request(connection_factory: Callable[..., Any], contract: HealthContract, method: str, path: str, *, body: bytes | None = None, headers: Mapping[str, str] | None = None) -> tuple[int, Mapping[str, str], Any]:
-    conn = connection_factory(contract.public_host.rsplit(":", 1)[0], contract.public_port, timeout=5)
+    connection_host = contract.connect_host or contract.public_host.rsplit(":", 1)[0]
+    connection_port = contract.connect_port or contract.public_port
+    conn = connection_factory(connection_host, connection_port, timeout=5)
     try:
         conn.request(method, path, body=body, headers={"Host": contract.public_host, **dict(headers or {})})
         return _json_response(conn.getresponse())
@@ -214,9 +237,17 @@ def _service_active(name: str, runner: Callable[..., Any]) -> None:
         raise HealthCheckError(f"systemd service inactive: {name}")
 
 
-def run_health_check(contract: HealthContract, *, runner: Callable[..., Any] = subprocess.run, connection_factory: Callable[..., Any] = http.client.HTTPConnection, sleep: Callable[[float], None] = time.sleep) -> None:
-    for service in (DASHBOARD_SERVICE, PROXY_SERVICE):
-        _service_active(service, runner)
+def run_health_check(
+    contract: HealthContract,
+    *,
+    skip_service_check: bool = False,
+    runner: Callable[..., Any] = subprocess.run,
+    connection_factory: Callable[..., Any] = http.client.HTTPConnection,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    if not skip_service_check:
+        for service in (DASHBOARD_SERVICE, PROXY_SERVICE):
+            _service_active(service, runner)
     last_error: Exception | None = None
     for _ in range(3):
         try:
@@ -252,8 +283,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dashboard-env", default="/etc/storage-viz/dashboard.env")
     parser.add_argument("--proxy-env", default="/etc/storage-viz/proxy.env")
+    parser.add_argument("--connect-host")
+    parser.add_argument("--connect-port", type=int)
+    parser.add_argument("--skip-service-check", action="store_true")
     args = parser.parse_args(argv)
-    run_health_check(load_contract(dashboard_env=Path(args.dashboard_env), proxy_env=Path(args.proxy_env)))
+    contract = load_contract(
+        dashboard_env=Path(args.dashboard_env),
+        proxy_env=Path(args.proxy_env),
+        connect_host=args.connect_host,
+        connect_port=args.connect_port,
+    )
+    run_health_check(contract, skip_service_check=args.skip_service_check)
     return 0
 
 

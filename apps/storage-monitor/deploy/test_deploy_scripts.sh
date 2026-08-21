@@ -632,6 +632,22 @@ done
 grep -Fq 'systemd action: daemon-reload' "$DASH_LOG" || fail "dashboard dry-run output missing daemon-reload action"
 grep -Fq 'systemd action: do not enable/start storage-viz-proxy.service until approved cutover' "$DASH_LOG" || fail "dashboard dry-run output missing gated proxy start action"
 grep -Fq 'systemd action: enable --now storage-monitor-release-puller.timer only after approved production health' "$DASH_LOG" || fail "dashboard dry-run output missing gated timer enable action"
+expected_plan_step=1
+while IFS= read -r expected_action; do
+  actual_action="$(sed -n "s/^cutover plan $expected_plan_step: //p" "$DASH_LOG")"
+  [[ "$actual_action" == "$expected_action" ]] || fail "dashboard dry-run cutover plan step $expected_plan_step mismatch: <$actual_action>"
+  expected_plan_step=$((expected_plan_step + 1))
+done <<'PLAN'
+prepare supplied artifact as an immutable candidate release
+start candidate dashboard 127.0.0.1:18088 and direct proxy 127.0.0.1:1505
+run full candidate health/session/inventory/UNKNOWN_SERVER readiness
+validate exact listener owners for live 505 and 8088
+stop only validated live owners and legacy dashboard service
+activate the exact prepared release
+start managed dashboard and proxy services
+run production health through public 505
+enable --now storage-monitor-release-puller.timer
+PLAN
 pass "dashboard dry-run renders assets/paths/modes/hashes without mutation"
 
 SECOND_PREFIX="$TMP/dashboard-second-prefix"
@@ -641,23 +657,71 @@ for asset in storage-dashboard-build-release.py storage-dashboard-activate.py st
 done
 pass "dashboard deployer dry-run is idempotent"
 
+DASH_REAL_PREFIX="$TMP/dashboard-real-prefix"
+DASH_REAL_SYSTEMCTL_LOG="$TMP/dashboard-real-systemctl.log"
+cat > "$FAKEBIN/dashboard-systemctl" <<'FAKE'
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "${DASH_REAL_SYSTEMCTL_LOG:?}"
+FAKE
+chmod +x "$FAKEBIN/dashboard-systemctl"
+DASH_REAL_SYSTEMCTL_LOG="$DASH_REAL_SYSTEMCTL_LOG" SYSTEMCTL="$FAKEBIN/dashboard-systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_REAL_WITH_PREFIX=1 \
+  "$DASHBOARD_DEPLOYER" --prefix "$DASH_REAL_PREFIX" >"$TMP/dashboard-real-install.out"
+[[ "$(cat "$DASH_REAL_SYSTEMCTL_LOG")" == "systemctl daemon-reload" ]] || fail "ordinary dashboard install performed service/timer action: $(cat "$DASH_REAL_SYSTEMCTL_LOG")"
+pass "ordinary dashboard install only reloads systemd and leaves live services untouched"
+
 DASH_CUTOVER_TMP="$TMP/dashboard-cutover"
-mkdir -p "$DASH_CUTOVER_TMP/bin" "$DASH_CUTOVER_TMP/incoming"
+mkdir -p "$DASH_CUTOVER_TMP/bin" "$DASH_CUTOVER_TMP/incoming" "$DASH_CUTOVER_TMP/proc/5050" "$DASH_CUTOVER_TMP/proc/8088"
 DASH_ARTIFACT="$DASH_CUTOVER_TMP/incoming/storage-monitor-dashboard-1111111111111111111111111111111111111111.tar.gz"
 DASH_METADATA="$DASH_CUTOVER_TMP/incoming/storage-monitor-dashboard-1111111111111111111111111111111111111111.sha256.json"
+DASH_CANDIDATE_ROOT="$DASH_CUTOVER_TMP/prepared/1111111111111111111111111111111111111111/storage-monitor"
+mkdir -p "$DASH_CANDIDATE_ROOT/viewer" "$DASH_CANDIDATE_ROOT/deploy"
 printf 'artifact' > "$DASH_ARTIFACT"
 printf '{"application_name":"storage-monitor"}
 ' > "$DASH_METADATA"
 DASH_DIGEST="$(sha256sum "$DASH_ARTIFACT" 2>/dev/null | awk '{print $1}')"
 if [[ -z "$DASH_DIGEST" ]]; then DASH_DIGEST="$(shasum -a 256 "$DASH_ARTIFACT" | awk '{print $1}')"; fi
+cat > "$DASH_CUTOVER_TMP/dashboard.env" <<FAKE
+STORAGE_VIZ_BIND=127.0.0.1
+STORAGE_VIZ_PORT=8088
+STORAGE_VIZ_TRUSTED_PROXY=1
+STORAGE_VIZ_ALLOWED_ORIGINS=http://storage.example:505
+STORAGE_VIZ_OPERATOR_ALLOWLIST=ops-viewer,fixed-proxy-operator
+STORAGE_VIZ_SESSION_COOKIE_SECURE=0
+STORAGE_VIZ_INVENTORY=$DASH_CUTOVER_TMP/servers.json
+FAKE
+cat > "$DASH_CUTOVER_TMP/proxy.env" <<'FAKE'
+STORAGE_VIZ_PROXY_BIND=0.0.0.0
+STORAGE_VIZ_PROXY_PORT=505
+STORAGE_VIZ_PROXY_UPSTREAM_HOST=127.0.0.1
+STORAGE_VIZ_PROXY_UPSTREAM_PORT=8088
+STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator
+STORAGE_VIZ_PROXY_PUBLIC_ORIGIN=http://storage.example:505
+FAKE
+printf '{"servers":[{"id":"atlas","enabled":true}]}' > "$DASH_CUTOVER_TMP/servers.json"
+cat > "$DASH_CANDIDATE_ROOT/viewer/serve.py" <<'FAKE'
+import json, os, signal, sys, time
+keys = ["STORAGE_VIZ_ROOT", "STORAGE_VIZ_BIND", "STORAGE_VIZ_PORT", "STORAGE_VIZ_INVENTORY", "STORAGE_VIZ_DATA_DIR", "STORAGE_VIZ_STATE_DIR", "STORAGE_VIZ_PREFLIGHT_BACKEND", "STORAGE_VIZ_TRUSTED_PROXY", "STORAGE_VIZ_ALLOWED_ORIGINS", "STORAGE_VIZ_OPERATOR_ALLOWLIST", "STORAGE_VIZ_SESSION_COOKIE_SECURE"]
+with open(os.environ["DASH_CUTOVER_LOG"], "a", encoding="utf-8") as out:
+    out.write("candidate-dashboard " + json.dumps({"argv": sys.argv[1:], "env": {key: os.environ.get(key) for key in keys}}, sort_keys=True) + "\n")
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+while True: time.sleep(1)
+FAKE
+cat > "$DASH_CANDIDATE_ROOT/deploy/direct_proxy.py" <<'FAKE'
+import json, os, signal, sys, time
+keys = ["STORAGE_VIZ_PROXY_BIND", "STORAGE_VIZ_PROXY_PORT", "STORAGE_VIZ_PROXY_UPSTREAM_HOST", "STORAGE_VIZ_PROXY_UPSTREAM_PORT", "STORAGE_VIZ_PROXY_OPERATOR", "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN"]
+with open(os.environ["DASH_CUTOVER_LOG"], "a", encoding="utf-8") as out:
+    out.write("candidate-proxy " + json.dumps({"argv": sys.argv[1:], "env": {key: os.environ.get(key) for key in keys}}, sort_keys=True) + "\n")
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+while True: time.sleep(1)
+FAKE
 cat > "$DASH_CUTOVER_TMP/bin/ss" <<'FAKE'
 #!/usr/bin/env bash
 printf 'ss %s
 ' "$*" >> "${DASH_CUTOVER_LOG:?}"
 case "$*" in
-  *:505*) printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("storage-viz-proxy",pid=5050,fd=3))
+  *:505*) printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("python3.12",pid=5050,fd=3))
 ' ;;
-  *:8088*) printf 'LISTEN 0 4096 127.0.0.1:8088 0.0.0.0:* users:(("python3",pid=8088,fd=3))
+  *:8088*) printf 'LISTEN 0 4096 127.0.0.1:8088 0.0.0.0:* users:(("python3.12",pid=8088,fd=3))
 ' ;;
 esac
 FAKE
@@ -665,70 +729,98 @@ cat > "$DASH_CUTOVER_TMP/bin/systemctl" <<'FAKE'
 #!/usr/bin/env bash
 printf 'systemctl %s
 ' "$*" >> "${DASH_CUTOVER_LOG:?}"
-if [[ "$*" == "start storage-viz-dashboard.service storage-viz-proxy.service" ]]; then exit "${SYSTEMCTL_START_RC:-0}"; fi
+if [[ "$*" == "show -p MainPID --value storage-viz-dashboard.service" ]]; then printf '8088\n'; exit 0; fi
+if [[ "$*" == "start storage-viz-dashboard.service storage-viz-proxy.service" && "${SYSTEMCTL_START_RC_ONCE:-0}" != 0 ]]; then
+  count=0
+  [[ -f "${SYSTEMCTL_START_COUNT_FILE:?}" ]] && count="$(cat "$SYSTEMCTL_START_COUNT_FILE")"
+  count=$((count + 1))
+  printf '%s' "$count" > "$SYSTEMCTL_START_COUNT_FILE"
+  [[ "$count" == 1 ]] && exit "$SYSTEMCTL_START_RC_ONCE"
+fi
 exit 0
-FAKE
-cat > "$DASH_CUTOVER_TMP/bin/curl" <<'FAKE'
-#!/usr/bin/env bash
-printf 'curl %s
-' "$*" >> "${DASH_CUTOVER_LOG:?}"
-if [[ "$*" == *UNKNOWN_SERVER* || "$*" == *unknown* ]]; then printf '{"error":"UNKNOWN_SERVER"}
-'; else printf '{"ok":true,"data_mode":"inventory","can_rescan":true,"csrf_token":"t"}
-'; fi
-exit "${CURL_RC:-0}"
 FAKE
 cat > "$DASH_CUTOVER_TMP/bin/python3.12" <<'FAKE'
 #!/usr/bin/env bash
 printf 'python3.12 %s
 ' "$*" >> "${DASH_CUTOVER_LOG:?}"
-exit "${PYTHON_RC:-0}"
+exec "${REAL_PYTHON:?}" "$@"
 FAKE
 cat > "$DASH_CUTOVER_TMP/bin/activate" <<'FAKE'
 #!/usr/bin/env bash
 printf 'activate %s
 ' "$*" >> "${DASH_CUTOVER_LOG:?}"
-if [[ "$*" == *--rollback-state* ]]; then exit 0; fi
+if [[ "$*" == *--rollback-state* ]]; then printf '{"status":"rolled_back"}\n'; exit 0; fi
 cat >/dev/null
-printf '{"status":"active","source_sha":"1111111111111111111111111111111111111111","archive_digest":"%s","release":"/srv/storage-viz-dashboard/releases/1111111111111111111111111111111111111111/storage-monitor","legacy_backup":"/opt/storage-viz-dashboard.legacy"}
-' "${DASH_DIGEST:?}"
+if [[ "$*" == *--prepare-only* ]]; then
+  printf '{"status":"prepared","source_sha":"1111111111111111111111111111111111111111","archive_digest":"%s","candidate_release":"%s"}\n' "${DASH_DIGEST:?}" "${DASH_CANDIDATE_ROOT:?}"
+  exit 0
+fi
+printf '{"status":"active","source_sha":"1111111111111111111111111111111111111111","archive_digest":"%s","release":"%s","legacy_backup":"/opt/storage-viz-dashboard.legacy"}\n' "${DASH_DIGEST:?}" "${DASH_CANDIDATE_ROOT:?}"
 exit 0
+FAKE
+cat > "$DASH_CUTOVER_TMP/bin/health-check.py" <<'FAKE'
+#!/usr/bin/env python3.12
+import os, sys
+with open(os.environ["DASH_CUTOVER_LOG"], "a", encoding="utf-8") as out:
+    mode = "candidate-health" if "--skip-service-check" in sys.argv else "production-health"
+    out.write(mode + " " + " ".join(sys.argv[1:]) + "\n")
 FAKE
 cat > "$DASH_CUTOVER_TMP/bin/kill" <<'FAKE'
 #!/usr/bin/env bash
 printf 'kill %s
 ' "$*" >> "${DASH_CUTOVER_LOG:?}"
+if [[ "$#" == 2 && -d "${PROC_ROOT:?}/$2" ]]; then exit 0; fi
+/bin/kill "$@" 2>/dev/null || true
 exit 0
 FAKE
 chmod +x "$DASH_CUTOVER_TMP/bin"/*
+ln -s /usr/bin/python3.12 "$DASH_CUTOVER_TMP/proc/5050/exe"
+ln -s /usr/bin/python3.12 "$DASH_CUTOVER_TMP/proc/8088/exe"
+printf 'python3.12\0/opt/storage-viz-dashboard/deploy/direct_proxy.py\0' > "$DASH_CUTOVER_TMP/proc/5050/cmdline"
+printf '0::/user.slice/legacy-proxy.scope\n' > "$DASH_CUTOVER_TMP/proc/5050/cgroup"
+printf 'python3.12\0/opt/storage-viz-dashboard/viewer/serve.py\0' > "$DASH_CUTOVER_TMP/proc/8088/cmdline"
+printf '0::/system.slice/storage-viz-dashboard.service\n' > "$DASH_CUTOVER_TMP/proc/8088/cgroup"
 DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/cutover.log"
 export DASH_CUTOVER_LOG
-DASH_DIGEST="$DASH_DIGEST" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
-  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" CURL="$DASH_CUTOVER_TMP/bin/curl" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
   "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/cutover.out"
-line_candidate=$(grep -n 'python3.12 .*18088' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
-line_probe=$(grep -n 'curl .*1505' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_prepare=$(grep -n '^activate --prepare-only' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_candidate=$(grep -n '^candidate-dashboard ' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_proxy=$(grep -n '^candidate-proxy ' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_probe=$(grep -n '^candidate-health ' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
 line_owner=$(grep -n '^ss .*:505' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
 line_stop=$(grep -n '^kill .*5050' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
-line_activate=$(grep -n '^activate --sha' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_activate=$(grep -n '^activate --sha' "$DASH_CUTOVER_LOG" | tail -1 | cut -d: -f1)
 line_start=$(grep -n '^systemctl start storage-viz-dashboard.service storage-viz-proxy.service' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
-line_health=$(grep -n 'python3.12 /usr/local/libexec/storage-dashboard-health-check.py' "$DASH_CUTOVER_LOG" | tail -1 | cut -d: -f1)
+line_health=$(grep -n '^production-health ' "$DASH_CUTOVER_LOG" | tail -1 | cut -d: -f1)
 line_timer=$(grep -n '^systemctl enable --now storage-monitor-release-puller.timer' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
-[[ -n "$line_candidate" && -n "$line_probe" && -n "$line_owner" && -n "$line_stop" && -n "$line_activate" && -n "$line_start" && -n "$line_health" && -n "$line_timer" ]] || fail "cutover log missing required action: $(cat "$DASH_CUTOVER_LOG")"
-[[ "$line_candidate" -lt "$line_probe" && "$line_probe" -lt "$line_owner" && "$line_owner" -lt "$line_stop" && "$line_stop" -lt "$line_activate" && "$line_activate" -lt "$line_start" && "$line_start" -lt "$line_health" && "$line_health" -lt "$line_timer" ]] || fail "cutover actions out of order: $(cat "$DASH_CUTOVER_LOG")"
+[[ -n "$line_prepare" && -n "$line_candidate" && -n "$line_proxy" && -n "$line_probe" && -n "$line_owner" && -n "$line_stop" && -n "$line_activate" && -n "$line_start" && -n "$line_health" && -n "$line_timer" ]] || fail "cutover log missing required action: $(cat "$DASH_CUTOVER_LOG")"
+[[ "$line_prepare" -lt "$line_candidate" && "$line_prepare" -lt "$line_proxy" && "$line_candidate" -lt "$line_probe" && "$line_proxy" -lt "$line_probe" && "$line_probe" -lt "$line_owner" && "$line_owner" -lt "$line_stop" && "$line_stop" -lt "$line_activate" && "$line_activate" -lt "$line_start" && "$line_start" -lt "$line_health" && "$line_health" -lt "$line_timer" ]] || fail "cutover actions out of order: $(cat "$DASH_CUTOVER_LOG")"
+grep -Fq -- "\"STORAGE_VIZ_ROOT\": \"$DASH_CANDIDATE_ROOT\"" "$DASH_CUTOVER_LOG" || fail "candidate dashboard did not use prepared release root"
+grep -Fq -- '"argv": []' "$DASH_CUTOVER_LOG" || fail "candidate scripts received unsupported argv"
+! grep -Eq '^candidate-(dashboard|proxy).*"argv": \[[^]]' "$DASH_CUTOVER_LOG" || fail "candidate script received unsupported argv"
+grep -Fq -- '"STORAGE_VIZ_PORT": "18088"' "$DASH_CUTOVER_LOG" || fail "candidate dashboard did not bind 18088 through serve.py env"
+grep -Fq -- '"STORAGE_VIZ_PREFLIGHT_BACKEND": "1"' "$DASH_CUTOVER_LOG" || fail "candidate dashboard did not enable real preflight backend env"
+grep -Fq -- '"STORAGE_VIZ_PROXY_PORT": "1505"' "$DASH_CUTOVER_LOG" || fail "candidate proxy did not bind 1505 through direct_proxy env"
+grep -Fq -- '"STORAGE_VIZ_PROXY_PUBLIC_ORIGIN": "http://storage.example:505"' "$DASH_CUTOVER_LOG" || fail "candidate proxy lost real public origin semantics"
+grep -Fq -- '--connect-host 127.0.0.1 --connect-port 1505 --skip-service-check' "$DASH_CUTOVER_LOG" || fail "candidate probe did not use real health checker candidate override"
+! grep -Fq -- 'storage-viz-proxy-launcher.py' "$DASH_CUTOVER_LOG" || fail "candidate proxy incorrectly used production launcher"
 grep -Fq -- '--artifact-stdin' "$DASH_CUTOVER_LOG" || fail "cutover activator did not use option-style artifact stdin"
 ! grep -Eq '^activate (upload|status|activate)( |$)' "$DASH_CUTOVER_LOG" || fail "cutover used legacy activator subcommands"
 pass "dashboard bootstrap cutover runs candidate probes, exact owner stops, option-style activation, managed start, health, then timer"
 
 DASH_ROLLBACK_LOG="$DASH_CUTOVER_TMP/rollback.log"
-if DASH_CUTOVER_LOG="$DASH_ROLLBACK_LOG" DASH_DIGEST="$DASH_DIGEST" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
-  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" CURL="$DASH_CUTOVER_TMP/bin/curl" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" SYSTEMCTL_START_RC=42 STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+if DASH_CUTOVER_LOG="$DASH_ROLLBACK_LOG" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" SYSTEMCTL_START_RC_ONCE=42 SYSTEMCTL_START_COUNT_FILE="$DASH_CUTOVER_TMP/start-count" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
   "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/rollback.out" 2>"$DASH_CUTOVER_TMP/rollback.err"; then
   fail "cutover succeeded after managed service start failure"
 fi
 grep -Fq -- 'activate --rollback-state' "$DASH_ROLLBACK_LOG" || fail "rollback did not invoke activator rollback contract"
-grep -Fq -- 'systemctl start storage-viz-proxy.service' "$DASH_ROLLBACK_LOG" || fail "rollback did not start proxy for protected legacy backup"
-grep -Fq -- 'curl ' "$DASH_ROLLBACK_LOG" || fail "rollback did not require previous inventory GET health"
+[[ "$(grep -c '^systemctl start storage-viz-dashboard.service storage-viz-proxy.service' "$DASH_ROLLBACK_LOG")" -ge 2 ]] || fail "rollback did not restart managed dashboard and proxy against restored legacy"
+grep -Fq -- 'production-health ' "$DASH_ROLLBACK_LOG" || fail "rollback did not require previous inventory health on 505"
 grep -Eq '^kill -TERM 5050$' "$DASH_ROLLBACK_LOG" || fail "rollback/cutover did not use exact PID kill only"
+! grep -Fq -- 'systemctl enable --now storage-monitor-release-puller.timer' "$DASH_ROLLBACK_LOG" || fail "failed cutover enabled puller timer"
 ! grep -Eq 'pkill|killall|fuser -k|tmux new|new-session' "$DASH_ROLLBACK_LOG" || fail "rollback used broad kill or recreated tmux"
 pass "dashboard cutover failure invokes rollback contract and validates previous 505 health without broad kill/tmux recreate"
 
@@ -741,13 +833,28 @@ printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("unrelated",pid=9999,fd=3))
 '
 FAKE
 chmod +x "$DASH_BAD_SS"
-if DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/bad-owner.log" DASH_DIGEST="$DASH_DIGEST" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
-  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_BAD_SS" CURL="$DASH_CUTOVER_TMP/bin/curl" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+if DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/bad-owner.log" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_BAD_SS" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
   "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/bad-owner.out" 2>"$DASH_CUTOVER_TMP/bad-owner.err"; then
   fail "cutover accepted unrelated port owner"
 fi
 ! grep -Eq '^kill -TERM (9999|5050)$' "$DASH_CUTOVER_TMP/bad-owner.log" || fail "cutover killed a live owner after unrelated owner rejection"
 pass "dashboard cutover rejects unrelated listener owners before stopping anything"
+
+DASH_MULTI_SS="$DASH_CUTOVER_TMP/bin/ss-multi"
+cat > "$DASH_MULTI_SS" <<'FAKE'
+#!/usr/bin/env bash
+printf 'ss %s\n' "$*" >> "${DASH_CUTOVER_LOG:?}"
+printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("python3.12",pid=5050,fd=3),("python3.12",pid=6060,fd=4))\n'
+FAKE
+chmod +x "$DASH_MULTI_SS"
+if DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/multi-owner.log" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_MULTI_SS" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/multi-owner.out" 2>"$DASH_CUTOVER_TMP/multi-owner.err"; then
+  fail "cutover accepted a listener record with multiple PID owners"
+fi
+! grep -Eq '^kill -TERM (5050|6060|8088)$' "$DASH_CUTOVER_TMP/multi-owner.log" || fail "cutover killed a live owner after multi-PID rejection"
+pass "dashboard cutover rejects listener records with multiple pid tokens"
 
 assert_contains "$STORAGE_PULLER_TIMER" "OnBootSec=2min"
 assert_contains "$STORAGE_PULLER_TIMER" "OnCalendar=*:0/5"
@@ -767,7 +874,7 @@ assert_contains "$STORAGE_PULLER_SERVICE" "CPUWeight=20"
 assert_contains "$STORAGE_PULLER_SERVICE" "IOWeight=20"
 assert_contains "$STORAGE_PULLER_SERVICE" "ProtectSystem=strict"
 assert_contains "$STORAGE_PULLER_SERVICE" "ProtectHome=yes"
-assert_contains "$STORAGE_PULLER_SERVICE" "ReadWritePaths=/srv/storage-viz-dashboard/releases /var/lib/storage-viz-dashboard/puller /var/lib/storage-viz-dashboard/builder /var/lib/storage-viz-dashboard/data /var/lib/storage-viz-dashboard/state /etc/storage-viz /opt/storage-viz-dashboard"
+assert_contains "$STORAGE_PULLER_SERVICE" "ReadWritePaths=/var/lib/storage-viz-dashboard /srv/storage-viz-dashboard/releases /opt/storage-viz-dashboard"
 assert_contains "$STORAGE_PULLER_SERVICE" "ReadOnlyPaths=/usr/local/libexec"
 assert_contains "$STORAGE_PULLER_SERVICE" "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"
 assert_grep "$STORAGE_PULLER_SERVICE" "ExecStart=/usr/bin/python3\.12 /usr/local/libexec/storage-monitor-release-puller\.py --repository IRCVLab/GPU_monitor" "explicit repository on puller ExecStart"
@@ -787,19 +894,8 @@ assert_contains "$RENDERED_PROXY_SERVICE" "ExecStart=/usr/bin/python3.12 /usr/lo
 assert_not_grep "$RENDERED_PROXY_SERVICE" 'gpu-monitor|storage-viz-scan|5173|8000|8100' "GPU or scanner coupling in rendered managed proxy service"
 pass "managed proxy service uses Storage runtime and launcher"
 
-assert_grep "$DASHBOARD_DEPLOYER" 'candidate.*18088' "candidate dashboard loopback port"
-assert_grep "$DASHBOARD_DEPLOYER" 'candidate.*1505|1505.*candidate' "candidate proxy loopback port"
-assert_grep "$DASHBOARD_DEPLOYER" '127\.0\.0\.1:8088' "legacy dashboard preservation port"
-assert_grep "$DASHBOARD_DEPLOYER" '505' "public proxy port"
-assert_grep "$DASHBOARD_DEPLOYER" 'preflight' "candidate preflight mode"
-assert_grep "$DASHBOARD_DEPLOYER" 'UNKNOWN_SERVER' "nonmutating unknown-server probe"
-assert_grep "$DASHBOARD_DEPLOYER" 'exact.*PID|PID.*exact|port.*owner' "exact PID/port owner validation"
-assert_grep "$DASHBOARD_DEPLOYER" 'stop_exact_current_505_owner.*stop_legacy_8088_dashboard.*activate_release.*start_managed_8088_505|first_cutover_order' "first cutover order"
-assert_grep "$DASHBOARD_DEPLOYER" 'rollback.*legacy.*backup|protected legacy backup' "rollback to recorded legacy backup"
-assert_grep "$DASHBOARD_DEPLOYER" 'previous dashboard/inventory GET health|legacy.*inventory.*GET' "rollback health requirement"
-assert_grep "$DASHBOARD_DEPLOYER" 'do not recreate tmux|not recreate tmux' "rollback must not recreate tmux"
 assert_not_grep "$DASHBOARD_DEPLOYER" 'pkill|killall|fuser -k|lsof -ti.*xargs kill' "broad process killing"
-pass "dashboard deployer encodes candidate preflight cutover and rollback safety contracts"
+pass "dashboard deployer avoids broad process killing"
 
 
 # Task 11 central dashboard/service and operations documentation contracts.
