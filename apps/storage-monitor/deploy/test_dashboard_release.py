@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tarfile
@@ -263,6 +264,15 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         return module
+
+    def test_activation_state_is_group_readable_using_parent_runtime_group(self) -> None:
+        self.state_path.parent.mkdir(parents=True)
+
+        self.module._atomic_write_json(self.state_path, {"status": "active"})
+
+        state_stat = self.state_path.stat()
+        self.assertEqual(stat.S_IMODE(state_stat.st_mode), 0o640)
+        self.assertEqual(state_stat.st_gid, self.state_path.parent.stat().st_gid)
 
     def _config(self, **overrides):
         kwargs = dict(
@@ -1446,10 +1456,11 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
 
 
 class StorageVizProxySystemdUnitTest(unittest.TestCase):
-    def test_proxy_unit_uses_unprivileged_storage_identity_minimal_bind_cap_and_launcher(self) -> None:
+    def test_proxy_unit_uses_existing_dashboard_identity_minimal_bind_cap_and_launcher(self) -> None:
         unit = (REPO_ROOT / "apps/storage-monitor/deploy/server/systemd/storage-viz-proxy.service").read_text(encoding="utf-8")
         self.assertIn("EnvironmentFile=/etc/storage-viz/proxy.env", unit)
-        self.assertIn("user=storage", unit.lower())
+        self.assertIn("User=storage-viz", unit)
+        self.assertIn("Group=storage-viz", unit)
         self.assertNotIn("User=root", unit)
         self.assertIn("CapabilityBoundingSet=CAP_NET_BIND_SERVICE", unit)
         self.assertIn("AmbientCapabilities=CAP_NET_BIND_SERVICE", unit)
@@ -1464,7 +1475,9 @@ class StorageVizProxySystemdUnitTest(unittest.TestCase):
         self.assertNotIn("--bind", unit)
         self.assertNotIn("--port", unit)
         self.assertNotIn("--upstream", unit)
-        self.assertRegex(unit, r"ReadWritePaths=.*storage", unit)
+        self.assertNotIn("ReadWritePaths=/var/lib/storage-viz-dashboard", unit)
+        self.assertIn("ReadOnlyPaths=/var/lib/storage-viz-dashboard/activation-state.json", unit)
+        self.assertIn("InaccessiblePaths=-/var/lib/storage-viz-dashboard/data", unit)
 
 if __name__ == "__main__":
     unittest.main()

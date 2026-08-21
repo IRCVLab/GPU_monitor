@@ -630,6 +630,8 @@ def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchown(handle.fileno(), -1, path.parent.stat().st_gid)
+            os.fchmod(handle.fileno(), 0o640)
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
