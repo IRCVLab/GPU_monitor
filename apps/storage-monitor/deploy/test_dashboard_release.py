@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -728,6 +729,190 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertFalse(old_extra.exists())
         self.assertTrue(incoming_file.exists())
 
+
+
+class DashboardProductionHealthContractTest(unittest.TestCase):
+    maxDiff = None
+
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.root = Path(self.tempdir.name)
+        self.module = self._load("health_check_dashboard", REPO_ROOT / "apps/storage-monitor/deploy/server/health-check-dashboard.py")
+
+    def _load(self, name: str, path: Path):
+        import importlib.util
+        import sys
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def _write_envs(self, *, dashboard_extra: str = "", proxy_extra: str = "") -> tuple[Path, Path, Path]:
+        dash = self.root / "dashboard.env"
+        proxy = self.root / "proxy.env"
+        inv = self.root / "servers.json"
+        dash.write_text(
+            "STORAGE_VIZ_BIND=127.0.0.1\n"
+            "STORAGE_VIZ_PORT=8088\n"
+            "STORAGE_VIZ_TRUSTED_PROXY=1\n"
+            "STORAGE_VIZ_ALLOWED_ORIGINS=http://166.104.167.11:505\n"
+            "STORAGE_VIZ_OPERATOR_ALLOWLIST=ops-viewer,fixed-proxy-operator\n"
+            "STORAGE_VIZ_SESSION_COOKIE_SECURE=0\n"
+            f"STORAGE_VIZ_INVENTORY={inv}\n"
+            f"{dashboard_extra}",
+            encoding="utf-8",
+        )
+        proxy.write_text(
+            "STORAGE_VIZ_PROXY_BIND=0.0.0.0\n"
+            "STORAGE_VIZ_PROXY_PORT=505\n"
+            "STORAGE_VIZ_PROXY_UPSTREAM=http://127.0.0.1:8088\n"
+            "STORAGE_VIZ_PUBLIC_ORIGIN=http://166.104.167.11:505\n"
+            "STORAGE_VIZ_PUBLIC_HOST=166.104.167.11:505\n"
+            "STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator\n"
+            f"{proxy_extra}",
+            encoding="utf-8",
+        )
+        inv.write_text(json.dumps({"servers":[
+            {"id":"atlas","enabled":True},
+            {"id":"disabled","enabled":False},
+            {"id":"hinton","enabled":True},
+        ]}), encoding="utf-8")
+        return dash, proxy, inv
+
+    def test_rejects_shell_syntax_duplicates_missing_and_incoherent_env_pairs(self) -> None:
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+        self.assertEqual(contract.public_origin, "http://166.104.167.11:505")
+        self.assertEqual(contract.public_host, "166.104.167.11:505")
+        self.assertEqual(contract.enabled_server_ids, ["atlas", "hinton"])
+
+        cases = [
+            ("dup", {"dashboard_extra":"STORAGE_VIZ_PORT=8089\n"}),
+            ("malformed", {"dashboard_extra":"export STORAGE_VIZ_PORT=8088\n"}),
+            ("shell", {"proxy_extra":"STORAGE_VIZ_PUBLIC_HOST=$(hostname):505\n"}),
+            ("missing", {"proxy_extra":"STORAGE_VIZ_PROXY_OPERATOR=\n"}),
+            ("sample", {"dashboard_extra":"STORAGE_VIZ_DEV_SAMPLE_DIR=/tmp/samples\n"}),
+            ("direct", {"dashboard_extra":"STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN=1\n"}),
+            ("bad_origin", {"dashboard_extra":"STORAGE_VIZ_ALLOWED_ORIGINS=http://166.104.167.11:8088\n"}),
+            ("bad_upstream", {"proxy_extra":"STORAGE_VIZ_PROXY_UPSTREAM=http://127.0.0.1:8089\n"}),
+        ]
+        for label, kwargs in cases:
+            with self.subTest(label=label):
+                dash, proxy, _ = self._write_envs(**kwargs)
+                with self.assertRaises(self.module.HealthCheckError):
+                    self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+
+    def test_probe_checks_systemd_public_session_servers_and_unknown_rescan_without_mutation(self) -> None:
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+        calls: list[list[str]] = []
+        def runner(argv, **kwargs):
+            calls.append(list(argv))
+            class Result:
+                returncode = 0
+                stdout = "active\n"
+                stderr = ""
+            return Result()
+
+        requests: list[tuple[str, str, dict[str, str], bytes | None]] = []
+        class FakeResponse:
+            def __init__(self, status, body, headers=None):
+                self.status = status; self._body = json.dumps(body).encode(); self._headers = headers or {}
+            def read(self): return self._body
+            def getheaders(self): return list(self._headers.items())
+        class FakeConnection:
+            responses = [
+                FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie":"storage_viz_session=abc; Path=/"}),
+                FakeResponse(200, {"data_mode":"inventory", "servers":[{"id":"atlas"},{"id":"hinton"}]}),
+                FakeResponse(404, {"error":"UNKNOWN_SERVER", "code":"UNKNOWN_SERVER"}),
+            ]
+            def __init__(self, host, port, timeout):
+                self.host = host; self.port = port; self.timeout = timeout
+            def request(self, method, path, body=None, headers=None):
+                requests.append((method, path, dict(headers or {}), body))
+            def getresponse(self): return self.responses.pop(0)
+            def close(self): pass
+        self.module.run_health_check(contract, runner=runner, connection_factory=FakeConnection, sleep=lambda _: None)
+        self.assertEqual(calls, [["systemctl", "is-active", "storage-viz-dashboard.service"], ["systemctl", "is-active", "storage-viz-proxy.service"]])
+        self.assertEqual([r[0:2] for r in requests], [("GET", "/api/session"), ("GET", "/api/servers"), ("POST", requests[2][1])])
+        self.assertRegex(requests[2][1], r"^/api/servers/[A-Za-z0-9_.-]{1,128}/rescan$")
+        self.assertNotIn(requests[2][1].split("/")[3], contract.enabled_server_ids)
+        self.assertEqual(requests[2][3], b"{}")
+        self.assertEqual(requests[2][2]["Cookie"], "storage_viz_session=abc")
+        self.assertEqual(requests[2][2]["X-CSRF-Token"], "csrf")
+        self.assertEqual(requests[2][2]["Host"], "166.104.167.11:505")
+        self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
+
+
+class StorageVizProxyLauncherTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory(); self.addCleanup(self.tempdir.cleanup)
+        self.root = Path(self.tempdir.name)
+        self.module = self._load("storage_viz_proxy_launcher", REPO_ROOT / "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py")
+
+    def _load(self, name: str, path: Path):
+        import importlib.util, sys
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec); assert spec.loader is not None
+        sys.modules[spec.name] = module; spec.loader.exec_module(module); return module
+
+    def _target(self, sha: str = "0123456789abcdef0123456789abcdef01234567") -> Path:
+        target = self.root / "srv/storage-viz-dashboard/releases" / sha / "storage-monitor/deploy/direct_proxy.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("print('proxy')\n", encoding="utf-8")
+        target.chmod(0o555)
+        return target
+
+    def test_accepts_only_immutable_active_release_or_recorded_legacy_proxy(self) -> None:
+        target = self._target()
+        state = self.root / "state.json"
+        state.write_text(json.dumps({"release": str(target.parents[1]), "legacy_backup": str(self.root / "legacy_backup")}), encoding="utf-8")
+        cfg = self.module.LauncherConfig(release_root=self.root / "srv/storage-viz-dashboard/releases", state_path=state)
+        self.assertEqual(self.module.validate_proxy_target(target, cfg), target.resolve())
+
+        legacy = self.root / "legacy_backup/deploy/direct_proxy.py"
+        legacy.parent.mkdir(parents=True); legacy.write_text("print('legacy')\n", encoding="utf-8"); legacy.chmod(0o555)
+        self.assertEqual(self.module.validate_proxy_target(legacy, cfg), legacy.resolve())
+
+        bads = [
+            self.root / "srv/gpu-dashboard/releases" / target.parent.name / "direct_proxy.py",
+            self.root / "tmp/direct_proxy.py",
+        ]
+        writable = self._target("1111111111111111111111111111111111111111"); writable.chmod(0o755); bads.append(writable)
+        link = self.root / "link.py"; link.symlink_to(target); bads.append(link)
+        for bad in bads:
+            with self.subTest(bad=bad):
+                with self.assertRaises(self.module.LauncherError):
+                    self.module.validate_proxy_target(bad, cfg)
+
+    def test_execs_python_direct_proxy_without_shell(self) -> None:
+        target = self._target()
+        state = self.root / "state.json"
+        state.write_text(json.dumps({"release": str(target.parents[1])}), encoding="utf-8")
+        observed = {}
+        def execv(exe, argv):
+            observed["exe"] = exe; observed["argv"] = argv; raise SystemExit(0)
+        with self.assertRaises(SystemExit):
+            self.module.launch([str(target), "--port", "505"], config=self.module.LauncherConfig(release_root=self.root / "srv/storage-viz-dashboard/releases", state_path=state), execv=execv)
+        self.assertEqual(observed["argv"][:2], [sys.executable, str(target.resolve())])
+        self.assertEqual(observed["argv"][2:], ["--port", "505"])
+
+
+class StorageVizProxySystemdUnitTest(unittest.TestCase):
+    def test_proxy_unit_uses_unprivileged_storage_identity_minimal_bind_cap_and_launcher(self) -> None:
+        unit = (REPO_ROOT / "apps/storage-monitor/deploy/server/systemd/storage-viz-proxy.service").read_text(encoding="utf-8")
+        self.assertIn("EnvironmentFile=/etc/storage-viz/proxy.env", unit)
+        self.assertIn("user=storage", unit.lower())
+        self.assertNotIn("User=root", unit)
+        self.assertIn("CapabilityBoundingSet=CAP_NET_BIND_SERVICE", unit)
+        self.assertIn("AmbientCapabilities=CAP_NET_BIND_SERVICE", unit)
+        self.assertNotIn("CAP_SYS_ADMIN", unit)
+        self.assertNotIn("gpu", unit.lower())
+        self.assertIn("storage-viz-proxy-launcher.py", unit)
+        self.assertRegex(unit, r"ReadWritePaths=.*storage", unit)
 
 if __name__ == "__main__":
     unittest.main()

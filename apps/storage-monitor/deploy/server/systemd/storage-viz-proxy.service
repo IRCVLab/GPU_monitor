@@ -1,0 +1,29 @@
+[Unit]
+Description=Storage Viz public proxy
+After=network-online.target storage-viz-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/storage-viz/proxy.env
+User=storage
+Group=storage
+WorkingDirectory=/opt/storage-viz-dashboard
+ExecStart=/usr/bin/python3.12 /opt/storage-viz-dashboard/deploy/server/storage-viz-proxy-launcher.py ${STORAGE_VIZ_PROXY_TARGET} --bind ${STORAGE_VIZ_PROXY_BIND} --port ${STORAGE_VIZ_PROXY_PORT} --upstream ${STORAGE_VIZ_PROXY_UPSTREAM}
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/storage-viz-dashboard /var/log/storage-viz /run/storage-viz
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

@@ -429,5 +429,70 @@ class ApiServerTest(unittest.TestCase):
         self.start_server({"STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_BIND":"0.0.0.0"}, expect_exit=True)
 
 
+
+class CandidatePreflightBackendModeTest(ApiServerTest):
+    def start_preflight(self, overrides=None, expect_exit=False):
+        inv = self.write_inventory()
+        env = {
+            "STORAGE_VIZ_DEV_SAMPLE_DIR":"",
+            "STORAGE_VIZ_INVENTORY":str(inv),
+            "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"),
+            "STORAGE_VIZ_PREFLIGHT_BACKEND":"1",
+            "STORAGE_VIZ_TRUSTED_PROXY":"1",
+            "STORAGE_VIZ_ALLOWED_ORIGINS":"http://166.104.167.11:505",
+            "STORAGE_VIZ_OPERATOR_ALLOWLIST":"fixed-proxy-operator",
+            "STORAGE_VIZ_SESSION_COOKIE_SECURE":"0",
+            "STORAGE_VIZ_BIND":"127.0.0.1",
+        }
+        if overrides:
+            env.update(overrides)
+        self.start_server(env, expect_exit=expect_exit)
+
+    def test_preflight_backend_allows_session_csrf_and_unknown_probe_but_refuses_known_jobs(self):
+        self.start_preflight()
+        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"fixed-proxy-operator"})
+        self.assertEqual(code, 200)
+        self.assertTrue(sess["can_rescan"])
+        self.assertNotIn("Secure", headers.get("Set-Cookie", ""))
+        cookie = self.cookie_value(headers)
+        code, _, servers = self.request("GET", "/api/servers", headers={"X-Forwarded-User":"fixed-proxy-operator"})
+        self.assertEqual(code, 200)
+        self.assertEqual(servers["data_mode"], "inventory")
+        self.assertEqual([s["id"] for s in servers["servers"]], ["hinton"])
+        post_headers = {"Cookie":cookie, "X-Forwarded-User":"fixed-proxy-operator", "Origin":"http://166.104.167.11:505", "X-CSRF-Token":sess["csrf_token"]}
+        code, _, body = self.request("POST", "/api/servers/absent-preflight/rescan", {}, headers=post_headers)
+        self.assertEqual(code, 404)
+        self.assertEqual(body.get("error"), "UNKNOWN_SERVER")
+        code, _, body = self.request("POST", "/api/servers/hinton/rescan", {}, headers=post_headers)
+        self.assertEqual(code, 403)
+        self.assertEqual(body.get("error"), "RESCAN_DISABLED")
+
+    def test_preflight_backend_rejects_sample_direct_public_bind_and_missing_inventory(self):
+        for overrides in (
+            {"STORAGE_VIZ_DEV_SAMPLE_DIR":str(self.sample_dir)},
+            {"STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN":"1"},
+            {"STORAGE_VIZ_BIND":"0.0.0.0"},
+            {"STORAGE_VIZ_INVENTORY":""},
+        ):
+            with self.subTest(overrides=overrides):
+                self.start_preflight(overrides, expect_exit=True)
+                self._stop(); self.proc = None
+
+    def test_preflight_backend_does_not_build_central_poller_or_execute_real_jobs(self):
+        code = """
+import os, pathlib, sys, tempfile, json
+root = pathlib.Path(sys.argv[1])
+inv = root / 'servers.json'
+inv.write_text(json.dumps({'servers':[{'id':'hinton','display_name':'hinton','order':1,'host':'hinton.example.test','port':22,'enabled':True,'username':'monitoring','identity_file':'/etc/storage-viz/hinton.key','known_hosts_file':'/etc/storage-viz/known_hosts','scanner':{'server_id':'hinton'}}]}))
+os.environ.update(STORAGE_VIZ_DEV_SAMPLE_DIR='', STORAGE_VIZ_INVENTORY=str(inv), STORAGE_VIZ_STATE_DIR=str(root/'state'), STORAGE_VIZ_PREFLIGHT_BACKEND='1', STORAGE_VIZ_TRUSTED_PROXY='1', STORAGE_VIZ_ALLOWED_ORIGINS='http://166.104.167.11:505', STORAGE_VIZ_OPERATOR_ALLOWLIST='fixed-proxy-operator', STORAGE_VIZ_SESSION_COOKIE_SECURE='0', STORAGE_VIZ_BIND='127.0.0.1')
+sys.path.insert(0, str(pathlib.Path('apps/storage-monitor').resolve()))
+from viewer import serve
+print(type(serve.jobs).__name__, serve.central_poller)
+"""
+        with tempfile.TemporaryDirectory(prefix="storage-viz-preflight-import.") as tmp:
+            result = subprocess.run([sys.executable, "-c", code, tmp], cwd=str(ROOT.parents[1]), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ExecutionDisabledRescanJobManager None")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

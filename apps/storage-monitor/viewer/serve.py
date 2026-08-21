@@ -43,6 +43,7 @@ PORT = _configured_port()
 BIND = os.environ.get("STORAGE_VIZ_BIND", os.environ.get("BIND", "127.0.0.1"))
 TRUSTED_PROXY = os.environ.get("STORAGE_VIZ_TRUSTED_PROXY", "").lower() in {"1", "true", "yes", "on"}
 DIRECT_LOOPBACK_RESCAN = os.environ.get("STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN", "").lower() in {"1", "true", "yes", "on"}
+PREFLIGHT_BACKEND = os.environ.get("STORAGE_VIZ_PREFLIGHT_BACKEND", "").lower() in {"1", "true", "yes", "on"}
 IDENTITY_HEADER = os.environ.get("STORAGE_VIZ_IDENTITY_HEADER", "X-Forwarded-User")
 ALLOWED_ORIGINS = frozenset(v.strip() for v in os.environ.get("STORAGE_VIZ_ALLOWED_ORIGINS", "").split(",") if v.strip())
 OPERATORS = frozenset(v.strip() for v in os.environ.get("STORAGE_VIZ_OPERATOR_ALLOWLIST", "").split(",") if v.strip())
@@ -125,6 +126,17 @@ if SESSION_COOKIE_SECURE_RAW is not None and not TRUSTED_PROXY:
 if TRUSTED_PROXY and not SESSION_COOKIE_SECURE:
     if not ALLOWED_ORIGINS or not all(_is_exact_http_origin(origin) for origin in ALLOWED_ORIGINS):
         raise SystemExit("non-secure trusted-proxy sessions require exact HTTP origins")
+if PREFLIGHT_BACKEND:
+    if not TRUSTED_PROXY:
+        raise SystemExit("preflight backend mode requires trusted-proxy mode")
+    if not _is_loopback(BIND):
+        raise SystemExit("preflight backend mode requires a loopback bind")
+    if DEV_SAMPLE_DIR:
+        raise SystemExit("preflight backend mode rejects dev sample mode")
+    if DIRECT_LOOPBACK_RESCAN:
+        raise SystemExit("preflight backend mode rejects direct rescan mode")
+    if not INVENTORY_PATH:
+        raise SystemExit("preflight backend mode requires production inventory")
 if DIRECT_LOOPBACK_RESCAN:
     if TRUSTED_PROXY:
         raise SystemExit("direct loopback rescan mode cannot be combined with trusted-proxy mode")
@@ -259,8 +271,8 @@ elif INVENTORY_PATH:
     inventory = load_inventory(INVENTORY_PATH)
     service = PollService(list(inventory.servers), CentralStore(STATE_DIR), OpenSshTransport())
     service.data_mode = "inventory"
-    jobs = RescanJobManager(service, cooldown_seconds=COOLDOWN_SECONDS, max_concurrent=MAX_CONCURRENT_RESCANS)
-    RESCAN_API_ENABLED = (TRUSTED_PROXY or DIRECT_LOOPBACK_RESCAN) and bool(OPERATORS)
+    jobs = None
+    RESCAN_API_ENABLED = (TRUSTED_PROXY or DIRECT_LOOPBACK_RESCAN or PREFLIGHT_BACKEND) and bool(OPERATORS)
 else:
     service = None
 
@@ -311,7 +323,33 @@ class CentralPoller:
                 break
 
 
+class ExecutionDisabledRescanJobManager:
+    """Preflight guard: validate routing/auth but never execute real rescan jobs."""
+
+    def __init__(self, active_service: Any) -> None:
+        self._server_ids = {s.id for s in getattr(active_service, "servers", ()) if getattr(s, "enabled", True)}
+
+    def request_rescan(self, server_id: str, actor: str) -> tuple[int, dict[str, Any]]:
+        if not isinstance(server_id, str) or not SERVER_ID_RE.fullmatch(server_id) or server_id not in self._server_ids:
+            return 404, {"error": "UNKNOWN_SERVER", "code": "UNKNOWN_SERVER"}
+        return 403, {"error": "RESCAN_DISABLED", "code": "EXECUTION_DISABLED"}
+
+    def job_for(self, server_id: str) -> tuple[int, dict[str, Any]]:
+        if not isinstance(server_id, str) or not SERVER_ID_RE.fullmatch(server_id) or server_id not in self._server_ids:
+            return 404, {"error": "UNKNOWN_SERVER"}
+        return 200, {"job": None}
+
+
+if isinstance(service, PollService):
+    if PREFLIGHT_BACKEND:
+        jobs = ExecutionDisabledRescanJobManager(service)
+    else:
+        jobs = RescanJobManager(service, cooldown_seconds=COOLDOWN_SECONDS, max_concurrent=MAX_CONCURRENT_RESCANS)
+
+
 def build_central_poller(active_service: Any) -> CentralPoller | None:
+    if PREFLIGHT_BACKEND:
+        return None
     if isinstance(active_service, PollService):
         return CentralPoller(active_service)
     return None
