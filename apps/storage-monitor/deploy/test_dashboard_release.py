@@ -227,5 +227,390 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertEqual(ok.returncode, 0, ok.stderr + ok.stdout)
 
 
+class DashboardReleaseActivationTest(unittest.TestCase):
+    maxDiff = None
+
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.root = Path(self.tempdir.name)
+        self.release_root = self.root / "srv/storage-viz-dashboard/releases"
+        self.app_path = self.root / "opt/storage-viz-dashboard"
+        self.state_path = self.root / "var/lib/storage-viz-dashboard/activation-state.json"
+        self.lock_path = self.root / "var/lib/storage-viz-dashboard/activation.lock"
+        self.incoming = self.root / "var/lib/storage-viz-dashboard/incoming"
+        self.gpu_sentinel = self.root / "srv/gpu-dashboard/SENTINEL"
+        self.gpu_sentinel.parent.mkdir(parents=True)
+        self.gpu_sentinel.write_bytes(b"gpu bytes must not change")
+        self.sha = "0123456789abcdef0123456789abcdef01234567"
+        self.old_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        self.archive_name = f"storage-monitor-dashboard-{self.sha}.tar.gz"
+        self.restart_calls: list[str] = []
+        self.health_calls = 0
+        self.module = self._load_module()
+
+    def _load_module(self):
+        import importlib.util
+        import sys
+
+        script = REPO_ROOT / "apps/storage-monitor/deploy/server/activate-dashboard-release.py"
+        spec = importlib.util.spec_from_file_location("activate_dashboard_release", script)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def _config(self, **overrides):
+        kwargs = dict(
+            release_root=self.release_root,
+            app_path=self.app_path,
+            state_path=self.state_path,
+            lock_path=self.lock_path,
+            incoming_dir=self.incoming,
+            max_input_bytes=1024 * 1024,
+            max_archive_bytes=1024 * 1024,
+            max_members=50,
+            max_file_bytes=256 * 1024,
+            max_total_bytes=512 * 1024,
+            keep_releases=2,
+        )
+        kwargs.update(overrides)
+        return self.module.ActivationConfig(**kwargs)
+
+    def _restart(self, phase: str = "activate") -> None:
+        self.restart_calls.append(phase)
+
+    def _health(self) -> bool:
+        self.health_calls += 1
+        return True
+
+    def _manifest(self, files: dict[str, bytes], sha: str | None = None, archive: str | None = None) -> dict[str, object]:
+        return {
+            "artifact_format_version": 1,
+            "application_name": "storage-monitor",
+            "schema_version": 1,
+            "archive": archive or self.archive_name,
+            "source_sha": sha or self.sha,
+            "included_paths": sorted(files),
+            "files": {path: hashlib.sha256(data).hexdigest() for path, data in files.items()},
+        }
+
+    def _archive(self, *, files: dict[str, bytes] | None = None, manifest: dict[str, object] | None = None,
+                 metadata: dict[str, object] | None = None, members: list[tarfile.TarInfo] | None = None,
+                 name: str | None = None) -> tuple[Path, Path, str]:
+        files = files or self._runtime_files()
+        manifest = manifest or self._manifest(files, archive=name or self.archive_name)
+        archive_path = self.incoming / (name or self.archive_name)
+        metadata_path = self.incoming / f"{archive_path.name}.sha256.json"
+        self.incoming.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(archive_path, "w:gz") as tar:
+            if members is None:
+                manifest_bytes = json.dumps(manifest, sort_keys=True).encode("utf-8")
+                info = tarfile.TarInfo("storage-monitor/RELEASE-MANIFEST.json")
+                info.size = len(manifest_bytes)
+                info.mode = 0o444
+                tar.addfile(info, fileobj=__import__("io").BytesIO(manifest_bytes))
+                for rel in sorted(files):
+                    data = files[rel]
+                    info = tarfile.TarInfo(f"storage-monitor/{rel}")
+                    info.size = len(data)
+                    info.mode = 0o444 if not rel.endswith(".py") else 0o555
+                    tar.addfile(info, fileobj=__import__("io").BytesIO(data))
+            else:
+                for info in members:
+                    payload = b"x" * info.size
+                    tar.addfile(info, fileobj=__import__("io").BytesIO(payload) if info.isfile() else None)
+        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        metadata = metadata or {
+            "application_name": "storage-monitor",
+            "schema_version": 1,
+            "source_sha": self.sha,
+            "archive": archive_path.name,
+            "sha256": digest,
+        }
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        return archive_path, metadata_path, digest
+
+    def _runtime_files(self) -> dict[str, bytes]:
+        return {
+            "viewer/serve.py": b"print('serve')\n",
+            "viewer/app.js": b"console.log('ok');\n",
+            "viewer/data-client.js": b"export const dataClient = {};\n",
+            "viewer/debug.html": b"<html>debug</html>\n",
+            "viewer/echarts.min.js": b"/*! echarts */\n",
+            "viewer/index.html": b"<html></html>\n",
+            "viewer/overview.js": b"export const overview = {};\n",
+            "viewer/selection.js": b"export const selection = {};\n",
+            "viewer/styles.css": b"body { color: black; }\n",
+            "viewer/tables.js": b"export const tables = {};\n",
+            "viewer/treemap.js": b"export const treemap = {};\n",
+            "viewer/users-chart.js": b"export const users = {};\n",
+            "collector/__init__.py": b"",
+            "collector/inventory.py": b"def load_inventory(): pass\n",
+            "collector/jobs.py": b"class RescanJobManager: pass\n",
+            "collector/service.py": b"class PollService: pass\n",
+            "collector/snapshot.py": b"class Snapshot: pass\n",
+            "collector/store.py": b"class CentralStore: pass\n",
+            "collector/transport.py": b"class OpenSshTransport: pass\n",
+            "config/servers.example.yaml": b"servers: []\n",
+            "docs/schema-v1.md": b"# Schema\n",
+            "deploy/direct_proxy.py": b"print('proxy')\n",
+        }
+
+    def _activate(self, archive: Path, metadata: Path, digest: str, **config_overrides):
+        return self.module.activate_release(
+            self._config(**config_overrides),
+            sha=self.sha,
+            expected_digest=digest,
+            artifact_path=archive,
+            metadata_path=metadata,
+            restart=self._restart,
+            health=self._health,
+        )
+
+    def _assert_gpu_sentinel_preserved(self) -> None:
+        self.assertEqual(self.gpu_sentinel.read_bytes(), b"gpu bytes must not change")
+
+    def test_rejects_invalid_sha_digest_and_metadata_identity_before_mutation(self) -> None:
+        archive, metadata, digest = self._archive()
+        cases = [
+            {"sha": "not-a-sha", "expected_digest": digest, "metadata_path": metadata},
+            {"sha": self.sha, "expected_digest": "not-a-digest", "metadata_path": metadata},
+            {"sha": self.sha, "expected_digest": "0" * 64, "metadata_path": metadata},
+        ]
+        bad_metadata = self.incoming / "bad.json"
+        bad_metadata.write_text(json.dumps({"application_name": "gpu-monitor", "schema_version": 1, "source_sha": self.sha, "archive": archive.name, "sha256": digest}), encoding="utf-8")
+        cases.append({"sha": self.sha, "expected_digest": digest, "metadata_path": bad_metadata})
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(self.module.ActivationError):
+                    self.module.activate_release(
+                        self._config(), artifact_path=archive, restart=self._restart, health=self._health, **kwargs
+                    )
+        self.assertFalse(self.app_path.exists())
+        self.assertEqual(self.restart_calls, [])
+        self._assert_gpu_sentinel_preserved()
+
+    def test_rejects_stdin_payload_larger_than_configured_bound(self) -> None:
+        archive, metadata, digest = self._archive()
+        with self.assertRaises(self.module.ActivationError):
+            self.module.activate_release(
+                self._config(max_input_bytes=len(archive.read_bytes()) - 1),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_stdin=__import__("io").BytesIO(archive.read_bytes()),
+                metadata_path=metadata,
+                restart=self._restart,
+                health=self._health,
+            )
+        self.assertFalse(self.app_path.exists())
+
+    def test_rejects_artifact_or_metadata_paths_outside_private_incoming_dir(self) -> None:
+        archive, metadata, digest = self._archive()
+        outside_archive = self.root / "outside.tar.gz"
+        outside_archive.write_bytes(archive.read_bytes())
+        outside_metadata = self.root / "outside.json"
+        outside_metadata.write_bytes(metadata.read_bytes())
+
+        for artifact_path, metadata_path in [(outside_archive, metadata), (archive, outside_metadata)]:
+            with self.subTest(artifact=artifact_path, metadata=metadata_path):
+                with self.assertRaises(self.module.ActivationError):
+                    self.module.activate_release(
+                        self._config(),
+                        sha=self.sha,
+                        expected_digest=digest,
+                        artifact_path=artifact_path,
+                        metadata_path=metadata_path,
+                        restart=self._restart,
+                        health=self._health,
+                    )
+        self.assertFalse(self.app_path.exists())
+
+    def test_rejects_unsafe_archive_members_before_extraction(self) -> None:
+        cases: list[tuple[str, tarfile.TarInfo]] = []
+        for name in ["storage-monitor/../evil", "/storage-monitor/viewer/app.js", "other-root/file"]:
+            info = tarfile.TarInfo(name)
+            info.size = 1
+            cases.append((name, info))
+        link = tarfile.TarInfo("storage-monitor/viewer/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "app.js"
+        cases.append(("symlink", link))
+        hardlink = tarfile.TarInfo("storage-monitor/viewer/hard")
+        hardlink.type = tarfile.LNKTYPE
+        hardlink.linkname = "storage-monitor/viewer/app.js"
+        cases.append(("hardlink", hardlink))
+        fifo = tarfile.TarInfo("storage-monitor/viewer/fifo")
+        fifo.type = tarfile.FIFOTYPE
+        cases.append(("fifo", fifo))
+        char_device = tarfile.TarInfo("storage-monitor/viewer/device")
+        char_device.type = tarfile.CHRTYPE
+        cases.append(("device", char_device))
+        unsafe_mode = tarfile.TarInfo("storage-monitor/viewer/world-writable")
+        unsafe_mode.mode = 0o777
+        unsafe_mode.size = 1
+        cases.append(("unsafe-mode", unsafe_mode))
+
+        for label, bad_member in cases:
+            with self.subTest(label=label):
+                archive, metadata, digest = self._archive(members=[bad_member])
+                with self.assertRaises(self.module.ActivationError):
+                    self._activate(archive, metadata, digest)
+                if self.app_path.is_symlink() or self.app_path.exists():
+                    self.fail("unsafe archive mutated app path")
+
+    def test_rejects_duplicate_member_count_and_expanded_size_limits(self) -> None:
+        duplicate_a = tarfile.TarInfo("storage-monitor/viewer/app.js")
+        duplicate_a.size = 1
+        duplicate_b = tarfile.TarInfo("storage-monitor/viewer/app.js")
+        duplicate_b.size = 1
+        archive, metadata, digest = self._archive(members=[duplicate_a, duplicate_b])
+        with self.assertRaises(self.module.ActivationError):
+            self._activate(archive, metadata, digest)
+
+        archive, metadata, digest = self._archive()
+        with self.assertRaises(self.module.ActivationError):
+            self._activate(archive, metadata, digest, max_members=2)
+        with self.assertRaises(self.module.ActivationError):
+            self._activate(archive, metadata, digest, max_file_bytes=4)
+        with self.assertRaises(self.module.ActivationError):
+            self._activate(archive, metadata, digest, max_total_bytes=8)
+
+    def test_rejects_missing_runtime_file_and_manifest_file_hash_mismatch(self) -> None:
+        for missing in ["deploy/direct_proxy.py", "viewer/styles.css"]:
+            with self.subTest(missing=missing):
+                files = self._runtime_files()
+                files.pop(missing)
+                archive, metadata, digest = self._archive(files=files)
+                with self.assertRaises(self.module.ActivationError):
+                    self._activate(archive, metadata, digest)
+
+        files = self._runtime_files()
+        manifest = self._manifest(files)
+        manifest["files"]["viewer/app.js"] = "0" * 64
+        archive, metadata, digest = self._archive(files=files, manifest=manifest)
+        with self.assertRaises(self.module.ActivationError):
+            self._activate(archive, metadata, digest)
+
+    def test_migrates_real_legacy_directory_to_backup_and_activates_immutable_release(self) -> None:
+        self.app_path.mkdir(parents=True)
+        sentinel = self.app_path / "legacy-sentinel.txt"
+        sentinel.write_bytes(b"legacy bytes")
+        archive, metadata, digest = self._archive()
+
+        status = self._activate(archive, metadata, digest)
+
+        self.assertEqual(status["status"], "active")
+        self.assertTrue(self.app_path.is_symlink())
+        self.assertEqual(self.app_path.resolve(), (self.release_root / self.sha / "storage-monitor").resolve())
+        backup = Path(status["legacy_backup"])
+        self.assertTrue(backup.is_dir())
+        self.assertEqual((backup / "legacy-sentinel.txt").read_bytes(), b"legacy bytes")
+        self.assertEqual((self.app_path / "viewer/app.js").stat().st_mode & 0o222, 0)
+        persisted = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["source_sha"], self.sha)
+        self.assertEqual(persisted["archive_digest"], digest)
+        self.assertEqual(self.restart_calls, ["activate"])
+        self.assertEqual(self.health_calls, 1)
+        self._assert_gpu_sentinel_preserved()
+
+    def test_switches_valid_prior_release_symlink_atomically_and_records_previous(self) -> None:
+        previous_target = self.release_root / self.old_sha / "storage-monitor"
+        previous_target.mkdir(parents=True)
+        (previous_target / "old.txt").write_text("old", encoding="utf-8")
+        self.app_path.parent.mkdir(parents=True)
+        self.app_path.symlink_to(previous_target)
+        archive, metadata, digest = self._archive()
+
+        status = self._activate(archive, metadata, digest)
+
+        self.assertEqual(Path(status["previous"]).resolve(), previous_target.resolve())
+        self.assertEqual(self.app_path.resolve(), (self.release_root / self.sha / "storage-monitor").resolve())
+        self.assertEqual(self.restart_calls, ["activate"])
+
+    def test_fails_closed_for_broken_or_external_symlink_without_restart(self) -> None:
+        external = self.root / "tmp/external"
+        external.mkdir(parents=True)
+        for target in [self.root / "missing", external]:
+            with self.subTest(target=target):
+                if self.app_path.is_symlink() or self.app_path.exists():
+                    self.app_path.unlink()
+                self.app_path.parent.mkdir(parents=True, exist_ok=True)
+                self.app_path.symlink_to(target)
+                archive, metadata, digest = self._archive()
+                with self.assertRaises(self.module.ActivationError):
+                    self._activate(archive, metadata, digest)
+                self.assertEqual(os.readlink(self.app_path), str(target))
+                self.assertEqual(self.restart_calls, [])
+
+    def test_accepts_duplicate_exact_release_directory_but_rejects_mismatch(self) -> None:
+        archive, metadata, digest = self._archive()
+        self._activate(archive, metadata, digest)
+        self.restart_calls.clear()
+        status = self._activate(archive, metadata, digest)
+        self.assertEqual(status["status"], "active")
+        self.assertEqual(self.restart_calls, ["activate"])
+
+        (self.release_root / self.sha / "storage-monitor/viewer/app.js").chmod(0o644)
+        (self.release_root / self.sha / "storage-monitor/viewer/app.js").write_bytes(b"tampered")
+        with self.assertRaises(self.module.ActivationError):
+            self._activate(archive, metadata, digest)
+
+    def test_failed_health_rolls_back_prior_symlink_and_restarts_rollback(self) -> None:
+        previous_target = self.release_root / self.old_sha / "storage-monitor"
+        previous_target.mkdir(parents=True)
+        self.app_path.parent.mkdir(parents=True)
+        self.app_path.symlink_to(previous_target)
+        archive, metadata, digest = self._archive()
+
+        def failing_health() -> bool:
+            return False
+
+        with self.assertRaises(self.module.ActivationError):
+            self.module.activate_release(
+                self._config(), sha=self.sha, expected_digest=digest, artifact_path=archive, metadata_path=metadata,
+                restart=self._restart, health=failing_health,
+            )
+        self.assertEqual(self.app_path.resolve(), previous_target.resolve())
+        self.assertEqual(self.restart_calls, ["activate", "rollback"])
+        self.assertFalse(any(path.name.startswith(".activate-") for path in self.app_path.parent.iterdir()))
+
+    def test_failed_health_rolls_back_first_legacy_migration_byte_for_byte(self) -> None:
+        self.app_path.mkdir(parents=True)
+        (self.app_path / "legacy-sentinel.txt").write_bytes(b"legacy bytes")
+        archive, metadata, digest = self._archive()
+
+        with self.assertRaises(self.module.ActivationError):
+            self.module.activate_release(
+                self._config(), sha=self.sha, expected_digest=digest, artifact_path=archive, metadata_path=metadata,
+                restart=self._restart, health=lambda: False,
+            )
+        self.assertFalse(self.app_path.is_symlink())
+        self.assertEqual((self.app_path / "legacy-sentinel.txt").read_bytes(), b"legacy bytes")
+        self.assertEqual(self.restart_calls, ["activate", "rollback"])
+
+    def test_prunes_only_old_inactive_storage_releases(self) -> None:
+        previous_target = self.release_root / self.old_sha / "storage-monitor"
+        active_target = self.release_root / self.sha / "storage-monitor"
+        old_extra = self.release_root / ("b" * 40) / "storage-monitor"
+        for path in [previous_target, old_extra]:
+            path.mkdir(parents=True)
+            (path / "sentinel").write_text(path.parent.name, encoding="utf-8")
+        incoming_file = self.incoming / "keep.tar.gz"
+        incoming_file.parent.mkdir(parents=True)
+        incoming_file.write_text("incoming", encoding="utf-8")
+        self.app_path.parent.mkdir(parents=True)
+        self.app_path.symlink_to(previous_target)
+        archive, metadata, digest = self._archive()
+
+        self._activate(archive, metadata, digest, keep_releases=1)
+
+        self.assertTrue(active_target.exists())
+        self.assertTrue(previous_target.exists())
+        self.assertFalse(old_extra.exists())
+        self.assertTrue(incoming_file.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
