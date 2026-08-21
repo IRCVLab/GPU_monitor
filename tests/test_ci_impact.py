@@ -135,6 +135,32 @@ class CiImpactTest(unittest.TestCase):
             apps_required=True,
         )
 
+
+    def test_storage_dashboard_deployment_assets_gate_storage_dashboard_ci(self):
+        dashboard_deploy_paths = (
+            "apps/storage-monitor/deploy/build-dashboard-release.py",
+            "apps/storage-monitor/deploy/test_dashboard_release.py",
+            "apps/storage-monitor/deploy/direct_proxy.py",
+            "apps/storage-monitor/deploy/test_direct_proxy.py",
+            "apps/storage-monitor/deploy/server/storage-monitor-release-puller.py",
+            "apps/storage-monitor/deploy/server/activate-dashboard-release.py",
+            "apps/storage-monitor/deploy/server/health-check-dashboard.py",
+            "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py",
+            "apps/storage-monitor/deploy/server/install-dashboard-deployer.sh",
+            "apps/storage-monitor/deploy/server/systemd/storage-viz-proxy.service",
+            "apps/storage-monitor/deploy/server/systemd/storage-monitor-release-puller.service",
+            "apps/storage-monitor/deploy/server/systemd/storage-monitor-release-puller.timer",
+            "tests/test_storage_release_puller.py",
+        )
+
+        for path in dashboard_deploy_paths:
+            with self.subTest(path=path):
+                self.assert_decisions(
+                    (path,),
+                    storage_dashboard=True,
+                    apps_required=True,
+                )
+
     def test_deploy_paths_validate_only_their_affected_application(self):
         self.assert_decisions(
             ("deploy/gpu-monitor/service.yml",),
