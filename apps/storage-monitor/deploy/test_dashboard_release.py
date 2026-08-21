@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -298,12 +299,13 @@ class DashboardReleaseActivationTest(unittest.TestCase):
 
     def _archive(self, *, files: dict[str, bytes] | None = None, manifest: dict[str, object] | None = None,
                  metadata: dict[str, object] | None = None, members: list[tarfile.TarInfo] | None = None,
-                 name: str | None = None) -> tuple[Path, Path, str]:
+                 name: str | None = None, directory: Path | None = None) -> tuple[Path, Path, str]:
         files = files or self._runtime_files()
         manifest = manifest or self._manifest(files, archive=name or self.archive_name)
-        archive_path = self.incoming / (name or self.archive_name)
-        metadata_path = self.incoming / f"{archive_path.name}.sha256.json"
-        self.incoming.mkdir(parents=True, exist_ok=True)
+        archive_dir = directory or self.incoming
+        archive_path = archive_dir / (name or self.archive_name)
+        metadata_path = archive_dir / f"{archive_path.name}.sha256.json"
+        archive_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive_path, "w:gz") as tar:
             if members is None:
                 manifest_bytes = json.dumps(manifest, sort_keys=True).encode("utf-8")
@@ -427,6 +429,34 @@ class DashboardReleaseActivationTest(unittest.TestCase):
                     )
         self.assertFalse(self.app_path.exists())
 
+    def test_extracts_private_verified_bytes_when_original_artifact_is_swapped_after_validation(self) -> None:
+        original_files = self._runtime_files()
+        archive, metadata, digest = self._archive(files=original_files)
+        replacement_files = dict(original_files)
+        replacement_files["viewer/app.js"] = b"console.log('pw');\n"
+        replacement, _, _ = self._archive(files=replacement_files, directory=self.incoming / "replacement")
+        original_start_state = self.module._current_start_state
+        observed_stages: list[tuple[Path, int]] = []
+
+        def swap_source_after_validation(config) -> object:
+            observed_stages.extend(
+                (path, path.stat().st_mode & 0o777)
+                for path in self.incoming.iterdir()
+                if path.is_file() and path not in {archive, metadata}
+            )
+            os.replace(replacement, archive)
+            return original_start_state(config)
+
+        with mock.patch.object(self.module, "_current_start_state", side_effect=swap_source_after_validation):
+            self._activate(archive, metadata, digest)
+
+        extracted = self.release_root / self.sha / "storage-monitor/viewer/app.js"
+        self.assertEqual(extracted.read_bytes(), original_files["viewer/app.js"])
+        self.assertEqual(len(observed_stages), 1)
+        stage_path, stage_mode = observed_stages[0]
+        self.assertEqual(stage_mode, 0o600)
+        self.assertFalse(stage_path.exists())
+
     def test_rejects_unsafe_archive_members_before_extraction(self) -> None:
         cases: list[tuple[str, tarfile.TarInfo]] = []
         for name in ["storage-monitor/../evil", "/storage-monitor/viewer/app.js", "other-root/file"]:
@@ -476,6 +506,34 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             self._activate(archive, metadata, digest, max_file_bytes=4)
         with self.assertRaises(self.module.ActivationError):
             self._activate(archive, metadata, digest, max_total_bytes=8)
+
+    def test_member_limit_stops_reading_before_rest_of_member_bomb(self) -> None:
+        members = []
+        for index in range(100):
+            member = tarfile.TarInfo(f"storage-monitor/bomb/{index:04d}.txt")
+            member.mode = 0o444
+            members.append(member)
+        archive, metadata, digest = self._archive(members=members)
+        original_next = tarfile.TarFile.next
+        next_calls = 0
+
+        def bounded_next(tar: tarfile.TarFile):
+            nonlocal next_calls
+            next_calls += 1
+            if next_calls > 8:
+                raise AssertionError("tar parser read materially beyond max_members")
+            return original_next(tar)
+
+        with mock.patch.object(tarfile.TarFile, "next", bounded_next):
+            with self.assertRaisesRegex(self.module.ActivationError, "member-count bound"):
+                self._activate(archive, metadata, digest, max_members=2)
+
+        self.assertLessEqual(next_calls, 8)
+        staged = {
+            path for path in self.incoming.iterdir()
+            if path.is_file() and path not in {archive, metadata}
+        }
+        self.assertEqual(staged, set())
 
     def test_rejects_missing_runtime_file_and_manifest_file_hash_mismatch(self) -> None:
         for missing in ["deploy/direct_proxy.py", "viewer/styles.css"]:
