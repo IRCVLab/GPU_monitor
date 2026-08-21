@@ -1,10 +1,12 @@
 [Unit]
-Description=Run Storage Monitor dashboard release puller every five minutes
+Description=Run Storage monitor outbound dashboard release puller every five minutes
 
 [Timer]
+OnBootSec=2min
 OnCalendar=*:0/5
 Persistent=true
-RandomizedDelaySec=45s
+RandomizedDelaySec=90s
+AccuracySec=15s
 Unit=storage-monitor-release-puller.service
 
 [Install]

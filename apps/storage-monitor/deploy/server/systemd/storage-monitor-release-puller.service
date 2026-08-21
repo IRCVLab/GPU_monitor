@@ -1,5 +1,5 @@
 [Unit]
-Description=Storage Monitor dashboard release puller
+Description=Storage monitor outbound dashboard release puller
 Documentation=https://github.com/IRCVLab/GPU_monitor
 Wants=network-online.target
 After=network-online.target
@@ -11,21 +11,24 @@ ConditionPathExists=/usr/local/libexec/storage-release-authorizer.py
 Type=oneshot
 User=root
 Group=root
-UMask=0027
+ExecStart=/usr/bin/python3.12 /usr/local/libexec/storage-monitor-release-puller.py --repository IRCVLab/GPU_monitor --repo-url https://github.com/IRCVLab/GPU_monitor.git --state-dir /var/lib/storage-viz-dashboard/puller --work-dir /var/lib/storage-viz-dashboard/builder --authorizer /usr/local/libexec/storage-release-authorizer.py --activate /usr/local/libexec/storage-dashboard-activate.py --builder-user storage-viz-builder
+UMask=0077
 Nice=10
 IOSchedulingClass=idle
-NoNewPrivileges=yes
+TimeoutStartSec=30min
+CPUWeight=20
+IOWeight=20
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/srv/storage-viz-dashboard/releases /var/lib/storage-viz-dashboard /etc/storage-viz /opt/storage-viz-dashboard
-WorkingDirectory=/var/lib/storage-viz-dashboard/puller
-ExecStart=/usr/bin/python3.12 /usr/local/libexec/storage-monitor-release-puller.py --repository IRCVLab/GPU_monitor --repo-url https://github.com/IRCVLab/GPU_monitor.git --state-dir /var/lib/storage-viz-dashboard/puller --work-dir /var/lib/storage-viz-dashboard/builder --authorizer /usr/local/libexec/storage-release-authorizer.py --activate /usr/local/libexec/storage-dashboard-activate.py --builder-user storage-viz-builder
-CapabilityBoundingSet=
-AmbientCapabilities=
+ReadWritePaths=/srv/storage-viz-dashboard/releases /var/lib/storage-viz-dashboard/puller /var/lib/storage-viz-dashboard/builder /var/lib/storage-viz-dashboard/data /var/lib/storage-viz-dashboard/state /etc/storage-viz /opt/storage-viz-dashboard
+ReadOnlyPaths=/usr/local/libexec
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
 SystemCallArchitectures=native
-SystemCallFilter=@system-service @chown @file-system @io-event @network-io @process @resources
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target
