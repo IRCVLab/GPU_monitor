@@ -83,6 +83,7 @@ class ActivationConfig:
 
 @dataclass(frozen=True)
 class PreparedArchive:
+    staged_file: BinaryIO
     staged_path: Path
     archive_name: str
     metadata: dict[str, object]
@@ -153,36 +154,32 @@ def _copy_to_private_stage(
     sha: str,
     *,
     overflow_message: str,
-) -> Path:
+) -> tuple[BinaryIO, Path]:
     config.incoming_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{sha}.verified.", suffix=".tar.gz", dir=config.incoming_dir)
+    staged_path = Path(tmp_name)
+    staged_file = os.fdopen(fd, "w+b")
     total = 0
     try:
-        with os.fdopen(fd, "wb") as out:
-            os.fchmod(out.fileno(), 0o600)
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > min(config.max_input_bytes, config.max_archive_bytes):
-                    raise ActivationError(overflow_message)
-                out.write(chunk)
-            out.flush()
-            os.fsync(out.fileno())
+        os.fchmod(staged_file.fileno(), 0o600)
+        with contextlib.suppress(FileNotFoundError):
+            staged_path.unlink()
         _fsync_dir(config.incoming_dir)
-        return Path(tmp_name)
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > min(config.max_input_bytes, config.max_archive_bytes):
+                raise ActivationError(overflow_message)
+            staged_file.write(chunk)
+        staged_file.flush()
+        os.fsync(staged_file.fileno())
+        staged_file.seek(0)
+        return staged_file, staged_path
     except BaseException:
-        _remove_private_stage(Path(tmp_name))
+        staged_file.close()
         raise
-
-
-def _remove_private_stage(path: Path) -> None:
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
-    _fsync_dir(path.parent)
 
 
 def _require_private_incoming_path(config: ActivationConfig, path: Path, label: str) -> None:
@@ -195,10 +192,16 @@ def _require_private_incoming_path(config: ActivationConfig, path: Path, label: 
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
+        return _sha256_stream(handle)
+
+
+def _sha256_stream(handle: BinaryIO) -> str:
+    handle.seek(0)
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+    handle.seek(0)
     return digest.hexdigest()
 
 
@@ -226,10 +229,8 @@ def _safe_mode(mode: int) -> bool:
     return permissions in {0o444, 0o555, 0o644, 0o755}
 
 
-def _inspect_archive(config: ActivationConfig, archive_path: Path) -> tuple[dict[str, object], tuple[tarfile.TarInfo, ...], dict[str, str]]:
-    if not archive_path.is_file():
-        raise ActivationError(f"artifact not found: {archive_path}")
-    if archive_path.stat().st_size > min(config.max_archive_bytes, config.max_input_bytes):
+def _inspect_archive(config: ActivationConfig, archive_file: BinaryIO) -> tuple[dict[str, object], tuple[tarfile.TarInfo, ...], dict[str, str]]:
+    if os.fstat(archive_file.fileno()).st_size > min(config.max_archive_bytes, config.max_input_bytes):
         raise ActivationError("artifact exceeds configured compressed size bound")
 
     seen: set[str] = set()
@@ -238,7 +239,8 @@ def _inspect_archive(config: ActivationConfig, archive_path: Path) -> tuple[dict
     members: list[tarfile.TarInfo] = []
     manifest: dict[str, object] | None = None
     try:
-        with tarfile.open(archive_path, "r:gz") as tar:
+        archive_file.seek(0)
+        with tarfile.open(fileobj=archive_file, mode="r:gz") as tar:
             while True:
                 member = tar.next()
                 if member is None:
@@ -335,6 +337,7 @@ def _prepare_archive(
 ) -> PreparedArchive:
     _validate_sha(sha, "source sha")
     _validate_digest(expected_digest, "expected digest")
+    staged_file: BinaryIO | None = None
     staged_path: Path | None = None
     metadata_path = Path(metadata_path)
     _require_private_incoming_path(config, metadata_path, "metadata")
@@ -342,7 +345,7 @@ def _prepare_archive(
         if artifact_stdin is None:
             raise ActivationError("artifact path or artifact stdin is required")
         archive_name = f"storage-monitor-dashboard-{sha}.tar.gz"
-        staged_path = _copy_to_private_stage(
+        staged_file, staged_path = _copy_to_private_stage(
             config,
             artifact_stdin,
             sha,
@@ -353,7 +356,7 @@ def _prepare_archive(
         archive_name = artifact_path.name
         _require_private_incoming_path(config, artifact_path, "artifact")
     try:
-        if staged_path is None:
+        if staged_file is None:
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
             try:
                 source_fd = os.open(artifact_path, flags)
@@ -362,23 +365,23 @@ def _prepare_archive(
             with os.fdopen(source_fd, "rb") as source:
                 if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
                     raise ActivationError("artifact must be a regular file")
-                staged_path = _copy_to_private_stage(
+                staged_file, staged_path = _copy_to_private_stage(
                     config,
                     source,
                     sha,
                     overflow_message="artifact exceeds configured input bound",
                 )
-        digest = _sha256_file(staged_path)
+        digest = _sha256_stream(staged_file)
         if digest != expected_digest:
             raise ActivationError("artifact digest mismatch")
         metadata = _read_json_file(metadata_path, config.max_input_bytes)
         _validate_metadata(metadata, sha=sha, archive_name=archive_name, digest=digest)
-        manifest, members, files = _inspect_archive(config, staged_path)
+        manifest, members, files = _inspect_archive(config, staged_file)
         _validate_manifest(manifest, sha=sha, archive_name=archive_name, files=files)
-        return PreparedArchive(staged_path, archive_name, metadata, manifest, members, files, digest)
+        return PreparedArchive(staged_file, staged_path, archive_name, metadata, manifest, members, files, digest)
     except BaseException:
-        if staged_path is not None:
-            _remove_private_stage(staged_path)
+        if staged_file is not None:
+            staged_file.close()
         raise
 
 
@@ -428,7 +431,8 @@ def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: st
         shutil.rmtree(tmp_parent)
     tmp_storage = tmp_parent / "storage-monitor"
     try:
-        with tarfile.open(archive.staged_path, "r:gz") as tar:
+        archive.staged_file.seek(0)
+        with tarfile.open(fileobj=archive.staged_file, mode="r:gz") as tar:
             for member in archive.members:
                 relative = Path(member.name).relative_to("storage-monitor")
                 destination = tmp_storage / relative
@@ -655,7 +659,7 @@ def activate_release(
             previous_state = _read_state(config.state_path)
             target = _extract_private(config, archive, sha)
         finally:
-            _remove_private_stage(archive.staged_path)
+            archive.staged_file.close()
         activated_state = _activate_symlink(config, target, original_state)
         status = {
             "status": "active",

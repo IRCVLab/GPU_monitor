@@ -436,14 +436,8 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         replacement_files["viewer/app.js"] = b"console.log('pw');\n"
         replacement, _, _ = self._archive(files=replacement_files, directory=self.incoming / "replacement")
         original_start_state = self.module._current_start_state
-        observed_stages: list[tuple[Path, int]] = []
 
         def swap_source_after_validation(config) -> object:
-            observed_stages.extend(
-                (path, path.stat().st_mode & 0o777)
-                for path in self.incoming.iterdir()
-                if path.is_file() and path not in {archive, metadata}
-            )
             os.replace(replacement, archive)
             return original_start_state(config)
 
@@ -452,10 +446,36 @@ class DashboardReleaseActivationTest(unittest.TestCase):
 
         extracted = self.release_root / self.sha / "storage-monitor/viewer/app.js"
         self.assertEqual(extracted.read_bytes(), original_files["viewer/app.js"])
-        self.assertEqual(len(observed_stages), 1)
-        stage_path, stage_mode = observed_stages[0]
-        self.assertEqual(stage_mode, 0o600)
-        self.assertFalse(stage_path.exists())
+        unexpected_stages = {
+            path for path in self.incoming.iterdir()
+            if path.is_file() and path not in {archive, metadata}
+        }
+        self.assertEqual(unexpected_stages, set())
+
+    def test_extracts_from_held_descriptor_when_staged_directory_entry_is_replaced(self) -> None:
+        original_files = self._runtime_files()
+        archive, metadata, digest = self._archive(files=original_files)
+        replacement_files = dict(original_files)
+        replacement_files["viewer/app.js"] = b"console.log('pw');\n"
+        replacement, _, _ = self._archive(files=replacement_files, directory=self.incoming / "replacement")
+        original_extract = self.module._extract_private
+        observed_stage_modes: list[int] = []
+
+        def replace_staged_entry(config, prepared, sha: str) -> Path:
+            staged_file = getattr(prepared, "staged_file", None)
+            if staged_file is None:
+                observed_stage_modes.append(prepared.staged_path.stat().st_mode & 0o777)
+            else:
+                observed_stage_modes.append(os.fstat(staged_file.fileno()).st_mode & 0o777)
+            os.replace(replacement, prepared.staged_path)
+            return original_extract(config, prepared, sha)
+
+        with mock.patch.object(self.module, "_extract_private", side_effect=replace_staged_entry):
+            self._activate(archive, metadata, digest)
+
+        extracted = self.release_root / self.sha / "storage-monitor/viewer/app.js"
+        self.assertEqual(extracted.read_bytes(), original_files["viewer/app.js"])
+        self.assertEqual(observed_stage_modes, [0o600])
 
     def test_rejects_unsafe_archive_members_before_extraction(self) -> None:
         cases: list[tuple[str, tarfile.TarInfo]] = []
