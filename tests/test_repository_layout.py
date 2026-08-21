@@ -64,6 +64,20 @@ BROWSER_OUTPUT_SUFFIXES = {
     ".zip",
 }
 
+PLANNED_STORAGE_CENTRAL_DEPLOYMENT_ASSETS = (
+    "apps/storage-monitor/deploy/build-dashboard-release.py",
+    "apps/storage-monitor/deploy/test_dashboard_release.py",
+    "apps/storage-monitor/deploy/server/storage-monitor-release-puller.py",
+    "apps/storage-monitor/deploy/server/activate-dashboard-release.py",
+    "apps/storage-monitor/deploy/server/health-check-dashboard.py",
+    "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py",
+    "apps/storage-monitor/deploy/server/install-dashboard-deployer.sh",
+    "apps/storage-monitor/deploy/server/systemd/storage-viz-proxy.service",
+    "apps/storage-monitor/deploy/server/systemd/storage-monitor-release-puller.service",
+    "apps/storage-monitor/deploy/server/systemd/storage-monitor-release-puller.timer",
+    "tests/test_storage_release_puller.py",
+)
+
 
 def workflow_text(path: str = ".github/workflows/ci.yml") -> str:
     return Path(path).read_text(encoding="utf-8")
@@ -154,6 +168,7 @@ class RepositoryLayoutTest(unittest.TestCase):
     def test_root_makefile_exposes_exact_application_command_contracts(self):
         self.assertEqual("SHELL := /bin/bash", makefile_text().splitlines()[0])
         self.assertIn("storage-release-puller-test", phony_targets())
+        self.assertIn("build-storage-release", phony_targets())
         test_dependencies = make_target_dependencies("test")
         self.assertEqual(
             ["layout-test", "history-test", "release-puller-test", "storage-release-puller-test"],
@@ -175,6 +190,12 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertEqual(
             ["cd apps/gpu-monitor/frontend && npm run build"],
             make_target_recipe("build-gpu"),
+        )
+        self.assertEqual(
+            [
+                'python3.12 apps/storage-monitor/deploy/build-dashboard-release.py --sha "$$(git rev-parse HEAD)" --output-dir "$${OUTPUT_DIR:-apps/storage-monitor/dist/releases}"'
+            ],
+            make_target_recipe("build-storage-release"),
         )
         self.assertEqual(
             ["test", "test-gpu", "test-storage", "diff-check"],
@@ -218,6 +239,17 @@ class RepositoryLayoutTest(unittest.TestCase):
             self.assertIn("PYTHONDONTWRITEBYTECODE=1", recipe, target)
             self.assertNotIn("pytest", recipe, target)
             self.assertNotIn("cacheprovider", recipe, target)
+
+
+    def test_planned_storage_central_deployment_assets_are_reserved_in_layout(self):
+        self.maxDiff = None
+        missing = [
+            path
+            for path in PLANNED_STORAGE_CENTRAL_DEPLOYMENT_ASSETS
+            if not Path(path).is_file()
+        ]
+
+        self.assertEqual([], missing)
 
 
     def test_storage_make_targets_run_artifact_checks_in_disposable_clone(self):

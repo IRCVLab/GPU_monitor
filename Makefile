@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-puller-test storage-release-puller-test release-script-test archive-ref-test build-gpu-release test-gpu build-gpu test-storage verify diff-check
+.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-puller-test storage-release-puller-test release-script-test archive-ref-test build-gpu-release build-storage-release test-gpu build-gpu test-storage verify diff-check
 
 test: layout-test history-test release-puller-test storage-release-puller-test
 	$(MAKE) impact-test
@@ -42,6 +42,9 @@ archive-ref-test:
 
 build-gpu-release:
 	apps/gpu-monitor/deploy/build-release.sh --sha "$$(git rev-parse HEAD)" --output-dir "$${OUTPUT_DIR:-apps/gpu-monitor/dist/releases}"
+
+build-storage-release:
+	python3.12 apps/storage-monitor/deploy/build-dashboard-release.py --sha "$$(git rev-parse HEAD)" --output-dir "$${OUTPUT_DIR:-apps/storage-monitor/dist/releases}"
 
 test-gpu:
 	cd apps/gpu-monitor/frontend && npm run check
