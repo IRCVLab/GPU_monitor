@@ -101,6 +101,14 @@ def normalized_make_recipe(target: str) -> str:
     return "\n".join(make_target_recipe(target))
 
 
+def phony_targets() -> list[str]:
+    prefix = ".PHONY:"
+    for line in makefile_text().splitlines():
+        if line.startswith(prefix):
+            return line.split(":", 1)[1].split()
+    return []
+
+
 def tracked_paths() -> list[str]:
     result = subprocess.run(
         ["git", "ls-files"],
@@ -145,9 +153,15 @@ class RepositoryLayoutTest(unittest.TestCase):
 
     def test_root_makefile_exposes_exact_application_command_contracts(self):
         self.assertEqual("SHELL := /bin/bash", makefile_text().splitlines()[0])
+        self.assertIn("storage-release-puller-test", phony_targets())
+        test_dependencies = make_target_dependencies("test")
         self.assertEqual(
-            ["layout-test", "history-test", "release-puller-test"],
-            make_target_dependencies("test"),
+            ["layout-test", "history-test", "release-puller-test", "storage-release-puller-test"],
+            test_dependencies,
+        )
+        self.assertLess(
+            test_dependencies.index("release-puller-test"),
+            test_dependencies.index("storage-release-puller-test"),
         )
         self.assertEqual(
             [
@@ -185,9 +199,18 @@ class RepositoryLayoutTest(unittest.TestCase):
             ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_gpu_release_puller -v"],
             make_target_recipe("release-puller-test"),
         )
+        self.assertEqual(
+            ["PYTHONDONTWRITEBYTECODE=1 python3.12 -m unittest tests.test_storage_release_puller -v"],
+            make_target_recipe("storage-release-puller-test"),
+        )
         root_python_recipes = {
             target: recipe
-            for target in ("layout-test", "history-test", "release-puller-test")
+            for target in (
+                "layout-test",
+                "history-test",
+                "release-puller-test",
+                "storage-release-puller-test",
+            )
             for recipe in make_target_recipe(target)
         }
         self.assertTrue(root_python_recipes)
