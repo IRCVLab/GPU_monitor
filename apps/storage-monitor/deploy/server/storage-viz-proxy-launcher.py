@@ -84,10 +84,10 @@ def validate_proxy_target(target: str | Path, config: LauncherConfig = LauncherC
 
 
 def launch(argv: Sequence[str], *, config: LauncherConfig = LauncherConfig(), execv: Callable[[str, list[str]], object] = os.execv) -> None:
-    if not argv:
-        raise LauncherError("direct_proxy.py target argument is required")
+    if len(argv) != 1:
+        raise LauncherError("exactly one direct_proxy.py target argument is required")
     target = validate_proxy_target(argv[0], config)
-    execv(sys.executable, [sys.executable, str(target), *list(argv[1:])])
+    execv(sys.executable, [sys.executable, str(target)])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -95,8 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--release-root", default="/srv/storage-viz-dashboard/releases")
     parser.add_argument("--state-path", default="/var/lib/storage-viz-dashboard/activation-state.json")
     parser.add_argument("target")
-    args, rest = parser.parse_known_args(argv)
-    launch([args.target, *rest], config=LauncherConfig(Path(args.release_root), Path(args.state_path)))
+    args = parser.parse_args(argv)
+    launch([args.target], config=LauncherConfig(Path(args.release_root), Path(args.state_path)))
     return 0
 
 

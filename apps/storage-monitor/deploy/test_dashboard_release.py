@@ -750,29 +750,50 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def _write_envs(self, *, dashboard_extra: str = "", proxy_extra: str = "") -> tuple[Path, Path, Path]:
+    def _write_envs(
+        self,
+        *,
+        dashboard_overrides: dict[str, str | None] | None = None,
+        proxy_overrides: dict[str, str | None] | None = None,
+        dashboard_extra: str = "",
+        proxy_extra: str = "",
+    ) -> tuple[Path, Path, Path]:
         dash = self.root / "dashboard.env"
         proxy = self.root / "proxy.env"
         inv = self.root / "servers.json"
+        dashboard_values = {
+            "STORAGE_VIZ_BIND": "127.0.0.1",
+            "STORAGE_VIZ_PORT": "8088",
+            "STORAGE_VIZ_TRUSTED_PROXY": "1",
+            "STORAGE_VIZ_ALLOWED_ORIGINS": "http://166.104.167.11:505",
+            "STORAGE_VIZ_OPERATOR_ALLOWLIST": "ops-viewer,fixed-proxy-operator",
+            "STORAGE_VIZ_SESSION_COOKIE_SECURE": "0",
+            "STORAGE_VIZ_INVENTORY": str(inv),
+        }
+        proxy_values = {
+            "STORAGE_VIZ_PROXY_BIND": "0.0.0.0",
+            "STORAGE_VIZ_PROXY_PORT": "505",
+            "STORAGE_VIZ_PROXY_UPSTREAM_HOST": "127.0.0.1",
+            "STORAGE_VIZ_PROXY_UPSTREAM_PORT": "8088",
+            "STORAGE_VIZ_PROXY_OPERATOR": "fixed-proxy-operator",
+            "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN": "http://166.104.167.11:505",
+            "STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES": "1048576",
+        }
+        for values, overrides in (
+            (dashboard_values, dashboard_overrides or {}),
+            (proxy_values, proxy_overrides or {}),
+        ):
+            for key, value in overrides.items():
+                if value is None:
+                    values.pop(key, None)
+                else:
+                    values[key] = value
         dash.write_text(
-            "STORAGE_VIZ_BIND=127.0.0.1\n"
-            "STORAGE_VIZ_PORT=8088\n"
-            "STORAGE_VIZ_TRUSTED_PROXY=1\n"
-            "STORAGE_VIZ_ALLOWED_ORIGINS=http://166.104.167.11:505\n"
-            "STORAGE_VIZ_OPERATOR_ALLOWLIST=ops-viewer,fixed-proxy-operator\n"
-            "STORAGE_VIZ_SESSION_COOKIE_SECURE=0\n"
-            f"STORAGE_VIZ_INVENTORY={inv}\n"
-            f"{dashboard_extra}",
+            "".join(f"{key}={value}\n" for key, value in dashboard_values.items()) + dashboard_extra,
             encoding="utf-8",
         )
         proxy.write_text(
-            "STORAGE_VIZ_PROXY_BIND=0.0.0.0\n"
-            "STORAGE_VIZ_PROXY_PORT=505\n"
-            "STORAGE_VIZ_PROXY_UPSTREAM=http://127.0.0.1:8088\n"
-            "STORAGE_VIZ_PUBLIC_ORIGIN=http://166.104.167.11:505\n"
-            "STORAGE_VIZ_PUBLIC_HOST=166.104.167.11:505\n"
-            "STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator\n"
-            f"{proxy_extra}",
+            "".join(f"{key}={value}\n" for key, value in proxy_values.items()) + proxy_extra,
             encoding="utf-8",
         )
         inv.write_text(json.dumps({"servers":[
@@ -788,22 +809,48 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         self.assertEqual(contract.public_origin, "http://166.104.167.11:505")
         self.assertEqual(contract.public_host, "166.104.167.11:505")
         self.assertEqual(contract.enabled_server_ids, ["atlas", "hinton"])
+        self.assertEqual(contract.proxy_env["STORAGE_VIZ_PROXY_UPSTREAM_HOST"], "127.0.0.1")
+        self.assertEqual(contract.proxy_env["STORAGE_VIZ_PROXY_UPSTREAM_PORT"], "8088")
 
         cases = [
             ("dup", {"dashboard_extra":"STORAGE_VIZ_PORT=8089\n"}),
             ("malformed", {"dashboard_extra":"export STORAGE_VIZ_PORT=8088\n"}),
-            ("shell", {"proxy_extra":"STORAGE_VIZ_PUBLIC_HOST=$(hostname):505\n"}),
-            ("missing", {"proxy_extra":"STORAGE_VIZ_PROXY_OPERATOR=\n"}),
-            ("sample", {"dashboard_extra":"STORAGE_VIZ_DEV_SAMPLE_DIR=/tmp/samples\n"}),
-            ("direct", {"dashboard_extra":"STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN=1\n"}),
-            ("bad_origin", {"dashboard_extra":"STORAGE_VIZ_ALLOWED_ORIGINS=http://166.104.167.11:8088\n"}),
-            ("bad_upstream", {"proxy_extra":"STORAGE_VIZ_PROXY_UPSTREAM=http://127.0.0.1:8089\n"}),
+            ("shell", {"proxy_overrides":{"STORAGE_VIZ_PROXY_PUBLIC_ORIGIN":"http://$(hostname):505"}}),
+            ("missing", {"proxy_overrides":{"STORAGE_VIZ_PROXY_OPERATOR":None}}),
+            ("sample", {"dashboard_overrides":{"STORAGE_VIZ_DEV_SAMPLE_DIR":"/tmp/samples"}}),
+            ("direct", {"dashboard_overrides":{"STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN":"1"}}),
+            ("bad_origin", {"dashboard_overrides":{"STORAGE_VIZ_ALLOWED_ORIGINS":"http://166.104.167.11:8088"}}),
+            ("bad_upstream_host", {"proxy_overrides":{"STORAGE_VIZ_PROXY_UPSTREAM_HOST":"127.0.0.2"}}),
+            ("bad_upstream_port", {"proxy_overrides":{"STORAGE_VIZ_PROXY_UPSTREAM_PORT":"8089"}}),
+            ("loopback_bind", {"proxy_overrides":{"STORAGE_VIZ_PROXY_BIND":"127.0.0.1"}}),
+            ("host_bind", {"proxy_overrides":{"STORAGE_VIZ_PROXY_BIND":"public.example.com"}}),
+            ("bad_response_bound", {"proxy_overrides":{"STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES":"536870913"}}),
+            ("invented_upstream", {"proxy_extra":"STORAGE_VIZ_PROXY_UPSTREAM=http://127.0.0.1:8088\n"}),
+            ("invented_origin", {"proxy_extra":"STORAGE_VIZ_PUBLIC_ORIGIN=http://166.104.167.11:505\n"}),
+            ("invented_host", {"proxy_extra":"STORAGE_VIZ_PUBLIC_HOST=166.104.167.11:505\n"}),
         ]
         for label, kwargs in cases:
             with self.subTest(label=label):
                 dash, proxy, _ = self._write_envs(**kwargs)
                 with self.assertRaises(self.module.HealthCheckError):
                     self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+
+    def test_validated_proxy_env_enables_real_direct_proxy_contract(self) -> None:
+        dash, proxy_env, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy_env)
+        module_path = REPO_ROOT / "apps/storage-monitor/deploy/direct_proxy.py"
+        with mock.patch.dict(os.environ, dict(contract.proxy_env), clear=True):
+            direct_proxy = self._load("storage_direct_proxy_contract", module_path)
+        self.addCleanup(sys.modules.pop, "storage_direct_proxy_contract", None)
+
+        self.assertEqual(direct_proxy.BIND, "0.0.0.0")
+        self.assertEqual(direct_proxy.PORT, 505)
+        self.assertEqual(direct_proxy.UPSTREAM_HOST, "127.0.0.1")
+        self.assertEqual(direct_proxy.UPSTREAM_PORT, 8088)
+        self.assertEqual(direct_proxy.OPERATOR_ID, "fixed-proxy-operator")
+        self.assertEqual(direct_proxy.PUBLIC_ORIGIN, "http://166.104.167.11:505")
+        self.assertEqual(direct_proxy.MAX_RESPONSE_BYTES, 1048576)
+        self.assertIs(direct_proxy.RESCAN_POST_ENABLED, True)
 
     def test_probe_checks_systemd_public_session_servers_and_unknown_rescan_without_mutation(self) -> None:
         dash, proxy, _ = self._write_envs()
@@ -890,15 +937,29 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
 
     def test_execs_python_direct_proxy_without_shell(self) -> None:
         target = self._target()
+        installed = self.root / "opt/storage-viz-dashboard"
+        installed.parent.mkdir(parents=True)
+        installed.symlink_to(target.parents[1])
+        installed_target = installed / "deploy/direct_proxy.py"
         state = self.root / "state.json"
         state.write_text(json.dumps({"release": str(target.parents[1])}), encoding="utf-8")
         observed = {}
         def execv(exe, argv):
             observed["exe"] = exe; observed["argv"] = argv; raise SystemExit(0)
         with self.assertRaises(SystemExit):
-            self.module.launch([str(target), "--port", "505"], config=self.module.LauncherConfig(release_root=self.root / "srv/storage-viz-dashboard/releases", state_path=state), execv=execv)
+            self.module.launch([str(installed_target)], config=self.module.LauncherConfig(release_root=self.root / "srv/storage-viz-dashboard/releases", state_path=state), execv=execv)
         self.assertEqual(observed["argv"][:2], [sys.executable, str(target.resolve())])
-        self.assertEqual(observed["argv"][2:], ["--port", "505"])
+        self.assertEqual(observed["argv"][2:], [])
+
+        with self.assertRaises(self.module.LauncherError):
+            self.module.launch(
+                [str(installed_target), "--port", "505"],
+                config=self.module.LauncherConfig(
+                    release_root=self.root / "srv/storage-viz-dashboard/releases",
+                    state_path=state,
+                ),
+                execv=execv,
+            )
 
 
 class StorageVizProxySystemdUnitTest(unittest.TestCase):
@@ -911,7 +972,15 @@ class StorageVizProxySystemdUnitTest(unittest.TestCase):
         self.assertIn("AmbientCapabilities=CAP_NET_BIND_SERVICE", unit)
         self.assertNotIn("CAP_SYS_ADMIN", unit)
         self.assertNotIn("gpu", unit.lower())
-        self.assertIn("storage-viz-proxy-launcher.py", unit)
+        self.assertIn(
+            "ExecStart=/usr/bin/python3.12 /opt/storage-viz-dashboard/deploy/server/storage-viz-proxy-launcher.py "
+            "/opt/storage-viz-dashboard/deploy/direct_proxy.py",
+            unit,
+        )
+        self.assertNotIn("${STORAGE_VIZ_PROXY_TARGET}", unit)
+        self.assertNotIn("--bind", unit)
+        self.assertNotIn("--port", unit)
+        self.assertNotIn("--upstream", unit)
         self.assertRegex(unit, r"ReadWritePaths=.*storage", unit)
 
 if __name__ == "__main__":

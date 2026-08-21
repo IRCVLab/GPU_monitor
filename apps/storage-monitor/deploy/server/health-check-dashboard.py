@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import argparse
 import http.client
+import ipaddress
 import json
 from pathlib import Path
 import re
@@ -22,6 +23,18 @@ SHELLY_VALUE_RE = re.compile(r"[\s`$'\";&|<>\\]")
 FIXED_PROXY_OPERATOR = "fixed-proxy-operator"
 DASHBOARD_SERVICE = "storage-viz-dashboard.service"
 PROXY_SERVICE = "storage-viz-proxy.service"
+PROXY_ENV_KEYS = frozenset(
+    {
+        "STORAGE_VIZ_PROXY_BIND",
+        "STORAGE_VIZ_PROXY_PORT",
+        "STORAGE_VIZ_PROXY_UPSTREAM_HOST",
+        "STORAGE_VIZ_PROXY_UPSTREAM_PORT",
+        "STORAGE_VIZ_PROXY_OPERATOR",
+        "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN",
+        "STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES",
+    }
+)
+MAX_PROXY_RESPONSE_BYTES = 512 * 1024 * 1024
 
 
 class HealthCheckError(RuntimeError):
@@ -82,7 +95,16 @@ def _parse_origin(origin: str) -> tuple[str, int, str]:
         raise HealthCheckError(f"invalid origin {origin}") from exc
     if parsed.scheme != "http" or not parsed.hostname or port is None or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
         raise HealthCheckError(f"origin must be exact HTTP origin: {origin}")
-    return parsed.hostname, port, f"{parsed.hostname}:{port}"
+    return parsed.hostname, port, parsed.netloc
+
+
+def _validate_proxy_bind(value: str) -> None:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise HealthCheckError("STORAGE_VIZ_PROXY_BIND must be an IP address") from exc
+    if address.version != 4 or address.is_loopback:
+        raise HealthCheckError("STORAGE_VIZ_PROXY_BIND must be a non-loopback IPv4 address")
 
 
 def _load_enabled_server_ids(path: Path) -> list[str]:
@@ -120,24 +142,35 @@ def load_contract(*, dashboard_env: Path = Path("/etc/storage-viz/dashboard.env"
     ):
         _require(dash, key)
     for key in (
-        "STORAGE_VIZ_PROXY_BIND", "STORAGE_VIZ_PROXY_PORT", "STORAGE_VIZ_PROXY_UPSTREAM", "STORAGE_VIZ_PUBLIC_ORIGIN",
-        "STORAGE_VIZ_PUBLIC_HOST", "STORAGE_VIZ_PROXY_OPERATOR",
+        "STORAGE_VIZ_PROXY_BIND", "STORAGE_VIZ_PROXY_PORT", "STORAGE_VIZ_PROXY_UPSTREAM_HOST",
+        "STORAGE_VIZ_PROXY_UPSTREAM_PORT", "STORAGE_VIZ_PROXY_OPERATOR", "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN",
     ):
         _require(proxy, key)
+    unknown_proxy_keys = set(proxy) - PROXY_ENV_KEYS
+    if unknown_proxy_keys:
+        raise HealthCheckError(f"unsupported proxy EnvironmentFile keys: {', '.join(sorted(unknown_proxy_keys))}")
     if dash.get("STORAGE_VIZ_DEV_SAMPLE_DIR") or dash.get("STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN"):
         raise HealthCheckError("production health rejects dev sample/direct modes")
     if dash["STORAGE_VIZ_BIND"] != "127.0.0.1" or dash["STORAGE_VIZ_PORT"] != "8088":
         raise HealthCheckError("dashboard must bind 127.0.0.1:8088")
     if proxy["STORAGE_VIZ_PROXY_PORT"] != "505":
         raise HealthCheckError("public proxy port must be 505")
-    if proxy["STORAGE_VIZ_PROXY_UPSTREAM"] != "http://127.0.0.1:8088":
-        raise HealthCheckError("proxy upstream must be http://127.0.0.1:8088")
+    _validate_proxy_bind(proxy["STORAGE_VIZ_PROXY_BIND"])
+    if proxy["STORAGE_VIZ_PROXY_UPSTREAM_HOST"] != "127.0.0.1" or proxy["STORAGE_VIZ_PROXY_UPSTREAM_PORT"] != "8088":
+        raise HealthCheckError("proxy upstream must be 127.0.0.1:8088")
+    if "STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES" in proxy:
+        try:
+            max_response_bytes = int(proxy["STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES"])
+        except ValueError as exc:
+            raise HealthCheckError("STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES must be an integer") from exc
+        if not 1 <= max_response_bytes <= MAX_PROXY_RESPONSE_BYTES:
+            raise HealthCheckError("STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES is outside the allowed bound")
     _require_bool(dash, "STORAGE_VIZ_TRUSTED_PROXY", "1")
     _require_bool(dash, "STORAGE_VIZ_SESSION_COOKIE_SECURE", "0")
-    public_origin = proxy["STORAGE_VIZ_PUBLIC_ORIGIN"]
+    public_origin = proxy["STORAGE_VIZ_PROXY_PUBLIC_ORIGIN"]
     _, port, host = _parse_origin(public_origin)
-    if port != 505 or proxy["STORAGE_VIZ_PUBLIC_HOST"] != host:
-        raise HealthCheckError("public origin/host must exactly describe real public :505")
+    if port != 505:
+        raise HealthCheckError("public origin must exactly describe real public :505")
     if dash["STORAGE_VIZ_ALLOWED_ORIGINS"] != public_origin:
         raise HealthCheckError("dashboard allowed origin must exactly match public origin")
     operator = proxy["STORAGE_VIZ_PROXY_OPERATOR"]
