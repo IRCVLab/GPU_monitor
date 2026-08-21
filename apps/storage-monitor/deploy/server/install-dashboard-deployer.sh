@@ -44,7 +44,7 @@ Usage: $0 [--dry-run] [--prefix PATH]
 
 Installs Storage-owned dashboard release deployer assets. Real mode requires root.
 Dry-run renders files under --prefix and performs no network, systemd, user, or service actions.
-Bootstrap cutover is a separate approved-candidate path; it validates candidate 127.0.0.1:18088/1505 before touching live 8088/505.
+Bootstrap cutover is a separate approved-candidate path; it validates candidate 127.0.0.1:18088/1505 before touching the configured live proxy listener and dashboard 127.0.0.1:8088.
 USAGE
 }
 
@@ -105,6 +105,16 @@ validate_candidate_args() {
   validate_hex "$CANDIDATE_SHA" 40 "candidate sha"
   validate_hex "$EXPECTED_DIGEST" 64 "expected digest"
   [[ -f "$ARTIFACT" && -f "$METADATA" ]] || { echo "candidate artifact and metadata must exist" >&2; exit 2; }
+}
+
+validate_live_proxy_endpoint() {
+  LIVE_PROXY_BIND="$(env_file_value "$PROXY_ENV" STORAGE_VIZ_PROXY_BIND)" || { echo "proxy bind config is unavailable" >&2; return 1; }
+  LIVE_PROXY_PORT="$(env_file_value "$PROXY_ENV" STORAGE_VIZ_PROXY_PORT)" || { echo "proxy port config is unavailable" >&2; return 1; }
+  [[ "$LIVE_PROXY_PORT" =~ ^[0-9]+$ && "$LIVE_PROXY_PORT" -ge 1 && "$LIVE_PROXY_PORT" -le 65535 ]] || { echo "invalid STORAGE_VIZ_PROXY_PORT in $PROXY_ENV" >&2; return 1; }
+  if [[ "$LIVE_PROXY_BIND" == 0.0.0.0 && "$LIVE_PROXY_PORT" == 8088 ]]; then
+    echo "wildcard proxy cannot share dashboard port 8088" >&2
+    return 1
+  fi
 }
 
 env_file_value() {
@@ -208,34 +218,37 @@ cmdline_has_exact_path() {
 }
 
 validate_listener_process() {
-  local port="$1" pid="$2" proc="$PROC_ROOT/$pid" exe cmdline cgroup main_pid
-  [[ -L "$proc/exe" && -f "$proc/cmdline" && -f "$proc/cgroup" ]] || { echo "listener process metadata unavailable for :$port pid=$pid" >&2; return 1; }
+  local role="$1" pid="$2" proc="$PROC_ROOT/$pid" exe cmdline cgroup main_pid expected_path
+  [[ -L "$proc/exe" && -f "$proc/cmdline" && -f "$proc/cgroup" ]] || { echo "listener process metadata unavailable for $role pid=$pid" >&2; return 1; }
   exe="$(readlink "$proc/exe")"
   cmdline="$proc/cmdline"
   cgroup="$(cat "$proc/cgroup")"
-  if [[ "$port" == 505 ]] && allowed_python_executable "$exe" && cmdline_has_exact_path "$cmdline" "$LEGACY_PROXY_PATH"; then
+  if [[ "$role" == proxy ]] && allowed_python_executable "$exe" && cmdline_has_exact_path "$cmdline" "$LEGACY_PROXY_PATH"; then
     return 0
   fi
-  if [[ "$port" == 8088 ]] && allowed_python_executable "$exe" && cmdline_has_exact_path "$cmdline" "$LEGACY_DASHBOARD_PATH"; then
+  if [[ "$role" == dashboard ]] && allowed_python_executable "$exe" && cmdline_has_exact_path "$cmdline" "$LEGACY_DASHBOARD_PATH"; then
     main_pid="$("$SYSTEMCTL" show -p MainPID --value storage-viz-dashboard.service)"
     if [[ "$main_pid" == "$pid" && "$cgroup" == *"/storage-viz-dashboard.service"* ]]; then
       return 0
     fi
   fi
   if [[ "$exe" == "$LEGACY_TMUX_EXE" ]]; then
-    if [[ "$port" == 505 ]] && cmdline_has_exact_path "$cmdline" "$LEGACY_PROXY_PATH"; then return 0; fi
-    if [[ "$port" == 8088 ]] && cmdline_has_exact_path "$cmdline" "$LEGACY_DASHBOARD_PATH"; then return 0; fi
+    expected_path="$LEGACY_DASHBOARD_PATH"
+    [[ "$role" == proxy ]] && expected_path="$LEGACY_PROXY_PATH"
+    if cmdline_has_exact_path "$cmdline" "$expected_path"; then return 0; fi
   fi
-  echo "listener owner for :$port pid=$pid does not match an approved legacy target" >&2
+  echo "listener owner for $role pid=$pid does not match an approved legacy target" >&2
   return 1
 }
 
 listener_owner_pid() {
-  local port="$1" line pid out pid_tokens
+  local role="$1" bind="$2" port="$3" line pid out pid_tokens endpoint
+  endpoint="$bind:$port"
   out="$($SS -H -ltnp "sport = :$port")"
   [[ -n "$out" ]] || { echo "missing listener for :$port" >&2; return 1; }
-  [[ "$(printf '%s\n' "$out" | wc -l | awk '{print $1}')" == 1 ]] || { echo "ambiguous listener for :$port" >&2; return 1; }
-  line="$out"
+  line="$(printf '%s\n' "$out" | awk -v endpoint="$endpoint" '$4 == endpoint')"
+  [[ -n "$line" ]] || { echo "missing listener for $endpoint" >&2; return 1; }
+  [[ "$(printf '%s\n' "$line" | wc -l | awk '{print $1}')" == 1 ]] || { echo "ambiguous listener for $endpoint" >&2; return 1; }
   pid_tokens="$(printf '%s' "$line" | awk '
     {
       rest = $0
@@ -245,10 +258,10 @@ listener_owner_pid() {
       }
     }
   ')"
-  [[ "$(printf '%s\n' "$pid_tokens" | awk 'NF { count++ } END { print count + 0 }')" == 1 ]] || { echo "listener for :$port must expose exactly one pid token" >&2; return 1; }
+  [[ "$(printf '%s\n' "$pid_tokens" | awk 'NF { count++ } END { print count + 0 }')" == 1 ]] || { echo "listener for $endpoint must expose exactly one pid token" >&2; return 1; }
   pid="$pid_tokens"
-  [[ "$pid" =~ ^[0-9]+$ ]] || { echo "cannot parse listener PID for :$port" >&2; return 1; }
-  validate_listener_process "$port" "$pid" || return 1
+  [[ "$pid" =~ ^[0-9]+$ ]] || { echo "cannot parse listener PID for $endpoint" >&2; return 1; }
+  validate_listener_process "$role" "$pid" || return 1
   printf '%s\n' "$pid"
 }
 
@@ -310,6 +323,7 @@ rollback_after_post_stop_failure() {
 
 bootstrap_cutover() {
   validate_candidate_args
+  validate_live_proxy_endpoint
   if [[ "$DRY_RUN" != 1 && "${STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER:-0}" != 1 && "${EUID:-$(id -u)}" -ne 0 ]]; then
     echo "bootstrap cutover requires root" >&2
     exit 1
@@ -318,8 +332,8 @@ bootstrap_cutover() {
   start_candidate_topology
   probe_candidate
   local proxy_pid dash_pid
-  proxy_pid="$(listener_owner_pid 505)"
-  dash_pid="$(listener_owner_pid 8088)"
+  proxy_pid="$(listener_owner_pid proxy "$LIVE_PROXY_BIND" "$LIVE_PROXY_PORT")"
+  dash_pid="$(listener_owner_pid dashboard 127.0.0.1 8088)"
   run_cmd "$KILL" -TERM "$proxy_pid"
   run_cmd "$KILL" -TERM "$dash_pid"
   run_cmd "$SYSTEMCTL" stop storage-viz-dashboard.service
@@ -422,8 +436,8 @@ render_proxy_service() {
 }
 
 # Candidate preflight/cutover executable path is implemented by --bootstrap-cutover above.
-# It preserves legacy dashboard 127.0.0.1:8088 and public proxy :505 while using candidate dashboard 127.0.0.1:18088, candidate proxy 127.0.0.1:1505, public :505 Host/Origin,
-# exact PID/port owner validation, first_cutover_order stop_exact_current_505_owner -> stop_legacy_8088_dashboard -> activate_release -> start_managed_8088_505,
+# It preserves legacy dashboard 127.0.0.1:8088 and the configured proxy listener while using candidate dashboard 127.0.0.1:18088, candidate proxy 127.0.0.1:1505, and public :505 Host/Origin,
+# exact PID/address/port owner validation, first_cutover_order stop_exact_current_proxy_owner -> stop_legacy_8088_dashboard -> activate_release -> start_managed_dashboard_and_proxy,
 # rollback to protected legacy backup with previous dashboard/inventory GET health; do not recreate tmux.
 ensure_identity "$BUILDER_USER" "$BUILDER_GROUP" "$STATE_ROOT/builder"
 ensure_identity "$RUNTIME_USER" "$RUNTIME_GROUP" "$STATE_ROOT"
@@ -459,11 +473,11 @@ cat <<'CUTOVER_PLAN'
 cutover plan 1: prepare supplied artifact as an immutable candidate release
 cutover plan 2: start candidate dashboard 127.0.0.1:18088 and direct proxy 127.0.0.1:1505
 cutover plan 3: run full candidate health/session/inventory/UNKNOWN_SERVER readiness
-cutover plan 4: validate exact listener owners for live 505 and 8088
+cutover plan 4: validate exact listener owners for configured live proxy endpoint and 127.0.0.1:8088
 cutover plan 5: stop only validated live owners and legacy dashboard service
 cutover plan 6: activate the exact prepared release
 cutover plan 7: start managed dashboard and proxy services
-cutover plan 8: run production health through public 505
+cutover plan 8: run production health through configured proxy listener with public :505 Host/Origin
 cutover plan 9: enable --now storage-monitor-release-puller.timer
 CUTOVER_PLAN
 

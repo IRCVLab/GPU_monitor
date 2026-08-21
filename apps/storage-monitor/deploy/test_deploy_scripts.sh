@@ -646,11 +646,11 @@ done <<'PLAN'
 prepare supplied artifact as an immutable candidate release
 start candidate dashboard 127.0.0.1:18088 and direct proxy 127.0.0.1:1505
 run full candidate health/session/inventory/UNKNOWN_SERVER readiness
-validate exact listener owners for live 505 and 8088
+validate exact listener owners for configured live proxy endpoint and 127.0.0.1:8088
 stop only validated live owners and legacy dashboard service
 activate the exact prepared release
 start managed dashboard and proxy services
-run production health through public 505
+run production health through configured proxy listener with public :505 Host/Origin
 enable --now storage-monitor-release-puller.timer
 PLAN
 pass "dashboard dry-run renders assets/paths/modes/hashes without mutation"
@@ -726,7 +726,8 @@ printf 'ss %s
 case "$*" in
   *:505*) printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("python3.12",pid=5050,fd=3))
 ' ;;
-  *:8088*) printf 'LISTEN 0 4096 127.0.0.1:8088 0.0.0.0:* users:(("python3.12",pid=8088,fd=3))
+  *:8088*) printf 'LISTEN 0 4096 192.168.0.3:8088 0.0.0.0:* users:(("python3.12",pid=5050,fd=3))
+LISTEN 0 4096 127.0.0.1:8088 0.0.0.0:* users:(("python3.12",pid=8088,fd=3))
 ' ;;
 esac
 FAKE
@@ -827,6 +828,41 @@ grep -Fq -- '--artifact-stdin' "$DASH_CUTOVER_LOG" || fail "cutover activator di
 ! grep -Eq '^activate (upload|status|activate)( |$)' "$DASH_CUTOVER_LOG" || fail "cutover used legacy activator subcommands"
 pass "dashboard bootstrap cutover runs candidate probes, exact owner stops, option-style activation, managed start, health, then timer"
 
+cat > "$DASH_CUTOVER_TMP/proxy.env" <<'FAKE'
+STORAGE_VIZ_PROXY_BIND=192.168.0.3
+STORAGE_VIZ_PROXY_PORT=8088
+STORAGE_VIZ_PROXY_UPSTREAM_HOST=127.0.0.1
+STORAGE_VIZ_PROXY_UPSTREAM_PORT=8088
+STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator
+STORAGE_VIZ_PROXY_PUBLIC_ORIGIN=http://storage.example:505
+FAKE
+DASH_NAT_CUTOVER_LOG="$DASH_CUTOVER_TMP/nat-cutover.log"
+DASH_CUTOVER_LOG="$DASH_NAT_CUTOVER_LOG" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/nat-cutover.out"
+grep -Fq -- 'ss -H -ltnp sport = :8088' "$DASH_NAT_CUTOVER_LOG" || fail "NAT cutover did not inspect shared numeric port"
+grep -Eq '^kill -TERM 5050$' "$DASH_NAT_CUTOVER_LOG" || fail "NAT cutover did not stop exact proxy owner"
+grep -Eq '^kill -TERM 8088$' "$DASH_NAT_CUTOVER_LOG" || fail "NAT cutover did not stop exact dashboard owner"
+grep -Fq -- 'systemctl enable --now storage-monitor-release-puller.timer' "$DASH_NAT_CUTOVER_LOG" || fail "NAT cutover did not enable five-minute puller"
+pass "dashboard bootstrap cutover supports NAT-mapped proxy listener sharing dashboard numeric port on another address"
+
+cat > "$DASH_CUTOVER_TMP/proxy-conflict.env" <<'FAKE'
+STORAGE_VIZ_PROXY_BIND=0.0.0.0
+STORAGE_VIZ_PROXY_PORT=8088
+STORAGE_VIZ_PROXY_UPSTREAM_HOST=127.0.0.1
+STORAGE_VIZ_PROXY_UPSTREAM_PORT=8088
+STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator
+STORAGE_VIZ_PROXY_PUBLIC_ORIGIN=http://storage.example:505
+FAKE
+if DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/conflict.log" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy-conflict.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/conflict.out" 2>"$DASH_CUTOVER_TMP/conflict.err"; then
+  fail "cutover accepted wildcard proxy on dashboard port"
+fi
+grep -Fq -- 'wildcard proxy cannot share dashboard port 8088' "$DASH_CUTOVER_TMP/conflict.err" || fail "cutover did not reject wildcard/dashboard port conflict explicitly"
+[[ ! -f "$DASH_CUTOVER_TMP/conflict.log" ]] || ! grep -Eq '^kill -TERM ' "$DASH_CUTOVER_TMP/conflict.log" || fail "conflicting cutover stopped a live owner"
+pass "dashboard bootstrap rejects wildcard proxy sharing dashboard port"
+
 DASH_ROLLBACK_LOG="$DASH_CUTOVER_TMP/rollback.log"
 if DASH_CUTOVER_LOG="$DASH_ROLLBACK_LOG" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
   SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" SYSTEMCTL_START_RC_ONCE=42 SYSTEMCTL_START_COUNT_FILE="$DASH_CUTOVER_TMP/start-count" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
@@ -875,7 +911,7 @@ cat > "$DASH_BAD_SS" <<'FAKE'
 #!/usr/bin/env bash
 printf 'ss %s
 ' "$*" >> "${DASH_CUTOVER_LOG:?}"
-printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("unrelated",pid=9999,fd=3))
+printf 'LISTEN 0 4096 192.168.0.3:8088 0.0.0.0:* users:(("unrelated",pid=9999,fd=3))
 '
 FAKE
 chmod +x "$DASH_BAD_SS"
@@ -891,7 +927,7 @@ DASH_MULTI_SS="$DASH_CUTOVER_TMP/bin/ss-multi"
 cat > "$DASH_MULTI_SS" <<'FAKE'
 #!/usr/bin/env bash
 printf 'ss %s\n' "$*" >> "${DASH_CUTOVER_LOG:?}"
-printf 'LISTEN 0 4096 0.0.0.0:505 0.0.0.0:* users:(("python3.12",pid=5050,fd=3),("python3.12",pid=6060,fd=4))\n'
+printf 'LISTEN 0 4096 192.168.0.3:8088 0.0.0.0:* users:(("python3.12",pid=5050,fd=3),("python3.12",pid=6060,fd=4))\n'
 FAKE
 chmod +x "$DASH_MULTI_SS"
 if DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/multi-owner.log" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \

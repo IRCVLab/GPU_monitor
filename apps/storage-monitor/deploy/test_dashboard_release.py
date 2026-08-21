@@ -1090,6 +1090,10 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             ("bad_origin", {"dashboard_overrides":{"STORAGE_VIZ_ALLOWED_ORIGINS":"http://166.104.167.11:8088"}}),
             ("bad_upstream_host", {"proxy_overrides":{"STORAGE_VIZ_PROXY_UPSTREAM_HOST":"127.0.0.2"}}),
             ("bad_upstream_port", {"proxy_overrides":{"STORAGE_VIZ_PROXY_UPSTREAM_PORT":"8089"}}),
+            ("bad_proxy_port_zero", {"proxy_overrides":{"STORAGE_VIZ_PROXY_PORT":"0"}}),
+            ("bad_proxy_port_large", {"proxy_overrides":{"STORAGE_VIZ_PROXY_PORT":"65536"}}),
+            ("bad_proxy_port_text", {"proxy_overrides":{"STORAGE_VIZ_PROXY_PORT":"eight"}}),
+            ("wildcard_dashboard_port_conflict", {"proxy_overrides":{"STORAGE_VIZ_PROXY_PORT":"8088"}}),
             ("loopback_bind", {"proxy_overrides":{"STORAGE_VIZ_PROXY_BIND":"127.0.0.1"}}),
             ("host_bind", {"proxy_overrides":{"STORAGE_VIZ_PROXY_BIND":"public.example.com"}}),
             ("bad_response_bound", {"proxy_overrides":{"STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES":"536870913"}}),
@@ -1119,6 +1123,53 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         self.assertEqual(direct_proxy.PUBLIC_ORIGIN, "http://166.104.167.11:505")
         self.assertEqual(direct_proxy.MAX_RESPONSE_BYTES, 1048576)
         self.assertIs(direct_proxy.RESCAN_POST_ENABLED, True)
+
+    def test_nat_mapped_public_origin_connects_to_configured_internal_proxy_listener(self) -> None:
+        dash, proxy, _ = self._write_envs(proxy_overrides={
+            "STORAGE_VIZ_PROXY_BIND": "192.168.0.3",
+            "STORAGE_VIZ_PROXY_PORT": "8088",
+        })
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+        connections: list[tuple[str, int, int]] = []
+
+        class FakeResponse:
+            status = 200
+            def read(self): return b"{}"
+            def getheaders(self): return []
+
+        class FakeConnection:
+            def __init__(self, host, port, timeout):
+                connections.append((host, port, timeout))
+            def request(self, method, path, body=None, headers=None): pass
+            def getresponse(self): return FakeResponse()
+            def close(self): pass
+
+        self.module._request(FakeConnection, contract, "GET", "/api/session")
+
+        self.assertEqual(connections, [("192.168.0.3", 8088, 5)])
+        self.assertEqual(contract.public_origin, "http://166.104.167.11:505")
+        self.assertEqual(contract.public_host, "166.104.167.11:505")
+
+    def test_wildcard_proxy_health_connects_to_public_host_not_unspecified_address(self) -> None:
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+        connections: list[tuple[str, int, int]] = []
+
+        class FakeResponse:
+            status = 200
+            def read(self): return b"{}"
+            def getheaders(self): return []
+
+        class FakeConnection:
+            def __init__(self, host, port, timeout):
+                connections.append((host, port, timeout))
+            def request(self, method, path, body=None, headers=None): pass
+            def getresponse(self): return FakeResponse()
+            def close(self): pass
+
+        self.module._request(FakeConnection, contract, "GET", "/api/session")
+
+        self.assertEqual(connections, [("166.104.167.11", 505, 5)])
 
     def test_probe_checks_systemd_public_session_servers_and_unknown_rescan_without_mutation(self) -> None:
         dash, proxy, _ = self._write_envs()

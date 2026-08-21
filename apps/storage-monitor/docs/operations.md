@@ -18,7 +18,7 @@ The Storage release path is independent from the GPU application. Storage uses i
 | Puller timer | `storage-monitor-release-puller.timer` | Five-minute outbound polling cadence with persistence and jitter. |
 | Puller service | `storage-monitor-release-puller.service` | Root orchestration with systemd hardening; builds as `storage-viz-builder`. |
 | Dashboard service | `storage-viz-dashboard.service` | Serves the dashboard on `127.0.0.1:8088`. |
-| Public proxy service | `storage-viz-proxy.service` | Owns public port `505` after bootstrap. |
+| Public proxy service | `storage-viz-proxy.service` | Owns the configured internal listener after bootstrap; the public origin remains `:505` and may reach it through NAT/port forwarding. |
 | Runtime symlink | `/opt/storage-viz-dashboard` | Points at the active immutable release after cutover. |
 | Release root | `/srv/storage-viz-dashboard/releases/<sha>/storage-monitor` | Immutable central dashboard release content. |
 | Puller state | `/var/lib/storage-viz-dashboard/puller` | `current-live-sha`, `puller-state.json`, and `failed-release.json`. |
@@ -75,15 +75,15 @@ sudo ./deploy/server/install-dashboard-deployer.sh \
   --metadata /path/to/storage-monitor-dashboard-<sha>.sha256.json
 ```
 
-Bootstrap preserves the existing live dashboard on `127.0.0.1:8088` and existing public proxy on `:505` until a candidate topology passes the non-mutating health probe. The candidate dashboard listens only on `127.0.0.1:18088`, uses isolated temporary data/state, and runs in preflight mode. The candidate proxy listens only on `127.0.0.1:1505` and forwards to the candidate dashboard while preserving the configured public Host/Origin.
+Bootstrap preserves the existing live dashboard on `127.0.0.1:8088` and the configured existing proxy listener until a candidate topology passes the non-mutating health probe. The external origin remains `http://<public-host>:505`, but `STORAGE_VIZ_PROXY_BIND` and `STORAGE_VIZ_PROXY_PORT` describe the actual listener on the central host and may differ when NAT or port forwarding is used. The candidate dashboard listens only on `127.0.0.1:18088`, uses isolated temporary data/state, and runs in preflight mode. The candidate proxy listens only on `127.0.0.1:1505` and forwards to the candidate dashboard while preserving the configured public Host/Origin.
 
-Only after the candidate `can_rescan`, inventory, and `UNKNOWN_SERVER` probe passes does bootstrap identify and stop the exact process that owns `:505`, stop the validated legacy `8088` owner, activate the prepared release, and start `storage-viz-dashboard.service` plus `storage-viz-proxy.service`. If cutover fails after live owners are stopped, the managed rollback path restores the protected legacy dashboard/proxy target, starts Storage services under systemd, and requires previous dashboard/inventory health before reporting rollback success. The puller timer is enabled only after the first managed release passes production health.
+Only after the candidate `can_rescan`, inventory, and `UNKNOWN_SERVER` probe passes does bootstrap identify and stop the exact process that owns the configured proxy bind/port, stop the validated `127.0.0.1:8088` dashboard owner, activate the prepared release, and start `storage-viz-dashboard.service` plus `storage-viz-proxy.service`. Listener ownership is matched by both local address and port, so a NAT deployment may safely use the same numeric port on different local addresses. If cutover fails after live owners are stopped, the managed rollback path restores the protected legacy dashboard/proxy target, starts Storage services under systemd, and requires previous dashboard/inventory health before reporting rollback success. The puller timer is enabled only after the first managed release passes production health.
 
 This branch documents the bootstrap procedure; it does not claim Storage Live has already been bootstrapped.
 
 ## Post-bootstrap verification
 
-After a successful bootstrap, verify the managed central surface from the Storage host. The bundled health checker performs the required non-mutating session, inventory, cookie, CSRF, and `UNKNOWN_SERVER` readiness checks through public port `505`:
+After a successful bootstrap, verify the managed central surface from the Storage host. The bundled health checker performs the required non-mutating session, inventory, cookie, CSRF, and `UNKNOWN_SERVER` readiness checks through the configured internal proxy listener while preserving the external `:505` Host/Origin contract:
 
 ```bash
 sudo /usr/local/libexec/storage-dashboard-health-check.py
@@ -94,12 +94,17 @@ Use this expanded probe when you need visible evidence for each contract. It mus
 ```bash
 PUBLIC_ORIGIN="$(awk -F= '$1 == "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN" { print substr($0, index($0, "=") + 1) }' /etc/storage-viz/proxy.env)"
 PUBLIC_HOST="${PUBLIC_ORIGIN#http://}"
+PROXY_BIND="$(awk -F= '$1 == "STORAGE_VIZ_PROXY_BIND" { print substr($0, index($0, "=") + 1) }' /etc/storage-viz/proxy.env)"
+PROXY_PORT="$(awk -F= '$1 == "STORAGE_VIZ_PROXY_PORT" { print substr($0, index($0, "=") + 1) }' /etc/storage-viz/proxy.env)"
+PROXY_CONNECT_HOST="$PROXY_BIND"
+[[ "$PROXY_CONNECT_HOST" != 0.0.0.0 ]] || PROXY_CONNECT_HOST="${PUBLIC_HOST%:505}"
+PROXY_ENDPOINT="http://${PROXY_CONNECT_HOST}:${PROXY_PORT}"
 VERIFY_TMP="$(mktemp -d)"
 
 curl -sS -D "$VERIFY_TMP/session.headers" \
   -H "Host: $PUBLIC_HOST" \
   -H 'X-Forwarded-User: fixed-proxy-operator' \
-  "http://127.0.0.1:505/api/session" \
+  "$PROXY_ENDPOINT/api/session" \
   -o "$VERIFY_TMP/session.json"
 python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert data["can_rescan"] is True; assert isinstance(data["csrf_token"], str) and data["csrf_token"]; print("can_rescan=true")' "$VERIFY_TMP/session.json"
 
@@ -110,7 +115,7 @@ curl -sS \
   -H "Host: $PUBLIC_HOST" \
   -H 'X-Forwarded-User: fixed-proxy-operator' \
   -H "Cookie: $COOKIE" \
-  "http://127.0.0.1:505/api/servers" \
+  "$PROXY_ENDPOINT/api/servers" \
   -o "$VERIFY_TMP/servers.json"
 python3 - /etc/storage-viz/servers.json "$VERIFY_TMP/servers.json" <<'PY'
 import json, sys
@@ -133,7 +138,7 @@ HTTP_CODE="$(curl -sS -o "$VERIFY_TMP/unknown.json" -w '%{http_code}' \
   -H "X-CSRF-Token: $CSRF" \
   -H 'Content-Type: application/json' \
   --data '{}' \
-  "http://127.0.0.1:505/api/servers/$UNKNOWN_ID/rescan")"
+  "$PROXY_ENDPOINT/api/servers/$UNKNOWN_ID/rescan")"
 test "$HTTP_CODE" = 404
 python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert data["error"] == "UNKNOWN_SERVER"; print("UNKNOWN_SERVER non-mutating probe ok")' "$VERIFY_TMP/unknown.json"
 rm -rf "$VERIFY_TMP"
@@ -148,7 +153,7 @@ The browser rescan button requires a healthy managed proxy and a valid operator 
 1. Confirm `storage-viz-proxy.service` and `storage-viz-dashboard.service` are active.
 2. Confirm `/etc/storage-viz/proxy.env` public origin exactly matches `STORAGE_VIZ_ALLOWED_ORIGINS` in `/etc/storage-viz/dashboard.env`.
 3. Confirm `STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator` and that operator appears in `STORAGE_VIZ_OPERATOR_ALLOWLIST`.
-4. Request `/api/session` through port `505` and verify `can_rescan: true`, a session cookie, and a CSRF token.
+4. Request `/api/session` through the configured proxy bind/port with the external `:505` Host header and verify `can_rescan: true`, a session cookie, and a CSRF token.
 5. Re-run `storage-dashboard-health-check.py`; it exercises the non-mutating authenticated POST path without starting a scan.
 
 Do not troubleshoot the button by restarting the GPU application, changing remote scan timers, or triggering a real scan before session/proxy health passes.
@@ -234,6 +239,8 @@ STORAGE_VIZ_PROXY_OPERATOR=lan-operator \
 STORAGE_VIZ_PROXY_PUBLIC_ORIGIN=http://storage.internal:505 \
 python3 deploy/direct_proxy.py
 ```
+
+When external `:505` is forwarded to another local endpoint, set the bind and port to that real listener instead. For example, an external `http://storage.example:505` mapped to `192.168.0.3:8088` uses `STORAGE_VIZ_PROXY_BIND=192.168.0.3` and `STORAGE_VIZ_PROXY_PORT=8088` while keeping `STORAGE_VIZ_PROXY_PUBLIC_ORIGIN=http://storage.example:505`.
 
 Both `STORAGE_VIZ_PROXY_OPERATOR` and `STORAGE_VIZ_PROXY_PUBLIC_ORIGIN` are required to enable writes. Without both, the proxy remains GET/HEAD-only. With both, it overwrites inbound identity headers, accepts only the exact same-origin per-server rescan route, requires a bounded non-empty request containing only `{}`, forwards the session cookie and CSRF header, and rejects every other POST/PUT/PATCH/DELETE request.
 

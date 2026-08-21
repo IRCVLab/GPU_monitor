@@ -49,9 +49,10 @@ class HealthContract:
     enabled_server_ids: list[str]
     public_origin: str
     public_host: str
+    proxy_bind: str
+    proxy_port: int
     upstream_host: str = "127.0.0.1"
     upstream_port: int = 8088
-    public_port: int = 505
     connect_host: str | None = None
     connect_port: int | None = None
 
@@ -161,9 +162,16 @@ def load_contract(
         raise HealthCheckError("production health rejects dev sample/direct modes")
     if dash["STORAGE_VIZ_BIND"] != "127.0.0.1" or dash["STORAGE_VIZ_PORT"] != "8088":
         raise HealthCheckError("dashboard must bind 127.0.0.1:8088")
-    if proxy["STORAGE_VIZ_PROXY_PORT"] != "505":
-        raise HealthCheckError("public proxy port must be 505")
-    _validate_proxy_bind(proxy["STORAGE_VIZ_PROXY_BIND"])
+    proxy_bind = proxy["STORAGE_VIZ_PROXY_BIND"]
+    _validate_proxy_bind(proxy_bind)
+    try:
+        proxy_port = int(proxy["STORAGE_VIZ_PROXY_PORT"])
+    except ValueError as exc:
+        raise HealthCheckError("STORAGE_VIZ_PROXY_PORT must be an integer") from exc
+    if not 1 <= proxy_port <= 65535:
+        raise HealthCheckError("STORAGE_VIZ_PROXY_PORT is outside the valid TCP port range")
+    if proxy_bind == "0.0.0.0" and proxy_port == 8088:
+        raise HealthCheckError("wildcard proxy cannot share dashboard port 8088")
     if proxy["STORAGE_VIZ_PROXY_UPSTREAM_HOST"] != "127.0.0.1" or proxy["STORAGE_VIZ_PROXY_UPSTREAM_PORT"] != "8088":
         raise HealthCheckError("proxy upstream must be 127.0.0.1:8088")
     if "STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES" in proxy:
@@ -198,6 +206,8 @@ def load_contract(
         _load_enabled_server_ids(inventory_path),
         public_origin,
         host,
+        proxy_bind,
+        proxy_port,
         connect_host=connect_host,
         connect_port=connect_port,
     )
@@ -221,8 +231,9 @@ def _unknown_id(absent_from: set[str]) -> str:
 
 
 def _request(connection_factory: Callable[..., Any], contract: HealthContract, method: str, path: str, *, body: bytes | None = None, headers: Mapping[str, str] | None = None) -> tuple[int, Mapping[str, str], Any]:
-    connection_host = contract.connect_host or contract.public_host.rsplit(":", 1)[0]
-    connection_port = contract.connect_port or contract.public_port
+    public_hostname = urlsplit(contract.public_origin).hostname
+    connection_host = contract.connect_host or (public_hostname if contract.proxy_bind == "0.0.0.0" else contract.proxy_bind)
+    connection_port = contract.connect_port or contract.proxy_port
     conn = connection_factory(connection_host, connection_port, timeout=5)
     try:
         conn.request(method, path, body=body, headers={"Host": contract.public_host, **dict(headers or {})})

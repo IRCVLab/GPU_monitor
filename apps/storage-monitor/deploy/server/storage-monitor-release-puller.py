@@ -306,11 +306,6 @@ def check_runs_for_sha(config: Config, sha: str, get_json=default_get_json) -> l
 def fetch_evidence(config: Config, sha: str, get_json=default_get_json) -> tuple[dict[str, object], list[dict[str, object]], str]:
     workflow_run = workflow_run_for_sha(config, sha, get_json)
     check_runs = check_runs_for_sha(config, sha, get_json)
-    required = [run for run in check_runs if run.get("name") == "ci/required" and run.get("head_sha") == sha]
-    if not required:
-        raise PullError("missing ci/required check for current SHA")
-    if not any(run.get("status") == "completed" and run.get("conclusion") == "success" for run in required):
-        raise PullError("ci/required check is not successful for current SHA")
     current = current_main_sha(config, get_json)
     if current != sha:
         raise PullError("current main changed while collecting evidence")

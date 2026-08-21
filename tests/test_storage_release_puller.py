@@ -188,6 +188,30 @@ class StorageReleasePullerTest(unittest.TestCase):
         self.assertEqual(seen["checks"]["check_runs"][0]["name"], "ci/required")
         self.assertEqual(seen["checks"]["check_runs"][0]["head_sha"], SHA1)
 
+    def test_fetch_evidence_defers_required_check_policy_to_shared_authorizer_like_gpu(self):
+        puller = load_puller()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self.config(tmp)
+            github = FakeGitHub(SHA1)
+
+            def get_json(path):
+                payload = github.get_json(path)
+                if path == f"/repos/{REPOSITORY}/commits/{SHA1}/check-runs?per_page=100":
+                    return {"check_runs": [{
+                        "id": 100,
+                        "name": "ci/storage",
+                        "head_sha": SHA1,
+                        "status": "completed",
+                        "conclusion": "success",
+                    }]}
+                return payload
+
+            workflow, checks, current = puller.fetch_evidence(cfg, SHA1, get_json)
+
+        self.assertEqual(workflow["head_sha"], SHA1)
+        self.assertEqual(checks[0]["name"], "ci/storage")
+        self.assertEqual(current, SHA1)
+
     def test_matching_live_digest_records_new_sha_without_invoking_activator(self):
         puller = load_puller()
         events = []
