@@ -99,7 +99,9 @@
 - [ ] Implement strict non-shell parsing of dashboard/proxy environment files and reject missing, duplicate, malformed, or conflicting values before network checks.
 - [ ] Implement bounded retries and exact parsing of `/etc/storage-viz/servers.json`, `/api/session`, and `/api/servers` through the public proxy.
 - [ ] Retain the session cookie/CSRF token and POST `{}` with exact Host/Origin to a guaranteed-nonexistent valid server id; require `404 UNKNOWN_SERVER` so no scan is started.
+- [ ] Generate the probe ID randomly within the shared 1-128 character server-id grammar and assert it is absent from the parsed inventory before sending the request.
 - [ ] Require the systemd proxy unit to execute the installed target-validating launcher, load `/etc/storage-viz/proxy.env`, own port 505, and use hardening independent of GPU services.
+- [ ] Run the proxy as the unprivileged Storage identity with only `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` and `AmbientCapabilities=CAP_NET_BIND_SERVICE`; test that root execution and all broader capabilities are absent.
 - [ ] Test that the launcher accepts only the active immutable Storage release or recorded legacy backup and rejects broken, unrecorded, external, writable, or GPU targets.
 - [ ] Re-run focused tests and systemd asset checks.
 - [ ] Commit the health/proxy slice.
@@ -114,6 +116,7 @@
 - [ ] Run `python3 -m unittest tests.test_storage_release_puller -v` and confirm failure because the puller is absent.
 - [ ] Implement a Storage-specific puller without importing or modifying GPU deployment code.
 - [ ] Use `storage-viz-builder`, `/var/lib/storage-viz-dashboard/puller`, `/var/lib/storage-viz-dashboard/builder`, `/usr/local/libexec/storage-dashboard-activate.py`, and the Storage artifact names.
+- [ ] Install and invoke a Storage-owned copy of `scripts/authorize_gpu_release.py` at `/usr/local/libexec/storage-release-authorizer.py`; never depend on GPU deployer installation state or GPU runtime paths.
 - [ ] Re-run focused tests and compare behavior with `tests/test_gpu_release_puller.py`.
 - [ ] Commit the puller slice.
 

@@ -46,6 +46,8 @@ Selected. The Storage host initiates outbound HTTPS, verifies the exact `main` S
 
 Failed SHAs receive bounded exponential backoff. A newer `main` SHA clears the old failure backoff. Concurrent runs are prevented by a file lock.
 
+Bootstrap installs a Storage-owned copy of the repository's existing parameterized CI evidence checker (`scripts/authorize_gpu_release.py`) as `/usr/local/libexec/storage-release-authorizer.py`. The Storage puller never assumes GPU deployment files are installed on the Storage host. Future changes to the shared checker are classified as shared and therefore run both application CI paths before either puller can authorize them.
+
 ### Release artifact
 
 The deterministic artifact contains only central runtime code:
@@ -82,7 +84,7 @@ If restart or health validation fails, the active pointer is restored and both s
 
 ### Managed public proxy
 
-`storage-viz-proxy.service` replaces tmux ownership of port 505. It executes an installed root-owned launcher that resolves a deployment-state proxy target only under the active immutable release or the protected legacy backup, then drops to the Storage service identity and executes that target's `deploy/direct_proxy.py` with `/etc/storage-viz/proxy.env`.
+`storage-viz-proxy.service` replaces tmux ownership of port 505. The service runs as the unprivileged Storage identity and executes an installed root-owned launcher that resolves a deployment-state proxy target only under the active immutable release or the protected legacy backup, then executes that target's `deploy/direct_proxy.py` with `/etc/storage-viz/proxy.env`. Because 505 is a privileged port, the unit grants only `CAP_NET_BIND_SERVICE` through its bounding/ambient capability sets and denies every broader capability; the launcher and proxy never run as root.
 
 The proxy remains independent from GPU Monitor and accepts only GET/HEAD plus the exact bounded manual-rescan POST contract already implemented. Other writes remain blocked.
 
@@ -110,7 +112,7 @@ Activation succeeds only when all of the following hold:
 
 1. dashboard and proxy services are active;
 2. public proxy `/api/session` returns valid JSON and `can_rescan: true`;
-3. the health checker retains the session cookie and CSRF token, then sends `{}` through port 505 to a guaranteed-nonexistent but syntactically valid server ID with the exact configured Host and Origin; health requires backend `404 {"error":"UNKNOWN_SERVER"}`, proving the proxy POST allowlist, fixed identity, cookie, CSRF, Origin, and backend authorization without starting a scan;
+3. the health checker reads the validated inventory, generates a bounded random server ID matching the backend/proxy grammar, verifies that ID is absent from inventory, retains the session cookie and CSRF token, then sends `{}` through port 505 with the exact configured Host and Origin; health requires backend `404 {"error":"UNKNOWN_SERVER"}`, proving the proxy POST allowlist, fixed identity, cookie, CSRF, Origin, and backend authorization without starting a scan;
 4. `/api/servers` reports `data_mode: inventory`;
 5. enabled server IDs from `/etc/storage-viz/servers.json` are present in the API response in inventory order;
 6. no sample-only server list has replaced production inventory.
