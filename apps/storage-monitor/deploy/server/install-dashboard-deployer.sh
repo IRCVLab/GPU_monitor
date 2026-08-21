@@ -259,8 +259,51 @@ activate_candidate_release() {
   [[ "$activated" == "$CANDIDATE_RELEASE" ]] || { echo "activated release differs from prepared candidate" >&2; return 1; }
 }
 
+is_no_state_rollback_error() {
+  local payload="$1"
+  [[ "${#payload}" -le 8192 ]] || return 1
+  printf '%s' "$payload" | "$PYTHON" -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+if payload != {"status": "error", "error": "activation state is unavailable for rollback"}:
+    raise SystemExit(1)
+'
+}
+
+validate_recovery_status() {
+  local payload="$1"
+  [[ "${#payload}" -le 8192 ]] || { echo "restored legacy status exceeds JSON bound" >&2; return 1; }
+  printf '%s' "$payload" | "$PYTHON" -c '
+import json, pathlib, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception as exc:
+    raise SystemExit(f"invalid restored legacy JSON: {exc}")
+app = pathlib.Path(sys.argv[1]).resolve(strict=True)
+expected_proxy = app / "deploy/direct_proxy.py"
+if payload.get("status") != "rolled_back":
+    raise SystemExit("activator did not report restored legacy rollback")
+if payload.get("restored_legacy_target") != str(app) or payload.get("managed_legacy_proxy_target") != str(expected_proxy):
+    raise SystemExit("activator restored legacy path mismatch")
+if any(key in payload for key in ("release", "current", "source_sha", "failed_release")):
+    raise SystemExit("activator restored legacy state retained candidate identity")
+' "$APP_PATH"
+}
+
 rollback_after_post_stop_failure() {
-  "$ACTIVATOR" --rollback-state --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" --release-root "$RELEASE_ROOT" --lock-path "$STATE_ROOT/activation.lock" --incoming-dir "$STATE_ROOT/incoming" || return 1
+  local rollback_status recovery_status
+  if ! rollback_status="$("$ACTIVATOR" --rollback-state --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" --release-root "$RELEASE_ROOT" --lock-path "$STATE_ROOT/activation.lock" --incoming-dir "$STATE_ROOT/incoming" 2>&1)"; then
+    is_no_state_rollback_error "$rollback_status" || { printf '%s\n' "$rollback_status" >&2; return 1; }
+    [[ -d "$APP_PATH" && ! -L "$APP_PATH" && -f "$APP_PATH/viewer/serve.py" && ! -L "$APP_PATH/viewer/serve.py" && -f "$APP_PATH/deploy/direct_proxy.py" && ! -L "$APP_PATH/deploy/direct_proxy.py" ]] || {
+      echo "activation state is unavailable and exact restored legacy app is not present" >&2
+      return 1
+    }
+    recovery_status="$("$ACTIVATOR" --record-restored-legacy --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" --release-root "$RELEASE_ROOT" --lock-path "$STATE_ROOT/activation.lock" --incoming-dir "$STATE_ROOT/incoming")" || return 1
+    validate_recovery_status "$recovery_status" || return 1
+  fi
   "$SYSTEMCTL" start storage-viz-dashboard.service storage-viz-proxy.service || return 1
   "$PYTHON" "$HEALTH_CHECKER" --dashboard-env "$DASHBOARD_ENV" --proxy-env "$PROXY_ENV" || { echo "rollback previous inventory health failed" >&2; return 1; }
 }

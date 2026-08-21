@@ -426,6 +426,49 @@ def _current_start_state(config: ActivationConfig) -> StartState:
     return StartState("absent")
 
 
+def _real_legacy_layout(app_path: Path) -> Path:
+    """Return a canonical, narrowly validated legacy Storage application root."""
+    if app_path.is_symlink():
+        raise ActivationError("restored legacy app path must not be a symlink")
+    try:
+        app_stat = app_path.stat()
+        canonical = app_path.resolve(strict=True)
+    except OSError as exc:
+        raise ActivationError("restored legacy app path is missing or broken") from exc
+    if not stat.S_ISDIR(app_stat.st_mode):
+        raise ActivationError("restored legacy app path must be a directory")
+    if app_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_ISUID | stat.S_ISGID):
+        raise ActivationError("restored legacy app path has unsafe mode")
+    owner = app_stat.st_uid
+    required = (
+        canonical / "viewer",
+        canonical / "viewer/serve.py",
+        canonical / "deploy",
+        canonical / "deploy/direct_proxy.py",
+    )
+    for path in required:
+        if path.is_symlink():
+            raise ActivationError(f"restored legacy path must not be a symlink: {path}")
+        try:
+            path_stat = path.stat()
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(canonical)
+        except (OSError, ValueError) as exc:
+            raise ActivationError(f"restored legacy path is missing, broken, or external: {path}") from exc
+        expected_directory = path.name in {"viewer", "deploy"}
+        if expected_directory and not stat.S_ISDIR(path_stat.st_mode):
+            raise ActivationError(f"restored legacy path must be a directory: {path}")
+        if not expected_directory and not stat.S_ISREG(path_stat.st_mode):
+            raise ActivationError(f"restored legacy path must be a regular file: {path}")
+        if not expected_directory and not path_stat.st_mode & (stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH):
+            raise ActivationError(f"restored legacy script is not readable: {path}")
+        if path_stat.st_uid != owner:
+            raise ActivationError(f"restored legacy path owner differs from app root: {path}")
+        if path_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_ISUID | stat.S_ISGID):
+            raise ActivationError(f"restored legacy path has unsafe mode: {path}")
+    return canonical
+
+
 def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: str) -> Path:
     target = _release_target(config, sha)
     if target.exists():
@@ -752,6 +795,20 @@ def prepare_release(
         }
 
 
+def record_restored_legacy(config: ActivationConfig) -> dict[str, object]:
+    """Persist launcher state after activation already restored a pre-state legacy app."""
+    with _activation_lock(config.lock_path):
+        restored = _real_legacy_layout(config.app_path)
+        status: dict[str, object] = {
+            "status": "rolled_back",
+            "restored": str(restored),
+            "restored_legacy_target": str(restored),
+            "managed_legacy_proxy_target": str(restored / "deploy/direct_proxy.py"),
+        }
+        _atomic_write_json(config.state_path, status)
+        return status
+
+
 def _clear_failed_candidate_fields(status: dict[str, object]) -> None:
     for key in (
         "failed_release",
@@ -826,7 +883,8 @@ def rollback_to_state(
             if not backup.is_dir():
                 raise ActivationError("legacy backup is unavailable for rollback")
             _replace_with_legacy_copy(config.app_path, backup)
-            restored = str(config.app_path)
+            restored_path = _real_legacy_layout(config.app_path)
+            restored = str(restored_path)
             status = dict(state)
             status.update(
                 {
@@ -837,7 +895,7 @@ def rollback_to_state(
                     "legacy_backup": str(backup),
                     "protected_legacy_backup": str(backup),
                     "restored_legacy_target": restored,
-                    "managed_legacy_proxy_target": str(config.app_path / "deploy/direct_proxy.py"),
+                    "managed_legacy_proxy_target": str(restored_path / "deploy/direct_proxy.py"),
                     "restored": restored,
                 }
             )
@@ -877,6 +935,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--keep-releases", type=int, default=ActivationConfig.keep_releases)
     parser.add_argument("--rollback-state", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--record-restored-legacy", action="store_true")
     parser.add_argument("--restart-argv", nargs="+")
     parser.add_argument("--health-argv", nargs="+")
     return parser.parse_args(argv)
@@ -900,10 +959,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         health_argv=tuple(args.health_argv) if args.health_argv else None,
     )
     try:
-        if args.rollback_state and args.prepare_only:
-            raise ActivationError("--rollback-state and --prepare-only are mutually exclusive")
+        operation_modes = sum((args.rollback_state, args.prepare_only, args.record_restored_legacy))
+        if operation_modes > 1:
+            raise ActivationError("--rollback-state, --prepare-only, and --record-restored-legacy are mutually exclusive")
         if args.rollback_state:
             status = rollback_to_state(config)
+        elif args.record_restored_legacy:
+            status = record_restored_legacy(config)
         else:
             if not args.sha or not args.expected_digest or not args.metadata:
                 raise ActivationError("--sha, --expected-digest, and --metadata are required for activation")

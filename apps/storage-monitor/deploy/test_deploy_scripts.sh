@@ -749,12 +749,24 @@ cat > "$DASH_CUTOVER_TMP/bin/activate" <<'FAKE'
 #!/usr/bin/env bash
 printf 'activate %s
 ' "$*" >> "${DASH_CUTOVER_LOG:?}"
-if [[ "$*" == *--rollback-state* ]]; then printf '{"status":"rolled_back"}\n'; exit 0; fi
+if [[ "$*" == *--rollback-state* ]]; then
+  if [[ "${ACTIVATE_FAIL_BEFORE_STATE:-0}" == 1 ]]; then
+    printf '{"status":"error","error":"activation state is unavailable for rollback"}\n' >&2
+    exit 1
+  fi
+  printf '{"status":"rolled_back"}\n'
+  exit 0
+fi
+if [[ "$*" == *--record-restored-legacy* ]]; then
+  printf '{"status":"rolled_back","restored":"%s","restored_legacy_target":"%s","managed_legacy_proxy_target":"%s/deploy/direct_proxy.py"}\n' "${APP_PATH:?}" "${APP_PATH:?}" "${APP_PATH:?}"
+  exit 0
+fi
 cat >/dev/null
 if [[ "$*" == *--prepare-only* ]]; then
   printf '{"status":"prepared","source_sha":"1111111111111111111111111111111111111111","archive_digest":"%s","candidate_release":"%s"}\n' "${DASH_DIGEST:?}" "${DASH_CANDIDATE_ROOT:?}"
   exit 0
 fi
+if [[ "${ACTIVATE_FAIL_BEFORE_STATE:-0}" == 1 ]]; then exit 42; fi
 printf '{"status":"active","source_sha":"1111111111111111111111111111111111111111","archive_digest":"%s","release":"%s","legacy_backup":"/opt/storage-viz-dashboard.legacy"}\n' "${DASH_DIGEST:?}" "${DASH_CANDIDATE_ROOT:?}"
 exit 0
 FAKE
@@ -823,6 +835,35 @@ grep -Eq '^kill -TERM 5050$' "$DASH_ROLLBACK_LOG" || fail "rollback/cutover did 
 ! grep -Fq -- 'systemctl enable --now storage-monitor-release-puller.timer' "$DASH_ROLLBACK_LOG" || fail "failed cutover enabled puller timer"
 ! grep -Eq 'pkill|killall|fuser -k|tmux new|new-session' "$DASH_ROLLBACK_LOG" || fail "rollback used broad kill or recreated tmux"
 pass "dashboard cutover failure invokes rollback contract and validates previous 505 health without broad kill/tmux recreate"
+
+DASH_RECOVERY_LOG="$DASH_CUTOVER_TMP/recovery.log"
+DASH_RECOVERY_APP="$DASH_CUTOVER_TMP/legacy-opt"
+DASH_RECOVERY_PROC="$DASH_CUTOVER_TMP/recovery-proc"
+mkdir -p "$DASH_RECOVERY_APP/viewer" "$DASH_RECOVERY_APP/deploy" "$DASH_RECOVERY_PROC/5050" "$DASH_RECOVERY_PROC/8088"
+DASH_RECOVERY_APP="$(cd "$DASH_RECOVERY_APP" && pwd -P)"
+printf '#!/usr/bin/env python3.12\n' > "$DASH_RECOVERY_APP/viewer/serve.py"
+printf '#!/usr/bin/env python3.12\n' > "$DASH_RECOVERY_APP/deploy/direct_proxy.py"
+chmod 0755 "$DASH_RECOVERY_APP/viewer/serve.py" "$DASH_RECOVERY_APP/deploy/direct_proxy.py"
+ln -s /usr/bin/python3.12 "$DASH_RECOVERY_PROC/5050/exe"
+ln -s /usr/bin/python3.12 "$DASH_RECOVERY_PROC/8088/exe"
+printf 'python3.12\0%s\0' "$DASH_RECOVERY_APP/deploy/direct_proxy.py" > "$DASH_RECOVERY_PROC/5050/cmdline"
+printf '0::/user.slice/legacy-proxy.scope\n' > "$DASH_RECOVERY_PROC/5050/cgroup"
+printf 'python3.12\0%s\0' "$DASH_RECOVERY_APP/viewer/serve.py" > "$DASH_RECOVERY_PROC/8088/cmdline"
+printf '0::/system.slice/storage-viz-dashboard.service\n' > "$DASH_RECOVERY_PROC/8088/cgroup"
+if DASH_CUTOVER_LOG="$DASH_RECOVERY_LOG" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_RECOVERY_PROC" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" STATE_ROOT="$DASH_CUTOVER_TMP/recovery-state" APP_PATH="$DASH_RECOVERY_APP" LEGACY_PROXY_PATH="$DASH_RECOVERY_APP/deploy/direct_proxy.py" LEGACY_DASHBOARD_PATH="$DASH_RECOVERY_APP/viewer/serve.py" ACTIVATE_FAIL_BEFORE_STATE=1 STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/recovery.out" 2>"$DASH_CUTOVER_TMP/recovery.err"; then
+  fail "cutover unexpectedly succeeded after pre-state activation failure"
+fi
+line_failed_activate=$(grep -n '^activate --sha' "$DASH_RECOVERY_LOG" | tail -1 | cut -d: -f1 || true)
+line_no_state=$(grep -n '^activate --rollback-state' "$DASH_RECOVERY_LOG" | tail -1 | cut -d: -f1 || true)
+line_recovery=$(grep -n '^activate --record-restored-legacy' "$DASH_RECOVERY_LOG" | tail -1 | cut -d: -f1 || true)
+line_recovery_start=$(grep -n '^systemctl start storage-viz-dashboard.service storage-viz-proxy.service' "$DASH_RECOVERY_LOG" | tail -1 | cut -d: -f1 || true)
+line_recovery_health=$(grep -n '^production-health ' "$DASH_RECOVERY_LOG" | tail -1 | cut -d: -f1 || true)
+[[ -n "$line_failed_activate" && -n "$line_no_state" && -n "$line_recovery" && -n "$line_recovery_start" && -n "$line_recovery_health" ]] || fail "no-state recovery log missing required action: $(cat "$DASH_RECOVERY_LOG")"
+[[ "$line_failed_activate" -lt "$line_no_state" && "$line_no_state" -lt "$line_recovery" && "$line_recovery" -lt "$line_recovery_start" && "$line_recovery_start" -lt "$line_recovery_health" ]] || fail "no-state recovery actions out of order: $(cat "$DASH_RECOVERY_LOG")"
+! grep -Fq -- 'systemctl enable --now storage-monitor-release-puller.timer' "$DASH_RECOVERY_LOG" || fail "failed no-state recovery enabled puller timer"
+pass "pre-state activation failure records restored legacy state then restarts both managed services and checks previous inventory health"
 
 DASH_BAD_SS="$DASH_CUTOVER_TMP/bin/ss-bad"
 cat > "$DASH_BAD_SS" <<'FAKE'

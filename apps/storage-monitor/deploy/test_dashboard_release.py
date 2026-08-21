@@ -683,6 +683,81 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(self.app_path.resolve(), previous_target.resolve())
 
+    def test_record_restored_legacy_cli_writes_state_without_mutating_real_app(self) -> None:
+        serve = self.app_path / "viewer/serve.py"
+        proxy = self.app_path / "deploy/direct_proxy.py"
+        serve.parent.mkdir(parents=True)
+        proxy.parent.mkdir(parents=True)
+        serve.write_bytes(b"#!/usr/bin/env python3\nprint('legacy serve')\n")
+        proxy.write_bytes(b"#!/usr/bin/env python3\nprint('legacy proxy')\n")
+        serve.chmod(0o755)
+        proxy.chmod(0o755)
+        sentinel = self.app_path / "legacy-data.bin"
+        sentinel.write_bytes(b"\x00legacy\xffunchanged")
+        before = {path.relative_to(self.app_path): (path.read_bytes(), path.stat().st_mode) for path in self.app_path.rglob("*") if path.is_file()}
+        stdout = io.StringIO()
+
+        with mock.patch("sys.stdout", stdout):
+            rc = self.module.main([
+                "--record-restored-legacy",
+                "--state-path", str(self.state_path),
+                "--app-path", str(self.app_path),
+                "--release-root", str(self.release_root),
+                "--lock-path", str(self.lock_path),
+                "--incoming-dir", str(self.incoming),
+            ])
+
+        self.assertEqual(rc, 0)
+        canonical_app = str(self.app_path.resolve())
+        expected = {
+            "managed_legacy_proxy_target": str(self.app_path.resolve() / "deploy/direct_proxy.py"),
+            "restored": canonical_app,
+            "restored_legacy_target": canonical_app,
+            "status": "rolled_back",
+        }
+        self.assertEqual(json.loads(stdout.getvalue()), expected)
+        self.assertEqual(json.loads(self.state_path.read_text(encoding="utf-8")), expected)
+        self.assertFalse(set(expected) & {"release", "current", "source_sha", "archive_digest", "failed_release"})
+        after = {path.relative_to(self.app_path): (path.read_bytes(), path.stat().st_mode) for path in self.app_path.rglob("*") if path.is_file()}
+        self.assertEqual(after, before)
+
+    def test_record_restored_legacy_rejects_symlink_missing_and_unsafe_legacy_layouts(self) -> None:
+        def real_layout(root: Path) -> tuple[Path, Path]:
+            serve = root / "viewer/serve.py"
+            proxy = root / "deploy/direct_proxy.py"
+            serve.parent.mkdir(parents=True)
+            proxy.parent.mkdir(parents=True)
+            serve.write_text("serve\n", encoding="utf-8")
+            proxy.write_text("proxy\n", encoding="utf-8")
+            serve.chmod(0o755)
+            proxy.chmod(0o755)
+            return serve, proxy
+
+        missing = self.root / "missing-layout"
+        missing.mkdir()
+        with self.assertRaises(self.module.ActivationError):
+            self.module.record_restored_legacy(self._config(app_path=missing))
+
+        external = self.root / "external-layout"
+        real_layout(external)
+        app_link = self.root / "linked-app"
+        app_link.symlink_to(external)
+        with self.assertRaises(self.module.ActivationError):
+            self.module.record_restored_legacy(self._config(app_path=app_link))
+
+        linked_file_root = self.root / "linked-file-layout"
+        serve, proxy = real_layout(linked_file_root)
+        proxy.unlink()
+        proxy.symlink_to(external / "deploy/direct_proxy.py")
+        with self.assertRaises(self.module.ActivationError):
+            self.module.record_restored_legacy(self._config(app_path=linked_file_root))
+
+        unsafe_root = self.root / "unsafe-layout"
+        _, unsafe_proxy = real_layout(unsafe_root)
+        unsafe_proxy.chmod(0o775)
+        with self.assertRaises(self.module.ActivationError):
+            self.module.record_restored_legacy(self._config(app_path=unsafe_root))
+
     def test_rollback_contract_restores_previous_symlink_from_activation_state(self) -> None:
         previous_target = self.release_root / self.old_sha / "storage-monitor"
         failed_target = self.release_root / self.sha / "storage-monitor"
@@ -729,6 +804,10 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         proxy.parent.mkdir(parents=True)
         proxy.write_bytes(b"#!/usr/bin/env python3\nprint('legacy')\n")
         proxy.chmod(0o755)
+        serve = backup / "viewer/serve.py"
+        serve.parent.mkdir(parents=True)
+        serve.write_bytes(b"#!/usr/bin/env python3\nprint('legacy dashboard')\n")
+        serve.chmod(0o755)
         (backup / "legacy-sentinel.bin").write_bytes(b"\x00legacy\xffbytes")
         self.state_path.parent.mkdir(parents=True)
         self.state_path.write_text(json.dumps({
@@ -748,8 +827,8 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual((self.app_path / "legacy-sentinel.bin").read_bytes(), b"\x00legacy\xffbytes")
         self.assertEqual((backup / "legacy-sentinel.bin").read_bytes(), b"\x00legacy\xffbytes")
         self.assertEqual(status["protected_legacy_backup"], str(backup))
-        self.assertEqual(status["restored_legacy_target"], str(self.app_path))
-        self.assertEqual(status["managed_legacy_proxy_target"], str(self.app_path / "deploy/direct_proxy.py"))
+        self.assertEqual(status["restored_legacy_target"], str(self.app_path.resolve()))
+        self.assertEqual(status["managed_legacy_proxy_target"], str(self.app_path.resolve() / "deploy/direct_proxy.py"))
         self.assertNotIn("failed_release", status)
         self.assertNotIn("failed_source_sha", status)
 
@@ -759,7 +838,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         )
         accepted = launcher.validate_proxy_target(
             self.app_path / "deploy/direct_proxy.py",
-            launcher.LauncherConfig(release_root=self.release_root, state_path=self.state_path),
+            launcher.LauncherConfig(release_root=self.release_root, state_path=self.state_path, app_path=self.app_path),
         )
         self.assertEqual(accepted, (self.app_path / "deploy/direct_proxy.py").resolve())
 
@@ -1238,7 +1317,11 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
         target = self._target()
         state = self.root / "state.json"
         state.write_text(json.dumps({"status": "active", "release": str(target.parents[1])}), encoding="utf-8")
-        cfg = self.module.LauncherConfig(release_root=self.root / "srv/storage-viz-dashboard/releases", state_path=state)
+        cfg = self.module.LauncherConfig(
+            release_root=self.root / "srv/storage-viz-dashboard/releases",
+            state_path=state,
+            app_path=self.root / "opt/storage-viz-dashboard",
+        )
         self.assertEqual(self.module.validate_proxy_target(target, cfg), target.resolve())
 
         backup = self.root / "legacy_backup"
@@ -1247,12 +1330,14 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
         restored = self.root / "opt/storage-viz-dashboard"
         legacy = restored / "deploy/direct_proxy.py"
         legacy.parent.mkdir(parents=True); legacy.write_bytes(backup_proxy.read_bytes()); legacy.chmod(0o755)
+        legacy_serve = restored / "viewer/serve.py"
+        legacy_serve.parent.mkdir(parents=True); legacy_serve.write_text("print('serve')\n", encoding="utf-8"); legacy_serve.chmod(0o755)
         state.write_text(json.dumps({
             "status": "rolled_back",
             "release": str(restored),
             "current": str(restored),
-            "restored_legacy_target": str(restored),
-            "managed_legacy_proxy_target": str(legacy),
+            "restored_legacy_target": str(restored.resolve()),
+            "managed_legacy_proxy_target": str(legacy.resolve()),
             "protected_legacy_backup": str(backup),
         }), encoding="utf-8")
         self.assertEqual(self.module.validate_proxy_target(legacy, cfg), legacy.resolve())
@@ -1274,6 +1359,56 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
                 with self.assertRaises(self.module.LauncherError):
                     self.module.validate_proxy_target(bad, cfg)
 
+    def test_recovery_state_accepts_only_exact_safe_real_legacy_proxy(self) -> None:
+        app = self.root / "opt/storage-viz-dashboard"
+        serve = app / "viewer/serve.py"
+        proxy = app / "deploy/direct_proxy.py"
+        serve.parent.mkdir(parents=True)
+        proxy.parent.mkdir(parents=True)
+        serve.write_text("serve\n", encoding="utf-8")
+        proxy.write_text("proxy\n", encoding="utf-8")
+        serve.chmod(0o755)
+        proxy.chmod(0o755)
+        state = self.root / "state.json"
+        state.write_text(json.dumps({
+            "status": "rolled_back",
+            "restored": str(app.resolve()),
+            "restored_legacy_target": str(app.resolve()),
+            "managed_legacy_proxy_target": str(proxy.resolve()),
+        }), encoding="utf-8")
+        cfg = self.module.LauncherConfig(
+            release_root=self.root / "srv/storage-viz-dashboard/releases",
+            state_path=state,
+            app_path=app,
+        )
+
+        self.assertEqual(self.module.validate_proxy_target(proxy, cfg), proxy.resolve())
+
+        external = self.root / "external/direct_proxy.py"
+        external.parent.mkdir(parents=True)
+        external.write_text("proxy\n", encoding="utf-8")
+        external.chmod(0o755)
+        proxy_link = app / "deploy/proxy-link.py"
+        proxy_link.symlink_to(proxy)
+        cases = [external, proxy_link]
+        for candidate in cases:
+            with self.subTest(candidate=candidate):
+                with self.assertRaises(self.module.LauncherError):
+                    self.module.validate_proxy_target(candidate, cfg)
+
+        proxy.chmod(0o775)
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(proxy, cfg)
+
+        proxy.chmod(0o755)
+        state.write_text(json.dumps({
+            "status": "rolled_back",
+            "restored_legacy_target": str(self.root / "external"),
+            "managed_legacy_proxy_target": str(external),
+        }), encoding="utf-8")
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(external, cfg)
+
     def test_execs_python_direct_proxy_without_shell(self) -> None:
         target = self._target()
         installed = self.root / "opt/storage-viz-dashboard"
@@ -1286,7 +1421,15 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
         def execv(exe, argv):
             observed["exe"] = exe; observed["argv"] = argv; raise SystemExit(0)
         with self.assertRaises(SystemExit):
-            self.module.launch([str(installed_target)], config=self.module.LauncherConfig(release_root=self.root / "srv/storage-viz-dashboard/releases", state_path=state), execv=execv)
+            self.module.launch(
+                [str(installed_target)],
+                config=self.module.LauncherConfig(
+                    release_root=self.root / "srv/storage-viz-dashboard/releases",
+                    state_path=state,
+                    app_path=installed,
+                ),
+                execv=execv,
+            )
         self.assertEqual(observed["argv"][:2], [sys.executable, str(target.resolve())])
         self.assertEqual(observed["argv"][2:], [])
 
@@ -1296,6 +1439,7 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
                 config=self.module.LauncherConfig(
                     release_root=self.root / "srv/storage-viz-dashboard/releases",
                     state_path=state,
+                    app_path=installed,
                 ),
                 execv=execv,
             )
