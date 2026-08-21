@@ -17,7 +17,9 @@ from pathlib import Path
 
 APP_ROOT = "apps/storage-monitor"
 ARCHIVE_ROOT = "storage-monitor"
+APPLICATION_NAME = "storage-monitor"
 FORMAT_VERSION = 1
+SCHEMA_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 INCLUDED_PATHS = tuple(sorted({
@@ -104,9 +106,12 @@ def _load_tracked_file(repo: Path, sha: str, rel_path: str) -> tuple[bytes, int]
     return raw, (0o755 if mode == "100755" else 0o644)
 
 
-def _manifest(source_sha: str, files: dict[str, bytes]) -> bytes:
+def _manifest(source_sha: str, archive_name: str, files: dict[str, bytes]) -> bytes:
     payload = {
+        "application_name": APPLICATION_NAME,
+        "archive": archive_name,
         "artifact_format_version": FORMAT_VERSION,
+        "schema_version": SCHEMA_VERSION,
         "source_sha": source_sha,
         "included_paths": sorted(files),
         "files": {path: hashlib.sha256(files[path]).hexdigest() for path in sorted(files)},
@@ -126,9 +131,9 @@ def _tar_info(name: str, size: int, mode: int) -> tarfile.TarInfo:
     return info
 
 
-def _archive_bytes(source_sha: str, files: dict[str, bytes], modes: dict[str, int]) -> bytes:
+def _archive_bytes(source_sha: str, archive_name: str, files: dict[str, bytes], modes: dict[str, int]) -> bytes:
     members: list[tuple[str, bytes, int]] = [
-        (f"{ARCHIVE_ROOT}/RELEASE-MANIFEST.json", _manifest(source_sha, files), 0o644)
+        (f"{ARCHIVE_ROOT}/RELEASE-MANIFEST.json", _manifest(source_sha, archive_name, files), 0o644)
     ]
     members.extend((f"{ARCHIVE_ROOT}/{path}", files[path], modes[path]) for path in sorted(files))
     members.sort(key=lambda item: item[0])
@@ -154,12 +159,16 @@ def build(repo: Path, source_sha: str, output_dir: Path) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     archive_name = f"storage-monitor-dashboard-{source_sha}.tar.gz"
     archive_path = output_dir / archive_name
-    archive_data = _archive_bytes(source_sha, files, modes)
+    archive_data = _archive_bytes(source_sha, archive_name, files, modes)
     archive_path.write_bytes(archive_data)
 
+    # The archive digest stays external: embedding it in the archive would create
+    # a circular self-reference. Together, both manifests bind source and artifact.
     metadata = {
+        "application_name": APPLICATION_NAME,
         "artifact_format_version": FORMAT_VERSION,
         "archive": archive_name,
+        "schema_version": SCHEMA_VERSION,
         "sha256": hashlib.sha256(archive_data).hexdigest(),
         "source_sha": source_sha,
     }

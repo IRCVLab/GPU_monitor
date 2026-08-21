@@ -85,6 +85,8 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "collector/test_store.py": "test\n",
             "data/hosts.json": "[]\n",
             "data/atlas.sample.json": "{}\n",
+            "state/dashboard-state.json": "{}\n",
+            "secrets/dashboard-token": "secret\n",
             ".env": "SECRET=1\n",
             "config/id_rsa": "private\n",
             "config/known_hosts": "host key\n",
@@ -136,8 +138,10 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertIn("storage-monitor/deploy/direct_proxy.py", member_names)
         self.assertIn("storage-monitor/config/servers.example.yaml", member_names)
         self.assertIn("storage-monitor/docs/schema-v1.md", member_names)
+        self.assertNotIn("storage-monitor/state/dashboard-state.json", member_names)
+        self.assertNotIn("storage-monitor/secrets/dashboard-token", member_names)
         forbidden_fragments = (
-            "/agent/", "/scanner/", "/data/", "test_", ".test.js", "install-agent",
+            "/agent/", "/scanner/", "/data/", "/state/", "/secrets/", "test_", ".test.js", "install-agent",
             "deploy-agent", "storage-viz-scan", ".env", "id_rsa", "known_hosts", "__pycache__", "dist/",
         )
         self.assertFalse([name for name in member_names if any(fragment in name for fragment in forbidden_fragments)])
@@ -147,6 +151,9 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertTrue(all(m.mode in {0o644, 0o755} for m in members))
 
         self.assertEqual(manifest["artifact_format_version"], 1)
+        self.assertEqual(manifest["application_name"], "storage-monitor")
+        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["archive"], archive2.name)
         self.assertEqual(manifest["source_sha"], self.sha)
         included_paths = manifest["included_paths"]
         self.assertEqual(included_paths, sorted(included_paths))
@@ -157,6 +164,8 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             self.assertEqual(file_hash, hashlib.sha256(source_bytes).hexdigest())
 
         metadata = json.loads(metadata_path2.read_text(encoding="utf-8"))
+        self.assertEqual(metadata["application_name"], "storage-monitor")
+        self.assertEqual(metadata["schema_version"], 1)
         self.assertEqual(metadata["source_sha"], self.sha)
         self.assertEqual(metadata["archive"], archive2.name)
         self.assertEqual(metadata["sha256"], hashlib.sha256(archive2.read_bytes()).hexdigest())
