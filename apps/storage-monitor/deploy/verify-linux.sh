@@ -53,13 +53,29 @@ import time
 
 archive = pathlib.Path(sys.argv[1])
 manifest_name = ".storage-viz-tracked-files"
+source_root = pathlib.Path.cwd().resolve()
 try:
     # tracked-files-only source list: git ls-files -z
-    raw = subprocess.check_output(["git", "ls-files", "-z"])
+    repository_root = pathlib.Path(
+        subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+    ).resolve()
+    monorepo_app = repository_root / "apps/storage-monitor"
+    if source_root == monorepo_app:
+        source_root = repository_root
+        raw = subprocess.check_output([
+            "git", "-C", str(repository_root), "ls-files", "-z", "--",
+            "apps/storage-monitor", "scripts/authorize_gpu_release.py",
+        ])
+    else:
+        raw = subprocess.check_output(["git", "ls-files", "-z"])
 except subprocess.CalledProcessError:
-    manifest = pathlib.Path(manifest_name)
-    if not manifest.is_file():
+    manifests = [source_root / manifest_name]
+    if source_root.name == "storage-monitor" and source_root.parent.name == "apps":
+        manifests.append(source_root.parent.parent / manifest_name)
+    manifest = next((candidate for candidate in manifests if candidate.is_file()), None)
+    if manifest is None:
         raise
+    source_root = manifest.parent
     raw = manifest.read_bytes()
 names = raw.split(b"\0")
 
@@ -81,7 +97,7 @@ with tarfile.open(archive, "w:gz") as tar:
         name = safe_name(raw_name)
         if name is None:
             continue
-        path = pathlib.Path(name)
+        path = source_root / name
         if path.is_file() or path.is_symlink():
             tar.add(path, arcname=name, recursive=False)
     info = tarfile.TarInfo(manifest_name)
@@ -194,6 +210,9 @@ run_one() {
 
 run_commands_in_dir() {
   local workdir="$1" rc=0
+  if [[ -d "$workdir/apps/storage-monitor" ]]; then
+    workdir="$workdir/apps/storage-monitor"
+  fi
   run_one "$workdir" 'make -C scanner clean all test' make -C scanner clean all test || rc=1
   run_one "$workdir" 'python3 data/test_fixtures.py' python3 data/test_fixtures.py || rc=1
   run_one "$workdir" "python3 -m unittest discover -s agent -p 'test_*.py' -v" python3 -m unittest discover -s agent -p 'test_*.py' -v || rc=1
@@ -271,10 +290,14 @@ with tarfile.open(sys.argv[1], "r:gz") as tar:
 PY
 tar -xzf "$work/repo.tar.gz" -C "$work/repo"
 rc=0
+app_workdir="$work/repo"
+if [ -d "$work/repo/apps/storage-monitor" ]; then
+  app_workdir="$work/repo/apps/storage-monitor"
+fi
 run_one() {
   name="$1"; shift
   printf 'command=%s\n' "$name"
-  (cd "$work/repo" && "$@") >/dev/null 2>&1
+  (cd "$app_workdir" && "$@") >/dev/null 2>&1
   code=$?
   printf 'exit_code=%s\n' "$code"
   [ "$code" -eq 0 ] || rc=1

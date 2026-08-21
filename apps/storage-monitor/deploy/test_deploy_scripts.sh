@@ -40,6 +40,8 @@ pass "all Task 5 deploy assets exist"
 
 assert_grep "$VERIFY_LINUX" 'mktemp -d /tmp/storage-viz-verify\.XXXXXX' "unique temporary Linux verification directory"
 assert_grep "$VERIFY_LINUX" 'git ls-files -z' "NUL-safe tracked-files-only transfer contract"
+assert_grep "$VERIFY_LINUX" 'scripts/authorize_gpu_release\.py' "shared release authorizer in tracked verification archive"
+assert_grep "$VERIFY_LINUX" 'apps/storage-monitor' "monorepo app layout in tracked verification archive"
 assert_grep "$VERIFY_LINUX" 'validate_tar_members' "tar member validation before extraction"
 assert_grep "$VERIFY_LINUX" 'trap.*rm -rf --' "temporary verification cleanup trap"
 assert_grep "$VERIFY_LINUX" 'make -C scanner clean all test' "scanner build/test verification command"
