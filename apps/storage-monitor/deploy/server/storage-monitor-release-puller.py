@@ -33,7 +33,7 @@ class PullError(RuntimeError):
 
 @dataclass(frozen=True)
 class Config:
-    repository: str = "IRCVLab/monitoring-platform"
+    repository: str = "IRCVLab/GPU_monitor"
     state_dir: Path = Path("/var/lib/storage-viz-dashboard/puller")
     work_dir: Path = Path("/var/lib/storage-viz-dashboard/builder")
     authorizer: Path = Path("/usr/local/libexec/storage-release-authorizer.py")
@@ -41,7 +41,7 @@ class Config:
     build_script: str = "apps/storage-monitor/deploy/build-dashboard-release.py"
     builder_user: str = "storage-viz-builder"
     node_prefix: Path = Path("/usr/local")
-    repo_url: str = "https://github.com/IRCVLab/monitoring-platform.git"
+    repo_url: str = "https://github.com/IRCVLab/GPU_monitor.git"
     timeout_seconds: int = 900
     failure_backoff_base_seconds: int = 900
     failure_backoff_max_seconds: int = 21600

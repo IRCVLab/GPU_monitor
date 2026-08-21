@@ -13,7 +13,8 @@ PULLER_PATH = REPO_ROOT / "apps/storage-monitor/deploy/server/storage-monitor-re
 SHA1 = "1" * 40
 SHA2 = "2" * 40
 DIGEST = "a" * 64
-REPOSITORY = "IRCVLab/monitoring-platform"
+REPOSITORY = "IRCVLab/GPU_monitor"
+REPO_URL = "https://github.com/IRCVLab/GPU_monitor.git"
 
 
 def load_puller():
@@ -72,7 +73,7 @@ class StorageReleasePullerTest(unittest.TestCase):
             build_script="apps/storage-monitor/deploy/build-dashboard-release.py",
             builder_user="storage-viz-builder",
             node_prefix=Path("/usr/local"),
-            repo_url="https://github.com/IRCVLab/monitoring-platform.git",
+            repo_url=REPO_URL,
             timeout_seconds=30,
         )
 
@@ -398,17 +399,50 @@ class StorageReleasePullerTest(unittest.TestCase):
             with self.assertRaises(puller.PullError):
                 puller.check_runs_for_sha(cfg, SHA1, get_json=lambda path: {"total_count": 101, "check_runs": [{"id": index} for index in range(99)]})
 
-    def test_default_config_uses_storage_owned_paths_and_has_no_forbidden_references(self):
+    def test_default_config_points_to_actual_monorepo_remote(self):
+        puller = load_puller()
+        cfg = puller.Config()
+        self.assertEqual(cfg.repository, REPOSITORY)
+        self.assertEqual(cfg.repo_url, REPO_URL)
+
+    def test_default_config_uses_storage_owned_paths_without_gpu_runtime_coupling(self):
         puller = load_puller()
         cfg = puller.Config()
         self.assertEqual(cfg.state_dir, Path("/var/lib/storage-viz-dashboard/puller"))
         self.assertEqual(cfg.work_dir, Path("/var/lib/storage-viz-dashboard/builder"))
         self.assertEqual(cfg.authorizer, Path("/usr/local/libexec/storage-release-authorizer.py"))
         self.assertEqual(cfg.activate, Path("/usr/local/libexec/storage-dashboard-activate.py"))
-        source = PULLER_PATH.read_text(encoding="utf-8")
-        forbidden = ["g" + "pu", "/opt/" + "g", "authorize_" + "g", "deploy" + "-live"]
+        source = PULLER_PATH.read_text(encoding="utf-8").lower()
+        forbidden = [
+            "/opt/gpu-monitor",
+            "/var/lib/gpu-monitor",
+            "/etc/gpu-monitor",
+            "/var/lock/gpu-monitor",
+            "/srv/gpu-monitor",
+            "/usr/local/libexec/gpu-monitor",
+            "apps/gpu-monitor/deploy/server/gpu-monitor-release-puller.py",
+            "gpu_monitor_release_puller",
+            "gpu-monitor-release-puller.py",
+            "gpu-monitor-release-puller.service",
+            "gpu-monitor-release-puller.timer",
+            "gpu-monitor-backend",
+            "gpu-monitor-frontend",
+            "gpu-monitor-bridge",
+            "gpu-monitor-builder",
+            "gpu-deploy-live",
+            "gpu-deploy-dev",
+            "gpu_monitor_backend_port",
+            "gpu_monitor_bridge_port",
+            "gpu_monitor_shared_dir",
+            "5173",
+            "5174",
+            "8000",
+            "8001",
+            "8100",
+            "8101",
+        ]
         for needle in forbidden:
-            self.assertNotIn(needle, source.lower())
+            self.assertNotIn(needle, source)
         self.assertIn("fcntl.flock", source)
         self.assertIn("storage-viz-builder", source)
         self.assertNotIn("shell=True", source)
