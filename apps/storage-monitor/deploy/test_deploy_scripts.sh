@@ -558,6 +558,132 @@ FAKE_LOG="$TMP/archive.log" FAKE_CHECK_COUNT_FILE="$TMP/archive.count" POLICY_SE
 pass "deployment archive excludes scanner/hstscan executable"
 
 
+# Task 6 storage dashboard live auto-deployer bootstrap contracts.
+DASHBOARD_DEPLOYER="$DEPLOY/server/install-dashboard-deployer.sh"
+STORAGE_PULLER_SERVICE="$DEPLOY/server/systemd/storage-monitor-release-puller.service"
+STORAGE_PULLER_TIMER="$DEPLOY/server/systemd/storage-monitor-release-puller.timer"
+STORAGE_PROXY_SERVICE="$DEPLOY/server/systemd/storage-viz-proxy.service"
+STORAGE_PULLER="$DEPLOY/server/storage-monitor-release-puller.py"
+STORAGE_ACTIVATOR="$DEPLOY/server/activate-dashboard-release.py"
+STORAGE_HEALTH="$DEPLOY/server/health-check-dashboard.py"
+STORAGE_PROXY_LAUNCHER="$DEPLOY/server/storage-viz-proxy-launcher.py"
+STORAGE_AUTHORIZER="$(cd "$ROOT/../.." && pwd)/scripts/authorize_gpu_release.py"
+STORAGE_BUILDER="$DEPLOY/build-dashboard-release.py"
+for f in "$DASHBOARD_DEPLOYER" "$STORAGE_PULLER_SERVICE" "$STORAGE_PULLER_TIMER" "$STORAGE_PROXY_SERVICE" "$STORAGE_PULLER" "$STORAGE_ACTIVATOR" "$STORAGE_HEALTH" "$STORAGE_PROXY_LAUNCHER" "$STORAGE_AUTHORIZER" "$STORAGE_BUILDER"; do
+  assert_file "$f"
+done
+pass "Task 6 storage dashboard deployer assets exist"
+
+assert_grep "$DASHBOARD_DEPLOYER" 'DRY_RUN' "dashboard deployer dry-run implementation"
+assert_grep "$DASHBOARD_DEPLOYER" '^[[:space:]]*if[[:space:]].*EUID.*-ne[[:space:]]+0' "real deployer root check"
+assert_grep "$DASHBOARD_DEPLOYER" 'storage-viz-builder' "unprivileged builder identity"
+assert_grep "$DASHBOARD_DEPLOYER" 'storage[^-]' "unprivileged storage runtime identity"
+assert_grep "$DASHBOARD_DEPLOYER" '/srv/storage-viz-dashboard/releases' "Storage-only release root"
+assert_grep "$DASHBOARD_DEPLOYER" '/var/lib/storage-viz-dashboard/\{puller,builder,data,state\}|/var/lib/storage-viz-dashboard/puller' "Storage-only state paths"
+assert_grep "$DASHBOARD_DEPLOYER" '/etc/storage-viz' "Storage-only config path"
+assert_grep "$DASHBOARD_DEPLOYER" '/usr/local/libexec/storage-' "Storage-owned libexec namespace"
+assert_grep "$DASHBOARD_DEPLOYER" 'storage-release-authorizer\.py' "Storage-owned authorizer copy"
+assert_grep "$DASHBOARD_DEPLOYER" 'sha256sum|shasum -a 256|sha256_file' "exact hash verification"
+assert_not_grep "$DASHBOARD_DEPLOYER" '/opt/gpu-monitor|/var/lib/gpu-monitor|/etc/gpu-monitor|gpu-monitor-(backend|frontend|bridge|builder)|gpu-deploy-(live|dev)|5173|5174|8000|8001|8100|8101|storage-viz-scan\.(service|timer)' "GPU runtime or remote scanner coupling"
+pass "dashboard deployer is Storage-owned and avoids GPU/runtime scanner coupling"
+
+DASH_DRY_PREFIX="$TMP/dashboard-dry-prefix"
+DASH_LOG="$TMP/dashboard-dry.log"
+cat > "$FAKEBIN/systemctl" <<'FAKE'
+#!/usr/bin/env bash
+echo "systemctl must not run in dashboard dry-run" >&2
+exit 97
+FAKE
+cat > "$FAKEBIN/useradd" <<'FAKE'
+#!/usr/bin/env bash
+echo "useradd must not run in dashboard dry-run" >&2
+exit 98
+FAKE
+cat > "$FAKEBIN/chown" <<'FAKE'
+#!/usr/bin/env bash
+echo "chown must not run in dashboard dry-run" >&2
+exit 99
+FAKE
+chmod +x "$FAKEBIN/systemctl" "$FAKEBIN/useradd" "$FAKEBIN/chown"
+PATH="$FAKEBIN:$PATH" "$DASHBOARD_DEPLOYER" --dry-run --prefix "$DASH_DRY_PREFIX" >"$DASH_LOG"
+[[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-dashboard-build-release.py" ]] || fail "dashboard dry-run did not render builder"
+[[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-dashboard-activate.py" ]] || fail "dashboard dry-run did not render activator"
+[[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-dashboard-health-check.py" ]] || fail "dashboard dry-run did not render health checker"
+[[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-viz-proxy-launcher.py" ]] || fail "dashboard dry-run did not render proxy launcher"
+[[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-monitor-release-puller.py" ]] || fail "dashboard dry-run did not render puller"
+[[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-release-authorizer.py" ]] || fail "dashboard dry-run did not render Storage-owned authorizer copy"
+[[ -f "$DASH_DRY_PREFIX/etc/systemd/system/storage-monitor-release-puller.service" ]] || fail "dashboard dry-run did not render puller service"
+[[ -f "$DASH_DRY_PREFIX/etc/systemd/system/storage-monitor-release-puller.timer" ]] || fail "dashboard dry-run did not render puller timer"
+[[ -f "$DASH_DRY_PREFIX/etc/systemd/system/storage-viz-proxy.service" ]] || fail "dashboard dry-run did not render managed proxy service"
+[[ -d "$DASH_DRY_PREFIX/srv/storage-viz-dashboard/releases" ]] || fail "dashboard dry-run did not render release directory"
+[[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/puller" ]] || fail "dashboard dry-run did not render puller state directory"
+[[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/builder" ]] || fail "dashboard dry-run did not render builder state directory"
+[[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/data" ]] || fail "dashboard dry-run did not render data directory"
+[[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/state" ]] || fail "dashboard dry-run did not render state directory"
+[[ "$(file_mode "$DASH_DRY_PREFIX/etc/storage-viz")" == "750" ]] || fail "dashboard dry-run config dir mode is not 0750"
+[[ "$(file_mode "$DASH_DRY_PREFIX/usr/local/libexec/storage-dashboard-activate.py")" == "755" ]] || fail "activator mode is not 0755"
+[[ "$(file_mode "$DASH_DRY_PREFIX/usr/local/libexec/storage-release-authorizer.py")" == "755" ]] || fail "authorizer mode is not 0755"
+! grep -q 'must not run in dashboard dry-run' "$DASH_LOG" || fail "dashboard dry-run invoked a forbidden service/user action"
+for src in "$STORAGE_BUILDER" "$STORAGE_ACTIVATOR" "$STORAGE_HEALTH" "$STORAGE_PROXY_LAUNCHER" "$STORAGE_PULLER" "$STORAGE_AUTHORIZER"; do
+  digest="$(sha256sum "$src" 2>/dev/null | awk '{print $1}')"
+  if [[ -z "$digest" ]]; then digest="$(shasum -a 256 "$src" | awk '{print $1}')"; fi
+  grep -Fq "$digest" "$DASH_LOG" || fail "dashboard dry-run output missing hash for $src"
+done
+grep -Fq 'systemd action: daemon-reload' "$DASH_LOG" || fail "dashboard dry-run output missing daemon-reload action"
+grep -Fq 'systemd action: enable --now storage-viz-proxy.service' "$DASH_LOG" || fail "dashboard dry-run output missing proxy enable action"
+grep -Fq 'systemd action: enable storage-monitor-release-puller.timer only after approved health' "$DASH_LOG" || fail "dashboard dry-run output missing gated timer enable action"
+pass "dashboard dry-run renders assets/paths/modes/hashes without mutation"
+
+SECOND_PREFIX="$TMP/dashboard-second-prefix"
+PATH="$FAKEBIN:$PATH" "$DASHBOARD_DEPLOYER" --dry-run --prefix "$SECOND_PREFIX" >"$TMP/dashboard-second.log"
+for asset in storage-dashboard-build-release.py storage-dashboard-activate.py storage-dashboard-health-check.py storage-viz-proxy-launcher.py storage-monitor-release-puller.py storage-release-authorizer.py; do
+  cmp -s "$DASH_DRY_PREFIX/usr/local/libexec/$asset" "$SECOND_PREFIX/usr/local/libexec/$asset" || fail "dashboard dry-run is not idempotent for $asset"
+done
+pass "dashboard deployer dry-run is idempotent"
+
+assert_contains "$STORAGE_PULLER_TIMER" "OnCalendar=*:0/5"
+assert_contains "$STORAGE_PULLER_TIMER" "Persistent=true"
+assert_grep "$STORAGE_PULLER_TIMER" '^RandomizedDelaySec=([1-9][0-9]?s|[1-4]m)$' "reasonable sub-cadence randomized delay"
+assert_not_grep "$STORAGE_PULLER_TIMER" 'OnUnitActiveSec|OnBootSec|OnCalendar=.*(1|2|3|4)min' "non-calendar or API-hammering cadence"
+pass "storage release puller timer has five-minute persistent jittered cadence"
+
+assert_contains "$STORAGE_PULLER_SERVICE" "User=root"
+assert_contains "$STORAGE_PULLER_SERVICE" "Group=root"
+assert_contains "$STORAGE_PULLER_SERVICE" "UMask=0027"
+assert_contains "$STORAGE_PULLER_SERVICE" "Nice=10"
+assert_contains "$STORAGE_PULLER_SERVICE" "IOSchedulingClass=idle"
+assert_contains "$STORAGE_PULLER_SERVICE" "NoNewPrivileges=yes"
+assert_contains "$STORAGE_PULLER_SERVICE" "ProtectSystem=strict"
+assert_contains "$STORAGE_PULLER_SERVICE" "ProtectHome=yes"
+assert_contains "$STORAGE_PULLER_SERVICE" "ReadWritePaths=/srv/storage-viz-dashboard/releases /var/lib/storage-viz-dashboard /etc/storage-viz /opt/storage-viz-dashboard"
+assert_grep "$STORAGE_PULLER_SERVICE" "ExecStart=/usr/bin/python3\.12 /usr/local/libexec/storage-monitor-release-puller\.py --repository IRCVLab/GPU_monitor" "explicit repository on puller ExecStart"
+assert_grep "$STORAGE_PULLER_SERVICE" ".*--repo-url https://github\.com/IRCVLab/GPU_monitor\.git" "explicit repository URL on puller ExecStart"
+assert_grep "$STORAGE_PULLER_SERVICE" 'CapabilityBoundingSet=$' "empty capability bounding set"
+assert_grep "$STORAGE_PULLER_SERVICE" 'AmbientCapabilities=$' "empty ambient capabilities"
+assert_not_grep "$STORAGE_PULLER_SERVICE" 'CAP_|gpu-monitor-|/opt/gpu-monitor|/var/lib/gpu-monitor|/etc/gpu-monitor|storage-viz-scan\.(service|timer)' "capabilities, GPU runtime, or remote scanner coupling"
+pass "storage release puller service has bounded root orchestration sandbox"
+
+RENDERED_PROXY_SERVICE="$DASH_DRY_PREFIX/etc/systemd/system/storage-viz-proxy.service"
+assert_contains "$RENDERED_PROXY_SERVICE" "User=storage"
+assert_contains "$RENDERED_PROXY_SERVICE" "Group=storage"
+assert_contains "$RENDERED_PROXY_SERVICE" "ExecStart=/usr/bin/python3.12 /usr/local/libexec/storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py"
+assert_not_grep "$RENDERED_PROXY_SERVICE" 'gpu-monitor|storage-viz-scan|5173|8000|8100' "GPU or scanner coupling in rendered managed proxy service"
+pass "managed proxy service uses Storage runtime and launcher"
+
+assert_grep "$DASHBOARD_DEPLOYER" 'candidate.*18088' "candidate dashboard loopback port"
+assert_grep "$DASHBOARD_DEPLOYER" 'candidate.*1505|1505.*candidate' "candidate proxy loopback port"
+assert_grep "$DASHBOARD_DEPLOYER" '127\.0\.0\.1:8088' "legacy dashboard preservation port"
+assert_grep "$DASHBOARD_DEPLOYER" '505' "public proxy port"
+assert_grep "$DASHBOARD_DEPLOYER" 'preflight' "candidate preflight mode"
+assert_grep "$DASHBOARD_DEPLOYER" 'UNKNOWN_SERVER' "nonmutating unknown-server probe"
+assert_grep "$DASHBOARD_DEPLOYER" 'exact.*PID|PID.*exact|port.*owner' "exact PID/port owner validation"
+assert_grep "$DASHBOARD_DEPLOYER" 'stop_exact_current_505_owner.*stop_legacy_8088_dashboard.*activate_release.*start_managed_8088_505|first_cutover_order' "first cutover order"
+assert_grep "$DASHBOARD_DEPLOYER" 'rollback.*legacy.*backup|protected legacy backup' "rollback to recorded legacy backup"
+assert_grep "$DASHBOARD_DEPLOYER" 'previous dashboard/inventory GET health|legacy.*inventory.*GET' "rollback health requirement"
+assert_grep "$DASHBOARD_DEPLOYER" 'do not recreate tmux|not recreate tmux' "rollback must not recreate tmux"
+assert_not_grep "$DASHBOARD_DEPLOYER" 'pkill|killall|fuser -k|lsof -ti.*xargs kill' "broad process killing"
+pass "dashboard deployer encodes candidate preflight cutover and rollback safety contracts"
+
 
 # Task 11 central dashboard/service and operations documentation contracts.
 FORBIDDEN_HOST_PRODUCT_RE="$(printf '%s' 'monitoring' '_v2')|166\.104\.167\.11|$(printf '%s' '/home/ircv/workspace/' 'monitoring')|$(printf '%s' 'GPU[ _-]?' 'Monitor')|$(printf '%s' 'gpu[_-]?' 'monitor')"
