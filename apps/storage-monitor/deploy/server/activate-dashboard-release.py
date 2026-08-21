@@ -634,8 +634,30 @@ def activate_release(
         except Exception as exc:
             _restore_after_failure(config, activated_state, original_state)
             _rollback_state(config.state_path, previous_state)
-            with contextlib.suppress(Exception):
+            try:
                 _call_restart(config, restart, "rollback")
+            except Exception as rollback_exc:
+                failure_status = dict(previous_state or {})
+                failure_status.update(
+                    {
+                        "status": "rollback_restart_failed",
+                        "activation_error": str(exc),
+                        "rollback_restart_error": str(rollback_exc),
+                        "failed_release": str(target),
+                        "failed_source_sha": sha,
+                        "failed_archive_digest": archive.digest,
+                        "restored": True,
+                    }
+                )
+                status_write_error: Exception | None = None
+                try:
+                    _atomic_write_json(config.state_path, failure_status)
+                except Exception as state_exc:
+                    status_write_error = state_exc
+                message = f"activation failed: {exc}; rollback restart failed: {rollback_exc}"
+                if status_write_error is not None:
+                    message += f"; failure status persistence failed: {status_write_error}"
+                raise ActivationError(message) from rollback_exc
             if isinstance(exc, ActivationError):
                 raise
             raise ActivationError(str(exc)) from exc

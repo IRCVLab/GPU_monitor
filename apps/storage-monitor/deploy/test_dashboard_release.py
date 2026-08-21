@@ -576,6 +576,45 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(self.restart_calls, ["activate", "rollback"])
         self.assertFalse(any(path.name.startswith(".activate-") for path in self.app_path.parent.iterdir()))
 
+    def test_rollback_restart_failure_is_persisted_and_raised_after_candidate_health_failure(self) -> None:
+        previous_target = self.release_root / self.old_sha / "storage-monitor"
+        previous_target.mkdir(parents=True)
+        self.app_path.parent.mkdir(parents=True)
+        self.app_path.symlink_to(previous_target)
+        previous_state = {
+            "status": "active",
+            "release": str(previous_target),
+            "source_sha": self.old_sha,
+            "archive_digest": "d" * 64,
+        }
+        self.state_path.parent.mkdir(parents=True)
+        self.state_path.write_text(json.dumps(previous_state), encoding="utf-8")
+        archive, metadata, digest = self._archive()
+
+        def restart_with_failed_rollback(phase: str) -> None:
+            self.restart_calls.append(phase)
+            if phase == "rollback":
+                raise RuntimeError("restored service restart failed")
+
+        with self.assertRaises(self.module.ActivationError) as raised:
+            self.module.activate_release(
+                self._config(), sha=self.sha, expected_digest=digest, artifact_path=archive, metadata_path=metadata,
+                restart=restart_with_failed_rollback, health=lambda: False,
+            )
+
+        self.assertIn("health check failed after activation", str(raised.exception))
+        self.assertIn("rollback restart failed: restored service restart failed", str(raised.exception))
+        self.assertEqual(self.app_path.resolve(), previous_target.resolve())
+        self.assertEqual(self.restart_calls, ["activate", "rollback"])
+        persisted = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["release"], str(previous_target))
+        self.assertEqual(persisted["source_sha"], self.old_sha)
+        self.assertEqual(persisted["archive_digest"], "d" * 64)
+        self.assertEqual(persisted["status"], "rollback_restart_failed")
+        self.assertIs(persisted["restored"], True)
+        self.assertEqual(persisted["activation_error"], "health check failed after activation")
+        self.assertEqual(persisted["rollback_restart_error"], "restored service restart failed")
+
     def test_failed_health_rolls_back_first_legacy_migration_byte_for_byte(self) -> None:
         self.app_path.mkdir(parents=True)
         (self.app_path / "legacy-sentinel.txt").write_bytes(b"legacy bytes")
