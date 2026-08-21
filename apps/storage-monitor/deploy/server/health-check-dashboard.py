@@ -235,7 +235,11 @@ def run_health_check(contract: HealthContract, *, runner: Callable[..., Any] = s
             absent = _unknown_id(set(contract.enabled_server_ids))
             post_headers = {"Cookie": cookie, "X-Forwarded-User": FIXED_PROXY_OPERATOR, "X-CSRF-Token": str(session["csrf_token"]), "Origin": contract.public_origin}
             status, _, body = _request(connection_factory, contract, "POST", f"/api/servers/{absent}/rescan", body=b"{}", headers=post_headers)
-            if status != 404 or not isinstance(body, Mapping) or body.get("error") != "UNKNOWN_SERVER" and body.get("code") != "UNKNOWN_SERVER":
+            if (
+                status != 404
+                or not isinstance(body, Mapping)
+                or body.get("error") != "UNKNOWN_SERVER"
+            ):
                 raise HealthCheckError("unknown-server rescan probe failed")
             return
         except Exception as exc:

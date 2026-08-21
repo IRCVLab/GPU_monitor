@@ -874,7 +874,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             responses = [
                 FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie":"storage_viz_session=abc; Path=/"}),
                 FakeResponse(200, {"data_mode":"inventory", "servers":[{"id":"atlas"},{"id":"hinton"}]}),
-                FakeResponse(404, {"error":"UNKNOWN_SERVER", "code":"UNKNOWN_SERVER"}),
+                FakeResponse(404, {"error":"UNKNOWN_SERVER"}),
             ]
             def __init__(self, host, port, timeout):
                 self.host = host; self.port = port; self.timeout = timeout
@@ -892,6 +892,62 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         self.assertEqual(requests[2][2]["X-CSRF-Token"], "csrf")
         self.assertEqual(requests[2][2]["Host"], "166.104.167.11:505")
         self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
+
+    def test_probe_rejects_code_only_unknown_server_response(self) -> None:
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+
+        class Result:
+            returncode = 0
+            stdout = "active\n"
+            stderr = ""
+
+        class FakeResponse:
+            def __init__(self, status, body, headers=None):
+                self.status = status
+                self._body = json.dumps(body).encode()
+                self._headers = headers or {}
+
+            def read(self):
+                return self._body
+
+            def getheaders(self):
+                return list(self._headers.items())
+
+        responses = []
+        for _ in range(3):
+            responses.extend(
+                [
+                    FakeResponse(
+                        200,
+                        {"can_rescan": True, "csrf_token": "csrf"},
+                        {"Set-Cookie": "storage_viz_session=abc; Path=/"},
+                    ),
+                    FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
+                    FakeResponse(404, {"code": "UNKNOWN_SERVER"}),
+                ]
+            )
+
+        class FakeConnection:
+            def __init__(self, host, port, timeout):
+                pass
+
+            def request(self, method, path, body=None, headers=None):
+                pass
+
+            def getresponse(self):
+                return responses.pop(0)
+
+            def close(self):
+                pass
+
+        with self.assertRaisesRegex(self.module.HealthCheckError, "unknown-server rescan probe failed"):
+            self.module.run_health_check(
+                contract,
+                runner=lambda argv, **kwargs: Result(),
+                connection_factory=FakeConnection,
+                sleep=lambda _: None,
+            )
 
 
 class StorageVizProxyLauncherTest(unittest.TestCase):
