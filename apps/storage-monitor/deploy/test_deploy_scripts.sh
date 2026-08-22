@@ -705,7 +705,7 @@ FAKE
 printf '{"servers":[{"id":"atlas","enabled":true}]}' > "$DASH_CUTOVER_TMP/servers.json"
 cat > "$DASH_CANDIDATE_ROOT/viewer/serve.py" <<'FAKE'
 import json, os, signal, sys, time
-keys = ["STORAGE_VIZ_ROOT", "STORAGE_VIZ_BIND", "STORAGE_VIZ_PORT", "STORAGE_VIZ_INVENTORY", "STORAGE_VIZ_DATA_DIR", "STORAGE_VIZ_STATE_DIR", "STORAGE_VIZ_PREFLIGHT_BACKEND", "STORAGE_VIZ_TRUSTED_PROXY", "STORAGE_VIZ_ALLOWED_ORIGINS", "STORAGE_VIZ_OPERATOR_ALLOWLIST", "STORAGE_VIZ_SESSION_COOKIE_SECURE"]
+keys = ["PYTHONDONTWRITEBYTECODE", "STORAGE_VIZ_ROOT", "STORAGE_VIZ_BIND", "STORAGE_VIZ_PORT", "STORAGE_VIZ_INVENTORY", "STORAGE_VIZ_DATA_DIR", "STORAGE_VIZ_STATE_DIR", "STORAGE_VIZ_PREFLIGHT_BACKEND", "STORAGE_VIZ_TRUSTED_PROXY", "STORAGE_VIZ_ALLOWED_ORIGINS", "STORAGE_VIZ_OPERATOR_ALLOWLIST", "STORAGE_VIZ_SESSION_COOKIE_SECURE"]
 with open(os.environ["DASH_CUTOVER_LOG"], "a", encoding="utf-8") as out:
     out.write("candidate-dashboard " + json.dumps({"argv": sys.argv[1:], "env": {key: os.environ.get(key) for key in keys}}, sort_keys=True) + "\n")
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -713,7 +713,7 @@ while True: time.sleep(1)
 FAKE
 cat > "$DASH_CANDIDATE_ROOT/deploy/direct_proxy.py" <<'FAKE'
 import json, os, signal, sys, time
-keys = ["STORAGE_VIZ_PROXY_BIND", "STORAGE_VIZ_PROXY_PORT", "STORAGE_VIZ_PROXY_UPSTREAM_HOST", "STORAGE_VIZ_PROXY_UPSTREAM_PORT", "STORAGE_VIZ_PROXY_OPERATOR", "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN"]
+keys = ["PYTHONDONTWRITEBYTECODE", "STORAGE_VIZ_PROXY_BIND", "STORAGE_VIZ_PROXY_PORT", "STORAGE_VIZ_PROXY_UPSTREAM_HOST", "STORAGE_VIZ_PROXY_UPSTREAM_PORT", "STORAGE_VIZ_PROXY_OPERATOR", "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN"]
 with open(os.environ["DASH_CUTOVER_LOG"], "a", encoding="utf-8") as out:
     out.write("candidate-proxy " + json.dumps({"argv": sys.argv[1:], "env": {key: os.environ.get(key) for key in keys}}, sort_keys=True) + "\n")
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -821,6 +821,7 @@ grep -Fq -- '"argv": []' "$DASH_CUTOVER_LOG" || fail "candidate scripts received
 grep -Fq -- '"STORAGE_VIZ_PORT": "18088"' "$DASH_CUTOVER_LOG" || fail "candidate dashboard did not bind 18088 through serve.py env"
 grep -Fq -- '"STORAGE_VIZ_PREFLIGHT_BACKEND": "1"' "$DASH_CUTOVER_LOG" || fail "candidate dashboard did not enable real preflight backend env"
 grep -Fq -- '"STORAGE_VIZ_PROXY_PORT": "1505"' "$DASH_CUTOVER_LOG" || fail "candidate proxy did not bind 1505 through direct_proxy env"
+[[ "$(grep -c -- '"PYTHONDONTWRITEBYTECODE": "1"' "$DASH_CUTOVER_LOG")" -ge 2 ]] || fail "candidate topology may mutate prepared release with Python bytecode"
 grep -Fq -- '"STORAGE_VIZ_PROXY_PUBLIC_ORIGIN": "http://storage.example:505"' "$DASH_CUTOVER_LOG" || fail "candidate proxy lost real public origin semantics"
 grep -Fq -- '--connect-host 127.0.0.1 --connect-port 1505 --skip-service-check' "$DASH_CUTOVER_LOG" || fail "candidate probe did not use real health checker candidate override"
 ! grep -Fq -- 'storage-viz-proxy-launcher.py' "$DASH_CUTOVER_LOG" || fail "candidate proxy incorrectly used production launcher"
