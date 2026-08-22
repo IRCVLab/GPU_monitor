@@ -959,7 +959,7 @@ assert_contains "$STORAGE_PULLER_SERVICE" "ProtectHome=yes"
 assert_contains "$STORAGE_PULLER_SERVICE" "ReadWritePaths=/var/lib/storage-viz-dashboard /srv/storage-viz-dashboard/releases /opt/storage-viz-dashboard"
 assert_contains "$STORAGE_PULLER_SERVICE" "ReadOnlyPaths=/usr/local/libexec"
 assert_contains "$STORAGE_PULLER_SERVICE" "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"
-assert_grep "$STORAGE_PULLER_SERVICE" "ExecStart=/usr/bin/python3\.12 /usr/local/libexec/storage-monitor-release-puller\.py --repository IRCVLab/GPU_monitor" "explicit repository on puller ExecStart"
+assert_grep "$STORAGE_PULLER_SERVICE" "ExecStart=/usr/bin/python3 /usr/local/libexec/storage-monitor-release-puller\.py --repository IRCVLab/GPU_monitor" "portable system Python on puller ExecStart"
 assert_grep "$STORAGE_PULLER_SERVICE" ".*--repo-url https://github\.com/IRCVLab/GPU_monitor\.git" "explicit repository URL on puller ExecStart"
 assert_contains "$STORAGE_PULLER_SERVICE" "LockPersonality=yes"
 assert_contains "$STORAGE_PULLER_SERVICE" "SystemCallArchitectures=native"
@@ -972,12 +972,18 @@ pass "storage release puller service matches GPU root oneshot hardening with Sto
 RENDERED_PROXY_SERVICE="$DASH_DRY_PREFIX/etc/systemd/system/storage-viz-proxy.service"
 assert_contains "$RENDERED_PROXY_SERVICE" "User=storage-viz"
 assert_contains "$RENDERED_PROXY_SERVICE" "Group=storage-viz"
-assert_contains "$RENDERED_PROXY_SERVICE" "ExecStart=/usr/bin/python3.12 /usr/local/libexec/storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py"
+assert_contains "$RENDERED_PROXY_SERVICE" "ExecStart=/usr/bin/python3 /usr/local/libexec/storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py"
 assert_not_grep "$RENDERED_PROXY_SERVICE" '^ReadWritePaths=/var/lib/storage-viz-dashboard' "proxy write access to dashboard mutable state"
 assert_contains "$RENDERED_PROXY_SERVICE" "ReadOnlyPaths=/var/lib/storage-viz-dashboard/activation-state.json"
 assert_contains "$RENDERED_PROXY_SERVICE" "InaccessiblePaths=-/var/lib/storage-viz-dashboard/data"
 assert_not_grep "$RENDERED_PROXY_SERVICE" 'gpu-monitor|storage-viz-scan|5173|8000|8100' "GPU or scanner coupling in rendered managed proxy service"
 pass "managed proxy service uses Storage runtime and launcher"
+
+for python_asset in "$STORAGE_ACTIVATOR" "$STORAGE_HEALTH" "$STORAGE_PROXY_LAUNCHER" "$STORAGE_PULLER"; do
+  [[ "$(head -n 1 "$python_asset")" == '#!/usr/bin/env python3' ]] || fail "$python_asset requires a version-specific Python unavailable on supported Live hosts"
+done
+assert_not_grep "$DASHBOARD_DEPLOYER" 'PYTHON="\$\{PYTHON:-/usr/bin/python3\.12\}"|ExecStart=/usr/bin/python3\.12' "version-specific Python runtime in dashboard deployer"
+pass "dashboard deployer runtime supports the host system Python 3.10+ contract"
 
 assert_not_grep "$DASHBOARD_DEPLOYER" 'pkill|killall|fuser -k|lsof -ti.*xargs kill' "broad process killing"
 pass "dashboard deployer avoids broad process killing"

@@ -14,7 +14,7 @@ ARTIFACT=""
 METADATA=""
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 SS="${SS:-ss}"
-PYTHON="${PYTHON:-/usr/bin/python3.12}"
+PYTHON="${PYTHON:-/usr/bin/python3}"
 ACTIVATOR="${ACTIVATOR:-/usr/local/libexec/storage-dashboard-activate.py}"
 KILL="${KILL:-kill}"
 PROC_ROOT="${PROC_ROOT:-/proc}"
@@ -30,7 +30,7 @@ CONFIG_DIR="/etc/storage-viz"
 APP_PATH="${APP_PATH:-/opt/storage-viz-dashboard}"
 LEGACY_PROXY_PATH="${LEGACY_PROXY_PATH:-$APP_PATH/deploy/direct_proxy.py}"
 LEGACY_DASHBOARD_PATH="${LEGACY_DASHBOARD_PATH:-$APP_PATH/viewer/serve.py}"
-LEGACY_PYTHON_EXES="${LEGACY_PYTHON_EXES:-/usr/bin/python3.12:/usr/bin/python3}"
+LEGACY_PYTHON_EXES="${LEGACY_PYTHON_EXES:-/usr/bin/python3:/usr/bin/python3.10:/usr/bin/python3.12}"
 LEGACY_TMUX_EXE="${LEGACY_TMUX_EXE:-/usr/bin/tmux}"
 RUNTIME_USER="storage-viz"
 RUNTIME_GROUP="storage-viz"
@@ -426,7 +426,7 @@ render_proxy_service() {
   actual_dest="$(prefix_path "$dest")"
   mkdir -p "$(dirname "$actual_dest")"
   sed \
-    -e 's#ExecStart=.*#ExecStart=/usr/bin/python3.12 /usr/local/libexec/storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py#' \
+    -e 's#ExecStart=.*#ExecStart=/usr/bin/python3 /usr/local/libexec/storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py#' \
     "$SERVER/systemd/storage-viz-proxy.service" >"$actual_dest"
   chmod 0644 "$actual_dest"
   if [[ "$DRY_RUN" != 1 && -z "$PREFIX" ]]; then

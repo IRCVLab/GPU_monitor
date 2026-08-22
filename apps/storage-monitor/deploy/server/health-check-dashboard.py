@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Production health check for the storage-viz dashboard behind the public proxy."""
 from __future__ import annotations
 

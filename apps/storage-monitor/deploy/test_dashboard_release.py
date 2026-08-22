@@ -1518,7 +1518,7 @@ class StorageVizProxySystemdUnitTest(unittest.TestCase):
         self.assertNotIn("CAP_SYS_ADMIN", unit)
         self.assertNotIn("gpu", unit.lower())
         self.assertIn(
-            "ExecStart=/usr/bin/python3.12 /opt/storage-viz-dashboard/deploy/server/storage-viz-proxy-launcher.py "
+            "ExecStart=/usr/bin/python3 /opt/storage-viz-dashboard/deploy/server/storage-viz-proxy-launcher.py "
             "/opt/storage-viz-dashboard/deploy/direct_proxy.py",
             unit,
         )

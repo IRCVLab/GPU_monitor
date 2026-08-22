@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Validate and exec the managed storage-viz direct proxy target."""
 from __future__ import annotations
 
