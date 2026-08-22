@@ -77,8 +77,8 @@ test('NoteForm keeps memo submission unchanged until selected GPUs reveal priori
 
 test('NoteForm priority description follows only the selected urgency instead of hover or focus', () => {
 	for (const description of [
-		'일정 조정 가능 · 다른 사용 계획과 협의할 수 있습니다.',
-		'일정 변경이 어려움 · 변경 전 등록자 확인이 필요합니다.',
+		'일정 조정 가능 · 개인 연구이거나 마감까지 여유가 있어 다른 사용 계획과 협의할 수 있습니다.',
+		'일정 변경이 어려움 · 산학 과제를 수행 중이거나 학회 마감이 가까워 GPU 사용이 필요합니다.',
 		'긴급 · 지금 당장 사용해야 합니다.'
 	]) {
 		assert.ok(source.includes(description), `missing priority description: ${description}`);

@@ -20,8 +20,8 @@
 	const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 	const MIN_FUTURE_MS = 60 * 1000;
 	const HOLD_PRIORITY_OPTIONS: { value: NotePriority; label: string; description: string }[] = [
-		{ value: 'normal', label: '보통', description: '일정 조정 가능 · 다른 사용 계획과 협의할 수 있습니다.' },
-		{ value: 'high', label: '높음', description: '일정 변경이 어려움 · 변경 전 등록자 확인이 필요합니다.' },
+		{ value: 'normal', label: '보통', description: '일정 조정 가능 · 개인 연구이거나 마감까지 여유가 있어 다른 사용 계획과 협의할 수 있습니다.' },
+		{ value: 'high', label: '높음', description: '일정 변경이 어려움 · 산학 과제를 수행 중이거나 학회 마감이 가까워 GPU 사용이 필요합니다.' },
 		{ value: 'urgent', label: '개초비상', description: '긴급 · 지금 당장 사용해야 합니다.' }
 	];
 
