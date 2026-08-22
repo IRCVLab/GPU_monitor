@@ -720,6 +720,8 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         canonical_app = str(self.app_path.resolve())
         expected = {
+            "legacy_proxy_original_path": str(self.app_path.resolve() / "deploy/direct_proxy.py"),
+            "managed_legacy_proxy_sha256": hashlib.sha256(proxy.read_bytes()).hexdigest(),
             "managed_legacy_proxy_target": str(self.app_path.resolve() / "deploy/direct_proxy.py"),
             "restored": canonical_app,
             "restored_legacy_target": canonical_app,
@@ -730,6 +732,179 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertFalse(set(expected) & {"release", "current", "source_sha", "archive_digest", "failed_release"})
         after = {path.relative_to(self.app_path): (path.read_bytes(), path.stat().st_mode) for path in self.app_path.rglob("*") if path.is_file()}
         self.assertEqual(after, before)
+
+    def test_external_legacy_proxy_is_snapshotted_and_launcher_uses_only_managed_copy(self) -> None:
+        serve = self.app_path / "viewer/serve.py"
+        serve.parent.mkdir(parents=True)
+        serve.write_bytes(b"#!/usr/bin/env python3\nprint('legacy serve')\n")
+        serve.chmod(0o755)
+        sentinel = self.app_path / "legacy-data.bin"
+        sentinel.write_bytes(b"\x00legacy\xffunchanged")
+        external_proxy = self.root / "home/ircv/workspace/storage-viz-direct/proxy.py"
+        external_proxy.parent.mkdir(parents=True)
+        external_proxy.write_bytes(b"#!/usr/bin/env python3\nprint('external legacy proxy')\n")
+        external_proxy.chmod(0o755)
+
+        prepared = self.module.prepare_legacy_proxy_recovery(self._config(), external_proxy)
+        managed_target = Path(prepared["managed_legacy_proxy_target"])
+        digest = hashlib.sha256(external_proxy.read_bytes()).hexdigest()
+
+        self.assertEqual(prepared["managed_legacy_proxy_sha256"], digest)
+        self.assertEqual(managed_target.read_bytes(), external_proxy.read_bytes())
+        self.assertEqual(stat.S_IMODE(managed_target.stat().st_mode), 0o440)
+        external_proxy.write_text("changed after snapshot\n", encoding="utf-8")
+
+        status = self.module.record_restored_legacy(
+            self._config(),
+            managed_legacy_proxy_target=managed_target,
+            managed_legacy_proxy_sha256=digest,
+            legacy_proxy_original_path=external_proxy,
+        )
+
+        self.assertEqual(status["managed_legacy_proxy_target"], str(managed_target.resolve()))
+        self.assertEqual(status["managed_legacy_proxy_sha256"], digest)
+        self.assertEqual(status["legacy_proxy_original_path"], str(external_proxy.resolve()))
+        self.assertEqual(sentinel.read_bytes(), b"\x00legacy\xffunchanged")
+        launcher = self._load_named_module(
+            "storage_viz_proxy_launcher_external_rollback",
+            REPO_ROOT / "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py",
+        )
+        launcher_config = launcher.LauncherConfig(
+            release_root=self.release_root,
+            state_path=self.state_path,
+            app_path=self.app_path,
+        )
+        self.assertEqual(launcher.resolve_proxy_target(launcher_config), managed_target.resolve())
+        with self.assertRaises(launcher.LauncherError):
+            launcher.validate_proxy_target(external_proxy, launcher_config)
+
+        managed_target.chmod(0o640)
+        managed_target.write_text("tampered\n", encoding="utf-8")
+        managed_target.chmod(0o440)
+        with self.assertRaises(launcher.LauncherError):
+            launcher.resolve_proxy_target(launcher_config)
+
+    def test_first_activation_carries_prepared_external_proxy_recovery_metadata(self) -> None:
+        serve = self.app_path / "viewer/serve.py"
+        serve.parent.mkdir(parents=True)
+        serve.write_text("print('legacy dashboard')\n", encoding="utf-8")
+        external_proxy = self.root / "home/ircv/workspace/storage-viz-direct/proxy.py"
+        external_proxy.parent.mkdir(parents=True)
+        external_proxy.write_text("print('legacy proxy')\n", encoding="utf-8")
+        external_proxy.chmod(0o755)
+        prepared = self.module.prepare_legacy_proxy_recovery(self._config(), external_proxy)
+        archive, metadata, digest = self._archive()
+
+        status = self.module.activate_release(
+            self._config(),
+            sha=self.sha,
+            expected_digest=digest,
+            artifact_path=archive,
+            metadata_path=metadata,
+            restart=self._restart,
+            health=self._health,
+            legacy_proxy_recovery=prepared,
+        )
+
+        for key in (
+            "legacy_proxy_original_path",
+            "managed_legacy_proxy_target",
+            "managed_legacy_proxy_sha256",
+        ):
+            self.assertEqual(status[key], prepared[key])
+        self.assertIsNotNone(status["legacy_backup"])
+
+    def test_failed_first_activation_does_not_restore_stale_release_state_over_real_legacy_app(self) -> None:
+        serve = self.app_path / "viewer/serve.py"
+        serve.parent.mkdir(parents=True)
+        serve.write_text("print('real legacy dashboard')\n", encoding="utf-8")
+        external_proxy = self.root / "home/ircv/proxy.py"
+        external_proxy.parent.mkdir(parents=True)
+        external_proxy.write_text("print('real legacy proxy')\n", encoding="utf-8")
+        external_proxy.chmod(0o755)
+        prepared = self.module.prepare_legacy_proxy_recovery(self._config(), external_proxy)
+        self.state_path.write_text(json.dumps({
+            "status": "active",
+            "release": "/stale/missing/release",
+            "legacy_backup": "/stale/missing/legacy-backup",
+            "previous": None,
+        }), encoding="utf-8")
+        archive, metadata, digest = self._archive()
+
+        with self.assertRaisesRegex(self.module.ActivationError, "health check failed"):
+            self.module.activate_release(
+                self._config(),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_path=archive,
+                metadata_path=metadata,
+                restart=self._restart,
+                health=lambda: False,
+                legacy_proxy_recovery=prepared,
+            )
+
+        self.assertFalse(self.app_path.is_symlink())
+        self.assertEqual(serve.read_text(encoding="utf-8"), "print('real legacy dashboard')\n")
+        self.assertFalse(self.state_path.exists())
+
+    def test_external_legacy_proxy_recovery_cli_prepares_and_records_exact_snapshot(self) -> None:
+        serve = self.app_path / "viewer/serve.py"
+        serve.parent.mkdir(parents=True)
+        serve.write_text("print('legacy dashboard')\n", encoding="utf-8")
+        external_proxy = self.root / "home/ircv/workspace/storage-viz-direct/proxy.py"
+        external_proxy.parent.mkdir(parents=True)
+        external_proxy.write_text("print('legacy proxy')\n", encoding="utf-8")
+        external_proxy.chmod(0o755)
+        stdout = io.StringIO()
+        common = [
+            "--state-path", str(self.state_path),
+            "--app-path", str(self.app_path),
+            "--release-root", str(self.release_root),
+            "--lock-path", str(self.lock_path),
+            "--incoming-dir", str(self.incoming),
+        ]
+
+        with mock.patch("sys.stdout", stdout):
+            rc = self.module.main([
+                "--prepare-legacy-proxy",
+                "--legacy-proxy-source", str(external_proxy),
+                *common,
+            ])
+        self.assertEqual(rc, 0)
+        prepared = json.loads(stdout.getvalue())
+        stdout = io.StringIO()
+        with mock.patch("sys.stdout", stdout):
+            rc = self.module.main([
+                "--record-restored-legacy",
+                "--legacy-proxy-recovery-target", prepared["managed_legacy_proxy_target"],
+                "--legacy-proxy-recovery-sha256", prepared["managed_legacy_proxy_sha256"],
+                "--legacy-proxy-original-path", prepared["legacy_proxy_original_path"],
+                *common,
+            ])
+        self.assertEqual(rc, 0)
+        recorded = json.loads(stdout.getvalue())
+        self.assertEqual(recorded["managed_legacy_proxy_target"], prepared["managed_legacy_proxy_target"])
+        self.assertEqual(recorded["managed_legacy_proxy_sha256"], prepared["managed_legacy_proxy_sha256"])
+
+    def test_managed_legacy_proxy_rejects_group_writable_recovery_directory(self) -> None:
+        serve = self.app_path / "viewer/serve.py"
+        serve.parent.mkdir(parents=True)
+        serve.write_text("print('legacy dashboard')\n", encoding="utf-8")
+        external_proxy = self.root / "home/ircv/proxy.py"
+        external_proxy.parent.mkdir(parents=True)
+        external_proxy.write_text("print('legacy proxy')\n", encoding="utf-8")
+        external_proxy.chmod(0o755)
+        prepared = self.module.prepare_legacy_proxy_recovery(self._config(), external_proxy)
+        managed = Path(prepared["managed_legacy_proxy_target"])
+        managed.parent.parent.chmod(0o770)
+
+        with self.assertRaisesRegex(self.module.ActivationError, "recovery directory mode"):
+            self.module.record_restored_legacy(
+                self._config(),
+                managed_legacy_proxy_target=managed,
+                managed_legacy_proxy_sha256=str(prepared["managed_legacy_proxy_sha256"]),
+                legacy_proxy_original_path=external_proxy,
+            )
 
     def test_record_restored_legacy_rejects_symlink_missing_and_unsafe_legacy_layouts(self) -> None:
         def real_layout(root: Path) -> tuple[Path, Path]:
@@ -804,6 +979,17 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         for key in ("failed_release", "failed_source_sha", "failed_archive_digest", "activation_error", "rollback_restart_error"):
             self.assertNotIn(key, persisted)
 
+    def test_rollback_rejects_present_malformed_state_without_restart_or_rewrite(self) -> None:
+        self.state_path.parent.mkdir(parents=True)
+        malformed = b'{"status":"active"\n'
+        self.state_path.write_bytes(malformed)
+
+        with self.assertRaisesRegex(self.module.ActivationError, "invalid or unreadable"):
+            self.module.rollback_to_state(self._config(), restart=self._restart)
+
+        self.assertEqual(self.restart_calls, [])
+        self.assertEqual(self.state_path.read_bytes(), malformed)
+
     def test_legacy_rollback_preserves_backup_restores_real_opt_and_launcher_accepts_target(self) -> None:
         failed_target = self.release_root / self.sha / "storage-monitor"
         failed_target.mkdir(parents=True)
@@ -851,6 +1037,50 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             launcher.LauncherConfig(release_root=self.release_root, state_path=self.state_path, app_path=self.app_path),
         )
         self.assertEqual(accepted, (self.app_path / "deploy/direct_proxy.py").resolve())
+
+    def test_legacy_rollback_restores_dashboard_and_uses_prepared_external_proxy_copy(self) -> None:
+        failed_target = self.release_root / self.sha / "storage-monitor"
+        failed_target.mkdir(parents=True)
+        self.app_path.parent.mkdir(parents=True)
+        self.app_path.symlink_to(failed_target)
+        backup = self.app_path.with_name("storage-viz-dashboard.legacy.external")
+        serve = backup / "viewer/serve.py"
+        serve.parent.mkdir(parents=True)
+        serve.write_bytes(b"#!/usr/bin/env python3\nprint('legacy dashboard')\n")
+        serve.chmod(0o755)
+        (backup / "legacy-sentinel.bin").write_bytes(b"\x00legacy\xffbytes")
+        external_proxy = self.root / "home/ircv/workspace/storage-viz-direct/proxy.py"
+        external_proxy.parent.mkdir(parents=True)
+        external_proxy.write_bytes(b"#!/usr/bin/env python3\nprint('external legacy proxy')\n")
+        external_proxy.chmod(0o755)
+        prepared = self.module.prepare_legacy_proxy_recovery(self._config(), external_proxy)
+        self.state_path.write_text(json.dumps({
+            "status": "active",
+            "source_sha": self.sha,
+            "archive_digest": "b" * 64,
+            "release": str(failed_target),
+            "previous": None,
+            "legacy_backup": str(backup),
+            "legacy_proxy_original_path": prepared["legacy_proxy_original_path"],
+            "managed_legacy_proxy_target": prepared["managed_legacy_proxy_target"],
+            "managed_legacy_proxy_sha256": prepared["managed_legacy_proxy_sha256"],
+        }) + "\n", encoding="utf-8")
+
+        status = self.module.rollback_to_state(self._config(), restart=self._restart)
+
+        self.assertFalse(self.app_path.is_symlink())
+        self.assertEqual((self.app_path / "legacy-sentinel.bin").read_bytes(), b"\x00legacy\xffbytes")
+        self.assertFalse((self.app_path / "deploy/direct_proxy.py").exists())
+        self.assertEqual(status["managed_legacy_proxy_target"], prepared["managed_legacy_proxy_target"])
+        self.assertEqual(status["managed_legacy_proxy_sha256"], prepared["managed_legacy_proxy_sha256"])
+        launcher = self._load_named_module(
+            "storage_viz_proxy_launcher_external_state_rollback",
+            REPO_ROOT / "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py",
+        )
+        accepted = launcher.resolve_proxy_target(
+            launcher.LauncherConfig(release_root=self.release_root, state_path=self.state_path, app_path=self.app_path)
+        )
+        self.assertEqual(accepted, Path(str(prepared["managed_legacy_proxy_target"])).resolve())
 
     def _load_named_module(self, name: str, path: Path):
         import importlib.util
@@ -1212,6 +1442,103 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         self.assertEqual(requests[2][2]["Host"], "166.104.167.11:505")
         self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
 
+    def test_probe_waits_for_dashboard_readiness_after_initial_proxy_502s(self) -> None:
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+
+        class Result:
+            returncode = 0
+            stdout = "active\n"
+            stderr = ""
+
+        class FakeResponse:
+            def __init__(self, status, body, headers=None, *, raw=False):
+                self.status = status
+                self._body = body if raw else json.dumps(body).encode()
+                self._headers = headers or {}
+
+            def read(self):
+                return self._body
+
+            def getheaders(self):
+                return list(self._headers.items())
+
+        responses = [
+            FakeResponse(502, b"storage-viz upstream unavailable", raw=True)
+            for _ in range(4)
+        ] + [
+            FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie": "storage_viz_session=abc; Path=/"}),
+            FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
+            FakeResponse(404, {"error": "UNKNOWN_SERVER"}),
+        ]
+
+        class FakeConnection:
+            def __init__(self, host, port, timeout):
+                pass
+
+            def request(self, method, path, body=None, headers=None):
+                pass
+
+            def getresponse(self):
+                return responses.pop(0)
+
+            def close(self):
+                pass
+
+        sleeps: list[float] = []
+        self.module.run_health_check(
+            contract,
+            runner=lambda *args, **kwargs: Result(),
+            connection_factory=FakeConnection,
+            sleep=sleeps.append,
+        )
+
+        self.assertEqual(sleeps, [0.2] * 4)
+        self.assertEqual(responses, [])
+
+    def test_probe_reports_proxy_http_boundary_for_non_json_readiness_failure(self) -> None:
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+
+        class Result:
+            returncode = 0
+            stdout = "active\n"
+            stderr = ""
+
+        class FakeResponse:
+            status = 502
+
+            def read(self):
+                return b"storage-viz upstream unavailable: connection refused"
+
+            def getheaders(self):
+                return [("Content-Type", "text/plain; charset=utf-8")]
+
+        class FakeConnection:
+            def __init__(self, host, port, timeout):
+                pass
+
+            def request(self, method, path, body=None, headers=None):
+                pass
+
+            def getresponse(self):
+                return FakeResponse()
+
+            def close(self):
+                pass
+
+        with self.assertRaisesRegex(
+            self.module.HealthCheckError,
+            r"HTTP 502 content-type=text/plain; charset=utf-8 body=storage-viz upstream unavailable",
+        ):
+            self.module.run_health_check(
+                contract,
+                runner=lambda *args, **kwargs: Result(),
+                connection_factory=FakeConnection,
+                sleep=lambda _: None,
+                ready_attempts=1,
+            )
+
     def test_candidate_override_connects_to_loopback_1505_without_systemd_and_keeps_public_semantics(self) -> None:
         dash, proxy, _ = self._write_envs()
         contract = self.module.load_contract(
@@ -1352,6 +1679,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
                 runner=lambda argv, **kwargs: Result(),
                 connection_factory=FakeConnection,
                 sleep=lambda _: None,
+                ready_attempts=3,
             )
 
 
@@ -1419,6 +1747,21 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
             with self.subTest(bad=bad):
                 with self.assertRaises(self.module.LauncherError):
                     self.module.validate_proxy_target(bad, cfg)
+
+    def test_launch_without_target_resolves_active_proxy_from_activation_state(self) -> None:
+        target = self._target()
+        state = self.root / "state.json"
+        state.write_text(json.dumps({"status": "active", "release": str(target.parents[1])}), encoding="utf-8")
+        cfg = self.module.LauncherConfig(
+            release_root=self.root / "srv/storage-viz-dashboard/releases",
+            state_path=state,
+            app_path=self.root / "opt/storage-viz-dashboard",
+        )
+        calls: list[tuple[str, list[str]]] = []
+
+        self.module.launch([], config=cfg, execv=lambda exe, argv: calls.append((exe, argv)))
+
+        self.assertEqual(calls[0][1][-1], str(target.resolve()))
 
     def test_recovery_state_accepts_only_exact_safe_real_legacy_proxy(self) -> None:
         app = self.root / "opt/storage-viz-dashboard"
@@ -1518,16 +1861,17 @@ class StorageVizProxySystemdUnitTest(unittest.TestCase):
         self.assertNotIn("CAP_SYS_ADMIN", unit)
         self.assertNotIn("gpu", unit.lower())
         self.assertIn(
-            "ExecStart=/usr/bin/python3 /opt/storage-viz-dashboard/deploy/server/storage-viz-proxy-launcher.py "
-            "/opt/storage-viz-dashboard/deploy/direct_proxy.py",
+            "ExecStart=/usr/bin/python3 /opt/storage-viz-dashboard/deploy/server/storage-viz-proxy-launcher.py",
             unit,
         )
+        self.assertNotIn("storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py", unit)
         self.assertNotIn("${STORAGE_VIZ_PROXY_TARGET}", unit)
         self.assertNotIn("--bind", unit)
         self.assertNotIn("--port", unit)
         self.assertNotIn("--upstream", unit)
         self.assertNotIn("ReadWritePaths=/var/lib/storage-viz-dashboard", unit)
         self.assertIn("ReadOnlyPaths=/var/lib/storage-viz-dashboard/activation-state.json", unit)
+        self.assertIn("ReadOnlyPaths=/var/lib/storage-viz-dashboard/legacy-proxy", unit)
         self.assertIn("InaccessiblePaths=-/var/lib/storage-viz-dashboard/data", unit)
 
 if __name__ == "__main__":

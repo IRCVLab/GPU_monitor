@@ -36,6 +36,9 @@ RUNTIME_USER="storage-viz"
 RUNTIME_GROUP="storage-viz"
 BUILDER_USER="storage-viz-builder"
 BUILDER_GROUP="storage-viz-builder"
+LEGACY_PROXY_RECOVERY_TARGET=""
+LEGACY_PROXY_RECOVERY_SHA256=""
+LEGACY_PROXY_ORIGINAL_PATH=""
 
 usage() {
   cat <<USAGE
@@ -267,9 +270,87 @@ listener_owner_pid() {
 
 activate_candidate_release() {
   local status activated
-  status="$("$ACTIVATOR" --sha "$CANDIDATE_SHA" --expected-digest "$EXPECTED_DIGEST" --artifact-stdin --metadata "$METADATA" <"$ARTIFACT")" || return
+  local -a recovery_args=(
+    --legacy-proxy-recovery-target "$LEGACY_PROXY_RECOVERY_TARGET"
+    --legacy-proxy-recovery-sha256 "$LEGACY_PROXY_RECOVERY_SHA256"
+    --legacy-proxy-original-path "$LEGACY_PROXY_ORIGINAL_PATH"
+  )
+  status="$("$ACTIVATOR" --sha "$CANDIDATE_SHA" --expected-digest "$EXPECTED_DIGEST" --artifact-stdin --metadata "$METADATA" "${recovery_args[@]}" <"$ARTIFACT")" || return
   activated="$(parse_status_path "$status" active)" || return
   [[ "$activated" == "$CANDIDATE_RELEASE" ]] || { echo "activated release differs from prepared candidate" >&2; return 1; }
+}
+
+prepare_legacy_proxy_recovery() {
+  local status parsed
+  status="$("$ACTIVATOR" --prepare-legacy-proxy --legacy-proxy-source "$LEGACY_PROXY_PATH" --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" --release-root "$RELEASE_ROOT" --lock-path "$STATE_ROOT/activation.lock" --incoming-dir "$STATE_ROOT/incoming")" || return
+  parsed="$(printf '%s' "$status" | "$PYTHON" -c '
+import json, re, sys
+payload = json.load(sys.stdin)
+keys = ("managed_legacy_proxy_target", "managed_legacy_proxy_sha256", "legacy_proxy_original_path")
+if payload.get("status") != "legacy_proxy_prepared" or any(not isinstance(payload.get(key), str) or not payload[key] for key in keys):
+    raise SystemExit("activator did not report prepared legacy proxy recovery")
+if not re.fullmatch(r"[0-9a-f]{64}", payload["managed_legacy_proxy_sha256"]):
+    raise SystemExit("prepared legacy proxy digest invalid")
+if any(any(ord(ch) < 32 for ch in payload[key]) for key in keys):
+    raise SystemExit("prepared legacy proxy path contains control characters")
+print("\x1f".join(payload[key] for key in keys), end="")
+')" || return
+  IFS=$'\x1f' read -r LEGACY_PROXY_RECOVERY_TARGET LEGACY_PROXY_RECOVERY_SHA256 LEGACY_PROXY_ORIGINAL_PATH <<<"$parsed"
+  [[ -n "$LEGACY_PROXY_RECOVERY_TARGET" && -n "$LEGACY_PROXY_RECOVERY_SHA256" && -n "$LEGACY_PROXY_ORIGINAL_PATH" ]] || {
+    echo "prepared legacy proxy recovery fields are incomplete" >&2
+    return 1
+  }
+}
+
+verify_legacy_proxy_source_for_process() {
+  local pid="$1"
+  "$PYTHON" - "$LEGACY_PROXY_PATH" "$LEGACY_PROXY_ORIGINAL_PATH" "$LEGACY_PROXY_RECOVERY_SHA256" "$PROC_ROOT" "$pid" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import stat
+import sys
+import time
+
+source_arg, expected_original, expected_digest, proc_root_arg, pid_text = sys.argv[1:]
+source = Path(source_arg)
+proc_root = Path(proc_root_arg)
+if not pid_text.isdigit() or int(pid_text) <= 0:
+    raise SystemExit("legacy proxy pid is invalid")
+if str(source.resolve(strict=True)) != expected_original:
+    raise SystemExit("legacy proxy source path changed during snapshot")
+fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+try:
+    source_stat = os.fstat(fd)
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise SystemExit("legacy proxy source is not a regular file")
+    digest = hashlib.sha256()
+    total = 0
+    while True:
+        chunk = os.read(fd, 1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > 32 * 1024 * 1024:
+            raise SystemExit("legacy proxy source exceeds verification bound")
+        digest.update(chunk)
+finally:
+    os.close(fd)
+if digest.hexdigest() != expected_digest:
+    raise SystemExit("legacy proxy source changed during snapshot")
+try:
+    uptime = float((proc_root / "uptime").read_text(encoding="utf-8").split()[0])
+    proc_stat = (proc_root / pid_text / "stat").read_text(encoding="utf-8")
+    tail = proc_stat[proc_stat.rfind(")") + 2 :].split()
+    start_ticks = int(tail[19])
+    ticks_per_second = int(os.sysconf("SC_CLK_TCK"))
+except (OSError, ValueError, IndexError) as exc:
+    raise SystemExit(f"legacy proxy process start metadata unavailable: {exc}")
+process_started_at = time.time() - uptime + (start_ticks / ticks_per_second)
+if source_stat.st_ctime > process_started_at + 1.0:
+    raise SystemExit("legacy proxy source changed after running process start")
+PY
+  printf 'legacy proxy source verified against running process pid=%s\n' "$pid"
 }
 
 is_no_state_rollback_error() {
@@ -296,25 +377,27 @@ try:
 except Exception as exc:
     raise SystemExit(f"invalid restored legacy JSON: {exc}")
 app = pathlib.Path(sys.argv[1]).resolve(strict=True)
-expected_proxy = app / "deploy/direct_proxy.py"
+expected_proxy, expected_digest, expected_original = sys.argv[2:]
 if payload.get("status") != "rolled_back":
     raise SystemExit("activator did not report restored legacy rollback")
-if payload.get("restored_legacy_target") != str(app) or payload.get("managed_legacy_proxy_target") != str(expected_proxy):
+if payload.get("restored_legacy_target") != str(app) or payload.get("managed_legacy_proxy_target") != expected_proxy:
     raise SystemExit("activator restored legacy path mismatch")
+if payload.get("managed_legacy_proxy_sha256") != expected_digest or payload.get("legacy_proxy_original_path") != expected_original:
+    raise SystemExit("activator restored legacy proxy identity mismatch")
 if any(key in payload for key in ("release", "current", "source_sha", "failed_release")):
     raise SystemExit("activator restored legacy state retained candidate identity")
-' "$APP_PATH"
+' "$APP_PATH" "$LEGACY_PROXY_RECOVERY_TARGET" "$LEGACY_PROXY_RECOVERY_SHA256" "$LEGACY_PROXY_ORIGINAL_PATH"
 }
 
 rollback_after_post_stop_failure() {
   local rollback_status recovery_status
   if ! rollback_status="$("$ACTIVATOR" --rollback-state --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" --release-root "$RELEASE_ROOT" --lock-path "$STATE_ROOT/activation.lock" --incoming-dir "$STATE_ROOT/incoming" 2>&1)"; then
     is_no_state_rollback_error "$rollback_status" || { printf '%s\n' "$rollback_status" >&2; return 1; }
-    [[ -d "$APP_PATH" && ! -L "$APP_PATH" && -f "$APP_PATH/viewer/serve.py" && ! -L "$APP_PATH/viewer/serve.py" && -f "$APP_PATH/deploy/direct_proxy.py" && ! -L "$APP_PATH/deploy/direct_proxy.py" ]] || {
+    [[ -d "$APP_PATH" && ! -L "$APP_PATH" && -f "$APP_PATH/viewer/serve.py" && ! -L "$APP_PATH/viewer/serve.py" ]] || {
       echo "activation state is unavailable and exact restored legacy app is not present" >&2
       return 1
     }
-    recovery_status="$("$ACTIVATOR" --record-restored-legacy --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" --release-root "$RELEASE_ROOT" --lock-path "$STATE_ROOT/activation.lock" --incoming-dir "$STATE_ROOT/incoming")" || return 1
+    recovery_status="$("$ACTIVATOR" --record-restored-legacy --legacy-proxy-recovery-target "$LEGACY_PROXY_RECOVERY_TARGET" --legacy-proxy-recovery-sha256 "$LEGACY_PROXY_RECOVERY_SHA256" --legacy-proxy-original-path "$LEGACY_PROXY_ORIGINAL_PATH" --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" --release-root "$RELEASE_ROOT" --lock-path "$STATE_ROOT/activation.lock" --incoming-dir "$STATE_ROOT/incoming")" || return 1
     validate_recovery_status "$recovery_status" || return 1
   fi
   "$SYSTEMCTL" start storage-viz-dashboard.service storage-viz-proxy.service || return 1
@@ -334,6 +417,8 @@ bootstrap_cutover() {
   local proxy_pid dash_pid
   proxy_pid="$(listener_owner_pid proxy "$LIVE_PROXY_BIND" "$LIVE_PROXY_PORT")"
   dash_pid="$(listener_owner_pid dashboard 127.0.0.1 8088)"
+  prepare_legacy_proxy_recovery
+  verify_legacy_proxy_source_for_process "$proxy_pid"
   run_cmd "$KILL" -TERM "$proxy_pid"
   run_cmd "$KILL" -TERM "$dash_pid"
   run_cmd "$SYSTEMCTL" stop storage-viz-dashboard.service
@@ -426,7 +511,7 @@ render_proxy_service() {
   actual_dest="$(prefix_path "$dest")"
   mkdir -p "$(dirname "$actual_dest")"
   sed \
-    -e 's#ExecStart=.*#ExecStart=/usr/bin/python3 /usr/local/libexec/storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py#' \
+    -e 's#ExecStart=.*#ExecStart=/usr/bin/python3 /usr/local/libexec/storage-viz-proxy-launcher.py#' \
     "$SERVER/systemd/storage-viz-proxy.service" >"$actual_dest"
   chmod 0644 "$actual_dest"
   if [[ "$DRY_RUN" != 1 && -z "$PREFIX" ]]; then
@@ -444,6 +529,7 @@ ensure_identity "$RUNTIME_USER" "$RUNTIME_GROUP" "$STATE_ROOT"
 
 ensure_dir "$RELEASE_ROOT" 0755 root:root
 ensure_dir "$STATE_ROOT" 0750 root:"$RUNTIME_GROUP"
+ensure_dir "$STATE_ROOT/legacy-proxy" 0750 root:"$RUNTIME_GROUP"
 ensure_dir "$STATE_ROOT/puller" 0750 root:root
 ensure_dir "$STATE_ROOT/builder" 0750 "$BUILDER_USER":"$BUILDER_GROUP"
 ensure_dir "$STATE_ROOT/data" 0750 "$RUNTIME_USER":"$RUNTIME_GROUP"
@@ -474,11 +560,12 @@ cutover plan 1: prepare supplied artifact as an immutable candidate release
 cutover plan 2: start candidate dashboard 127.0.0.1:18088 and direct proxy 127.0.0.1:1505
 cutover plan 3: run full candidate health/session/inventory/UNKNOWN_SERVER readiness
 cutover plan 4: validate exact listener owners for configured live proxy endpoint and 127.0.0.1:8088
-cutover plan 5: stop only validated live owners and legacy dashboard service
-cutover plan 6: activate the exact prepared release
-cutover plan 7: start managed dashboard and proxy services
-cutover plan 8: run production health through configured proxy listener with public :505 Host/Origin
-cutover plan 9: enable --now storage-monitor-release-puller.timer
+cutover plan 5: snapshot the exact validated legacy proxy into checksum-bound managed recovery storage
+cutover plan 6: stop only validated live owners and legacy dashboard service
+cutover plan 7: activate the exact prepared release
+cutover plan 8: start managed dashboard and proxy services
+cutover plan 9: run production health through configured proxy listener with public :505 Host/Origin
+cutover plan 10: enable --now storage-monitor-release-puller.timer
 CUTOVER_PLAN
 
 if [[ "$DRY_RUN" == 1 || ( -n "$PREFIX" && "${STORAGE_VIZ_INSTALL_TEST_REAL_WITH_PREFIX:-0}" != 1 ) ]]; then

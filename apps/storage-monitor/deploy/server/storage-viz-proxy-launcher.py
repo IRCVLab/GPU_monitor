@@ -120,12 +120,42 @@ def _legacy_target(resolved: Path, config: LauncherConfig, state: dict[str, obje
     restored = state.get("restored_legacy_target")
     managed = state.get("managed_legacy_proxy_target")
     protected = state.get("protected_legacy_backup")
+    managed_digest = state.get("managed_legacy_proxy_sha256")
     if (
         state.get("status") != "rolled_back"
         or not isinstance(restored, str)
         or not isinstance(managed, str)
     ):
         return False
+    recovery_root = config.state_path.parent / "legacy-proxy"
+    if isinstance(managed_digest, str) and re.fullmatch(r"[0-9a-f]{64}", managed_digest):
+        expected = recovery_root / managed_digest / "direct_proxy.py"
+        if managed == str(expected.resolve(strict=False)):
+            if resolved != expected.resolve(strict=False):
+                return False
+            try:
+                target_stat = expected.stat()
+                state_parent_stat = config.state_path.parent.stat()
+                recovery_root_stat = recovery_root.stat()
+                digest_dir_stat = expected.parent.stat()
+                expected.resolve(strict=True).relative_to(recovery_root.resolve(strict=True))
+            except (OSError, ValueError):
+                return False
+            if (
+                not stat.S_ISREG(target_stat.st_mode)
+                or stat.S_IMODE(target_stat.st_mode) != 0o440
+                or target_stat.st_uid != state_parent_stat.st_uid
+                or target_stat.st_gid != state_parent_stat.st_gid
+            ):
+                return False
+            for directory_stat in (recovery_root_stat, digest_dir_stat):
+                if (
+                    directory_stat.st_uid != state_parent_stat.st_uid
+                    or directory_stat.st_gid != state_parent_stat.st_gid
+                    or stat.S_IMODE(directory_stat.st_mode) != 0o750
+                ):
+                    return False
+            return hashlib.sha256(expected.read_bytes()).hexdigest() == managed_digest
     try:
         canonical_app = _safe_legacy_app(config.app_path)
     except LauncherError:
@@ -155,10 +185,21 @@ def validate_proxy_target(target: str | Path, config: LauncherConfig = LauncherC
     raise LauncherError("proxy target is not the active storage release or recorded legacy backup")
 
 
+def resolve_proxy_target(config: LauncherConfig = LauncherConfig()) -> Path:
+    state = _state(config)
+    if state.get("status") == "active" and isinstance(state.get("release"), str):
+        target = Path(str(state["release"])) / "deploy/direct_proxy.py"
+    elif state.get("status") == "rolled_back" and isinstance(state.get("managed_legacy_proxy_target"), str):
+        target = Path(str(state["managed_legacy_proxy_target"]))
+    else:
+        raise LauncherError("activation state does not select a proxy target")
+    return validate_proxy_target(target, config)
+
+
 def launch(argv: Sequence[str], *, config: LauncherConfig = LauncherConfig(), execv: Callable[[str, list[str]], object] = os.execv) -> None:
-    if len(argv) != 1:
-        raise LauncherError("exactly one direct_proxy.py target argument is required")
-    target = validate_proxy_target(argv[0], config)
+    if len(argv) > 1:
+        raise LauncherError("at most one direct_proxy.py target argument is allowed")
+    target = validate_proxy_target(argv[0], config) if argv else resolve_proxy_target(config)
     execv(sys.executable, [sys.executable, str(target)])
 
 
@@ -167,10 +208,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--release-root", default="/srv/storage-viz-dashboard/releases")
     parser.add_argument("--state-path", default="/var/lib/storage-viz-dashboard/activation-state.json")
     parser.add_argument("--app-path", default="/opt/storage-viz-dashboard")
-    parser.add_argument("target")
+    parser.add_argument("target", nargs="?")
     args = parser.parse_args(argv)
     launch(
-        [args.target],
+        [args.target] if args.target else [],
         config=LauncherConfig(Path(args.release_root), Path(args.state_path), Path(args.app_path)),
     )
     return 0

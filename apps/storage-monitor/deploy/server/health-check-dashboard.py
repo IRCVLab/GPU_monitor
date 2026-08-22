@@ -35,6 +35,8 @@ PROXY_ENV_KEYS = frozenset(
     }
 )
 MAX_PROXY_RESPONSE_BYTES = 512 * 1024 * 1024
+HEALTH_READY_ATTEMPTS = 50
+HEALTH_READY_INTERVAL_SECONDS = 0.2
 
 
 class HealthCheckError(RuntimeError):
@@ -215,11 +217,16 @@ def load_contract(
 
 def _json_response(response: Any) -> tuple[int, Mapping[str, str], Any]:
     raw = response.read()
+    headers = dict(response.getheaders())
     try:
         body = json.loads(raw.decode("utf-8") if raw else "{}")
     except Exception as exc:
-        raise HealthCheckError(f"invalid JSON response: {exc}") from exc
-    return response.status, dict(response.getheaders()), body
+        content_type = headers.get("Content-Type", "unknown")
+        snippet = raw[:160].decode("utf-8", "replace").replace("\r", " ").replace("\n", " ")
+        raise HealthCheckError(
+            f"HTTP {response.status} content-type={content_type} body={snippet or '<empty>'}"
+        ) from exc
+    return response.status, headers, body
 
 
 def _unknown_id(absent_from: set[str]) -> str:
@@ -255,12 +262,13 @@ def run_health_check(
     runner: Callable[..., Any] = subprocess.run,
     connection_factory: Callable[..., Any] = http.client.HTTPConnection,
     sleep: Callable[[float], None] = time.sleep,
+    ready_attempts: int = HEALTH_READY_ATTEMPTS,
 ) -> None:
     if not skip_service_check:
         for service in (DASHBOARD_SERVICE, PROXY_SERVICE):
             _service_active(service, runner)
     last_error: Exception | None = None
-    for _ in range(3):
+    for _ in range(ready_attempts):
         try:
             status, headers, session = _request(connection_factory, contract, "GET", "/api/session", headers={"X-Forwarded-User": FIXED_PROXY_OPERATOR})
             if status != 200 or not isinstance(session, Mapping) or session.get("can_rescan") is not True or not isinstance(session.get("csrf_token"), str):
@@ -286,7 +294,7 @@ def run_health_check(
             return
         except Exception as exc:
             last_error = exc
-            sleep(0.2)
+            sleep(HEALTH_READY_INTERVAL_SECONDS)
     raise HealthCheckError(str(last_error or "health check failed"))
 
 

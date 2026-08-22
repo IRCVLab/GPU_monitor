@@ -75,9 +75,21 @@ sudo ./deploy/server/install-dashboard-deployer.sh \
   --metadata /path/to/storage-monitor-dashboard-<sha>.sha256.json
 ```
 
+If the current proxy script is outside `/opt/storage-viz-dashboard`, pass its exact process path explicitly. The current central host uses:
+
+```bash
+sudo env LEGACY_PROXY_PATH=/home/ircv/workspace/storage-viz-direct/proxy.py \
+  ./deploy/server/install-dashboard-deployer.sh \
+  --bootstrap-cutover \
+  --candidate-sha <40-lowercase-hex-main-sha> \
+  --expected-digest <64-lowercase-hex-sha256> \
+  --artifact /path/to/storage-monitor-dashboard-<sha>.tar.gz \
+  --metadata /path/to/storage-monitor-dashboard-<sha>.sha256.json
+```
+
 Bootstrap preserves the existing live dashboard on `127.0.0.1:8088` and the configured existing proxy listener until a candidate topology passes the non-mutating health probe. The external origin remains `http://<public-host>:505`, but `STORAGE_VIZ_PROXY_BIND` and `STORAGE_VIZ_PROXY_PORT` describe the actual listener on the central host and may differ when NAT or port forwarding is used. The candidate dashboard listens only on `127.0.0.1:18088`, uses isolated temporary data/state, and runs in preflight mode. The candidate proxy listens only on `127.0.0.1:1505` and forwards to the candidate dashboard while preserving the configured public Host/Origin.
 
-Only after the candidate `can_rescan`, inventory, and `UNKNOWN_SERVER` probe passes does bootstrap identify and stop the exact process that owns the configured proxy bind/port, stop the validated `127.0.0.1:8088` dashboard owner, activate the prepared release, and start `storage-viz-dashboard.service` plus `storage-viz-proxy.service`. Listener ownership is matched by both local address and port, so a NAT deployment may safely use the same numeric port on different local addresses. If cutover fails after live owners are stopped, the managed rollback path restores the protected legacy dashboard/proxy target, starts Storage services under systemd, and requires previous dashboard/inventory health before reporting rollback success. The puller timer is enabled only after the first managed release passes production health.
+Only after the candidate `can_rescan`, inventory, and `UNKNOWN_SERVER` probe passes does bootstrap identify the exact processes that own the configured proxy bind/port and `127.0.0.1:8088`. Before stopping either process, it copies the validated legacy proxy script into `/var/lib/storage-viz-dashboard/legacy-proxy/<sha256>/direct_proxy.py`, fixes that copy to root ownership with the Storage runtime group and non-writable mode, verifies that its digest still matches the exact running process source, and keeps the recovery identity in the cutover process without publishing an authoritative rollback state. Bootstrap then stops the validated owners, activates the prepared release, and starts `storage-viz-dashboard.service` plus `storage-viz-proxy.service`; deployment state is written only after that post-stop transition succeeds or an actual rollback restores the legacy service. Listener ownership is matched by both local address and port, so a NAT deployment may safely use the same numeric port on different local addresses. If cutover fails after live owners are stopped, the managed rollback path restores the protected legacy dashboard and executes only the checksum-verified managed proxy copy, then requires previous dashboard/inventory health before reporting rollback success. The puller timer is enabled only after the first managed release passes production health.
 
 This branch documents the bootstrap procedure; it does not claim Storage Live has already been bootstrapped.
 

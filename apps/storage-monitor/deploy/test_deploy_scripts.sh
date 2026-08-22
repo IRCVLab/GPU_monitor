@@ -620,6 +620,7 @@ PATH="$FAKEBIN:$PATH" "$DASHBOARD_DEPLOYER" --dry-run --prefix "$DASH_DRY_PREFIX
 [[ -f "$DASH_DRY_PREFIX/etc/systemd/system/storage-viz-proxy.service" ]] || fail "dashboard dry-run did not render managed proxy service"
 [[ -d "$DASH_DRY_PREFIX/srv/storage-viz-dashboard/releases" ]] || fail "dashboard dry-run did not render release directory"
 [[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/puller" ]] || fail "dashboard dry-run did not render puller state directory"
+[[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/legacy-proxy" ]] || fail "dashboard dry-run did not render managed legacy proxy recovery directory"
 [[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/builder" ]] || fail "dashboard dry-run did not render builder state directory"
 [[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/data" ]] || fail "dashboard dry-run did not render data directory"
 [[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/state" ]] || fail "dashboard dry-run did not render state directory"
@@ -647,6 +648,7 @@ prepare supplied artifact as an immutable candidate release
 start candidate dashboard 127.0.0.1:18088 and direct proxy 127.0.0.1:1505
 run full candidate health/session/inventory/UNKNOWN_SERVER readiness
 validate exact listener owners for configured live proxy endpoint and 127.0.0.1:8088
+snapshot the exact validated legacy proxy into checksum-bound managed recovery storage
 stop only validated live owners and legacy dashboard service
 activate the exact prepared release
 start managed dashboard and proxy services
@@ -756,6 +758,14 @@ cat > "$DASH_CUTOVER_TMP/bin/activate" <<'FAKE'
 printf 'activate %s
 ' "$*" >> "${DASH_CUTOVER_LOG:?}"
 if [[ "$*" == *--rollback-state* ]]; then
+  if [[ "${ROLLBACK_ERROR_KIND:-}" == unsafe ]]; then
+    printf '{"status":"error","error":"managed legacy proxy digest mismatch"}\n' >&2
+    exit 1
+  fi
+  if [[ "${ROLLBACK_ERROR_KIND:-}" == malformed ]]; then
+    printf '{"status":"error","error":"activation state is invalid or unreadable for rollback"}\n' >&2
+    exit 1
+  fi
   if [[ "${ACTIVATE_FAIL_BEFORE_STATE:-0}" == 1 ]]; then
     printf '{"status":"error","error":"activation state is unavailable for rollback"}\n' >&2
     exit 1
@@ -764,7 +774,29 @@ if [[ "$*" == *--rollback-state* ]]; then
   exit 0
 fi
 if [[ "$*" == *--record-restored-legacy* ]]; then
-  printf '{"status":"rolled_back","restored":"%s","restored_legacy_target":"%s","managed_legacy_proxy_target":"%s/deploy/direct_proxy.py"}\n' "${APP_PATH:?}" "${APP_PATH:?}" "${APP_PATH:?}"
+  target=""; digest=""; original=""; app=""; previous=""
+  for arg in "$@"; do
+    [[ "$previous" == --legacy-proxy-recovery-target ]] && target="$arg"
+    [[ "$previous" == --legacy-proxy-recovery-sha256 ]] && digest="$arg"
+    [[ "$previous" == --legacy-proxy-original-path ]] && original="$arg"
+    [[ "$previous" == --app-path ]] && app="$arg"
+    previous="$arg"
+  done
+  app="$(cd "$app" && pwd -P)"
+  printf '{"status":"rolled_back","restored":"%s","restored_legacy_target":"%s","managed_legacy_proxy_target":"%s","managed_legacy_proxy_sha256":"%s","legacy_proxy_original_path":"%s"}\n' "$app" "$app" "$target" "$digest" "$original"
+  exit 0
+fi
+if [[ "$*" == *--prepare-legacy-proxy* ]]; then
+  source=""; previous=""
+  for arg in "$@"; do
+    [[ "$previous" == --legacy-proxy-source ]] && source="$arg"
+    previous="$arg"
+  done
+  source="$(cd "$(dirname "$source")" && pwd -P)/$(basename "$source")"
+  digest="$(sha256sum "$source" 2>/dev/null | awk '{print $1}')"
+  [[ -n "$digest" ]] || digest="$(shasum -a 256 "$source" | awk '{print $1}')"
+  managed_root="$(cd "${DASH_CANDIDATE_ROOT:?}/../../.." && pwd -P)/managed-legacy"
+  printf '{"status":"legacy_proxy_prepared","legacy_proxy_original_path":"%s","managed_legacy_proxy_target":"%s/direct_proxy.py","managed_legacy_proxy_sha256":"%s"}\n' "$source" "$managed_root" "$digest"
   exit 0
 fi
 cat >/dev/null
@@ -792,11 +824,25 @@ if [[ "$#" == 2 && -d "${PROC_ROOT:?}/$2" ]]; then exit 0; fi
 exit 0
 FAKE
 chmod +x "$DASH_CUTOVER_TMP/bin"/*
+mkdir -p "$DASH_CUTOVER_TMP/storage-viz-direct"
+DASH_LEGACY_PROXY="$DASH_CUTOVER_TMP/storage-viz-direct/proxy.py"
+printf '#!/usr/bin/env python3.12\n' > "$DASH_LEGACY_PROXY"
+chmod 0755 "$DASH_LEGACY_PROXY"
+export LEGACY_PROXY_PATH="$DASH_LEGACY_PROXY"
+DASH_LIVE_APP="$DASH_CUTOVER_TMP/live-opt"
+mkdir -p "$DASH_LIVE_APP/viewer"
+printf '#!/usr/bin/env python3.12\n' > "$DASH_LIVE_APP/viewer/serve.py"
+chmod 0755 "$DASH_LIVE_APP/viewer/serve.py"
+export APP_PATH="$DASH_LIVE_APP"
+export LEGACY_DASHBOARD_PATH="$DASH_LIVE_APP/viewer/serve.py"
 ln -s /usr/bin/python3.12 "$DASH_CUTOVER_TMP/proc/5050/exe"
 ln -s /usr/bin/python3.12 "$DASH_CUTOVER_TMP/proc/8088/exe"
-printf 'python3.12\0/opt/storage-viz-dashboard/deploy/direct_proxy.py\0' > "$DASH_CUTOVER_TMP/proc/5050/cmdline"
+printf 'python3.12\0%s\0' "$DASH_LEGACY_PROXY" > "$DASH_CUTOVER_TMP/proc/5050/cmdline"
 printf '0::/user.slice/legacy-proxy.scope\n' > "$DASH_CUTOVER_TMP/proc/5050/cgroup"
-printf 'python3.12\0/opt/storage-viz-dashboard/viewer/serve.py\0' > "$DASH_CUTOVER_TMP/proc/8088/cmdline"
+printf '1000.00 0.00\n' > "$DASH_CUTOVER_TMP/proc/uptime"
+CLK_TCK="$(getconf CLK_TCK)"
+printf '5050 (python3.12) S%s %s 0 0 0 0 0 0 0 0\n' "$(printf ' 0%.0s' {1..18})" "$((1000 * CLK_TCK))" > "$DASH_CUTOVER_TMP/proc/5050/stat"
+printf 'python3.12\0%s\0' "$DASH_LIVE_APP/viewer/serve.py" > "$DASH_CUTOVER_TMP/proc/8088/cmdline"
 printf '0::/system.slice/storage-viz-dashboard.service\n' > "$DASH_CUTOVER_TMP/proc/8088/cgroup"
 DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/cutover.log"
 export DASH_CUTOVER_LOG
@@ -808,13 +854,15 @@ line_candidate=$(grep -n '^candidate-dashboard ' "$DASH_CUTOVER_LOG" | head -1 |
 line_proxy=$(grep -n '^candidate-proxy ' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
 line_probe=$(grep -n '^candidate-health ' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
 line_owner=$(grep -n '^ss .*:505' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
+line_legacy_snapshot=$(grep -n '^activate --prepare-legacy-proxy' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
 line_stop=$(grep -n '^kill .*5050' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
 line_activate=$(grep -n '^activate --sha' "$DASH_CUTOVER_LOG" | tail -1 | cut -d: -f1)
 line_start=$(grep -n '^systemctl start storage-viz-dashboard.service storage-viz-proxy.service' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
 line_health=$(grep -n '^production-health ' "$DASH_CUTOVER_LOG" | tail -1 | cut -d: -f1)
 line_timer=$(grep -n '^systemctl enable --now storage-monitor-release-puller.timer' "$DASH_CUTOVER_LOG" | head -1 | cut -d: -f1)
-[[ -n "$line_prepare" && -n "$line_candidate" && -n "$line_proxy" && -n "$line_probe" && -n "$line_owner" && -n "$line_stop" && -n "$line_activate" && -n "$line_start" && -n "$line_health" && -n "$line_timer" ]] || fail "cutover log missing required action: $(cat "$DASH_CUTOVER_LOG")"
-[[ "$line_prepare" -lt "$line_candidate" && "$line_prepare" -lt "$line_proxy" && "$line_candidate" -lt "$line_probe" && "$line_proxy" -lt "$line_probe" && "$line_probe" -lt "$line_owner" && "$line_owner" -lt "$line_stop" && "$line_stop" -lt "$line_activate" && "$line_activate" -lt "$line_start" && "$line_start" -lt "$line_health" && "$line_health" -lt "$line_timer" ]] || fail "cutover actions out of order: $(cat "$DASH_CUTOVER_LOG")"
+[[ -n "$line_prepare" && -n "$line_candidate" && -n "$line_proxy" && -n "$line_probe" && -n "$line_owner" && -n "$line_legacy_snapshot" && -n "$line_stop" && -n "$line_activate" && -n "$line_start" && -n "$line_health" && -n "$line_timer" ]] || fail "cutover log missing required action: $(cat "$DASH_CUTOVER_LOG")"
+[[ "$line_prepare" -lt "$line_candidate" && "$line_prepare" -lt "$line_proxy" && "$line_candidate" -lt "$line_probe" && "$line_proxy" -lt "$line_probe" && "$line_probe" -lt "$line_owner" && "$line_owner" -lt "$line_legacy_snapshot" && "$line_legacy_snapshot" -lt "$line_stop" && "$line_stop" -lt "$line_activate" && "$line_activate" -lt "$line_start" && "$line_start" -lt "$line_health" && "$line_health" -lt "$line_timer" ]] || fail "cutover actions out of order: $(cat "$DASH_CUTOVER_LOG")"
+grep -Fq -- 'legacy proxy source verified against running process pid=5050' "$DASH_CUTOVER_TMP/cutover.out" || fail "cutover did not verify snapshot bytes against running proxy start time"
 grep -Fq -- "\"STORAGE_VIZ_ROOT\": \"$DASH_CANDIDATE_ROOT\"" "$DASH_CUTOVER_LOG" || fail "candidate dashboard did not use prepared release root"
 grep -Fq -- '"argv": []' "$DASH_CUTOVER_LOG" || fail "candidate scripts received unsupported argv"
 ! grep -Eq '^candidate-(dashboard|proxy).*"argv": \[[^]]' "$DASH_CUTOVER_LOG" || fail "candidate script received unsupported argv"
@@ -826,8 +874,20 @@ grep -Fq -- '"STORAGE_VIZ_PROXY_PUBLIC_ORIGIN": "http://storage.example:505"' "$
 grep -Fq -- '--connect-host 127.0.0.1 --connect-port 1505 --skip-service-check' "$DASH_CUTOVER_LOG" || fail "candidate probe did not use real health checker candidate override"
 ! grep -Fq -- 'storage-viz-proxy-launcher.py' "$DASH_CUTOVER_LOG" || fail "candidate proxy incorrectly used production launcher"
 grep -Fq -- '--artifact-stdin' "$DASH_CUTOVER_LOG" || fail "cutover activator did not use option-style artifact stdin"
+grep -Fq -- '--legacy-proxy-recovery-target' "$DASH_CUTOVER_LOG" || fail "cutover activation did not carry managed legacy proxy recovery metadata"
 ! grep -Eq '^activate (upload|status|activate)( |$)' "$DASH_CUTOVER_LOG" || fail "cutover used legacy activator subcommands"
 pass "dashboard bootstrap cutover runs candidate probes, exact owner stops, option-style activation, managed start, health, then timer"
+
+printf '5050 (python3.12) S%s %s 0 0 0 0 0 0 0 0\n' "$(printf ' 0%.0s' {1..18})" "$((800 * CLK_TCK))" > "$DASH_CUTOVER_TMP/proc/5050/stat"
+if DASH_CUTOVER_LOG="$DASH_CUTOVER_TMP/changed-source.log" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/changed-source.out" 2>"$DASH_CUTOVER_TMP/changed-source.err"; then
+  fail "cutover accepted a legacy proxy source changed after the running process started"
+fi
+grep -Fq -- 'legacy proxy source changed after running process start' "$DASH_CUTOVER_TMP/changed-source.err" || fail "changed legacy proxy source rejection was not explicit"
+! grep -Eq '^kill -TERM (5050|8088)$' "$DASH_CUTOVER_TMP/changed-source.log" || fail "changed legacy proxy source rejection stopped a live owner"
+printf '5050 (python3.12) S%s %s 0 0 0 0 0 0 0 0\n' "$(printf ' 0%.0s' {1..18})" "$((1000 * CLK_TCK))" > "$DASH_CUTOVER_TMP/proc/5050/stat"
+pass "dashboard cutover snapshots only proxy source bytes unchanged since process start"
 
 cat > "$DASH_CUTOVER_TMP/proxy.env" <<'FAKE'
 STORAGE_VIZ_PROXY_BIND=192.168.0.3
@@ -878,6 +938,32 @@ grep -Eq '^kill -TERM 5050$' "$DASH_ROLLBACK_LOG" || fail "rollback/cutover did 
 ! grep -Eq 'pkill|killall|fuser -k|tmux new|new-session' "$DASH_ROLLBACK_LOG" || fail "rollback used broad kill or recreated tmux"
 pass "dashboard cutover failure invokes rollback contract and validates previous 505 health without broad kill/tmux recreate"
 
+DASH_UNSAFE_ROLLBACK_LOG="$DASH_CUTOVER_TMP/unsafe-rollback.log"
+rm -f "$DASH_CUTOVER_TMP/start-count"
+if DASH_CUTOVER_LOG="$DASH_UNSAFE_ROLLBACK_LOG" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" SYSTEMCTL_START_RC_ONCE=42 SYSTEMCTL_START_COUNT_FILE="$DASH_CUTOVER_TMP/start-count" ROLLBACK_ERROR_KIND=unsafe STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/unsafe-rollback.out" 2>"$DASH_CUTOVER_TMP/unsafe-rollback.err"; then
+  fail "cutover accepted unsafe rollback-state validation failure"
+fi
+grep -Fq -- 'managed legacy proxy digest mismatch' "$DASH_CUTOVER_TMP/unsafe-rollback.err" || fail "unsafe rollback error was hidden"
+! grep -Fq -- 'activate --record-restored-legacy' "$DASH_UNSAFE_ROLLBACK_LOG" || fail "unsafe rollback error was overwritten by legacy record fallback"
+[[ "$(grep -c '^systemctl start storage-viz-dashboard.service storage-viz-proxy.service' "$DASH_UNSAFE_ROLLBACK_LOG")" == 1 ]] || fail "unsafe rollback restarted services after validation failure"
+! grep -Fq -- 'production-health ' "$DASH_UNSAFE_ROLLBACK_LOG" || fail "unsafe rollback ran health after validation failure"
+pass "dashboard rollback fails closed on path or digest validation errors"
+
+DASH_MALFORMED_ROLLBACK_LOG="$DASH_CUTOVER_TMP/malformed-rollback.log"
+rm -f "$DASH_CUTOVER_TMP/start-count"
+if DASH_CUTOVER_LOG="$DASH_MALFORMED_ROLLBACK_LOG" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
+  SYSTEMCTL="$DASH_CUTOVER_TMP/bin/systemctl" SS="$DASH_CUTOVER_TMP/bin/ss" PYTHON="$DASH_CUTOVER_TMP/bin/python3.12" ACTIVATOR="$DASH_CUTOVER_TMP/bin/activate" KILL="$DASH_CUTOVER_TMP/bin/kill" PROC_ROOT="$DASH_CUTOVER_TMP/proc" HEALTH_CHECKER="$DASH_CUTOVER_TMP/bin/health-check.py" DASHBOARD_ENV="$DASH_CUTOVER_TMP/dashboard.env" PROXY_ENV="$DASH_CUTOVER_TMP/proxy.env" RELEASE_ROOT="$DASH_CUTOVER_TMP/prepared" SYSTEMCTL_START_RC_ONCE=42 SYSTEMCTL_START_COUNT_FILE="$DASH_CUTOVER_TMP/start-count" ROLLBACK_ERROR_KIND=malformed STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_ENABLE_CUTOVER=1 \
+  "$DASHBOARD_DEPLOYER" --bootstrap-cutover --candidate-sha 1111111111111111111111111111111111111111 --expected-digest "$DASH_DIGEST" --artifact "$DASH_ARTIFACT" --metadata "$DASH_METADATA" >"$DASH_CUTOVER_TMP/malformed-rollback.out" 2>"$DASH_CUTOVER_TMP/malformed-rollback.err"; then
+  fail "cutover accepted malformed rollback state"
+fi
+grep -Fq -- 'activation state is invalid or unreadable for rollback' "$DASH_CUTOVER_TMP/malformed-rollback.err" || fail "malformed rollback-state error was hidden"
+! grep -Fq -- 'activate --record-restored-legacy' "$DASH_MALFORMED_ROLLBACK_LOG" || fail "malformed rollback state entered no-state recovery"
+[[ "$(grep -c '^systemctl start storage-viz-dashboard.service storage-viz-proxy.service' "$DASH_MALFORMED_ROLLBACK_LOG")" == 1 ]] || fail "malformed rollback state restarted services"
+! grep -Fq -- 'production-health ' "$DASH_MALFORMED_ROLLBACK_LOG" || fail "malformed rollback state ran production health"
+pass "dashboard rollback distinguishes absent state from malformed state"
+
 DASH_RECOVERY_LOG="$DASH_CUTOVER_TMP/recovery.log"
 DASH_RECOVERY_APP="$DASH_CUTOVER_TMP/legacy-opt"
 DASH_RECOVERY_PROC="$DASH_CUTOVER_TMP/recovery-proc"
@@ -890,6 +976,8 @@ ln -s /usr/bin/python3.12 "$DASH_RECOVERY_PROC/5050/exe"
 ln -s /usr/bin/python3.12 "$DASH_RECOVERY_PROC/8088/exe"
 printf 'python3.12\0%s\0' "$DASH_RECOVERY_APP/deploy/direct_proxy.py" > "$DASH_RECOVERY_PROC/5050/cmdline"
 printf '0::/user.slice/legacy-proxy.scope\n' > "$DASH_RECOVERY_PROC/5050/cgroup"
+printf '1000.00 0.00\n' > "$DASH_RECOVERY_PROC/uptime"
+printf '5050 (python3.12) S%s %s 0 0 0 0 0 0 0 0\n' "$(printf ' 0%.0s' {1..18})" "$((1000 * CLK_TCK))" > "$DASH_RECOVERY_PROC/5050/stat"
 printf 'python3.12\0%s\0' "$DASH_RECOVERY_APP/viewer/serve.py" > "$DASH_RECOVERY_PROC/8088/cmdline"
 printf '0::/system.slice/storage-viz-dashboard.service\n' > "$DASH_RECOVERY_PROC/8088/cgroup"
 if DASH_CUTOVER_LOG="$DASH_RECOVERY_LOG" DASH_DIGEST="$DASH_DIGEST" DASH_CANDIDATE_ROOT="$DASH_CANDIDATE_ROOT" REAL_PYTHON="$(command -v python3.12)" PATH="$DASH_CUTOVER_TMP/bin:$PATH" \
@@ -973,9 +1061,11 @@ pass "storage release puller service matches GPU root oneshot hardening with Sto
 RENDERED_PROXY_SERVICE="$DASH_DRY_PREFIX/etc/systemd/system/storage-viz-proxy.service"
 assert_contains "$RENDERED_PROXY_SERVICE" "User=storage-viz"
 assert_contains "$RENDERED_PROXY_SERVICE" "Group=storage-viz"
-assert_contains "$RENDERED_PROXY_SERVICE" "ExecStart=/usr/bin/python3 /usr/local/libexec/storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py"
+assert_contains "$RENDERED_PROXY_SERVICE" "ExecStart=/usr/bin/python3 /usr/local/libexec/storage-viz-proxy-launcher.py"
+assert_not_grep "$RENDERED_PROXY_SERVICE" 'storage-viz-proxy-launcher.py /opt/storage-viz-dashboard/deploy/direct_proxy.py' "fixed proxy target bypasses activation-state selection"
 assert_not_grep "$RENDERED_PROXY_SERVICE" '^ReadWritePaths=/var/lib/storage-viz-dashboard' "proxy write access to dashboard mutable state"
 assert_contains "$RENDERED_PROXY_SERVICE" "ReadOnlyPaths=/var/lib/storage-viz-dashboard/activation-state.json"
+assert_contains "$RENDERED_PROXY_SERVICE" "ReadOnlyPaths=/var/lib/storage-viz-dashboard/legacy-proxy"
 assert_contains "$RENDERED_PROXY_SERVICE" "InaccessiblePaths=-/var/lib/storage-viz-dashboard/data"
 assert_not_grep "$RENDERED_PROXY_SERVICE" 'gpu-monitor|storage-viz-scan|5173|8000|8100' "GPU or scanner coupling in rendered managed proxy service"
 pass "managed proxy service uses Storage runtime and launcher"

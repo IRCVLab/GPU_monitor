@@ -17,7 +17,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from typing import BinaryIO, Callable, Iterable, Sequence
+from typing import BinaryIO, Callable, Iterable, Mapping, Sequence
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -426,7 +426,7 @@ def _current_start_state(config: ActivationConfig) -> StartState:
     return StartState("absent")
 
 
-def _real_legacy_layout(app_path: Path) -> Path:
+def _real_legacy_layout(app_path: Path, *, require_proxy: bool = True) -> Path:
     """Return a canonical, narrowly validated legacy Storage application root."""
     if app_path.is_symlink():
         raise ActivationError("restored legacy app path must not be a symlink")
@@ -440,12 +440,12 @@ def _real_legacy_layout(app_path: Path) -> Path:
     if app_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_ISUID | stat.S_ISGID):
         raise ActivationError("restored legacy app path has unsafe mode")
     owner = app_stat.st_uid
-    required = (
+    required = [
         canonical / "viewer",
         canonical / "viewer/serve.py",
-        canonical / "deploy",
-        canonical / "deploy/direct_proxy.py",
-    )
+    ]
+    if require_proxy:
+        required.extend((canonical / "deploy", canonical / "deploy/direct_proxy.py"))
     for path in required:
         if path.is_symlink():
             raise ActivationError(f"restored legacy path must not be a symlink: {path}")
@@ -467,6 +467,117 @@ def _real_legacy_layout(app_path: Path) -> Path:
         if path_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_ISUID | stat.S_ISGID):
             raise ActivationError(f"restored legacy path has unsafe mode: {path}")
     return canonical
+
+
+def _legacy_proxy_recovery_root(config: ActivationConfig) -> Path:
+    return config.state_path.parent / "legacy-proxy"
+
+
+def _validated_managed_legacy_proxy(config: ActivationConfig, target: Path, digest: str) -> Path:
+    _validate_digest(digest, "managed legacy proxy digest")
+    root = _legacy_proxy_recovery_root(config)
+    expected = root / digest / "direct_proxy.py"
+    if target.resolve(strict=False) != expected.resolve(strict=False) or target.is_symlink():
+        raise ActivationError("managed legacy proxy path mismatch")
+    try:
+        canonical_root = root.resolve(strict=True)
+        canonical = target.resolve(strict=True)
+        target_stat = target.stat()
+        parent_stat = config.state_path.parent.stat()
+        root_stat = root.stat()
+        digest_dir_stat = expected.parent.stat()
+        canonical.relative_to(canonical_root)
+    except (OSError, ValueError) as exc:
+        raise ActivationError("managed legacy proxy is missing, broken, or external") from exc
+    if canonical != expected.resolve(strict=True) or not stat.S_ISREG(target_stat.st_mode):
+        raise ActivationError("managed legacy proxy must be a regular file")
+    if target_stat.st_uid != parent_stat.st_uid or target_stat.st_gid != parent_stat.st_gid:
+        raise ActivationError("managed legacy proxy owner/group mismatch")
+    for directory_stat in (root_stat, digest_dir_stat):
+        if directory_stat.st_uid != parent_stat.st_uid or directory_stat.st_gid != parent_stat.st_gid:
+            raise ActivationError("managed legacy proxy recovery directory owner/group mismatch")
+        if stat.S_IMODE(directory_stat.st_mode) != 0o750:
+            raise ActivationError("managed legacy proxy recovery directory mode must be 0750")
+    if stat.S_IMODE(target_stat.st_mode) != 0o440:
+        raise ActivationError("managed legacy proxy mode must be 0440")
+    if _sha256_file(canonical) != digest:
+        raise ActivationError("managed legacy proxy digest mismatch")
+    return canonical
+
+
+def prepare_legacy_proxy_recovery(config: ActivationConfig, source: Path) -> dict[str, object]:
+    """Snapshot an approved legacy proxy into immutable deployment-owned storage."""
+    source = Path(source)
+    if source.is_symlink():
+        raise ActivationError("legacy proxy source must not be a symlink")
+    try:
+        fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ActivationError(f"legacy proxy source is unavailable: {exc}") from exc
+    try:
+        source_stat = os.fstat(fd)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ActivationError("legacy proxy source must be a regular file")
+        if source_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH | stat.S_ISUID | stat.S_ISGID):
+            raise ActivationError("legacy proxy source has unsafe mode")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            payload = handle.read(config.max_file_bytes + 1)
+        if len(payload) > config.max_file_bytes:
+            raise ActivationError("legacy proxy source exceeds configured file bound")
+    finally:
+        os.close(fd)
+    digest = hashlib.sha256(payload).hexdigest()
+    state_parent = config.state_path.parent
+    state_parent.mkdir(parents=True, exist_ok=True)
+    owner = state_parent.stat()
+    root = _legacy_proxy_recovery_root(config)
+    root.mkdir(mode=0o750, parents=True, exist_ok=True)
+    os.chown(root, owner.st_uid, owner.st_gid)
+    os.chmod(root, 0o750)
+    digest_dir = root / digest
+    digest_dir.mkdir(mode=0o750, exist_ok=True)
+    os.chown(digest_dir, owner.st_uid, owner.st_gid)
+    os.chmod(digest_dir, 0o750)
+    target = digest_dir / "direct_proxy.py"
+    if not target.exists():
+        fd, temp_name = tempfile.mkstemp(prefix=".direct_proxy.", dir=digest_dir)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                os.fchown(handle.fileno(), owner.st_uid, owner.st_gid)
+                os.fchmod(handle.fileno(), 0o440)
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, target)
+            _fsync_dir(digest_dir)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temp_name)
+            raise
+    canonical = _validated_managed_legacy_proxy(config, target, digest)
+    return {
+        "status": "legacy_proxy_prepared",
+        "legacy_proxy_original_path": str(source.resolve(strict=True)),
+        "managed_legacy_proxy_target": str(canonical),
+        "managed_legacy_proxy_sha256": digest,
+    }
+
+
+def _validated_legacy_proxy_recovery(
+    config: ActivationConfig,
+    payload: Mapping[str, object],
+) -> dict[str, str]:
+    target = payload.get("managed_legacy_proxy_target")
+    digest = payload.get("managed_legacy_proxy_sha256")
+    original = payload.get("legacy_proxy_original_path")
+    if not all(isinstance(value, str) and value for value in (target, digest, original)):
+        raise ActivationError("legacy proxy recovery metadata is incomplete")
+    managed = _validated_managed_legacy_proxy(config, Path(str(target)), str(digest))
+    return {
+        "legacy_proxy_original_path": str(Path(str(original)).resolve(strict=False)),
+        "managed_legacy_proxy_target": str(managed),
+        "managed_legacy_proxy_sha256": str(digest),
+    }
 
 
 def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: str) -> Path:
@@ -643,14 +754,29 @@ def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
         raise
 
 
-def _read_state(path: Path) -> dict[str, object] | None:
-    if not path.is_file():
+def _read_state(path: Path, *, require_valid: bool = False) -> dict[str, object] | None:
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if require_valid:
+            raise ActivationError("activation state is invalid or unreadable for rollback") from exc
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ValueError("activation state is not a regular file")
+            data = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        if require_valid:
+            raise ActivationError("activation state is invalid or unreadable for rollback") from exc
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        if require_valid:
+            raise ActivationError("activation state is invalid or unreadable for rollback")
+        return None
+    return data
 
 
 def _rollback_state(path: Path, previous_state: dict[str, object] | None) -> None:
@@ -696,6 +822,7 @@ def activate_release(
     artifact_stdin: BinaryIO | None = None,
     restart: Callable[..., object] | None = None,
     health: Callable[[], object] | None = None,
+    legacy_proxy_recovery: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     with _activation_lock(config.lock_path):
         archive = _prepare_archive(
@@ -708,7 +835,12 @@ def activate_release(
         )
         try:
             original_state = _current_start_state(config)
-            previous_state = _read_state(config.state_path)
+            previous_state = None if original_state.kind == "legacy" else _read_state(config.state_path)
+            recovery = None
+            if legacy_proxy_recovery is not None:
+                if original_state.kind != "legacy":
+                    raise ActivationError("legacy proxy recovery metadata requires a legacy app start state")
+                recovery = _validated_legacy_proxy_recovery(config, legacy_proxy_recovery)
             target = _extract_private(config, archive, sha)
         finally:
             archive.staged_file.close()
@@ -722,6 +854,8 @@ def activate_release(
             "previous": original_state.previous,
             "legacy_backup": activated_state.legacy_backup,
         }
+        if recovery is not None:
+            status.update(recovery)
         try:
             _call_restart(config, restart, "activate")
             if not _call_health(config, health):
@@ -797,15 +931,37 @@ def prepare_release(
         }
 
 
-def record_restored_legacy(config: ActivationConfig) -> dict[str, object]:
+def record_restored_legacy(
+    config: ActivationConfig,
+    *,
+    managed_legacy_proxy_target: Path | None = None,
+    managed_legacy_proxy_sha256: str | None = None,
+    legacy_proxy_original_path: Path | None = None,
+) -> dict[str, object]:
     """Persist launcher state after activation already restored a pre-state legacy app."""
     with _activation_lock(config.lock_path):
-        restored = _real_legacy_layout(config.app_path)
+        external_proxy = managed_legacy_proxy_target is not None
+        restored = _real_legacy_layout(config.app_path, require_proxy=not external_proxy)
+        if external_proxy:
+            if managed_legacy_proxy_sha256 is None or legacy_proxy_original_path is None:
+                raise ActivationError("managed legacy proxy target, digest, and original path are required together")
+            managed = _validated_managed_legacy_proxy(
+                config,
+                Path(managed_legacy_proxy_target),
+                managed_legacy_proxy_sha256,
+            )
+            original = Path(legacy_proxy_original_path).resolve(strict=False)
+        else:
+            managed = restored / "deploy/direct_proxy.py"
+            managed_legacy_proxy_sha256 = _sha256_file(managed)
+            original = managed
         status: dict[str, object] = {
             "status": "rolled_back",
             "restored": str(restored),
             "restored_legacy_target": str(restored),
-            "managed_legacy_proxy_target": str(restored / "deploy/direct_proxy.py"),
+            "managed_legacy_proxy_target": str(managed),
+            "managed_legacy_proxy_sha256": managed_legacy_proxy_sha256,
+            "legacy_proxy_original_path": str(original),
         }
         _atomic_write_json(config.state_path, status)
         return status
@@ -855,7 +1011,7 @@ def rollback_to_state(
     restart: Callable[..., object] | None = None,
 ) -> dict[str, object]:
     with _activation_lock(config.lock_path):
-        state = _read_state(config.state_path)
+        state = _read_state(config.state_path, require_valid=True)
         if not state:
             raise ActivationError("activation state is unavailable for rollback")
         previous = state.get("previous")
@@ -885,7 +1041,18 @@ def rollback_to_state(
             if not backup.is_dir():
                 raise ActivationError("legacy backup is unavailable for rollback")
             _replace_with_legacy_copy(config.app_path, backup)
-            restored_path = _real_legacy_layout(config.app_path)
+            managed_target = state.get("managed_legacy_proxy_target")
+            managed_digest = state.get("managed_legacy_proxy_sha256")
+            original_proxy = state.get("legacy_proxy_original_path")
+            external_proxy = all(isinstance(value, str) and value for value in (managed_target, managed_digest, original_proxy))
+            if external_proxy:
+                managed = _validated_managed_legacy_proxy(config, Path(str(managed_target)), str(managed_digest))
+                restored_path = _real_legacy_layout(config.app_path, require_proxy=False)
+            else:
+                restored_path = _real_legacy_layout(config.app_path)
+                managed = restored_path / "deploy/direct_proxy.py"
+                managed_digest = _sha256_file(managed)
+                original_proxy = str(managed)
             restored = str(restored_path)
             status = dict(state)
             status.update(
@@ -897,7 +1064,9 @@ def rollback_to_state(
                     "legacy_backup": str(backup),
                     "protected_legacy_backup": str(backup),
                     "restored_legacy_target": restored,
-                    "managed_legacy_proxy_target": str(restored_path / "deploy/direct_proxy.py"),
+                    "managed_legacy_proxy_target": str(managed),
+                    "managed_legacy_proxy_sha256": managed_digest,
+                    "legacy_proxy_original_path": original_proxy,
                     "restored": restored,
                 }
             )
@@ -937,7 +1106,12 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--keep-releases", type=int, default=ActivationConfig.keep_releases)
     parser.add_argument("--rollback-state", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--prepare-legacy-proxy", action="store_true")
     parser.add_argument("--record-restored-legacy", action="store_true")
+    parser.add_argument("--legacy-proxy-source")
+    parser.add_argument("--legacy-proxy-recovery-target")
+    parser.add_argument("--legacy-proxy-recovery-sha256")
+    parser.add_argument("--legacy-proxy-original-path")
     parser.add_argument("--restart-argv", nargs="+")
     parser.add_argument("--health-argv", nargs="+")
     return parser.parse_args(argv)
@@ -961,25 +1135,53 @@ def main(argv: Sequence[str] | None = None) -> int:
         health_argv=tuple(args.health_argv) if args.health_argv else None,
     )
     try:
-        operation_modes = sum((args.rollback_state, args.prepare_only, args.record_restored_legacy))
+        operation_modes = sum((args.rollback_state, args.prepare_only, args.prepare_legacy_proxy, args.record_restored_legacy))
         if operation_modes > 1:
-            raise ActivationError("--rollback-state, --prepare-only, and --record-restored-legacy are mutually exclusive")
+            raise ActivationError("rollback, release preparation, legacy proxy preparation, and legacy recording modes are mutually exclusive")
+        recovery_values = (
+            args.legacy_proxy_recovery_target,
+            args.legacy_proxy_recovery_sha256,
+            args.legacy_proxy_original_path,
+        )
+        has_recovery = any(recovery_values)
+        if has_recovery and not all(recovery_values):
+            raise ActivationError("legacy proxy recovery target, digest, and original path are required together")
+        recovery = None
+        if has_recovery:
+            recovery = {
+                "managed_legacy_proxy_target": args.legacy_proxy_recovery_target,
+                "managed_legacy_proxy_sha256": args.legacy_proxy_recovery_sha256,
+                "legacy_proxy_original_path": args.legacy_proxy_original_path,
+            }
         if args.rollback_state:
             status = rollback_to_state(config)
+        elif args.prepare_legacy_proxy:
+            if not args.legacy_proxy_source:
+                raise ActivationError("--legacy-proxy-source is required for legacy proxy preparation")
+            status = prepare_legacy_proxy_recovery(config, Path(args.legacy_proxy_source))
         elif args.record_restored_legacy:
-            status = record_restored_legacy(config)
+            status = record_restored_legacy(
+                config,
+                managed_legacy_proxy_target=Path(args.legacy_proxy_recovery_target) if has_recovery else None,
+                managed_legacy_proxy_sha256=args.legacy_proxy_recovery_sha256,
+                legacy_proxy_original_path=Path(args.legacy_proxy_original_path) if has_recovery else None,
+            )
         else:
             if not args.sha or not args.expected_digest or not args.metadata:
                 raise ActivationError("--sha, --expected-digest, and --metadata are required for activation")
-            operation = prepare_release if args.prepare_only else activate_release
-            status = operation(
-                config,
+            common = dict(
                 sha=args.sha,
                 expected_digest=args.expected_digest,
                 artifact_path=Path(args.artifact) if args.artifact else None,
                 artifact_stdin=sys.stdin.buffer if args.artifact_stdin else None,
                 metadata_path=Path(args.metadata),
             )
+            if args.prepare_only:
+                if recovery is not None:
+                    raise ActivationError("legacy proxy recovery metadata is only valid for activation")
+                status = prepare_release(config, **common)
+            else:
+                status = activate_release(config, legacy_proxy_recovery=recovery, **common)
     except ActivationError as exc:
         print(_bounded_status({"status": "error", "error": str(exc)}), file=sys.stderr)
         return 1
