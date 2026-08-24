@@ -94,6 +94,103 @@ PYEOF
 rm -f "$GUARDED_OUT" "$GUARDED_OUT.tmp"
 pass "guarded --target PATH MAJOR:MINOR scans exact absolute target"
 
+# A mount's immediate child directories are navigation landmarks (for example
+# /data/alice and /data/project-a), not expendable detail.  They must remain in
+# the published tree even when their contents are smaller than the configured
+# pruning threshold.  Deeper small descendants should still be folded into the
+# immediate child's other_bytes so snapshots remain bounded.
+PRUNE_ROOT="$TMP/prune-root"
+mkdir -p "$PRUNE_ROOT/alice/tiny-work" "$PRUNE_ROOT/bob"
+head -c 4096 /dev/zero > "$PRUNE_ROOT/alice/tiny-work/file.bin"
+PRUNE_OUT="$TMP/hstscan_prune_root.json"
+"$BIN" --threads 2 --prune-home 1 --prune-data 1 --top 10 \
+    --out "$PRUNE_OUT" --target "$PRUNE_ROOT" "$TREE_DEV"
+PRC=$?
+[ "$PRC" -eq 0 ] || fail "top-level navigation pruning scan exited non-zero ($PRC)"
+$PY - "$PRUNE_OUT" <<'PYEOF' || fail "small immediate child directories were pruned from mount navigation"
+import json, sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+tree = payload["mounts"][0]["tree"]
+children = {child["name"]: child for child in tree.get("children", [])}
+assert set(children) == {"alice", "bob"}, children
+assert children["alice"].get("children", []) == [], children["alice"]
+PYEOF
+pass "mount-level child directories survive size pruning while deeper detail remains bounded"
+
+# Root navigation preservation must stay within the collector's per-node child
+# contract.  Create one more tiny workspace than the limit and verify the
+# scanner emits a deterministic, bounded root while folding the omitted inode
+# bytes into other_bytes.
+BOUNDED_ROOT="$TMP/bounded-root"
+mkdir -p "$BOUNDED_ROOT"
+$PY - "$BOUNDED_ROOT" <<'PYEOF'
+import os, sys
+
+root = sys.argv[1]
+for index in range(16_385):
+    os.mkdir(os.path.join(root, f"workspace-{index:05d}"))
+PYEOF
+BOUNDED_OUT="$TMP/hstscan_bounded_root.json"
+"$BIN" --threads 4 --prune-home 1 --prune-data 1 --top 10 \
+    --out "$BOUNDED_OUT" --target "$BOUNDED_ROOT" "$TREE_DEV"
+BRC=$?
+[ "$BRC" -eq 0 ] || fail "bounded top-level navigation scan exited non-zero ($BRC)"
+$PY - "$BOUNDED_OUT" "$BOUNDED_ROOT" <<'PYEOF' || fail "mount navigation exceeded or nondeterministically applied the child bound"
+import json, os, sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+tree = payload["mounts"][0]["tree"]
+children = tree.get("children", [])
+names = [child["name"] for child in children]
+assert len(children) == 16_384, len(children)
+assert names == [f"workspace-{index:05d}" for index in range(16_384)], (names[:3], names[-3:])
+root = sys.argv[2]
+expected_other = (
+    os.lstat(root).st_blocks * 512
+    + os.lstat(os.path.join(root, "workspace-16384")).st_blocks * 512
+)
+assert tree["other_bytes"] == expected_other, (tree["other_bytes"], expected_other)
+assert tree["bytes"] == sum(child["bytes"] for child in children) + tree["other_bytes"]
+PYEOF
+pass "mount-level navigation is deterministic and capped at the collector child limit"
+
+# The collector applies the same child limit at every depth.  A retained
+# workspace with very high fan-out must therefore be bounded too, including
+# when the pruning threshold is zero.
+NESTED_ROOT="$TMP/nested-bounded-root"
+mkdir -p "$NESTED_ROOT/workspace"
+$PY - "$NESTED_ROOT/workspace" <<'PYEOF'
+import os, sys
+
+root = sys.argv[1]
+for index in range(16_385):
+    os.mkdir(os.path.join(root, f"run-{index:05d}"))
+PYEOF
+NESTED_OUT="$TMP/hstscan_nested_bounded_root.json"
+"$BIN" --threads 4 --prune-home 0 --prune-data 0 --top 10 \
+    --out "$NESTED_OUT" --target "$NESTED_ROOT" "$TREE_DEV"
+NRC=$?
+[ "$NRC" -eq 0 ] || fail "nested bounded navigation scan exited non-zero ($NRC)"
+$PY - "$NESTED_OUT" "$NESTED_ROOT/workspace" <<'PYEOF' || fail "nested tree node exceeded or nondeterministically applied the child bound"
+import json, os, sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+workspace = payload["mounts"][0]["tree"]["children"][0]
+children = workspace.get("children", [])
+names = [child["name"] for child in children]
+assert len(children) == 16_384, len(children)
+assert names == [f"run-{index:05d}" for index in range(16_384)], (names[:3], names[-3:])
+root = sys.argv[2]
+expected_other = (
+    os.lstat(root).st_blocks * 512
+    + os.lstat(os.path.join(root, "run-16384")).st_blocks * 512
+)
+assert workspace["other_bytes"] == expected_other, (workspace["other_bytes"], expected_other)
+assert workspace["bytes"] == sum(child["bytes"] for child in children) + workspace["other_bytes"]
+PYEOF
+pass "nested tree nodes are deterministic and capped at the collector child limit"
+
 # Cross-target hardlink regression: when two guarded targets on the same device
 # contain directory entries for the same regular-file inode, the inode must be
 # charged once globally, to the first target in CLI order.  Keep the fixture

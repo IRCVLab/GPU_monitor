@@ -52,6 +52,7 @@
 #define DEFAULT_STALE_DAYS 180
 #define DEFAULT_PRUNE_HOME_MB 50
 #define DEFAULT_PRUNE_DATA_MB 100
+#define MAX_CHILDREN_PER_NODE 16384
 
 /* Linux dirent64 (not exposed by glibc headers). */
 struct linux_dirent64 {
@@ -282,15 +283,27 @@ static void node_rollup(struct node *n, uint64_t *out_bytes, uint64_t *out_files
 
 static void node_free(struct node *n);
 
+static int node_root_rank_cmp(const void *left, const void *right) {
+    const struct node *a = *(const struct node * const *)left;
+    const struct node *b = *(const struct node * const *)right;
+    if (a->bytes > b->bytes) return -1;
+    if (a->bytes < b->bytes) return 1;
+    return strcmp(a->name, b->name);
+}
+
 /* Prune children below threshold; bytes not represented by retained children
  * (direct entries plus pruned subtrees) fold into other_bytes. Must run after
  * node_rollup (final n->bytes). */
 static void node_prune(struct node *n, uint64_t threshold) {
+    if (n->nchildren > 1) {
+        qsort(n->children, n->nchildren, sizeof *n->children,
+              node_root_rank_cmp);
+    }
     size_t keep = 0;
     uint64_t retained_bytes = 0;
     for (size_t i = 0; i < n->nchildren; i++) {
         struct node *c = n->children[i];
-        if (c->bytes >= threshold) {
+        if (c->bytes >= threshold && keep < MAX_CHILDREN_PER_NODE) {
             node_prune(c, threshold);
             n->children[keep++] = c;     /* retained: compact toward front */
             retained_bytes += c->bytes;
@@ -300,6 +313,30 @@ static void node_prune(struct node *n, uint64_t threshold) {
     }
     n->nchildren = keep;
     n->other_bytes = keep ? n->bytes - retained_bytes : 0;
+}
+
+/* Preserve every immediate directory below a selected scan root so the
+ * dashboard's first drill-down always matches the mount's real workspace
+ * layout.  Size pruning still applies below those navigation landmarks. */
+static void node_prune_below_root(struct node *root, uint64_t threshold) {
+    if (root->nchildren > 1) {
+        qsort(root->children, root->nchildren, sizeof *root->children,
+              node_root_rank_cmp);
+    }
+    size_t keep = root->nchildren;
+    if (keep > MAX_CHILDREN_PER_NODE) keep = MAX_CHILDREN_PER_NODE;
+
+    uint64_t retained_bytes = 0;
+    for (size_t i = 0; i < keep; i++) {
+        struct node *child = root->children[i];
+        node_prune(child, threshold);
+        retained_bytes += child->bytes;
+    }
+    for (size_t i = keep; i < root->nchildren; i++) {
+        node_free(root->children[i]);
+    }
+    root->nchildren = keep;
+    root->other_bytes = keep ? root->bytes - retained_bytes : 0;
 }
 
 static void node_free(struct node *n) {
@@ -1240,7 +1277,7 @@ int main(int argc, char **argv) {
         /* Prune threshold: "/" target uses prune-home, others prune-data. */
         int prune_mb = (strcmp(tg, "/") == 0) ? prune_home_mb : prune_data_mb;
         uint64_t threshold = (uint64_t)prune_mb * 1024 * 1024;
-        node_prune(tree, threshold);
+        node_prune_below_root(tree, threshold);
 
         struct mount_result *mr = &results[nresults++];
         mr->path = xstrdup(tg);
