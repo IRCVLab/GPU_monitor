@@ -275,6 +275,7 @@
 .monitor-card .note-form-expiry-toggle:focus-visible,
 .monitor-card .note-form-submit-primary:focus-visible,
 .monitor-card .note-form-precision-input:focus-visible,
+.monitor-card .note-form-gpu-toggle-all:focus-visible,
 .monitor-card .note-form-gpu-chip:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ops-primary) 12%, transparent);
@@ -1676,6 +1677,40 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
 .monitor-card .note-form-gpu-hint {
   font-size: 0.66rem;
   color: color-mix(in srgb, var(--ops-fg) 36%, transparent);
+}
+
+.monitor-card .note-form-gpu-toggle-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.45rem;
+  margin-left: auto;
+  padding: 0.1rem 0.46rem;
+  border: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ops-muted) 52%, transparent);
+  color: color-mix(in srgb, var(--ops-fg) 62%, transparent);
+  font-size: 0.66rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.monitor-card .note-form-gpu-toggle-all[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--ops-primary) 24%, var(--ops-border));
+  background: color-mix(in srgb, var(--ops-primary) 12%, var(--ops-card));
+  color: color-mix(in srgb, var(--ops-fg) 92%, transparent);
+}
+
+.monitor-card .note-form-gpu-toggle-all:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ops-primary) 22%, var(--ops-border));
+  color: color-mix(in srgb, var(--ops-fg) 88%, transparent);
+}
+
+.monitor-card .note-form-gpu-toggle-all:disabled {
+  cursor: default;
+  opacity: 0.42;
 }
 
 .monitor-card .note-form-gpu-chip-row {

@@ -50,6 +50,17 @@ test('NoteForm always renders the GPU selector before submit, keeps abnormal tel
 	assert.equal(source.match(/예약을 보장하지 않습니다\./g)?.length ?? 0, 1, 'reservation disclaimer should appear only once in NoteForm');
 });
 
+test('NoteForm provides one accessible select-all toggle that becomes clear-all when every GPU is selected', () => {
+	assert.match(source, /const\s+selectableGpuIndices\s*=\s*\$derived\(sortedGpus\.map\(\(gpu\)\s*=>\s*gpu\.index\)\)/);
+	assert.match(source, /const\s+allGpusSelected\s*=\s*\$derived\([\s\S]*selectableGpuIndices\.length\s*>\s*0[\s\S]*selectableGpuIndices\.every\(\(gpuIndex\)\s*=>\s*selectedGpuIndices\.includes\(gpuIndex\)\)[\s\S]*\)/);
+	assert.match(source, /function\s+toggleAllGpus\(\):\s*void\s*\{[\s\S]*selectedGpuIndices\s*=\s*allGpusSelected\s*\?\s*\[\]\s*:\s*\[\.\.\.selectableGpuIndices\][\s\S]*\}/);
+	assert.match(source, /class="note-form-gpu-toggle-all"/);
+	assert.match(source, /aria-pressed=\{allGpusSelected\}/);
+	assert.match(source, /aria-label=\{allGpusSelected\s*\?\s*'GPU 전체 선택 해제'\s*:\s*'GPU 전체 선택'\}/);
+	assert.match(source, /onclick=\{toggleAllGpus\}/);
+	assert.match(source, /\{allGpusSelected\s*\?\s*'전체 해제'\s*:\s*'전체 선택'\}/);
+});
+
 test('NoteForm removes the old repeated explainer and stays within three compact composer rows', () => {
 	assert.doesNotMatch(source, /note-form-hold-copy/);
 	assert.doesNotMatch(source, /showPrecisePicker/);

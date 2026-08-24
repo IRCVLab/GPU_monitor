@@ -307,6 +307,15 @@ test('unified GPU selector remains chip-based, compact, and visually integrated'
 	assert.doesNotMatch(css, /\.monitor-note-item__gpu-chip\s*\{/);
 });
 
+test('GPU select-all toggle stays compact, right-aligned, and visibly stateful', () => {
+	const toggleRule = cssRuleWithDeclaration('.monitor-card .note-form-gpu-toggle-all', 'min-height');
+	assert.ok(remValues(declarationValue(toggleRule, 'min-height'))[0] <= 1.45);
+	assert.match(toggleRule, /margin-left:\s*auto/);
+	assert.match(toggleRule, /border-radius:\s*999px/);
+	assert.match(css, /\.note-form-gpu-toggle-all\[aria-pressed='true'\]/);
+	assert.match(css, /\.note-form-gpu-toggle-all:focus-visible[\s\S]*box-shadow/);
+});
+
 test('GPU chip hover has focus-visible and reduced-motion coverage', () => {
 	assert.match(css, /\.note-form-gpu-chip:focus-visible[\s\S]*box-shadow/);
 	assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.note-form-gpu-chip:hover[\s\S]*transform:\s*none/);

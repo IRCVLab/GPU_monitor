@@ -39,6 +39,11 @@
 	const telemetryStale = $derived(isTelemetryStale(lastSeen, nowMs, 60000));
 	const statusWarning = $derived(serverStatus !== 'online');
 	const sortedGpus = $derived([...gpus].sort((a, b) => a.index - b.index));
+	const selectableGpuIndices = $derived(sortedGpus.map((gpu) => gpu.index));
+	const allGpusSelected = $derived(
+		selectableGpuIndices.length > 0 &&
+			selectableGpuIndices.every((gpuIndex) => selectedGpuIndices.includes(gpuIndex))
+	);
 	const trimmedDisplayName = $derived(displayName.trim());
 	const holdPayload = $derived.by(() => {
 		if (selectedGpuIndices.length === 0) return {};
@@ -86,6 +91,10 @@
 			? selectedGpuIndices.filter((value) => value !== gpuIndex)
 			: [...selectedGpuIndices, gpuIndex];
 		selectedGpuIndices = [...new Set(next)].sort((a, b) => a - b);
+	}
+
+	function toggleAllGpus(): void {
+		selectedGpuIndices = allGpusSelected ? [] : [...selectableGpuIndices];
 	}
 
 	function formatExpiryAbsolute(date: Date): string {
@@ -188,6 +197,16 @@
 		<div class="note-form-gpu-selector-head">
 			<span class="note-form-gpu-label">GPU 작업 공유</span>
 			<span class="note-form-gpu-hint">선택 시 참고 홀드가 생성됩니다.</span>
+			<button
+				type="button"
+				class="note-form-gpu-toggle-all"
+				aria-pressed={allGpusSelected}
+				aria-label={allGpusSelected ? 'GPU 전체 선택 해제' : 'GPU 전체 선택'}
+				onclick={toggleAllGpus}
+				disabled={selectableGpuIndices.length === 0}
+			>
+				{allGpusSelected ? '전체 해제' : '전체 선택'}
+			</button>
 		</div>
 		<div class="note-form-gpu-chip-row" role="group" aria-label="GPU 선택(선택 시 참고 홀드)">
 			{#each sortedGpus as gpu (gpu.index)}
