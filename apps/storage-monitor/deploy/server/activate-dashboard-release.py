@@ -657,6 +657,8 @@ def _assert_existing_release_matches(target: Path, expected_files: dict[str, str
                 continue
             if not path.is_file() or path.is_symlink():
                 raise ActivationError("existing release contains unsafe nonregular file")
+            if path.stat().st_nlink != 1:
+                raise ActivationError("existing release contains a hardlinked file")
             actual[rel] = _sha256_file(path)
     if actual != expected_files:
         raise ActivationError("existing release content mismatch")
@@ -824,11 +826,15 @@ def _remove_readonly_release(release_root: Path, release: Path) -> None:
         raise ActivationError("release selected for pruning is outside the release root")
     for current, dirs, files in os.walk(canonical, topdown=False, followlinks=False):
         current_path = Path(current)
-        for name in (*files, *dirs):
+        for name in files:
             entry = current_path / name
             if entry.is_symlink():
                 raise ActivationError("release selected for pruning contains a symlink")
-            os.chmod(entry, 0o700 if entry.is_dir() else 0o600)
+        for name in dirs:
+            entry = current_path / name
+            if entry.is_symlink():
+                raise ActivationError("release selected for pruning contains a symlink")
+            os.chmod(entry, 0o700)
         os.chmod(current_path, 0o700)
     shutil.rmtree(canonical)
 

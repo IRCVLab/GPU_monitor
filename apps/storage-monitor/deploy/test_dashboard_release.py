@@ -500,6 +500,36 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(Path(reused["candidate_release"]), release_parent / "storage-monitor")
         self.assertEqual(stat.S_IMODE(release_parent.stat().st_mode), 0o555)
 
+    def test_existing_release_rejects_hardlinks_without_mutating_external_mode(self) -> None:
+        archive, metadata, digest = self._archive()
+        status = self.module.prepare_release(
+            self._config(),
+            sha=self.sha,
+            expected_digest=digest,
+            artifact_path=archive,
+            metadata_path=metadata,
+        )
+        release = Path(status["candidate_release"])
+        target = release / "viewer/app.js"
+        external = self.root / "external-app.js"
+        external.write_bytes(target.read_bytes())
+        external.chmod(0o644)
+        target.parent.chmod(0o755)
+        target.unlink()
+        os.link(external, target)
+        target.parent.chmod(0o555)
+
+        with self.assertRaises(self.module.ActivationError):
+            self.module.prepare_release(
+                self._config(),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_path=archive,
+                metadata_path=metadata,
+            )
+
+        self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o644)
+
     def test_extracts_private_verified_bytes_when_original_artifact_is_swapped_after_validation(self) -> None:
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)
@@ -1270,6 +1300,24 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertTrue(previous_target.exists())
         self.assertFalse(old_extra.exists())
         self.assertTrue(incoming_file.exists())
+
+    def test_pruning_hardlinked_file_does_not_mutate_external_inode_mode(self) -> None:
+        release = self.release_root / ("c" * 40)
+        payload_dir = release / "storage-monitor/viewer"
+        payload_dir.mkdir(parents=True)
+        external = self.root / "external.js"
+        external.write_text("shared", encoding="utf-8")
+        external.chmod(0o644)
+        os.link(external, payload_dir / "app.js")
+        payload_dir.chmod(0o555)
+        payload_dir.parent.chmod(0o555)
+        release.chmod(0o555)
+
+        self.module._remove_readonly_release(self.release_root, release)
+
+        self.assertFalse(release.exists())
+        self.assertEqual(external.read_text(encoding="utf-8"), "shared")
+        self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o644)
 
 
 
