@@ -289,6 +289,13 @@ test('task 3 memo loading and error expanded states use dense top padding', () =
 	assert.ok(remValues(declarationValue(stateRule, 'padding-top'))[0] <= 0.45);
 });
 
+test('collapsed memo count is a quiet section-level numeral rather than another pill', () => {
+	const countRule = cssRule('.monitor-card__footer-count');
+	assert.ok(remValues(declarationValue(countRule, 'font-size'))[0] <= 0.62);
+	assert.match(countRule, /font-variant-numeric:\s*tabular-nums/);
+	assert.doesNotMatch(countRule, /background:|border:|border-radius:/);
+});
+
 test('unified GPU selector remains chip-based, compact, and visually integrated', () => {
 	assert.doesNotMatch(css, /\.note-form-kind-row|\.note-form-kind-toggle/);
 	const rowRule = cssRule('.monitor-card .note-form-gpu-chip-row');

@@ -202,8 +202,12 @@
     return [...new Set(note.gpu_indices.filter((value) => Number.isInteger(value) && value >= 0))].sort((a, b) => a - b);
   }
 
+  function holdGpuCount(note: Note): number {
+    return holdGpuIndices(note).length;
+  }
+
   function holdGpuSummary(note: Note): string {
-    return `GPU ${holdGpuIndices(note).length}개`;
+    return `GPU ${holdGpuCount(note)}개`;
   }
 
   function notePreviewBadgeClass(note: Note): string {
@@ -615,6 +619,11 @@
       >
         <span class="monitor-card__footer-toggle-main">
           <span class="monitor-card__footer-label">메모</span>
+          {#if !notesExpanded && visibleNotes.length > 1}
+            <span class="monitor-card__footer-count" aria-label={`활성 메모 ${visibleNotes.length}개`}>
+              {visibleNotes.length}
+            </span>
+          {/if}
         </span>
         <span class="monitor-card__footer-side">
           {#if !notesExpanded}
@@ -622,8 +631,11 @@
               {#if previewNotes.length > 0}
                 <span class="monitor-card__note-preview-main">
                   {#if previewNotes[0].kind === 'hold'}
-                    <span class="monitor-card__note-preview-hold">
-                      HOLD · {holdGpuSummary(previewNotes[0])}
+                    <span
+                      class="monitor-card__note-preview-hold"
+                      aria-label={`이 메모가 선택한 GPU ${holdGpuCount(previewNotes[0])}개`}
+                    >
+                      HOLD {holdGpuCount(previewNotes[0])}
                     </span>
                   {/if}
                   <span class="monitor-card__note-preview-user">@{previewNotes[0].username}</span>

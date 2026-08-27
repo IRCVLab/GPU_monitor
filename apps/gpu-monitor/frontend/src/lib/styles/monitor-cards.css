@@ -747,6 +747,13 @@ html.light .monitor-gpu-row__index[data-has-hold='true']::after {
   text-transform: uppercase;
 }
 
+.monitor-card__footer-count {
+  font-size: 0.6rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--ops-fg) 38%, transparent);
+}
+
 .monitor-card__footer-preview {
   min-width: 0;
   flex: 1 1 0;

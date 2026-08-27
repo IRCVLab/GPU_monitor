@@ -179,10 +179,28 @@ test('collapsed memo preview uses explicit Korean relative expiry instead of cry
 	assert.match(preview, /monitor-card__note-preview-content/);
 	assert.match(preview, /monitor-card__note-preview-expiry/);
 	assert.match(preview, /\{noteRemainingText\(previewNotes\[0\]\)\}/, 'collapsed memo preview should use explicit Korean relative expiry');
-	assert.match(preview, /HOLD · \{holdGpuSummary\(previewNotes\[0\]\)\}/, 'hold preview should summarize GPU scope without listing every index');
+	assert.match(preview, /HOLD \{holdGpuCount\(previewNotes\[0\]\)\}/, 'hold preview should summarize its own GPU scope without listing every index');
 	assert.match(preview, /@\{previewNotes\[0\]\.username\}/, 'memo owner must be unmistakable as a user identity');
 	assert.match(preview, /title=\{previewNotes\[0\]\.content\}/, 'truncated memo content must retain its full text');
 	assert.doesNotMatch(source, /notePreviewCountdownText/, 'cryptic D\/H\/M\/S countdown helper should be removed');
+});
+
+test('collapsed memo summary exposes additional active notes beside the section label and scopes HOLD to the previewed note', () => {
+	const notesSection = source.match(
+		/<span class="monitor-card__footer-label">메모<\/span>[\s\S]*?monitor-card__footer-disclosure/
+	)?.[0] ?? '';
+	assert.match(
+		notesSection,
+		/\{#if !notesExpanded && visibleNotes\.length > 1\}[\s\S]*class="monitor-card__footer-count"[\s\S]*aria-label=\{`활성 메모 \$\{visibleNotes\.length\}개`\}[\s\S]*\{visibleNotes\.length\}/,
+		'the section label should reveal the total active memo count only when another memo exists'
+	);
+	assert.match(
+		notesSection,
+		/aria-label=\{`이 메모가 선택한 GPU \$\{holdGpuCount\(previewNotes\[0\]\)\}개`\}[\s\S]*HOLD \{holdGpuCount\(previewNotes\[0\]\)\}/,
+		'HOLD count must describe only the representative memo'
+	);
+	assert.doesNotMatch(notesSection, /HOLD · \{holdGpuSummary\(previewNotes\[0\]\)\}/);
+	assert.match(source, /function holdGpuCount\(note: Note\): number \{[\s\S]*return holdGpuIndices\(note\)\.length;[\s\S]*\}/);
 });
 
 test('note expiry helper speaks in concise Korean relative units and expired state', () => {
@@ -207,7 +225,7 @@ test('Task 4 ServerCard consumes the page shared nowMs clock and owns no interva
 test('ServerCard note preview and history keep concise HOLD markers without repeated GPU index lists', () => {
 	assert.doesNotMatch(source, /advisory soft hold/);
 	assert.match(source, /monitor-note-item__kind">HOLD<\/span>/);
-	assert.match(source, /function holdGpuSummary\(note: Note\): string \{[\s\S]*return `GPU \$\{holdGpuIndices\(note\)\.length\}개`;[\s\S]*\}/);
+	assert.match(source, /function holdGpuSummary\(note: Note\): string \{[\s\S]*return `GPU \$\{holdGpuCount\(note\)\}개`;[\s\S]*\}/);
 	assert.doesNotMatch(source, /\{#each holdGpuIndices\((?:note|previewNotes\[0\])\)/);
 	assert.match(source, /monitor-note-item__user">@\{note\.username\}<\/span>/, 'history must distinguish author from memo copy');
 	assert.doesNotMatch(source, /monitor-note-item__user">@\{resolveDisplayName\(note\)\}<\/span>/, 'display_name must not replace username ownership or delete identity');
