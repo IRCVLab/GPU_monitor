@@ -811,8 +811,26 @@ def _prune_releases(config: ActivationConfig, protected: Iterable[Path]) -> None
     protected_release_dirs = {path for path in protected_resolved if path.parent == config.release_root.resolve()}
     keep_inactive = max(0, config.keep_releases - len(protected_release_dirs))
     for old in candidates[keep_inactive:]:
-        shutil.rmtree(old)
+        _remove_readonly_release(config.release_root, old)
     _fsync_dir(config.release_root)
+
+
+def _remove_readonly_release(release_root: Path, release: Path) -> None:
+    canonical_root = release_root.resolve(strict=True)
+    if release.is_symlink():
+        raise ActivationError("release selected for pruning must not be a symlink")
+    canonical = release.resolve(strict=True)
+    if canonical.parent != canonical_root or SHA_RE.fullmatch(canonical.name) is None:
+        raise ActivationError("release selected for pruning is outside the release root")
+    for current, dirs, files in os.walk(canonical, topdown=False, followlinks=False):
+        current_path = Path(current)
+        for name in (*files, *dirs):
+            entry = current_path / name
+            if entry.is_symlink():
+                raise ActivationError("release selected for pruning contains a symlink")
+            os.chmod(entry, 0o700 if entry.is_dir() else 0o600)
+        os.chmod(current_path, 0o700)
+    shutil.rmtree(canonical)
 
 
 def activate_release(

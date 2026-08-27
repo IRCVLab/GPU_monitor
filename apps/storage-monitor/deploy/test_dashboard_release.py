@@ -1254,6 +1254,9 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         for path in [previous_target, old_extra]:
             path.mkdir(parents=True)
             (path / "sentinel").write_text(path.parent.name, encoding="utf-8")
+        (old_extra / "sentinel").chmod(0o444)
+        old_extra.chmod(0o555)
+        old_extra.parent.chmod(0o555)
         incoming_file = self.incoming / "keep.tar.gz"
         incoming_file.parent.mkdir(parents=True)
         incoming_file.write_text("incoming", encoding="utf-8")
