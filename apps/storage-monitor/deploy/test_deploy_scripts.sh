@@ -624,6 +624,12 @@ PATH="$FAKEBIN:$PATH" "$DASHBOARD_DEPLOYER" --dry-run --prefix "$DASH_DRY_PREFIX
 [[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/builder" ]] || fail "dashboard dry-run did not render builder state directory"
 [[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/data" ]] || fail "dashboard dry-run did not render data directory"
 [[ -d "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/state" ]] || fail "dashboard dry-run did not render state directory"
+[[ "$(file_mode "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard")" == "751" ]] || fail "dashboard state root mode does not permit builder traversal without listing"
+for private_child in legacy-proxy puller builder data state; do
+  [[ "$(file_mode "$DASH_DRY_PREFIX/var/lib/storage-viz-dashboard/$private_child")" == "750" ]] || fail "dashboard private child $private_child mode is not 0750"
+done
+grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard owner=root:storage-viz mode=0751' "$DASH_LOG" || fail "dashboard deployer does not render traversable non-listable state root"
+grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/builder owner=storage-viz-builder:storage-viz-builder mode=0750' "$DASH_LOG" || fail "dashboard deployer does not keep builder home isolated"
 grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/data owner=storage-viz:storage-viz mode=0750' "$DASH_LOG" || fail "dashboard deployer does not preserve dashboard data ownership"
 grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/state owner=storage-viz:storage-viz mode=0750' "$DASH_LOG" || fail "dashboard deployer does not preserve dashboard state ownership"
 [[ "$(file_mode "$DASH_DRY_PREFIX/etc/storage-viz")" == "750" ]] || fail "dashboard dry-run config dir mode is not 0750"

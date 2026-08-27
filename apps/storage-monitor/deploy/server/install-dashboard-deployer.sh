@@ -528,7 +528,7 @@ ensure_identity "$BUILDER_USER" "$BUILDER_GROUP" "$STATE_ROOT/builder"
 ensure_identity "$RUNTIME_USER" "$RUNTIME_GROUP" "$STATE_ROOT"
 
 ensure_dir "$RELEASE_ROOT" 0755 root:root
-ensure_dir "$STATE_ROOT" 0750 root:"$RUNTIME_GROUP"
+ensure_dir "$STATE_ROOT" 0751 root:"$RUNTIME_GROUP"
 ensure_dir "$STATE_ROOT/legacy-proxy" 0750 root:"$RUNTIME_GROUP"
 ensure_dir "$STATE_ROOT/puller" 0750 root:root
 ensure_dir "$STATE_ROOT/builder" 0750 "$BUILDER_USER":"$BUILDER_GROUP"
