@@ -58,4 +58,3 @@
 - [ ] Commit and push to `main` through the existing deployment workflow.
 - [ ] Verify Storage Live on port `505` shows grouped physical capacity.
 - [ ] Deploy the scanner change through the existing agent deployment path, trigger a neo rescan, and verify `/data/minjae/resworld_navsim` is navigable.
-
