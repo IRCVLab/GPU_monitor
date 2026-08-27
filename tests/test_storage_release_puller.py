@@ -191,12 +191,15 @@ class StorageReleasePullerTest(unittest.TestCase):
     def test_build_release_invokes_tracked_python_script_with_python3_under_builder_limits(self):
         puller = load_puller()
         commands = []
+        build_kwargs = []
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self.config(tmp)
             checkout = Path(tmp) / "checkout"
 
             def run_command(argv, **kwargs):
                 commands.append(list(argv))
+                if any(str(part).endswith("build-dashboard-release.py") for part in argv):
+                    build_kwargs.append(dict(kwargs))
                 return CompletedProcess(argv, 0, "", "")
 
             outdir = puller.build_release(cfg, checkout, SHA1, run_command)
@@ -204,11 +207,12 @@ class StorageReleasePullerTest(unittest.TestCase):
         script = checkout / cfg.build_script
         build_commands = [command for command in commands if str(script) in command]
         self.assertEqual(len(build_commands), 1)
+        self.assertEqual(build_kwargs, [{"cwd": checkout, "timeout": cfg.timeout_seconds}])
         build_command = build_commands[0]
         self.assertEqual(
             build_command,
             [
-                "runuser", "-u", "storage-viz-builder", "--",
+                "/usr/sbin/runuser", "-u", "storage-viz-builder", "--",
                 "env", "-i",
                 "HOME=/var/lib/storage-viz-dashboard/builder",
                 "PATH=/usr/local/bin:/usr/local/bin:/usr/bin:/bin",
@@ -319,7 +323,7 @@ class StorageReleasePullerTest(unittest.TestCase):
             checkout = puller.clean_checkout(cfg, SHA1, run_command)
         self.assertEqual(checkout, cfg.work_dir / "checkout")
         rendered = [" ".join(str(x) for x in c) for c in commands]
-        self.assertTrue(all(c[:7] == ["runuser", "-u", "storage-viz-builder", "--", "env", "-i", "HOME=/var/lib/storage-viz-dashboard/builder"] for c in commands))
+        self.assertTrue(all(c[:7] == ["/usr/sbin/runuser", "-u", "storage-viz-builder", "--", "env", "-i", "HOME=/var/lib/storage-viz-dashboard/builder"] for c in commands))
         self.assertTrue(any("git clone --no-checkout --filter=blob:none" in r for r in rendered))
         self.assertTrue(any(f"git -C {checkout} fetch --depth 1 origin {SHA1}" in r for r in rendered))
         self.assertTrue(any(f"git -C {checkout} checkout --detach {SHA1}" in r for r in rendered))

@@ -340,7 +340,7 @@ def authorize(config: Config, sha: str, workflow_run: dict[str, object], check_r
 
 def builder_command(config: Config, *args: str) -> list[str]:
     return [
-        "runuser", "-u", config.builder_user, "--",
+        "/usr/sbin/runuser", "-u", config.builder_user, "--",
         "env", "-i",
         "HOME=/var/lib/storage-viz-dashboard/builder",
         f"PATH={config.node_prefix}/bin:/usr/local/bin:/usr/bin:/bin",
@@ -382,6 +382,7 @@ def build_release(config: Config, checkout: Path, sha: str, run_command=default_
     script = checkout / config.build_script
     result = run_command(
         builder_command(config, "nice", "-n", "10", "ionice", "-c", "3", "python3", str(script), "--sha", sha, "--output-dir", str(outdir)),
+        cwd=checkout,
         timeout=config.timeout_seconds,
     )
     if result.returncode != 0:
