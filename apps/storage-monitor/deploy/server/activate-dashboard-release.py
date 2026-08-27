@@ -614,6 +614,7 @@ def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: st
         os.replace(tmp_parent, target_parent)
         _fsync_dir(target_parent.parent)
         _chmod_tree_readonly(target)
+        os.chmod(target_parent, 0o555)
         return target
     except Exception:
         with contextlib.suppress(FileNotFoundError):

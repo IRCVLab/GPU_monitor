@@ -459,6 +459,24 @@ class DashboardReleaseActivationTest(unittest.TestCase):
                 metadata_path=metadata_link,
             )
 
+    def test_release_parent_is_readonly_and_traversable_under_restrictive_umask(self) -> None:
+        archive, metadata, digest = self._archive()
+        previous_umask = os.umask(0o077)
+        try:
+            status = self.module.prepare_release(
+                self._config(),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_path=archive,
+                metadata_path=metadata,
+            )
+        finally:
+            os.umask(previous_umask)
+
+        release_parent = Path(status["candidate_release"]).parent
+        self.assertEqual(stat.S_IMODE(release_parent.stat().st_mode), 0o555)
+        self.assertEqual(stat.S_IMODE((release_parent / "storage-monitor").stat().st_mode), 0o555)
+
     def test_extracts_private_verified_bytes_when_original_artifact_is_swapped_after_validation(self) -> None:
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)
