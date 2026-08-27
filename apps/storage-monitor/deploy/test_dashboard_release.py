@@ -477,6 +477,29 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(release_parent.stat().st_mode), 0o555)
         self.assertEqual(stat.S_IMODE((release_parent / "storage-monitor").stat().st_mode), 0o555)
 
+    def test_existing_release_repairs_restrictive_parent_mode_before_reuse(self) -> None:
+        archive, metadata, digest = self._archive()
+        status = self.module.prepare_release(
+            self._config(),
+            sha=self.sha,
+            expected_digest=digest,
+            artifact_path=archive,
+            metadata_path=metadata,
+        )
+        release_parent = Path(status["candidate_release"]).parent
+        os.chmod(release_parent, 0o700)
+
+        reused = self.module.prepare_release(
+            self._config(),
+            sha=self.sha,
+            expected_digest=digest,
+            artifact_path=archive,
+            metadata_path=metadata,
+        )
+
+        self.assertEqual(Path(reused["candidate_release"]), release_parent / "storage-monitor")
+        self.assertEqual(stat.S_IMODE(release_parent.stat().st_mode), 0o555)
+
     def test_extracts_private_verified_bytes_when_original_artifact_is_swapped_after_validation(self) -> None:
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)

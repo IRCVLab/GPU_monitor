@@ -584,6 +584,8 @@ def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: st
     target = _release_target(config, sha)
     if target.exists():
         _assert_existing_release_matches(target, archive.files)
+        _chmod_tree_readonly(target)
+        os.chmod(target.parent, 0o555)
         return target
     config.release_root.mkdir(parents=True, exist_ok=True)
     target_parent = target.parent
