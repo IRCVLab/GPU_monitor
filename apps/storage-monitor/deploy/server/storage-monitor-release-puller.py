@@ -381,7 +381,7 @@ def build_release(config: Config, checkout: Path, sha: str, run_command=default_
         raise PullError("builder could not create output directory")
     script = checkout / config.build_script
     result = run_command(
-        builder_command(config, "nice", "-n", "10", "ionice", "-c", "3", str(script), "--sha", sha, "--output-dir", str(outdir)),
+        builder_command(config, "nice", "-n", "10", "ionice", "-c", "3", "python3", str(script), "--sha", sha, "--output-dir", str(outdir)),
         timeout=config.timeout_seconds,
     )
     if result.returncode != 0:

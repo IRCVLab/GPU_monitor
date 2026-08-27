@@ -188,6 +188,38 @@ class StorageReleasePullerTest(unittest.TestCase):
         self.assertEqual(seen["checks"]["check_runs"][0]["name"], "ci/required")
         self.assertEqual(seen["checks"]["check_runs"][0]["head_sha"], SHA1)
 
+    def test_build_release_invokes_tracked_python_script_with_python3_under_builder_limits(self):
+        puller = load_puller()
+        commands = []
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self.config(tmp)
+            checkout = Path(tmp) / "checkout"
+
+            def run_command(argv, **kwargs):
+                commands.append(list(argv))
+                return CompletedProcess(argv, 0, "", "")
+
+            outdir = puller.build_release(cfg, checkout, SHA1, run_command)
+
+        script = checkout / cfg.build_script
+        build_commands = [command for command in commands if str(script) in command]
+        self.assertEqual(len(build_commands), 1)
+        build_command = build_commands[0]
+        self.assertEqual(
+            build_command,
+            [
+                "runuser", "-u", "storage-viz-builder", "--",
+                "env", "-i",
+                "HOME=/var/lib/storage-viz-dashboard/builder",
+                "PATH=/usr/local/bin:/usr/local/bin:/usr/bin:/bin",
+                "GIT_CONFIG_NOSYSTEM=1",
+                "nice", "-n", "10", "ionice", "-c", "3",
+                "python3", str(script),
+                "--sha", SHA1,
+                "--output-dir", str(outdir),
+            ],
+        )
+
     def test_fetch_evidence_defers_required_check_policy_to_shared_authorizer_like_gpu(self):
         puller = load_puller()
         with tempfile.TemporaryDirectory() as tmp:
