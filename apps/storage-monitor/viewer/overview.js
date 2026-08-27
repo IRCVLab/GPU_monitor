@@ -145,6 +145,20 @@ function selectedRootByMountId(snapshot) {
   return byMountId;
 }
 
+function scanRootPath(mount, selectedRoot) {
+  return String(
+    (selectedRoot && (selectedRoot.scan_root || selectedRoot.path || selectedRoot.mountpoint))
+    || (mount && (mount.scan_root || mount.path || mount.mountpoint))
+    || "/"
+  );
+}
+
+function scannedBytesForMount(mount, selectedRoot) {
+  const mountBytes = normalizeBytes(mount && mount.scanned_bytes);
+  if (mountBytes != null) return mountBytes;
+  return normalizeBytes(selectedRoot && selectedRoot.scanned_bytes);
+}
+
 function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
   const mounts = Array.isArray(snapshot && snapshot.mounts) ? snapshot.mounts : [];
   const rootsByMountId = selectedRootByMountId(snapshot);
@@ -168,9 +182,12 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       key: String((mount && mount.mount_id) || (mount && mount.path) || index),
       mountId,
       path: String((mount && mount.path) || (mount && mount.mountpoint) || "/"),
+      scanRoot: scanRootPath(mount, selectedRoot),
+      scannedBytes: scannedBytesForMount(mount, selectedRoot),
       usedBytes,
       totalBytes,
       availableBytes,
+      capacityPct: explicitPct,
       usedPct,
       freeBytes,
       media,
@@ -185,6 +202,52 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       metricText: usedPctText + " · " + freeText,
     };
   });
+}
+
+function summarizeCapacityGroups(mounts) {
+  const groups = [];
+  const groupsByIdentity = new Map();
+  for (const mount of Array.isArray(mounts) ? mounts : []) {
+    if (!mount) continue;
+    const identityKey = mount.identity && mount.identity.key ? mount.identity.key : "";
+    const existing = identityKey ? groupsByIdentity.get(identityKey) || null : null;
+    const canMerge = !!(
+      existing
+      && capacityMetricsKnown(existing)
+      && capacityMetricsKnown(mount)
+      && sameCapacityMetrics(existing, mount)
+      && existing.media === mount.media
+      && existing.mediaConfidence === mount.mediaConfidence
+    );
+    if (!canMerge) {
+      const group = {
+        key: identityKey || ("path:" + mount.key),
+        path: mount.path,
+        usedBytes: mount.usedBytes,
+        totalBytes: mount.totalBytes,
+        availableBytes: mount.availableBytes,
+        capacityPct: mount.capacityPct,
+        usedPct: mount.usedPct,
+        freeBytes: mount.freeBytes,
+        media: mount.media,
+        mediaConfidence: mount.mediaConfidence,
+        mediaLabel: mount.mediaLabel,
+        usedTotalText: mount.usedTotalText,
+        usedPctText: mount.usedPctText,
+        freeText: mount.freeText,
+        identity: mount.identity,
+        pressure: mount.pressure,
+        pressureLabel: mount.pressureLabel,
+        metricText: mount.metricText,
+        scanRoots: [{ path: mount.scanRoot, scannedBytes: mount.scannedBytes }],
+      };
+      groups.push(group);
+      if (identityKey) groupsByIdentity.set(identityKey, group);
+      continue;
+    }
+    existing.scanRoots.push({ path: mount.scanRoot, scannedBytes: mount.scannedBytes });
+  }
+  return groups;
 }
 
 function formatMediaLabel(value) {
@@ -232,8 +295,12 @@ function sameCapacityNumbers(left, right) {
   return left.totalBytes === right.totalBytes && left.usedBytes === right.usedBytes && left.availableBytes === right.availableBytes;
 }
 
-function capacityNumbersKnown(mount) {
-  return mount && mount.totalBytes != null && mount.usedBytes != null && mount.availableBytes != null;
+function sameCapacityMetrics(left, right) {
+  return sameCapacityNumbers(left, right) && left.capacityPct === right.capacityPct;
+}
+
+function capacityMetricsKnown(mount) {
+  return mount && mount.totalBytes != null && mount.usedBytes != null && mount.availableBytes != null && mount.capacityPct != null;
 }
 
 function aggregateMountCapacity(mounts) {
@@ -259,11 +326,12 @@ function aggregateMountCapacity(mounts) {
   for (const [identityKey, group] of groups) {
     const first = group[0];
     const identityLabel = first.identity.value || identityKey;
-    const allNumbersKnown = group.every(capacityNumbersKnown);
-    const consistent = allNumbersKnown && group.every(mount => sameCapacityNumbers(first, mount));
+    const allMetricsKnown = group.every(capacityMetricsKnown);
+    const consistent = allMetricsKnown && group.every(mount => sameCapacityMetrics(first, mount));
     if (!consistent) {
       excludedMountCount += group.length;
-      const reason = allNumbersKnown ? "inconsistent capacity data" : "invalid capacity numbers";
+      const hasInvalidNumbers = group.some(mount => !mount || mount.totalBytes == null || mount.usedBytes == null || mount.availableBytes == null);
+      const reason = allMetricsKnown ? "inconsistent capacity data" : (hasInvalidNumbers ? "invalid capacity numbers" : "invalid capacity metrics");
       partialReasons.push(identityLabel + ": " + reason + ", " + group.length + "개 마운트 제외");
       continue;
     }
@@ -276,6 +344,7 @@ function aggregateMountCapacity(mounts) {
       totalBytes: first.totalBytes,
       usedBytes: first.usedBytes,
       availableBytes: first.availableBytes,
+      capacityPct: first.capacityPct,
     });
   }
   if (!inputMounts.length) partialReasons.push("no known capacity identities");
@@ -379,6 +448,7 @@ function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
     totalAvailableBytes: hasKnownCapacity ? aggregate.availableBytes : null,
     totalAvailableLabel: hasKnownCapacity ? aggregate.availableLabel : "여유 미확인",
     mounts,
+    capacityGroups: summarizeCapacityGroups(mounts),
     aggregate,
     primaryStatus,
     secondaryStatus,
@@ -480,6 +550,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   const item = makeEl(doc, "li", "overview-item");
   const capacityOnlyState = row.primaryStatus.code === "pressure_warning" || row.primaryStatus.code === "pressure_critical";
   const operationalTone = capacityOnlyState ? "normal" : (row.primaryStatus.tone || "normal");
+  const renderedMounts = row && Array.isArray(row.capacityGroups) && row.capacityGroups.length ? row.capacityGroups : row.mounts;
   const card = makeEl(doc, "a", "overview-card");
   card.setAttribute("href", buildRouteHref(handlers.pathname || "/", { serverId: row.id, tab: "treemap" }));
   card.dataset.serverId = row.id;
@@ -507,21 +578,28 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   card.appendChild(cardHeader);
 
   const mountsWrap = makeEl(doc, "div", "overview-mounts");
-  if (!row.mounts.length) {
+  if (!renderedMounts.length) {
     mountsWrap.appendChild(makeEl(doc, "div", "overview-mount overview-mount-empty", "표시할 데이터 마운트 없음"));
   } else {
-    for (const mount of row.mounts) {
+    for (const mount of renderedMounts) {
       const mountEl = makeEl(doc, "div", "overview-mount");
       mountEl.setAttribute("data-pressure", mount.pressure);
       if (mount.pressure === "warning" || mount.pressure === "critical") {
         mountEl.setAttribute("role", "group");
-        mountEl.setAttribute("aria-label", [mount.path, mount.mediaLabel, mount.usedPctText, mount.freeText, mount.pressureLabel].join(", "));
+        mountEl.setAttribute("aria-label", [mount.scanRoots.map(root => root.path).join(", "), mount.mediaLabel, mount.usedPctText, mount.freeText, mount.pressureLabel].join(", "));
       }
       mountEl.appendChild(makeEl(doc, "span", "overview-media-label", mount.mediaLabel));
       const body = makeEl(doc, "div", "overview-mount-body");
       const line = makeEl(doc, "div", "overview-mount-line");
-      const pathEl = makeEl(doc, "div", "overview-mount-path", mount.path);
-      pathEl.title = mount.path;
+      const pathClassName = mount.scanRoots.length > 1 ? "overview-mount-path overview-mount-path-grouped" : "overview-mount-path";
+      const pathEl = mount.scanRoots.length === 1
+        ? makeEl(doc, "div", pathClassName, mount.scanRoots[0].path)
+        : makeEl(doc, "div", pathClassName);
+      pathEl.title = mount.scanRoots.map(root => root.path).join("\n");
+      if (mount.scanRoots.length > 1) {
+        pathEl.appendChild(makeEl(doc, "span", "overview-capacity-label", "공유 디스크"));
+        pathEl.appendChild(makeEl(doc, "span", "overview-scan-paths", "탐색 " + mount.scanRoots.map(root => root.path).join(" · ")));
+      }
       line.appendChild(pathEl);
       line.appendChild(makeEl(doc, "div", "overview-mount-pct", mount.usedPctText));
       body.appendChild(line);
@@ -540,14 +618,14 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   }
   card.appendChild(mountsWrap);
 
-  if (row.mounts.length) {
+  if (renderedMounts.length) {
     const footer = makeEl(doc, "footer", "overview-card-footer");
     footer.appendChild(makeEl(doc, "span", "overview-footer-label", "스토리지"));
     footer.appendChild(makeEl(doc, "span", "overview-footer-value", row.aggregate.utilizationLabel));
     footer.appendChild(makeEl(doc, "span", "overview-footer-separator", "·"));
     footer.appendChild(makeEl(doc, "span", "overview-footer-value", totalAvailableMetaText(row)));
-    const warningCount = row.mounts.filter(mount => mount.pressure === "warning").length;
-    const criticalCount = row.mounts.filter(mount => mount.pressure === "critical").length;
+    const warningCount = renderedMounts.filter(mount => mount.pressure === "warning").length;
+    const criticalCount = renderedMounts.filter(mount => mount.pressure === "critical").length;
     if (criticalCount) footer.appendChild(makeEl(doc, "span", "overview-footer-pressure overview-footer-critical", "위험 " + criticalCount));
     if (warningCount) footer.appendChild(makeEl(doc, "span", "overview-footer-pressure overview-footer-warning", "주의 " + warningCount));
     card.appendChild(footer);
@@ -689,6 +767,7 @@ const overviewExports = {
   normalizePercent,
   selectedRootByMountId,
   summarizeMounts,
+  summarizeCapacityGroups,
   formatMediaLabel,
   pressureText,
   aggregateMountCapacity,

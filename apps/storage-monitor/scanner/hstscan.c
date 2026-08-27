@@ -293,8 +293,11 @@ static int node_root_rank_cmp(const void *left, const void *right) {
 
 /* Prune children below threshold; bytes not represented by retained children
  * (direct entries plus pruned subtrees) fold into other_bytes. Must run after
- * node_rollup (final n->bytes). */
-static void node_prune(struct node *n, uint64_t threshold) {
+ * node_rollup (final n->bytes). When preserve_levels > 0, retain the next
+ * child level regardless of threshold (still sorted and capped), then resume
+ * threshold pruning below it. */
+static void node_prune(struct node *n, uint64_t threshold,
+                       unsigned preserve_levels) {
     if (n->nchildren > 1) {
         qsort(n->children, n->nchildren, sizeof *n->children,
               node_root_rank_cmp);
@@ -303,8 +306,11 @@ static void node_prune(struct node *n, uint64_t threshold) {
     uint64_t retained_bytes = 0;
     for (size_t i = 0; i < n->nchildren; i++) {
         struct node *c = n->children[i];
-        if (c->bytes >= threshold && keep < MAX_CHILDREN_PER_NODE) {
-            node_prune(c, threshold);
+        bool retain = preserve_levels > 0 || c->bytes >= threshold;
+        if (retain && keep < MAX_CHILDREN_PER_NODE) {
+            unsigned child_preserve_levels =
+                preserve_levels > 0 ? preserve_levels - 1 : 0;
+            node_prune(c, threshold, child_preserve_levels);
             n->children[keep++] = c;     /* retained: compact toward front */
             retained_bytes += c->bytes;
         } else {
@@ -315,9 +321,10 @@ static void node_prune(struct node *n, uint64_t threshold) {
     n->other_bytes = keep ? n->bytes - retained_bytes : 0;
 }
 
-/* Preserve every immediate directory below a selected scan root so the
- * dashboard's first drill-down always matches the mount's real workspace
- * layout.  Size pruning still applies below those navigation landmarks. */
+/* Preserve every immediate directory below a selected scan root plus one more
+ * descendant directory level so the dashboard's first two drill-downs match
+ * the real workspace layout. Size pruning still applies below those
+ * navigation landmarks. */
 static void node_prune_below_root(struct node *root, uint64_t threshold) {
     if (root->nchildren > 1) {
         qsort(root->children, root->nchildren, sizeof *root->children,
@@ -329,7 +336,7 @@ static void node_prune_below_root(struct node *root, uint64_t threshold) {
     uint64_t retained_bytes = 0;
     for (size_t i = 0; i < keep; i++) {
         struct node *child = root->children[i];
-        node_prune(child, threshold);
+        node_prune(child, threshold, 1);
         retained_bytes += child->bytes;
     }
     for (size_t i = keep; i < root->nchildren; i++) {

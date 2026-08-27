@@ -284,10 +284,130 @@ function normalizeDetailMounts() {
 function detailCapacityNumber(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
-function detailCapacityPercent(mount, usedBytes, totalBytes) {
+function detailExplicitCapacityPercent(mount) {
   if (typeof (mount && mount.df_use_pct) === "number" && Number.isFinite(mount.df_use_pct)) return Math.max(0, Math.min(100, Math.round(mount.df_use_pct)));
+  return null;
+}
+function detailCapacityPercent(mount, usedBytes, totalBytes) {
+  const explicitPct = detailExplicitCapacityPercent(mount);
+  if (explicitPct != null) return explicitPct;
   if (usedBytes != null && totalBytes > 0) return Math.max(0, Math.min(100, Math.round(usedBytes / totalBytes * 100)));
   return null;
+}
+function detailSelectedRootByMountId() {
+  const byMountId = new Map();
+  const roots = Array.isArray(DATA && DATA.selected_roots) ? DATA.selected_roots : [];
+  for (const root of roots) {
+    const mountId = root && root.mount_id != null ? String(root.mount_id) : "";
+    if (!mountId || byMountId.has(mountId)) continue;
+    byMountId.set(mountId, root);
+  }
+  return byMountId;
+}
+function detailIsCanonicalDecimal(raw, allowZero) {
+  if (!/^\d{1,10}$/.test(raw)) return false;
+  if (raw.length > 1 && raw[0] === "0") return false;
+  if (!allowZero && raw === "0") return false;
+  return true;
+}
+function detailCanonicalCapacityId(value) {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^dev-(\d+)-(\d+)$/);
+  if (!match) return null;
+  if (!detailIsCanonicalDecimal(match[1], false) || !detailIsCanonicalDecimal(match[2], true)) return null;
+  return value;
+}
+function detailCanonicalMajorMinor(value) {
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/^(\d+):(\d+)$/);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return null;
+  if (major === 0 && minor === 0) return null;
+  return String(major) + ":" + String(minor);
+}
+function detailCapacityIdentity(root, mount) {
+  const capacityId = detailCanonicalCapacityId(
+    String((root && root.capacity_id) || (mount && mount.capacity_id) || "")
+  );
+  if (capacityId) return { key: "capacity_id:" + capacityId, value: capacityId };
+  const majorMinor = detailCanonicalMajorMinor(
+    String((root && root.major_minor) || (mount && mount.major_minor) || "")
+  );
+  return majorMinor ? { key: "major_minor:" + majorMinor, value: majorMinor } : null;
+}
+function detailScanRootPath(mount, root) {
+  return String(
+    (root && (root.scan_root || root.path || root.mountpoint))
+    || (mount && (mount.scan_root || mount.path || mount.mountpoint))
+    || "/"
+  );
+}
+function detailScannedBytes(mount, root) {
+  const mountBytes = detailCapacityNumber(mount && mount.scanned_bytes);
+  if (mountBytes != null) return mountBytes;
+  return detailCapacityNumber(root && root.scanned_bytes);
+}
+function sameDetailCapacityMetrics(left, right) {
+  return left.totalBytes === right.totalBytes
+    && left.usedBytes === right.usedBytes
+    && left.availableBytes === right.availableBytes
+    && left.capacityPct === right.capacityPct;
+}
+function detailCapacityMetricsKnown(candidate) {
+  return candidate
+    && candidate.totalBytes != null
+    && candidate.usedBytes != null
+    && candidate.availableBytes != null
+    && candidate.capacityPct != null;
+}
+function groupDetailCapacityMounts(mounts) {
+  const rootsByMountId = detailSelectedRootByMountId();
+  const groups = [];
+  const groupsByIdentity = new Map();
+  for (const mount of Array.isArray(mounts) ? mounts : []) {
+    if (!mount) continue;
+    const mountId = mount.mount_id != null ? String(mount.mount_id) : "";
+    const root = mountId ? rootsByMountId.get(mountId) || null : null;
+    const usedBytes = detailCapacityNumber(mount.df_used);
+    const totalBytes = detailCapacityNumber(mount.df_total);
+    const availableBytes = detailCapacityNumber(mount.df_avail);
+    const capacityPct = detailExplicitCapacityPercent(mount);
+    const identity = detailCapacityIdentity(root, mount);
+    const identityKey = identity && identity.key ? identity.key : "";
+    const existing = identityKey ? groupsByIdentity.get(identityKey) || null : null;
+    const candidate = {
+      key: identityKey || ("path:" + String(mount.path || mountId || groups.length)),
+      path: String((root && root.mountpoint) || mount.mountpoint || mount.path || "/"),
+      usedBytes,
+      totalBytes,
+      availableBytes,
+      capacityPct,
+      media: String((mount.storage_media || mount.block_media || (root && (root.storage_media || root.block_media)) || "unknown")),
+      fstype: String((mount.fstype || (root && root.fstype) || "")),
+      scanRoots: [{
+        path: detailScanRootPath(mount, root),
+        mountPath: String(mount.path || mount.mountpoint || "/"),
+        scannedBytes: detailScannedBytes(mount, root),
+      }],
+    };
+    const canMerge = !!(
+      existing
+      && detailCapacityMetricsKnown(existing)
+      && detailCapacityMetricsKnown(candidate)
+      && sameDetailCapacityMetrics(existing, candidate)
+      && existing.media === candidate.media
+      && existing.fstype === candidate.fstype
+    );
+    if (!canMerge) {
+      groups.push(candidate);
+      if (identityKey) groupsByIdentity.set(identityKey, candidate);
+      continue;
+    }
+    existing.scanRoots.push(candidate.scanRoots[0]);
+  }
+  return groups;
 }
 function isTransientBlockedEntry(entry) {
   const reason = String(entry && entry.reason || '').trim().toLowerCase();
@@ -322,28 +442,39 @@ function renderHeader() {
     empty.textContent = "표시할 데이터 마운트 없음";
     caps.appendChild(empty);
   }
-  for (const m of actionableMounts) {
-    const usedBytes = detailCapacityNumber(m.df_used);
-    const totalBytes = detailCapacityNumber(m.df_total);
-    const availableBytes = detailCapacityNumber(m.df_avail);
-    const pct = detailCapacityPercent(m, usedBytes, totalBytes);
+  const capacityGroups = groupDetailCapacityMounts(actionableMounts);
+  for (const group of capacityGroups) {
+    const usedBytes = group.usedBytes;
+    const totalBytes = group.totalBytes;
+    const availableBytes = group.availableBytes;
+    const pct = group.capacityPct;
     const pressure = pct == null || availableBytes == null ? "unknown" : (pct >= 90 ? "critical" : (pct >= 75 ? "warning" : "normal"));
     const color = pressure === "unknown" ? null : capColor(pct);
     const fillStyle = pct == null ? "width:0%" : "width:" + Math.min(100, pct) + "%;background:" + color;
-    capUsedByMount[m.path] = usedBytes || 0; totalCapacityUsed += (usedBytes || 0);
-    const media = m.storage_media || m.block_media || "unknown";
+    for (const root of group.scanRoots) {
+      if (root.scannedBytes != null) {
+        capUsedByMount[root.mountPath] = root.scannedBytes;
+        totalCapacityUsed += root.scannedBytes;
+      }
+    }
+    const media = group.media;
+    const scanRootsHtml = group.scanRoots.map(root =>
+      '<span class="cap-scan-root"><span class="cap-scan-path">' + escapeHtml(root.path) + '</span> <span class="figure">' +
+      humanBytes(root.scannedBytes) + '</span> scanned</span>'
+    ).join('');
     const div = document.createElement("div");
     div.className = "detail-capacity-row";
     div.setAttribute("data-pressure", pressure);
     div.innerHTML =
-      '<div class="cap-main"><span class="cap-path">' + escapeHtml(m.path) + '</span>' +
-        '<span class="cap-fs">' + escapeHtml(m.fstype || "") + '</span>' +
+      '<div class="cap-main"><span class="cap-path">' + escapeHtml(group.path) + '</span>' +
+        '<span class="cap-fs">' + escapeHtml(group.fstype || "") + '</span>' +
         '<span class="cap-media">' + escapeHtml(media) + '</span></div>' +
       '<div class="cap-sub"><span class="figure">' + humanBytes(usedBytes) + '</span> used / <span class="figure">' +
         humanBytes(totalBytes) + '</span></div>' +
       '<div class="cap-pct"' + (color ? ' style="color:' + color + '"' : '') + '>' + (pct == null ? "—" : pct + '<span>%</span>') + '</div>' +
       '<div class="cap-free"><span class="figure">' + humanBytes(availableBytes) + '</span> free</div>' +
-      '<div class="cap-bar"><div class="cap-fill" style="' + fillStyle + '"></div></div>';
+      '<div class="cap-bar"><div class="cap-fill" style="' + fillStyle + '"></div></div>' +
+      '<div class="cap-scan-roots">' + scanRootsHtml + '</div>';
     caps.appendChild(div);
   }
   if (totalCapacityUsed <= 0) totalCapacityUsed = 1;

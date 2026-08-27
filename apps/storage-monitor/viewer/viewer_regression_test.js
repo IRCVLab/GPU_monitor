@@ -693,6 +693,92 @@ function testServerHeaderMetaIsActionableMountCountOnly() {
   assert.strictEqual(findByClass(button, 'overview-server-subtotal').length, 0, 'compact server rows must not render subtotal labels');
 }
 
+function testSharedCapacityOverviewGroupsPhysicalDiskAndPreservesScanPathOrder() {
+  const viewer = loadViewer();
+  const row = viewer.buildOverviewServer(
+    {
+      id: 'neo',
+      display_name: 'neo',
+      mount_count: 2,
+      snapshot_availability: 'available',
+      freshness: 'fresh',
+      latest_pull_status: 'succeeded',
+      latest_scan_result: 'complete',
+      configuration_sync: 'in_sync',
+      active_job: null,
+    },
+    {
+      server_id: 'neo',
+      selected_roots: [
+        { mount_id: 'home', capacity_id: 'dev-259-3', mountpoint: '/', scan_root: '/home', storage_media: 'ssd', scanned_bytes: 700 * 1024 ** 3 },
+        { mount_id: 'data', capacity_id: 'dev-259-3', mountpoint: '/', scan_root: '/data', storage_media: 'ssd', scanned_bytes: 20 * 1024 },
+      ],
+      mounts: [
+        { mount_id: 'home', path: '/home', mountpoint: '/', scan_root: '/home', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3, df_avail: 820 * 1024 ** 3, df_use_pct: 77, scanned_bytes: 700 * 1024 ** 3 },
+        { mount_id: 'data', path: '/data', mountpoint: '/', scan_root: '/data', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3, df_avail: 820 * 1024 ** 3, df_use_pct: 77, scanned_bytes: 20 * 1024 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+  const list = viewer.document.getElementById('overviewList');
+  viewer.renderOverviewList(list, [row], { onOpenServer() {} });
+
+  const card = list.children[0].children[0];
+  assert.strictEqual(findByClass(card, 'overview-mount').length, 1, 'shared-capacity scan roots must render one physical-capacity summary');
+  assert.strictEqual(findByClass(card, 'overview-pressure-bar').length, 1, 'shared-capacity groups must keep one shared utilization bar');
+  const capacityLabel = findByClass(card, 'overview-capacity-label')[0];
+  const scanPaths = findByClass(card, 'overview-scan-paths')[0];
+  assert(capacityLabel, 'multi-root capacity groups must expose a distinct physical-capacity label');
+  assert(scanPaths, 'multi-root capacity groups must expose a distinct scan-root line');
+  assert.strictEqual(textTree(capacityLabel), '공유 디스크', 'multi-root capacity groups must name the physical capacity without borrowing a scan-root path');
+  assert.strictEqual(textTree(scanPaths), '탐색 /home · /data', 'shared-capacity groups must expose a secondary ordered scan-root line');
+  assert.strictEqual(textTree(findByClass(card, 'overview-meta')[0]), '2개 마운트', 'server header must still report actionable scan-root count');
+  assert(textTree(card).includes('77%') && textTree(card).includes('여유 820 GB'), 'shared-capacity overview must keep shared physical-capacity metrics visible');
+}
+
+function testOverviewSharedCapacityRequiresKnownConsistentMetrics() {
+  const viewer = loadViewer();
+  const row = viewer.buildOverviewServer(
+    { id: 'neo', display_name: 'neo', mount_count: 4 },
+    {
+      server_id: 'neo',
+      selected_roots: [
+        { mount_id: 'unknown-home', capacity_id: 'dev-8-1', scan_root: '/unknown-home' },
+        { mount_id: 'unknown-data', capacity_id: 'dev-8-1', scan_root: '/unknown-data' },
+        { mount_id: 'mismatch-home', capacity_id: 'dev-8-2', scan_root: '/mismatch-home' },
+        { mount_id: 'mismatch-data', capacity_id: 'dev-8-2', scan_root: '/mismatch-data' },
+        { mount_id: 'missing-pct-home', capacity_id: 'dev-8-3', scan_root: '/missing-pct-home' },
+        { mount_id: 'missing-pct-data', capacity_id: 'dev-8-3', scan_root: '/missing-pct-data' },
+        { mount_id: 'mismatch-avail-home', capacity_id: 'dev-8-4', scan_root: '/mismatch-avail-home' },
+        { mount_id: 'mismatch-avail-data', capacity_id: 'dev-8-4', scan_root: '/mismatch-avail-data' },
+      ],
+      mounts: [
+        { mount_id: 'unknown-home', path: '/unknown-home', df_total: 1000, df_used: 400, df_use_pct: 40 },
+        { mount_id: 'unknown-data', path: '/unknown-data', df_total: 1000, df_used: 400, df_use_pct: 40 },
+        { mount_id: 'mismatch-home', path: '/mismatch-home', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
+        { mount_id: 'mismatch-data', path: '/mismatch-data', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 41 },
+        { mount_id: 'missing-pct-home', path: '/missing-pct-home', df_total: 1000, df_used: 400, df_avail: 600 },
+        { mount_id: 'missing-pct-data', path: '/missing-pct-data', df_total: 1000, df_used: 400, df_avail: 600 },
+        { mount_id: 'mismatch-avail-home', path: '/mismatch-avail-home', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
+        { mount_id: 'mismatch-avail-data', path: '/mismatch-avail-data', df_total: 1000, df_used: 400, df_avail: 500, df_use_pct: 40 },
+      ],
+    },
+    viewer.DEFAULT_CAPACITY_THRESHOLDS,
+  );
+
+  assert.strictEqual(row.capacityGroups.length, 8, 'unknown or mismatched physical-capacity metrics must keep same-identity scan roots separate');
+  assert.deepStrictEqual(Array.from(row.capacityGroups, group => group.scanRoots[0].path), [
+    '/unknown-home',
+    '/unknown-data',
+    '/mismatch-home',
+    '/mismatch-data',
+    '/missing-pct-home',
+    '/missing-pct-data',
+    '/mismatch-avail-home',
+    '/mismatch-avail-data',
+  ], 'rejected capacity merges must preserve original scan-root order');
+}
+
 function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
   const viewer = loadViewer();
   const row = viewer.buildOverviewServer(
@@ -731,6 +817,151 @@ function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
   assert(!text.includes('— / —'), 'compact mount strip must omit used/total capacity text');
   assert(!text.includes('여유 0 B'), 'unknown free capacity must never render as 0 B free');
   assert.strictEqual(button.getAttribute('aria-label'), undefined, 'unknown mount details must not be hidden behind a row aria-label');
+}
+
+
+async function testDetailSharedCapacityUsesOneCapacityRowAndSeparateScanNavigation() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'neo', display_name: 'neo', mount_count: 2, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+    dataMode: 'inventory',
+  });
+  viewer.loadSnapshotForCurrentSource = async () => ({
+    server_id: 'neo',
+    hostname: 'neo-host',
+    scanner_version: '1.0',
+    run_as_root: true,
+    users: [],
+    top_files: [],
+    stale: [],
+    selected_roots: [
+      { mount_id: 'home', capacity_id: 'dev-259-3', mountpoint: '/', scan_root: '/home', storage_media: 'ssd', scanned_bytes: 700 * 1024 ** 3 },
+      { mount_id: 'data', capacity_id: 'dev-259-3', mountpoint: '/', scan_root: '/data', storage_media: 'ssd', scanned_bytes: 20 * 1024 },
+    ],
+    mounts: [
+      {
+        mount_id: 'home',
+        path: '/home',
+        mountpoint: '/',
+        scan_root: '/home',
+        fstype: 'ext4',
+        storage_media: 'ssd',
+        df_total: 1000 * 1024 ** 3,
+        df_used: 400 * 1024 ** 3,
+        df_avail: 600 * 1024 ** 3,
+        df_use_pct: 77,
+        scanned_bytes: 700 * 1024 ** 3,
+      },
+      {
+        mount_id: 'data',
+        path: '/data',
+        mountpoint: '/',
+        scan_root: '/data',
+        fstype: 'ext4',
+        storage_media: 'ssd',
+        df_total: 1000 * 1024 ** 3,
+        df_used: 400 * 1024 ** 3,
+        df_avail: 600 * 1024 ** 3,
+        df_use_pct: 77,
+        scanned_bytes: 20 * 1024,
+      },
+    ],
+  });
+  viewer.navigateToServer('neo', { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('neo');
+  await flushPromises();
+
+  const caps = viewer.document.getElementById('caps');
+  assert.strictEqual(caps.children.length, 1, 'detail capacity rail must group shared-capacity scan roots into one physical-disk row');
+  const groupedHtml = caps.children[0].innerHTML;
+  assert.strictEqual(caps.children[0].getAttribute('data-pressure'), 'warning', 'original df_use_pct must control grouped capacity pressure when byte ratio differs');
+  assert.match(groupedHtml, /<div class="cap-pct"[^>]*>77<span>%<\/span>/, 'grouped capacity percentage must preserve original df_use_pct instead of recomputing from used and total');
+  assert.doesNotMatch(groupedHtml, />40<span>%<\/span>/, 'grouped capacity percentage must not replace df_use_pct with the byte ratio');
+  assert.match(groupedHtml, /20\.0 KB<\/span>\s*scanned/, 'detail capacity row must label /data with scanned_bytes instead of shared used bytes');
+  assert.match(groupedHtml, /700 GB<\/span>\s*scanned/, 'detail capacity row must keep larger scan-root sizes labeled as scanned bytes');
+  const mountSeg = viewer.document.getElementById('mountSeg');
+  assert.deepStrictEqual(mountSeg.children.map(child => child.textContent), ['/home', '/data'], 'detail navigation must remain per scan root in existing order');
+  assert.strictEqual(mountSeg.children[1].title, '/data · scanned 20.0 KB', 'scan-root navigation must keep the scanned_bytes label for tiny shared-capacity directories');
+}
+
+async function testDetailSharedCapacityRequiresKnownConsistentMetrics() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'neo', display_name: 'neo', mount_count: 4, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+    dataMode: 'inventory',
+  });
+  viewer.loadSnapshotForCurrentSource = async () => ({
+    server_id: 'neo', hostname: 'neo-host', scanner_version: '1.0', run_as_root: true,
+    users: [], top_files: [], stale: [],
+    selected_roots: [
+      { mount_id: 'unknown-home', capacity_id: 'dev-8-1', scan_root: '/unknown-home' },
+      { mount_id: 'unknown-data', capacity_id: 'dev-8-1', scan_root: '/unknown-data' },
+      { mount_id: 'mismatch-home', capacity_id: 'dev-8-2', scan_root: '/mismatch-home' },
+      { mount_id: 'mismatch-data', capacity_id: 'dev-8-2', scan_root: '/mismatch-data' },
+      { mount_id: 'missing-pct-home', capacity_id: 'dev-8-3', scan_root: '/missing-pct-home' },
+      { mount_id: 'missing-pct-data', capacity_id: 'dev-8-3', scan_root: '/missing-pct-data' },
+      { mount_id: 'mismatch-avail-home', capacity_id: 'dev-8-4', scan_root: '/mismatch-avail-home' },
+      { mount_id: 'mismatch-avail-data', capacity_id: 'dev-8-4', scan_root: '/mismatch-avail-data' },
+    ],
+    mounts: [
+      { mount_id: 'unknown-home', path: '/unknown-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_use_pct: 40, scanned_bytes: 100 },
+      { mount_id: 'unknown-data', path: '/unknown-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_use_pct: 40, scanned_bytes: 200 },
+      { mount_id: 'mismatch-home', path: '/mismatch-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, scanned_bytes: 300 },
+      { mount_id: 'mismatch-data', path: '/mismatch-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 41, scanned_bytes: 400 },
+      { mount_id: 'missing-pct-home', path: '/missing-pct-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, scanned_bytes: 500 },
+      { mount_id: 'missing-pct-data', path: '/missing-pct-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, scanned_bytes: 600 },
+      { mount_id: 'mismatch-avail-home', path: '/mismatch-avail-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, scanned_bytes: 700 },
+      { mount_id: 'mismatch-avail-data', path: '/mismatch-avail-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 500, df_use_pct: 40, scanned_bytes: 800 },
+    ],
+  });
+  viewer.navigateToServer('neo', { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('neo');
+  await flushPromises();
+
+  const caps = viewer.document.getElementById('caps');
+  assert.strictEqual(caps.children.length, 8, 'detail must not merge same-identity rows when capacity metrics are unknown or inconsistent');
+}
+
+async function testDetailScopeCapacityUsesScanRootBytes() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap({
+    mode: 'api',
+    session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
+    summaries: [
+      { id: 'neo', display_name: 'neo', mount_count: 2, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null },
+    ],
+    snapshots: [],
+    dataMode: 'inventory',
+  });
+  viewer.loadSnapshotForCurrentSource = async () => ({
+    server_id: 'neo', hostname: 'neo-host', scanner_version: '1.0', run_as_root: true,
+    users: [], top_files: [], stale: [],
+    selected_roots: [
+      { mount_id: 'home', capacity_id: 'dev-259-3', scan_root: '/home', scanned_bytes: 700 * 1024 ** 3 },
+      { mount_id: 'data', capacity_id: 'dev-259-3', scan_root: '/data', scanned_bytes: 20 * 1024 },
+    ],
+    mounts: [
+      { mount_id: 'home', path: '/home', fstype: 'ext4', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40, scanned_bytes: 700 * 1024 ** 3 },
+      { mount_id: 'data', path: '/data', fstype: 'ext4', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40, scanned_bytes: 20 * 1024 },
+    ],
+  });
+  viewer.navigateToServer('neo', { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('neo');
+  await flushPromises();
+
+  assert.strictEqual(viewer.scopeCapacity(), 700 * 1024 ** 3 + 20 * 1024, 'unfiltered scan scope must sum each scan root scanned_bytes exactly once');
+  vm.runInContext('userMountFilter = "/data"', viewer);
+  assert.strictEqual(viewer.scopeCapacity(), 20 * 1024, '/data scan scope must use its scanned_bytes rather than shared physical df_used');
 }
 
 
@@ -2671,7 +2902,12 @@ async function main() {
   testMountCentricOverviewDomFieldsAndStableNavigation();
   testMountStatusTextAppearsOnlyForExceptionalPressure();
   testServerHeaderMetaIsActionableMountCountOnly();
+  testSharedCapacityOverviewGroupsPhysicalDiskAndPreservesScanPathOrder();
+  testOverviewSharedCapacityRequiresKnownConsistentMetrics();
   testUnknownMountCapacityDomStaysNeutralAndAccessible();
+  await testDetailSharedCapacityUsesOneCapacityRowAndSeparateScanNavigation();
+  await testDetailSharedCapacityRequiresKnownConsistentMetrics();
+  await testDetailScopeCapacityUsesScanRootBytes();
   await testDetailCapacityUsesCompactRowsAndFiltersBootMounts();
   await testDetailNormalizationFiltersBootEverywhereAndRecomputesUsers();
   await testDetailCapacityUnknownNumbersRenderNeutralDashes();

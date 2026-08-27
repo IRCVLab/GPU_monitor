@@ -95,10 +95,11 @@ rm -f "$GUARDED_OUT" "$GUARDED_OUT.tmp"
 pass "guarded --target PATH MAJOR:MINOR scans exact absolute target"
 
 # A mount's immediate child directories are navigation landmarks (for example
-# /data/alice and /data/project-a), not expendable detail.  They must remain in
-# the published tree even when their contents are smaller than the configured
-# pruning threshold.  Deeper small descendants should still be folded into the
-# immediate child's other_bytes so snapshots remain bounded.
+# /data/alice and /data/project-a), not expendable detail. They, and one more
+# descendant directory level, must remain in the published tree even when their
+# contents are smaller than the configured pruning threshold. Deeper small
+# descendants should still be folded below that extra preserved level so
+# snapshots remain bounded.
 PRUNE_ROOT="$TMP/prune-root"
 mkdir -p "$PRUNE_ROOT/alice/tiny-work" "$PRUNE_ROOT/bob"
 head -c 4096 /dev/zero > "$PRUNE_ROOT/alice/tiny-work/file.bin"
@@ -114,9 +115,40 @@ payload = json.load(open(sys.argv[1], encoding="utf-8"))
 tree = payload["mounts"][0]["tree"]
 children = {child["name"]: child for child in tree.get("children", [])}
 assert set(children) == {"alice", "bob"}, children
-assert children["alice"].get("children", []) == [], children["alice"]
+alice = children["alice"]
+workspaces = {child["name"]: child for child in alice.get("children", [])}
+assert set(workspaces) == {"tiny-work"}, workspaces
+assert workspaces["tiny-work"].get("children", []) == [], workspaces["tiny-work"]
+assert alice["bytes"] == workspaces["tiny-work"]["bytes"] + alice["other_bytes"], alice
 PYEOF
-pass "mount-level child directories survive size pruning while deeper detail remains bounded"
+pass "mount-level child directories and one extra descendant level survive size pruning while deeper detail remains bounded"
+
+# Root-preserved navigation needs one additional retained directory level so
+# small nested workspaces remain drillable, but threshold pruning must still
+# resume below that point.
+DEPTH_ROOT="$TMP/depth-root"
+mkdir -p "$DEPTH_ROOT/user/project/tiny"
+head -c 4096 /dev/zero > "$DEPTH_ROOT/user/project/tiny/file.bin"
+DEPTH_OUT="$TMP/hstscan_depth_root.json"
+"$BIN" --threads 2 --prune-home 1 --prune-data 1 --top 10 \
+    --out "$DEPTH_OUT" --target "$DEPTH_ROOT" "$TREE_DEV"
+DRC=$?
+[ "$DRC" -eq 0 ] || fail "second-level navigation pruning scan exited non-zero ($DRC)"
+$PY - "$DEPTH_OUT" <<'PYEOF' || fail "second-level nested directories were pruned from mount navigation"
+import json, sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+tree = payload["mounts"][0]["tree"]
+children = {child["name"]: child for child in tree.get("children", [])}
+assert set(children) == {"user"}, children
+user = children["user"]
+projects = {child["name"]: child for child in user.get("children", [])}
+assert set(projects) == {"project"}, projects
+project = projects["project"]
+assert project.get("children", []) == [], project
+assert user["bytes"] == project["bytes"] + user["other_bytes"], user
+PYEOF
+pass "mount-level navigation preserves one extra directory level before threshold pruning resumes"
 
 # Root navigation preservation must stay within the collector's per-node child
 # contract.  Create one more tiny workspace than the limit and verify the

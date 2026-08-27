@@ -264,6 +264,10 @@
   .overview-mount-body { min-width: 0; display: grid; gap: 5px; }
   .overview-mount-line { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 38px; align-items: baseline; gap: 8px; }
   .overview-mount-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px/1.3 var(--mono); color: color-mix(in srgb, var(--text) 88%, transparent); }
+  .overview-mount-path-grouped { display: grid; gap: 2px; white-space: normal; overflow: visible; text-overflow: clip; }
+  .overview-capacity-label, .overview-scan-paths { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .overview-capacity-label { font-family: var(--sans); font-weight: 650; }
+  .overview-scan-paths { color: color-mix(in srgb, var(--text) 58%, transparent); font-size: 10px; }
   .overview-mount-pct { color: color-mix(in srgb, var(--text) 64%, transparent); font: 700 10px/1 var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
   .overview-mount[data-pressure="warning"] .overview-mount-pct { color: var(--warn); }
   .overview-mount[data-pressure="critical"] .overview-mount-pct { color: var(--crit); }
@@ -400,6 +404,10 @@
   .cap-sub { grid-area: sub; }
   .cap-free { grid-area: free; text-align: right; }
   .cap-sub .figure, .cap-free .figure { color: var(--text); }
+  .cap-scan-roots { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 3px 8px; min-width: 0; color: var(--text2); font-size: 9px; }
+  .cap-scan-root { min-width: 0; display: inline-flex; align-items: baseline; gap: 4px; }
+  .cap-scan-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-family: var(--mono); }
+  .cap-scan-root .figure { color: var(--text); }
   .detail-capacity-row[data-pressure="unknown"] .cap-pct, .detail-capacity-row[data-pressure="unknown"] .cap-fill { color: var(--text2); background: var(--text2); opacity: .55; }
   .detail-capacity-empty { color: var(--text2); padding: 12px; text-align: center; font-size: 13px; }
 
