@@ -588,6 +588,22 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(external_parent.stat().st_mode), 0o755)
         self.assertEqual(stat.S_IMODE((external_parent / "storage-monitor").stat().st_mode), 0o755)
 
+    def test_dangling_existing_release_symlink_fails_with_bounded_activation_error(self) -> None:
+        archive, metadata, digest = self._archive()
+        sha_parent = self.release_root / self.sha
+        sha_parent.mkdir(parents=True)
+        target = sha_parent / "storage-monitor"
+        target.symlink_to(self.root / "missing-release", target_is_directory=True)
+
+        with self.assertRaises(self.module.ActivationError):
+            self.module.prepare_release(
+                self._config(),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_path=archive,
+                metadata_path=metadata,
+            )
+
     def test_extracts_private_verified_bytes_when_original_artifact_is_swapped_after_validation(self) -> None:
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)

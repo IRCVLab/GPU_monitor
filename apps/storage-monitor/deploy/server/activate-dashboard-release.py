@@ -582,12 +582,16 @@ def _validated_legacy_proxy_recovery(
 
 def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: str) -> Path:
     target = _release_target(config, sha)
+    if target.is_symlink() or target.parent.is_symlink():
+        raise ActivationError("existing release path contains a dangling or linked release directory")
     if target.exists():
         _assert_existing_release_location(config, target, sha)
         _assert_existing_release_matches(target, archive.files)
         _chmod_tree_readonly(target)
         os.chmod(target.parent, 0o555)
         return target
+    if target.parent.exists():
+        raise ActivationError("existing release directory is incomplete")
     config.release_root.mkdir(parents=True, exist_ok=True)
     target_parent = target.parent
     tmp_parent = config.release_root / f".{sha}.extract.{os.getpid()}"
