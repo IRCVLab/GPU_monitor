@@ -558,6 +558,36 @@ class DashboardReleaseActivationTest(unittest.TestCase):
 
         self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o755)
 
+    def test_existing_release_rejects_symlinked_sha_parent_without_mutating_external_tree(self) -> None:
+        archive, metadata, digest = self._archive()
+        status = self.module.prepare_release(
+            self._config(),
+            sha=self.sha,
+            expected_digest=digest,
+            artifact_path=archive,
+            metadata_path=metadata,
+        )
+        release = Path(status["candidate_release"])
+        sha_parent = release.parent
+        external_parent = self.root / "external-release"
+        sha_parent.chmod(0o755)
+        os.replace(sha_parent, external_parent)
+        sha_parent.symlink_to(external_parent, target_is_directory=True)
+        external_parent.chmod(0o755)
+        (external_parent / "storage-monitor").chmod(0o755)
+
+        with self.assertRaises(self.module.ActivationError):
+            self.module.prepare_release(
+                self._config(),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_path=archive,
+                metadata_path=metadata,
+            )
+
+        self.assertEqual(stat.S_IMODE(external_parent.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((external_parent / "storage-monitor").stat().st_mode), 0o755)
+
     def test_extracts_private_verified_bytes_when_original_artifact_is_swapped_after_validation(self) -> None:
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)

@@ -583,6 +583,7 @@ def _validated_legacy_proxy_recovery(
 def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: str) -> Path:
     target = _release_target(config, sha)
     if target.exists():
+        _assert_existing_release_location(config, target, sha)
         _assert_existing_release_matches(target, archive.files)
         _chmod_tree_readonly(target)
         os.chmod(target.parent, 0o555)
@@ -675,6 +676,25 @@ def _assert_existing_release_matches(target: Path, expected_files: dict[str, str
             actual[rel] = _sha256_file(path)
     if actual != expected_files:
         raise ActivationError("existing release content mismatch")
+
+
+def _assert_existing_release_location(config: ActivationConfig, target: Path, sha: str) -> None:
+    parent = target.parent
+    if parent.is_symlink() or target.is_symlink():
+        raise ActivationError("existing release path must not contain a symlinked release directory")
+    try:
+        canonical_root = config.release_root.resolve(strict=True)
+        canonical_parent = parent.resolve(strict=True)
+        canonical_target = target.resolve(strict=True)
+    except OSError as exc:
+        raise ActivationError("existing release path is missing or unreadable") from exc
+    if (
+        canonical_parent.parent != canonical_root
+        or canonical_parent.name != sha
+        or canonical_target.parent != canonical_parent
+        or canonical_target.name != "storage-monitor"
+    ):
+        raise ActivationError("existing release path is outside the direct release root")
 
 
 def _atomic_symlink(link_path: Path, target: Path) -> None:
