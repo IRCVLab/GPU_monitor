@@ -530,6 +530,34 @@ class DashboardReleaseActivationTest(unittest.TestCase):
 
         self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o644)
 
+    def test_existing_release_rejects_directory_symlink_without_mutating_external_mode(self) -> None:
+        archive, metadata, digest = self._archive()
+        status = self.module.prepare_release(
+            self._config(),
+            sha=self.sha,
+            expected_digest=digest,
+            artifact_path=archive,
+            metadata_path=metadata,
+        )
+        release = Path(status["candidate_release"])
+        external = self.root / "external-directory"
+        external.mkdir()
+        external.chmod(0o755)
+        release.chmod(0o755)
+        (release / "external-link").symlink_to(external, target_is_directory=True)
+        release.chmod(0o555)
+
+        with self.assertRaises(self.module.ActivationError):
+            self.module.prepare_release(
+                self._config(),
+                sha=self.sha,
+                expected_digest=digest,
+                artifact_path=archive,
+                metadata_path=metadata,
+            )
+
+        self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o755)
+
     def test_extracts_private_verified_bytes_when_original_artifact_is_swapped_after_validation(self) -> None:
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)

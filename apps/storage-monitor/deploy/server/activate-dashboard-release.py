@@ -637,12 +637,22 @@ def _fsync_tree(root: Path) -> None:
 def _chmod_tree_readonly(root: Path) -> None:
     for current, dirs, files in os.walk(root):
         current_path = Path(current)
+        if current_path.is_symlink():
+            raise ActivationError("release tree contains a directory symlink")
         for filename in files:
             file_path = current_path / filename
-            mode = file_path.stat().st_mode
+            if file_path.is_symlink():
+                raise ActivationError("release tree contains a file symlink")
+            file_stat = file_path.stat()
+            if file_stat.st_nlink != 1:
+                raise ActivationError("release tree contains a hardlinked file")
+            mode = file_stat.st_mode
             os.chmod(file_path, 0o555 if mode & 0o111 else 0o444)
         for dirname in dirs:
-            os.chmod(current_path / dirname, 0o555)
+            directory = current_path / dirname
+            if directory.is_symlink():
+                raise ActivationError("release tree contains a directory symlink")
+            os.chmod(directory, 0o555)
     os.chmod(root, 0o555)
 
 
@@ -650,6 +660,9 @@ def _assert_existing_release_matches(target: Path, expected_files: dict[str, str
     actual: dict[str, str] = {}
     for current, dirs, files in os.walk(target):
         current_path = Path(current)
+        for name in dirs:
+            if (current_path / name).is_symlink():
+                raise ActivationError("existing release contains a directory symlink")
         for name in files:
             path = current_path / name
             rel = str(path.relative_to(target))
