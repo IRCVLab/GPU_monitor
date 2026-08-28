@@ -624,8 +624,8 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert.strictEqual(findByClass(first, 'overview-media-label')[0].textContent, 'SSD', 'media labels must use neutral storage-class text');
   assert.strictEqual(findByClass(first, 'overview-mount-used-total').length, 0, 'compact mount strip must not render used/total capacity text');
   assert.strictEqual(findByClass(first, 'overview-mount-pct')[0].textContent, '40%', 'utilization percent must be rendered as its own compact field');
-  assert.strictEqual(textTree(findByClass(first, 'overview-mount-free')[0]), '여유 600 GB', 'healthy mount free text must not append redundant normal status text');
-  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('40%') && accessibleRowText.includes('여유 600 GB'), 'mount path, media, percent, and free information must remain accessible as descendant text');
+  assert.strictEqual(textTree(findByClass(first, 'overview-mount-capacity')[0]), '총 1000 GB · 여유 600 GB', 'mount rows must expose the filesystem total capacity beside remaining capacity');
+  assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('40%') && accessibleRowText.includes('총 1000 GB') && accessibleRowText.includes('여유 600 GB'), 'mount path, media, percent, total, and free information must remain accessible as descendant text');
   assert(!accessibleRowText.includes('400 GB / 1000 GB'), 'compact mount strip must omit used/total text');
 
   hintonButton.onclick();
@@ -655,10 +655,10 @@ function testMountStatusTextAppearsOnlyForExceptionalPressure() {
   const list = viewer.document.getElementById('overviewList');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
   const cells = findByClass(list.children[0].children[0], 'overview-mount');
-  const freeTexts = cells.map(cell => textTree(findByClass(cell, 'overview-mount-free')[0]));
-  assert.strictEqual(freeTexts[0], '여유 600 GB', 'healthy mount free text must not append redundant normal text');
-  assert.strictEqual(freeTexts[1], '여유 190 GB', 'warning mount free text must remain a clean numeric field');
-  assert.strictEqual(freeTexts[2], '여유 70.0 GB', 'critical mount free text must remain a clean numeric field');
+  const capacityTexts = cells.map(cell => textTree(findByClass(cell, 'overview-mount-capacity')[0]));
+  assert.strictEqual(capacityTexts[0], '총 1000 GB · 여유 600 GB', 'healthy mount capacity text must remain compact and complete');
+  assert.strictEqual(capacityTexts[1], '총 1000 GB · 여유 190 GB', 'warning mount capacity text must remain compact and complete');
+  assert.strictEqual(capacityTexts[2], '총 1000 GB · 여유 70.0 GB', 'critical mount capacity text must remain compact and complete');
   const footerText = textTree(findByClass(list.children[0].children[0], 'overview-card-footer')[0]);
   assert(footerText.includes('주의 1') && footerText.includes('위험 1'), 'non-color pressure labels must be consolidated in the card footer');
   assert(findByClass(list.children[0].children[0], 'overview-mount')[1].getAttribute('aria-label').includes('주의'), 'warning mount must expose its exact state without relying on color');
@@ -733,7 +733,7 @@ function testSharedCapacityOverviewGroupsPhysicalDiskAndPreservesScanPathOrder()
   assert.strictEqual(textTree(capacityLabel), '공유 디스크', 'multi-root capacity groups must name the physical capacity without borrowing a scan-root path');
   assert.strictEqual(textTree(scanPaths), '탐색 /home · /data', 'shared-capacity groups must expose a secondary ordered scan-root line');
   assert.strictEqual(textTree(findByClass(card, 'overview-meta')[0]), '2개 마운트', 'server header must still report actionable scan-root count');
-  assert(textTree(card).includes('77%') && textTree(card).includes('여유 820 GB'), 'shared-capacity overview must keep shared physical-capacity metrics visible');
+  assert(textTree(card).includes('77%') && textTree(card).includes('총 3.52 TB · 여유 820 GB'), 'shared-capacity overview must render one total for the shared physical capacity');
 }
 
 function testOverviewSharedCapacityRequiresKnownConsistentMetrics() {
@@ -1512,6 +1512,7 @@ function testMountCentricResponsiveCssContract() {
   assert(/\.overview-view\b[\s\S]*max-width:\s*var\(--overview-max-width\)/.test(css), 'overview view must consume the semantic max-width token');
   assert(/\.overview-list\b[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(var\(--overview-card-min\),\s*1fr\)\)/.test(css), 'desktop overview must use three columns with the semantic minimum card width');
   assert(/\.overview-list\b[\s\S]*gap:\s*var\(--overview-card-gap\)/.test(css), 'desktop card gutter must use the semantic card gap token');
+  assert(/@media \(max-width:\s*520px\)[\s\S]*\.overview-mount-metrics\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*\}[\s\S]*\.overview-mount-free\s*\{[^}]*min-width:\s*0[^}]*text-align:\s*left/.test(css), 'narrow mount rows must stack total/free capacity below the bar instead of causing horizontal overflow');
   assert(/--monitor-card-radius:\s*24px/.test(css), 'the shared monitor-card radius must use the GPU Monitor computed value, independent of root font size');
   assert(/--monitor-card-header-padding:\s*9px 12px 8px/.test(css), 'the shared monitor-card header padding must use the GPU Monitor computed value');
   assert(/--monitor-card-title-row-min-height:\s*30px/.test(css), 'the shared monitor-card title row must preserve the GPU Monitor edit-control height even when Storage has no edit button');

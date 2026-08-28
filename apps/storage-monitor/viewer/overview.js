@@ -176,7 +176,9 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
     const mediaConfidence = String((selectedRoot && (selectedRoot.storage_media_confidence || selectedRoot.block_media_confidence)) || (mount && (mount.storage_media_confidence || mount.block_media_confidence)) || "unknown");
     const usedPctText = usedPct == null ? "—" : usedPct + "%";
     const usedTotalText = compactBytes(usedBytes) + " / " + compactBytes(totalBytes);
+    const totalText = totalBytes == null ? "총용량 미확인" : "총 " + compactBytes(totalBytes);
     const freeText = availableBytes == null ? "여유 미확인" : "여유 " + compactBytes(availableBytes);
+    const capacityText = totalText + " · " + freeText;
     const pressure = pressureLevel(usedPct, freeBytes, thresholds);
     return {
       key: String((mount && mount.mount_id) || (mount && mount.path) || index),
@@ -194,8 +196,10 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       mediaConfidence,
       mediaLabel: formatMediaLabel(media),
       usedTotalText,
+      totalText,
       usedPctText,
       freeText,
+      capacityText,
       identity: capacityIdentityFromRoot(selectedRoot),
       pressure,
       pressureLabel: pressureText(pressure),
@@ -233,8 +237,10 @@ function summarizeCapacityGroups(mounts) {
         mediaConfidence: mount.mediaConfidence,
         mediaLabel: mount.mediaLabel,
         usedTotalText: mount.usedTotalText,
+        totalText: mount.totalText,
         usedPctText: mount.usedPctText,
         freeText: mount.freeText,
+        capacityText: mount.capacityText,
         identity: mount.identity,
         pressure: mount.pressure,
         pressureLabel: mount.pressureLabel,
@@ -586,7 +592,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       mountEl.setAttribute("data-pressure", mount.pressure);
       if (mount.pressure === "warning" || mount.pressure === "critical") {
         mountEl.setAttribute("role", "group");
-        mountEl.setAttribute("aria-label", [mount.scanRoots.map(root => root.path).join(", "), mount.mediaLabel, mount.usedPctText, mount.freeText, mount.pressureLabel].join(", "));
+        mountEl.setAttribute("aria-label", [mount.scanRoots.map(root => root.path).join(", "), mount.mediaLabel, mount.usedPctText, mount.capacityText, mount.pressureLabel].join(", "));
       }
       mountEl.appendChild(makeEl(doc, "span", "overview-media-label", mount.mediaLabel));
       const body = makeEl(doc, "div", "overview-mount-body");
@@ -610,7 +616,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       fill.style.width = Math.max(4, Math.min(100, mount.usedPct == null ? 0 : mount.usedPct)) + "%";
       meter.appendChild(fill);
       metrics.appendChild(meter);
-      metrics.appendChild(makeEl(doc, "div", "overview-mount-free", mount.freeText));
+      metrics.appendChild(makeEl(doc, "div", "overview-mount-free overview-mount-capacity", mount.capacityText));
       body.appendChild(metrics);
       mountEl.appendChild(body);
       mountsWrap.appendChild(mountEl);

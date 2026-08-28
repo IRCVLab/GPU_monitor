@@ -278,7 +278,7 @@
   .overview-pressure-fill[data-pressure="warning"] { background: var(--warn); }
   .overview-pressure-fill[data-pressure="critical"] { background: var(--crit); }
   .overview-pressure-fill[data-pressure="unknown"] { background: var(--text2); opacity: .55; }
-  .overview-mount-free { min-width: 74px; color: color-mix(in srgb, var(--text) 48%, transparent); font: 9.5px/1 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+  .overview-mount-free { min-width: 142px; color: color-mix(in srgb, var(--text) 48%, transparent); font: 9.5px/1 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
   .overview-card-footer { min-height: 31px; display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-top: 1px solid color-mix(in srgb, var(--ops-border) 88%, transparent); color: color-mix(in srgb, var(--ops-fg) 46%, transparent); font-size: 9.5px; line-height: 1.2; }
   .overview-footer-label { color: color-mix(in srgb, var(--text) 68%, transparent); font-weight: 600; }
   .overview-footer-value { font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -726,7 +726,8 @@
     .cap-sub, .cap-free { white-space: normal; }
     .overview-card { overflow: hidden; }
     .overview-mounts { padding-left: 12px; padding-right: 12px; }
-    .overview-mount-free { min-width: 70px; }
+    .overview-mount-metrics { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .overview-mount-free { min-width: 0; text-align: left; }
     .head-row { gap: 10px; }
     .brand-title { font-size: 19px; }
     .suite-nav-link { min-width: 58px; padding-left: 11px; padding-right: 11px; }
