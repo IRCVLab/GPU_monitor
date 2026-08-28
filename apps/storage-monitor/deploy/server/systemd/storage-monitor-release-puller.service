@@ -21,7 +21,9 @@ IOWeight=20
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/storage-viz-dashboard /srv/storage-viz-dashboard/releases /opt/storage-viz-dashboard
+# The activator atomically replaces /opt/storage-viz-dashboard itself, so the
+# containing directory must be writable inside this otherwise read-only mount namespace.
+ReadWritePaths=/var/lib/storage-viz-dashboard /srv/storage-viz-dashboard/releases /opt
 ReadOnlyPaths=/usr/local/libexec
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=yes
