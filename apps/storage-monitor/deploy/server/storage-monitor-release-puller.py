@@ -466,6 +466,23 @@ def _parse_activation_stdout(stdout: str, *, sha: str, digest: str) -> dict[str,
     return payload
 
 
+def _bounded_activation_error(stderr: str) -> str | None:
+    if not isinstance(stderr, str) or not stderr or len(stderr) > 4096:
+        return None
+    try:
+        payload = json.loads(stderr)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("status") != "error":
+        return None
+    message = payload.get("error")
+    if not isinstance(message, str) or not message or len(message) > 512:
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in message):
+        return None
+    return message
+
+
 def activate_release(config: Config, sha: str, digest: str, artifact: Path, run_command=default_run_command) -> dict[str, object]:
     validate_sha(sha)
     validate_digest(digest)
@@ -482,7 +499,9 @@ def activate_release(config: Config, sha: str, digest: str, artifact: Path, run_
     with artifact.open("rb") as input_handle:
         result = run_command(argv, stdin=input_handle, timeout=config.timeout_seconds)
     if result.returncode != 0:
-        raise PullError(f"activation command failed: {' '.join(argv)}")
+        detail = _bounded_activation_error(result.stderr)
+        suffix = f": {detail}" if detail else ""
+        raise PullError(f"activation command failed{suffix}")
     return _parse_activation_stdout(result.stdout, sha=sha, digest=digest)
 
 
@@ -504,14 +523,14 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
         if failure is not None and failure["sha"] != sha:
             clear_failed_release(config)
             failure = None
-        now = float(now_fn())
-        if failure is not None and now < failure["retry_after"]:
-            return "backoff"
         activation_state = read_activation_state(config)
         if activation_state["current"] == sha:
             write_state_sha(config, sha)
             clear_failed_release(config)
             return "reconciled-current"
+        now = float(now_fn())
+        if failure is not None and now < failure["retry_after"]:
+            return "backoff"
         workflow_run, check_runs, _ = fetch_evidence(config, sha, get_json)
         authorize(config, sha, workflow_run, check_runs, run_command)
         try:

@@ -381,6 +381,24 @@ class StorageReleasePullerTest(unittest.TestCase):
             puller.activate_release(cfg, SHA1, digest, artifact, run_command)
         self.assertEqual(seen["payload"], b"streamed-artifact")
 
+    def test_activate_release_reports_bounded_activator_error(self):
+        puller = load_puller()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self.config(tmp)
+            artifact = Path(tmp) / f"storage-monitor-dashboard-{SHA1}.tar.gz"
+            artifact.write_bytes(b"streamed-artifact")
+            artifact.with_name(f"storage-monitor-dashboard-{SHA1}.sha256.json").write_text("{}", encoding="utf-8")
+            digest = hashlib.sha256(b"streamed-artifact").hexdigest()
+
+            def run_command(argv, **kwargs):
+                return CompletedProcess(argv, 1, "", json.dumps({
+                    "status": "error",
+                    "error": "health check failed after activation",
+                }) + "\n")
+
+            with self.assertRaisesRegex(puller.PullError, "health check failed after activation"):
+                puller.activate_release(cfg, SHA1, digest, artifact, run_command)
+
     def test_reconciles_missing_state_when_live_current_already_matches_main(self):
         puller = load_puller()
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,6 +409,30 @@ class StorageReleasePullerTest(unittest.TestCase):
             result = puller.run_once(cfg, get_json=github.get_json, run_command=lambda *a, **k: self.fail("unexpected command"))
             self.assertEqual(result, "reconciled-current")
             self.assertEqual((cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip(), SHA1)
+
+    def test_live_activation_reconciles_before_failed_release_backoff(self):
+        puller = load_puller()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self.config(tmp)
+            github = FakeGitHub(SHA1)
+            cfg.state_dir.mkdir(parents=True)
+            self.write_activation_state(cfg.activation_state_path, sha=SHA1, digest=DIGEST)
+            (cfg.state_dir / "failed-release.json").write_text(json.dumps({
+                "sha": SHA1,
+                "failures": 1,
+                "retry_after": 9_999.0,
+            }), encoding="utf-8")
+
+            result = puller.run_once(
+                cfg,
+                get_json=github.get_json,
+                run_command=lambda *a, **k: self.fail("already-active release must not rebuild"),
+                now_fn=lambda: 1_000.0,
+            )
+
+            self.assertEqual(result, "reconciled-current")
+            self.assertEqual((cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip(), SHA1)
+            self.assertFalse((cfg.state_dir / "failed-release.json").exists())
 
     def test_failed_release_uses_persistent_backoff_until_main_advances(self):
         puller = load_puller()
