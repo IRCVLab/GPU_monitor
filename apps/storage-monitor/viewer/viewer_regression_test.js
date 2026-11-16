@@ -96,6 +96,7 @@ function loadViewer(options = {}) {
     'treemap.js',
     'tables.js',
     'overview.js',
+    'scan-status.js',
     'app.js',
   ], 'viewer code must be loaded from ordered external scripts including overview.js before app.js');
   assert(!/<style\b/i.test(html), 'viewer stylesheet must be externalized');
@@ -1104,7 +1105,7 @@ async function testZeroActionableMountsUseExactKoreanEmptyCopy() {
   const row = viewer.buildOverviewServer({ id: 'boot-only', display_name: 'boot-only', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null }, snapshot, viewer.DEFAULT_CAPACITY_THRESHOLDS);
   const list = viewer.document.getElementById('overviewList');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
-  assert.strictEqual(textTree(list), 'boot-only정상0개 마운트표시할 데이터 마운트 없음', 'overview must keep the hidden healthy status and exact Korean empty-mount copy');
+  assert.strictEqual(textTree(list), 'boot-only정상0개 마운트표시할 데이터 마운트 없음완료 기록 없음 · 예약 정보 확인 불가', 'overview must keep the hidden healthy status and exact Korean empty-mount copy');
 
   viewer.rememberBootstrap({
     mode: 'api', session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
@@ -1735,10 +1736,9 @@ function testRescanButtonExposesPersistentActivityCue() {
   assert.strictEqual(button.getAttribute('aria-busy'), 'false');
 
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
-  assert.match(css, /\.rescan-btn\[data-rescan-state\]\s*::after\s*\{[^}]*conic-gradient[^}]*animation:\s*rescan-orbit/i, 'active rescan button must draw an orbiting border without changing layout');
-  assert.match(css, /@keyframes\s+rescan-orbit\s*\{[\s\S]*transform:\s*rotate\(1turn\)/, 'rescan border cue must rotate continuously');
-  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.rescan-btn\[data-rescan-state\]\s*::after\s*\{[^}]*animation:\s*none/i, 'reduced-motion users must keep a static activity ring');
-  assert.match(css, /(?:^|[;\s])mask:\s*linear-gradient\(#000 0 0\) content-box,\s*linear-gradient\(#000 0 0\)/m, 'the orbit ring must include the unprefixed mask for standards-based engines');
+  assert(!css.includes('rescan-orbit'), 'rescan control must not rotate');
+  assert.match(css, /\.rescan-btn\s*\{[^}]*min-width:/, 'rescan keeps a stable width');
+  assert.match(fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8'), /id="scanStatusPanel"/, 'status has a dedicated panel');
 }
 
 function apiBootstrapForRescan(snapshots) {
@@ -2880,7 +2880,54 @@ function testTreemapLegendUsesDedicatedSpaceBelowTileViewport() {
   assert.ok(treemap.indexOf('renderTreemapLegend();') < treemap.indexOf('const H = sizeTreemap()'), 'legend must render before treemap height is measured');
 }
 
+async function testScanStatusContinuesDuringSnapshotDownload() {
+  const viewer = loadViewer({ fetch: async url => ({ ok: true, json: async () => ({state: 'complete', generation: url.includes('alpha-1') ? 'new-alpha' : 'new-beta', observed_unix: Date.now()/1000}) }) });
+  const timers = [], downloads = [];
+  viewer.setTimeout = (fn, ms) => { const t = {fn, ms}; timers.push(t); return t; };
+  viewer.clearTimeout = t => { t.cancelled = true; };
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.loadSnapshotForCurrentSource = id => { downloads.push(id); return new Promise(() => {}); };
+  viewer.applyRouteState({serverId: 'alpha-1', tab: 'treemap'}, {skipHistory: true, skipDataLoad: true});
+  viewer.startScanStatusMonitoring();
+  for (let i=0; i<12; i++) await Promise.resolve();
+  assert.deepStrictEqual(downloads, ['alpha-1']);
+  assert(timers.length > 0, 'status must schedule next poll while snapshot is pending');
+  viewer.applyRouteState({serverId: 'beta-2', tab: 'treemap'}, {skipHistory: true, skipDataLoad: true});
+  for (let i=0; i<12; i++) await Promise.resolve();
+  assert.deepStrictEqual(downloads, ['alpha-1', 'beta-2'], 'another server download must not be blocked');
+  viewer.navigateToOverview();
+}
+
+async function testScanStatusRetriesUntilNewSnapshotDisplayed() {
+  const viewer = loadViewer({fetch: async () => ({ok:true,json:async()=>({state:'complete',generation:'new',observed_unix:Date.now()/1000})})});
+  const timers=[];
+  viewer.setTimeout=(fn,ms)=>{const timer={fn,ms};timers.push(timer);return timer;};
+  viewer.clearTimeout=t=>{t.cancelled=true;};
+  const snapshot=gen=>({server_id:'alpha-1',hostname:'alpha-1',scan_generation:gen,scan_finished_unix:100,mounts:[],users:[],top_files:[],stale:[],blocked:[]});
+  viewer.rememberBootstrap(apiBootstrapForRescan([{id:'alpha-1',snapshot:snapshot('old')} ]));
+  let downloads=0;
+  viewer.loadSnapshotForCurrentSource=async()=>{downloads++; if(downloads===1)throw new Error('temporary');return snapshot(downloads===2?'old':'new');};
+  viewer.applyRouteState({serverId:'alpha-1',tab:'treemap'},{skipHistory:true,skipDataLoad:true});
+  const log=viewer.console.error; viewer.console.error=()=>{};
+  const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
+  try {
+    viewer.startScanStatusMonitoring();await flush();
+    assert.equal(viewer.getCurrentDetailDebugState().data.scan_generation,'old');
+    assert.equal(viewer.document.getElementById('rescanNotice').hidden,false);
+    timers.filter(t=>t.ms===30000&&!t.cancelled).at(-1).fn();await flush();
+    assert.equal(viewer.getCurrentDetailDebugState().data.scan_generation,'old');
+    assert.match(viewer.document.getElementById('scanStatusNote').textContent,/갱신/);
+    timers.filter(t=>t.ms===30000&&!t.cancelled).at(-1).fn();await flush();
+    assert.equal(viewer.getCurrentDetailDebugState().data.scan_generation,'new');
+    assert.equal(viewer.document.getElementById('rescanNotice').hidden,true);
+    assert.equal(viewer.document.getElementById('scanStatusNote').hidden,true);
+    viewer.navigateToOverview();
+  } finally {viewer.console.error=log;}
+}
+
 async function main() {
+  await testScanStatusContinuesDuringSnapshotDownload();
+  await testScanStatusRetriesUntilNewSnapshotDisplayed();
   await testThemeRevealOriginUsesVisibleIconCenterAndButtonFallback();
   await testThemeRevealLifecycleLocksAndCleansUpAfterFinished();
   await testThemeUnsupportedViewTransitionSwitchesImmediatelyWithNoTweenState();

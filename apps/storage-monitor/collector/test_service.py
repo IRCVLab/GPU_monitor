@@ -339,7 +339,7 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in summaries], ["alpha-1", "beta-2"])
         self.assertEqual(summaries[0]["snapshot_availability"], "available")
         overview = summaries[0]["overview_snapshot"]
-        self.assertEqual(set(overview), {"server_id", "selected_roots", "mounts"})
+        self.assertEqual(set(overview), {"server_id", "selected_roots", "mounts", "scan_generation", "scan_finished_unix", "scan_duration_sec", "estimate_duration_sec"})
         self.assertEqual(overview["server_id"], "alpha-1")
         self.assertEqual(set(overview["selected_roots"][0]), {
             "mount_id", "capacity_id", "major_minor", "storage_media", "block_media",

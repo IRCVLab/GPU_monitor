@@ -60,6 +60,7 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "viewer/echarts.min.js": "/*! echarts */\n",
             "viewer/index.html": "<html><script src='app.js'></script></html>\n",
             "viewer/overview.js": "export const overview = {};\n",
+            "viewer/scan-status.js": "export const scanStatus = {};\n",
             "viewer/selection.js": "export const selection = {};\n",
             "viewer/styles.css": "body { color: black; }\n",
             "viewer/tables.js": "export const tables = {};\n",
@@ -69,6 +70,7 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "collector/inventory.py": "SERVER_ID_RE = None\ndef load_inventory(): pass\n",
             "collector/jobs.py": "class RescanJobManager: pass\n",
             "collector/service.py": "class PollService: pass\n",
+            "collector/scan_telemetry.py": "def empty_status(): return {}\n",
             "collector/snapshot.py": "class Snapshot: pass\n",
             "collector/store.py": "class CentralStore: pass\n",
             "collector/transport.py": "class OpenSshTransport: pass\n",
@@ -139,6 +141,8 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertEqual(member_names[0], "storage-monitor/RELEASE-MANIFEST.json")
         self.assertIn("storage-monitor/viewer/serve.py", member_names)
         self.assertIn("storage-monitor/collector/store.py", member_names)
+        self.assertIn("storage-monitor/collector/scan_telemetry.py", member_names)
+        self.assertIn("storage-monitor/viewer/scan-status.js", member_names)
         self.assertIn("storage-monitor/deploy/direct_proxy.py", member_names)
         self.assertIn("storage-monitor/config/servers.example.yaml", member_names)
         self.assertIn("storage-monitor/docs/schema-v1.md", member_names)

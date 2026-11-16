@@ -8,6 +8,7 @@ from typing import Any, Mapping, Protocol
 
 from collector.inventory import Server
 from collector import snapshot
+from collector.scan_telemetry import empty_status
 from collector.store import CentralStore
 from collector.transport import ACTIVE_SCAN_STATES, TransportError, status_tuple, validate_status_envelope
 
@@ -48,6 +49,10 @@ def _overview_snapshot(payload: Mapping[str, Any] | None) -> dict[str, Any] | No
     ]
     return {
         "server_id": payload.get("server_id"),
+        "scan_generation": payload.get("scan_generation"),
+        "scan_finished_unix": payload.get("scan_finished_unix"),
+        "scan_duration_sec": payload.get("scan_duration_sec"),
+        "estimate_duration_sec": payload.get("scan_duration_sec") if payload.get("selected_roots") and all(r.get("status") in {"complete", "skipped"} for r in payload["selected_roots"]) else None,
         "selected_roots": selected_roots,
         "mounts": mounts,
     }
@@ -74,6 +79,10 @@ class PollService:
         self._verified_status_tuples: dict[str, tuple[Any, ...]] = {}
         self._locks = {s.id: threading.RLock() for s in self.servers}
         self._summary_lock = threading.RLock()
+        self._telemetry_locks = {s.id: threading.Lock() for s in self.servers}
+        self._telemetry_cache = {}
+        self._telemetry_threads = {}
+        self._refresh_threads = {}
         self._overview_cache = {
             server.id: _overview_snapshot(self.store.load_snapshot(server.id))
             for server in self.servers
@@ -174,6 +183,63 @@ class PollService:
         return self._poll_server_locked(server)
 
 
+    def _status_with_history(self, server_id: str, status=None):
+        result = empty_status()
+        overview = self._overview_cache.get(server_id) or {}
+        result.update(last_finished_unix=overview.get("scan_finished_unix"),
+                      last_duration_sec=overview.get("scan_duration_sec"),
+                      estimate_duration_sec=overview.get("estimate_duration_sec"),
+                      snapshot_generation=overview.get("scan_generation"))
+        if status:
+            result.update({k:v for k,v in status.items() if v is not None or k == "estimate_duration_sec"})
+        result["snapshot_generation"] = overview.get("scan_generation")
+        return result
+
+    def scan_status_for_api(self, server_id: str) -> dict[str, Any]:
+        server = self._require_server(server_id)
+        now = self.clock.time()
+        cached = self._telemetry_cache.get(server.id)
+        if cached and now - cached[0] < 5:
+            return self._status_with_history(server.id, cached[1])
+        lock = self._telemetry_locks[server.id]
+        if not lock.acquire(blocking=False):
+            result = self._status_with_history(server.id)
+            result["error_code"] = "OBSERVATION_PENDING"
+            return result
+        try:
+            try:
+                if hasattr(self.transport, "fetch_scan_status"):
+                    status = self.transport.fetch_scan_status(server)
+                else:
+                    active = self.transport.scan_active_state(server)
+                    status = {"state": "running" if active in ACTIVE_SCAN_STATES else "idle", "progress_available":False}
+                status = dict(status)
+                status["observed_unix"] = int(self.clock.time())
+            except Exception as exc:
+                status = {"state":"unknown", "error_code":getattr(exc,"code","TELEMETRY_UNAVAILABLE"), "progress_available":False}
+            self._telemetry_cache[server.id] = (self.clock.time(), status)
+            result = self._status_with_history(server.id,status)
+            if result["state"] in {"complete","partial"} and result.get("generation") and result["generation"] != result.get("snapshot_generation"):
+                worker = self._refresh_threads.get(server.id)
+                if worker is None or not worker.is_alive():
+                    worker = threading.Thread(target=self.poll_server,args=(server.id,),daemon=True)
+                    self._refresh_threads[server.id] = worker
+                    worker.start()
+            return result
+        finally:
+            lock.release()
+
+    def _cached_scan_status(self, server_id):
+        cached = self._telemetry_cache.get(server_id)
+        if cached and self.clock.time() - cached[0] < 5:
+            return self._status_with_history(server_id,cached[1])
+        worker = self._telemetry_threads.get(server_id)
+        if worker is None or not worker.is_alive():
+            worker = threading.Thread(target=self.scan_status_for_api,args=(server_id,),daemon=True)
+            self._telemetry_threads[server_id] = worker
+            worker.start()
+        return self._status_with_history(server_id, cached[1] if cached else None)
+
     def server_summaries(self) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
         with self._summary_lock:
@@ -192,6 +258,7 @@ class PollService:
                     "mount_count": len(overview.get("mounts", [])) if isinstance(overview, Mapping) else 0,
                     "overview_snapshot": overview,
                     "active_job": state.get("active_job"),
+                    "scan_status": self._cached_scan_status(server.id),
                 })
         return summaries
 

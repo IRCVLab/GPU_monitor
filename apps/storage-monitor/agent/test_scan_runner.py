@@ -1456,3 +1456,81 @@ class ScanRunnerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class LifecycleTests(unittest.TestCase):
+    write_config = ScanRunnerTests.write_config
+    def test_lifecycle_running_failure_preserves_last_good(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td); config, _ = self.write_config(tmp)
+            mountinfo = mi(1,0,'8:1','/','/','rw','ext4','/dev/sda1')
+            def good(argv, **kwargs):
+                lifecycle = json.loads((tmp/'data'/'scan-lifecycle.json').read_text())
+                self.assertEqual(lifecycle['state'],'running')
+                self.assertEqual(lifecycle['phase'],'scanning')
+                self.assertIn('--progress',argv)
+                pathlib.Path(argv[argv.index('--out')+1]).write_text(json.dumps(raw_payload()))
+                return scan_runner.CompletedScan(0)
+            result = scan_runner.run_once(config,mountinfo_reader=lambda:mountinfo,scanner_runner=good,clock=Clock(200))
+            self.assertEqual(result.status,'complete')
+            prior = (tmp/'data'/'scan-status.json').read_bytes()
+            life = json.loads((tmp/'data'/'scan-lifecycle.json').read_text())
+            self.assertEqual(life['state'],'complete'); self.assertEqual(life['last_duration_sec'],100)
+            result = scan_runner.run_once(config,mountinfo_reader=lambda:mountinfo,scanner_runner=lambda *a,**k:scan_runner.CompletedScan(1))
+            life = json.loads((tmp/'data'/'scan-lifecycle.json').read_text())
+            self.assertEqual(life['state'],'failed')
+            self.assertEqual(life['error_code'],'SCANNER_FAILED')
+            self.assertEqual(life['last_duration_sec'],100)
+            self.assertEqual((tmp/'data'/'scan-status.json').read_bytes(),prior)
+
+    def test_early_failure_publishes_error_and_lock_conflict_preserves_lifecycle(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td); config, _ = self.write_config(tmp)
+            result = scan_runner.run_once(config,mountinfo_reader=lambda:'invalid mountinfo')
+            self.assertEqual(result.status,'failed')
+            path = tmp/'data'/'scan-lifecycle.json'
+            lifecycle = json.loads(path.read_text())
+            self.assertEqual(lifecycle['state'],'failed')
+            self.assertIn(lifecycle['error_code'],{'MOUNTINFO_FAILED','NO_SAFE_ROOTS'})
+            before = path.read_bytes()
+            fd = os.open(tmp/'run'/'scan.lock',os.O_RDWR)
+            try:
+                self.assertTrue(scan_runner.try_lock_fd(fd))
+                self.assertEqual(scan_runner.run_once(config).status,'lock-conflict')
+                self.assertEqual(path.read_bytes(),before)
+            finally: os.close(fd)
+
+    def test_partial_scan_keeps_successful_estimate_separate_from_latest_duration(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td); config, _ = self.write_config(tmp)
+            mountinfo = mi(1,0,'8:1','/','/','rw','ext4','/dev/sda1') + '\n' + mi(2,1,'8:2','/','/data','rw','ext4','/dev/sdb1')
+            def runner(started, errors):
+                def run(argv, **kwargs):
+                    payload = raw_payload_many(['/home','/data'], errors_by_path={'/data': errors})
+                    payload['scan_started_unix'] = started
+                    pathlib.Path(argv[argv.index('--out')+1]).write_text(json.dumps(payload))
+                    return scan_runner.CompletedScan(0)
+                return run
+            scan_runner.run_once(config,mountinfo_reader=lambda:mountinfo,scanner_runner=runner(100,0),clock=Clock(200))
+            scan_runner.run_once(config,mountinfo_reader=lambda:mountinfo,scanner_runner=runner(300,1),clock=Clock(320))
+            lifecycle = json.loads((tmp/'data'/'scan-lifecycle.json').read_text())
+            self.assertEqual(lifecycle['state'],'partial')
+            self.assertEqual(lifecycle['last_duration_sec'],20)
+            self.assertEqual(lifecycle['last_finished_unix'],320)
+            self.assertEqual(lifecycle['estimate_duration_sec'],100)
+
+    def test_totally_failed_scan_preserves_completed_timing(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td); config, _ = self.write_config(tmp)
+            mountinfo = mi(1,0,'8:1','/','/','rw','ext4','/dev/sda1')
+            def run(started, errors):
+                def fake(argv, **kwargs):
+                    pathlib.Path(argv[argv.index('--out')+1]).write_text(json.dumps(raw_payload(started=started,errors=errors)))
+                    return scan_runner.CompletedScan(0)
+                return fake
+            scan_runner.run_once(config,mountinfo_reader=lambda:mountinfo,scanner_runner=run(100,0),clock=Clock(200))
+            scan_runner.run_once(config,mountinfo_reader=lambda:mountinfo,scanner_runner=run(300,1),clock=Clock(320))
+            lifecycle = json.loads((tmp/'data'/'scan-lifecycle.json').read_text())
+            self.assertEqual(lifecycle['state'],'failed')
+            self.assertEqual(lifecycle['last_finished_unix'],200)
+            self.assertEqual(lifecycle['last_duration_sec'],100)
+            self.assertEqual(lifecycle['estimate_duration_sec'],100)

@@ -615,6 +615,16 @@ struct scan_ctx {
  *  Worker
  * ----------------------------------------------------------------------- */
 
+/* Progress writes are optional, throttled and independent of the snapshot. */
+static const char *g_progress_path = NULL;
+static const char *g_progress_run_id = "";
+static const char *g_progress_root = "";
+static int g_progress_roots_total = 0, g_progress_roots_done = 0;
+static uint64_t g_progress_bytes = 0, g_progress_files = 0, g_progress_dirs = 0;
+static double g_progress_last = -10;
+static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
+                           uint64_t dirs, bool force);
+
 struct worker_arg {
     struct scan_ctx  *ctx;
     struct inode_set  local_links;   /* per-thread hardlink set */
@@ -637,6 +647,7 @@ static void ctx_flush_stats(struct scan_ctx *c, struct worker_arg *w) {
     c->scanned_files += w->files;
     c->scanned_dirs  += w->dirs;
     c->errors        += w->errs;
+    progress_write("scanning", c->scanned_bytes, c->scanned_files, c->scanned_dirs, false);
     pthread_mutex_unlock(&c->stat_lock);
     w->bytes = w->files = w->dirs = w->errs = 0;
 }
@@ -676,6 +687,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
     char *buf = xmalloc(GETDENTS_BUFSZ);
 
     for (;;) {
+        ctx_flush_stats(c, w);
         long nread = syscall(SYS_getdents64, dirfd, buf, GETDENTS_BUFSZ);
         if (nread == -1) {
             record_scan_error(w, it->path, errno);
@@ -1058,6 +1070,32 @@ static void json_escape(FILE *f, const char *s) {
     fputc('"', f);
 }
 
+static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
+                           uint64_t dirs, bool force) {
+    if (!g_progress_path) return;
+    double now = now_monotonic();
+    if (!force && now - g_progress_last < 2.0) return;
+    g_progress_last = now;
+    char tmp[PATH_MAX];
+    if (snprintf(tmp, sizeof tmp, "%s.XXXXXX", g_progress_path) >= (int)sizeof tmp) return;
+    int fd = mkstemp(tmp);
+    if (fd < 0) return;
+    fchmod(fd, 0640);
+    FILE *f = fdopen(fd, "w");
+    if (!f) { close(fd); unlink(tmp); return; }
+    fputs("{\"phase\":", f); json_escape(f, phase);
+    fputs(",\"run_id\":", f); json_escape(f, g_progress_run_id);
+    fputs(",\"current_root\":", f); json_escape(f, g_progress_root);
+    fprintf(f, ",\"updated_unix\":%lld,\"scanned_bytes\":%llu,\"scanned_files\":%llu,\"scanned_dirs\":%llu,\"roots_completed\":%d,\"roots_total\":%d}\n",
+            (long long)time(NULL), (unsigned long long)(g_progress_bytes + bytes),
+            (unsigned long long)(g_progress_files + files), (unsigned long long)(g_progress_dirs + dirs),
+            g_progress_roots_done, g_progress_roots_total);
+    bool ok = !ferror(f);
+    if (fclose(f) != 0) ok = false;
+    if (ok) rename(tmp, g_progress_path);
+    unlink(tmp);
+}
+
 static void emit_node(FILE *f, struct node *n, int indent) {
     (void)indent;
     fputc('{', f);
@@ -1109,7 +1147,7 @@ static void fill_df(const char *path, struct mount_result *mr) {
 static void usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [--threads N] [--prune-home MB] [--prune-data MB]\n"
-        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR]\n"
+        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR] [--progress PATH]\n"
         "          [--target PATH MAJOR:MINOR ...] [PATH ...]\n"
         "       --target may be repeated; each consumes PATH and MAJOR:MINOR.\n"
         "       Do not mix guarded --target arguments with positional PATH targets.\n"
@@ -1187,6 +1225,10 @@ int main(int argc, char **argv) {
             top_n = atoi(argv[++i]); if (top_n < 0) top_n = 0;
         } else if (strcmp(a, "--stale-days") == 0 && i+1 < argc) {
             stale_days = atoi(argv[++i]);
+        } else if (strcmp(a, "--progress") == 0 && i+1 < argc) {
+            g_progress_path = argv[++i];
+        } else if (strcmp(a, "--progress-run-id") == 0 && i+1 < argc) {
+            g_progress_run_id = argv[++i];
         } else if (strcmp(a, "--out") == 0 && i+1 < argc) {
             out_path = argv[++i];
         } else if (strcmp(a, "--out-dir") == 0 && i+1 < argc) {
@@ -1261,9 +1303,13 @@ int main(int argc, char **argv) {
     /* Run each target; collect results. Targets that don't exist are skipped. */
     struct mount_result *results = xcalloc(target_count, sizeof *results);
     int nresults = 0;
+    g_progress_roots_total = target_count;
 
     for (int i = 0; i < target_count; i++) {
         const char *tg = targets[i].path;
+        g_progress_root = tg;
+        g_progress_roots_done = i;
+        progress_write("scanning", 0, 0, 0, true);
         struct stat tst;
         if (lstat(tg, &tst) != 0) {
             continue;  /* target absent (e.g. /data not present): skip silently */
@@ -1295,8 +1341,13 @@ int main(int argc, char **argv) {
         mr->scanned_dirs  = d;
         mr->errors        = e;
         fill_df(tg, mr);
+        g_progress_bytes += b;
+        g_progress_files += fl;
+        g_progress_dirs += d;
     }
 
+    g_progress_roots_done = target_count;
+    progress_write("publishing", 0, 0, 0, true);
     double dur = now_monotonic() - t0;
 
     /* ---- Build output path ---- */

@@ -415,7 +415,7 @@ function isTransientBlockedEntry(entry) {
 }
 function renderHeader() {
   document.getElementById("h-host").textContent = DATA.hostname || "—";
-  document.getElementById("h-scan").textContent = fmtDate(DATA.scan_started_unix) +
+  document.getElementById("h-scan").textContent = (DATA.scan_finished_unix ? fmtDate(DATA.scan_finished_unix) : "—") +
     (DATA.scan_duration_sec ? " · " + DATA.scan_duration_sec.toFixed(0) + "s" : "");
   document.getElementById("h-scanner").textContent =
     "scanner v" + (DATA.scanner_version || "?") + (DATA.run_as_root ? " · root scan" : " · non-root");

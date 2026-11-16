@@ -449,6 +449,7 @@ function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
   return {
     id: summary.id,
     displayName: summary.display_name || summary.id,
+    scanStatus: summaryInput && summaryInput.scan_status,
     order: summary.order,
     mountCount: snapshotHasMountList ? mounts.length : summary.mount_count,
     totalAvailableBytes: hasKnownCapacity ? aggregate.availableBytes : null,
@@ -637,6 +638,13 @@ function createOverviewRowElement(doc, row, handlers = {}) {
     card.appendChild(footer);
   }
 
+  if (typeof scanStatusModel === "function") {
+    const timing = scanStatusModel(row.scanStatus, row.snapshot);
+    const last = timing.lastFinished !== null ? "완료 " + scanDate(timing.lastFinished) : "완료 기록 없음";
+    const outcome = ["running", "failed", "partial", "unknown"].includes(timing.state) && row.scanStatus ? timing.label + " · " : "";
+    const next = outcome + (timing.nextRun !== null ? "다음 " + scanDate(timing.nextRun) : timing.scheduleNote);
+    card.appendChild(makeEl(doc, "div", "overview-scan-timing", last + " · " + next));
+  }
   const activate = () => {
     if (handlers && typeof handlers.onOpenServer === "function") handlers.onOpenServer(row.id);
   };

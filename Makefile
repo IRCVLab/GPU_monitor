@@ -71,6 +71,9 @@ test-storage:
 	cd "$$storage_verify/repo/apps/storage-monitor"; \
 	PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \
 	find viewer -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check; \
+	node viewer/viewer.test.js; \
+	node viewer/viewer_regression_test.js; \
+	node viewer/scan-status.test.js; \
 	bash deploy/test_deploy_scripts.sh; \
 	test ! -e scanner/hstscan || { printf '%s\n' 'FAIL: deploy tests left scanner/hstscan behind'; exit 1; }; \
 	test ! -e output/verification/linux-verification.txt || { printf '%s\n' 'FAIL: deploy tests left a verification artifact behind'; exit 1; }; \

@@ -29,6 +29,80 @@ let automaticApiRefreshLastStartedAt = 0;
 let automaticVisibilityHandler = null;
 let automaticFocusHandler = null;
 let automaticUnloadHandler = null;
+let scanStatusMonitor = null;
+let scanStatusByServer = new Map();
+const scanSnapshotRefresh = new Map();
+let scanOverviewRefreshInFlight = false;
+
+async function refreshScanOverview() {
+  if (currentServerId || currentDataSource !== "api" || currentDataMode === "sample" || document.hidden || scanOverviewRefreshInFlight) return;
+  const generation = overviewLoadGeneration;
+  scanOverviewRefreshInFlight = true;
+  try {
+    const envelope = await loadServerSummaries();
+    if (currentServerId || generation !== overviewLoadGeneration) return;
+    currentOverviewSummaries = envelope.servers;
+    renderOverview();
+  } catch (_) {
+    // Retain the last observation; its timestamp makes stale status visible.
+    if (!currentServerId) renderOverview();
+  } finally { scanOverviewRefreshInFlight = false; }
+}
+
+function renderCurrentScanStatus() {
+  if (!currentServerId) return;
+  const status = scanStatusByServer.get(currentServerId) || (currentServerSummary && currentServerSummary.scan_status) || {};
+  const button = document.getElementById("rescanBtn");
+  const localState = button && button.dataset.rescanState;
+  const displayed = Object.assign({}, status);
+  if (rescanServerId === currentServerId && localState && status.state !== "running" && !status.disconnected) {
+    displayed.state = localState === "running" ? "requested" : localState;
+  }
+  const pending = status.generation && (status.state === "complete" || status.state === "partial") && (!DATA || DATA.scan_generation !== status.generation);
+  renderScanStatus(displayed, DATA, {
+    sample: currentDataMode === "sample",
+    note: pending ? "새 스캔이 완료되었습니다. 화면 데이터를 갱신하고 있습니다." : "",
+  });
+}
+
+function startScanStatusMonitoring() {
+  if (scanStatusMonitor) scanStatusMonitor.stop();
+  scanStatusMonitor = createScanMonitor({
+    fetchStatus: id => fetchJson("/api/servers/" + encodeURIComponent(safeServerId(id)) + "/scan-status"),
+    onStatus: (id, status, isCurrent) => {
+      if (currentServerId !== id) return;
+      scanStatusByServer.set(id, status);
+      renderCurrentScanStatus();
+      syncRescanButton();
+      const needsSnapshot = status.generation && ["complete", "partial"].includes(status.state) && (!DATA || DATA.scan_generation !== status.generation);
+      // Manual job completion owns its refresh. Retry automatically if that refresh failed.
+      const activeRefresh = scanSnapshotRefresh.get(id);
+      if (needsSnapshot && !rescanServerId && (!activeRefresh || activeRefresh.routeGeneration !== detailLoadGeneration)) {
+        const refresh = { routeGeneration: detailLoadGeneration };
+        scanSnapshotRefresh.set(id, refresh);
+        void ensureDetailLoaded(id, true).catch(() => {}).finally(() => {
+          if (scanSnapshotRefresh.get(id) === refresh) scanSnapshotRefresh.delete(id);
+          if (isCurrent() && currentServerId === id) renderCurrentScanStatus();
+        });
+      }
+    },
+    onError: id => {
+      if (currentServerId !== id) return;
+      scanStatusByServer.set(id, Object.assign({}, scanStatusByServer.get(id), { disconnected: true }));
+      renderCurrentScanStatus();
+      syncRescanButton();
+    },
+  });
+  if (currentServerId && currentDataSource === "api" && currentDataMode !== "sample") scanStatusMonitor.start(currentServerId);
+  setInterval(() => { renderCurrentScanStatus(); }, 1000);
+  setInterval(refreshScanOverview, 30000);
+  const initialOverviewStatus = setTimeout(refreshScanOverview, 3000);
+  if (initialOverviewStatus && typeof initialOverviewStatus.unref === "function") initialOverviewStatus.unref();
+  window.addEventListener("pagehide", () => scanStatusMonitor.stop());
+  window.addEventListener("pageshow", () => {
+    if (currentServerId && currentDataSource === "api" && currentDataMode !== "sample") scanStatusMonitor.start(currentServerId);
+  });
+}
 
 const AUTOMATIC_API_REFRESH_MS = 15 * 60 * 1000;
 const AUTOMATIC_API_REFRESH_MIN_GAP_MS = 60 * 1000;
@@ -603,7 +677,7 @@ async function ensureDetailLoaded(serverId, forceReload, generationOverride, req
         if (existingSnapshot) {
           clearDetailLoading();
           clearDetailError();
-          showRescanNotice("Could not refresh this server. Existing data is still shown.");
+          showRescanNotice("Could not refresh this server. Existing data is still shown.", "snapshot-refresh");
         } else {
           showDetailError("Could not load snapshot for " + summary.display_name + ".");
         }
@@ -613,11 +687,14 @@ async function ensureDetailLoaded(serverId, forceReload, generationOverride, req
   }
   if (!isCurrentDetailGeneration(serverId, generation)) return;
   DATA = snapshot;
+  const refreshNotice = document.getElementById("rescanNotice");
+  if (refreshNotice && refreshNotice.dataset.noticeKind === "snapshot-refresh") clearRescanNotice();
   clearDetailLoading();
   clearDetailError();
   renderAll();
   updateLastUpdated();
   syncRescanButton();
+  renderCurrentScanStatus();
 }
 
 function applyRouteState(route, options) {
@@ -636,6 +713,11 @@ function applyRouteState(route, options) {
   clearDetailError();
   setShellMode(!!safeRoute.serverId);
   syncRescanButton();
+  renderCurrentScanStatus();
+  if (scanStatusMonitor) {
+    scanStatusMonitor.stop();
+    if (safeRoute.serverId && currentDataSource === "api" && currentDataMode !== "sample") scanStatusMonitor.start(safeRoute.serverId);
+  }
   if (!safeRoute.serverId) {
     clearDetailLoading();
     return safeRoute;
@@ -678,9 +760,9 @@ function fmtRel(unix) {
 }
 function updateLastUpdated() {
   const el = document.getElementById("lastUpd"); if (!el) return;
-  if (DATA && DATA.scan_started_unix) {
-    el.innerHTML = "Updated <b>" + fmtRel(DATA.scan_started_unix) + "</b>";
-    el.title = "Last scan: " + fmtDate(DATA.scan_started_unix);
+  if (DATA && DATA.scan_finished_unix) {
+    el.innerHTML = "완료 <b>" + fmtRel(DATA.scan_finished_unix) + "</b>";
+    el.title = "마지막 완료: " + fmtDate(DATA.scan_finished_unix);
   } else el.textContent = "";
 }
 
@@ -698,12 +780,14 @@ function setRescanActivityState(btn, state) {
   if (active) btn.dataset.rescanState = state;
   else delete btn.dataset.rescanState;
   btn.setAttribute("aria-busy", active ? "true" : "false");
+  renderCurrentScanStatus();
 }
 
-function showRescanNotice(message) {
+function showRescanNotice(message, kind = "rescan") {
   const warning = document.getElementById("rescanNotice");
   if (!warning) return;
   warning.textContent = message || "Rescan failed.";
+  warning.dataset.noticeKind = kind;
   warning.hidden = false;
   warning.classList.add("show");
 }
@@ -720,7 +804,7 @@ function setRescanRetry(btn, message, title) {
   if (!btn) return;
   setRescanActivityState(btn, "idle");
   btn.disabled = false;
-  btn.textContent = message || "↻ Retry rescan";
+  btn.textContent = message || "Retry rescan";
   btn.title = title || "Try the scan again";
 }
 
@@ -730,9 +814,17 @@ function syncRescanButton() {
   if (!currentServerId || currentDataSource !== "api") return setRescanUnsupported(btn, "Manual rescan only in API-backed mode.");
   if (!currentSession.can_rescan) return setRescanUnsupported(btn, "Read-only session: manual rescan is disabled.");
   if (rescanServerId === currentServerId && (rescanPollInFlight || rescanTimer || rescanSawActive)) return;
+  const status = scanStatusByServer.get(currentServerId);
+  if (status && status.state === "running" && !status.disconnected && Date.now() / 1000 - status.observed_unix <= 90) {
+    setRescanActivityState(btn, "running");
+    btn.disabled = true;
+    btn.textContent = "Scanning…";
+    btn.title = "서버에서 스캔이 진행 중입니다";
+    return;
+  }
   setRescanActivityState(btn, "idle");
   btn.disabled = false;
-  btn.textContent = "↻ Rescan";
+  btn.textContent = "Rescan";
   btn.title = "Run a fresh scan now";
 }
 
@@ -840,7 +932,7 @@ async function refreshOverviewData(options) {
     return { ok: true, preservedRoute: false };
   } catch (error) {
     console.error("[storage-viz] failed to refresh overview", error);
-    if (currentServerId) showRescanNotice("Could not refresh the latest scan data. Existing data is still shown.");
+    if (currentServerId) showRescanNotice("Could not refresh the latest scan data. Existing data is still shown.", "snapshot-refresh");
     else showOverviewError("Overview refresh failed.");
     return { ok: false, error };
   }
@@ -917,13 +1009,13 @@ async function pollRescanJob(serverId, generation) {
       if (rescanPollFailures <= 2) {
         setRescanActivityState(btn, "reconnecting");
         btn.disabled = true;
-        btn.textContent = "⟳ Waiting for scan…";
+        btn.textContent = "Waiting for scan…";
         btn.title = "Waiting for the new scan job to become visible.";
         scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
         return;
       }
       clearRescanPoll();
-      setRescanRetry(btn, "↻ Retry rescan", "The new scan status did not become visible. Try again.");
+      setRescanRetry(btn, "Retry rescan", "The new scan status did not become visible. Try again.");
       showRescanNotice("The new scan status is not available yet.");
       return;
     }
@@ -932,7 +1024,7 @@ async function pollRescanJob(serverId, generation) {
       rescanSawActive = true;
       setRescanActivityState(btn, job.state);
       btn.disabled = true;
-      btn.textContent = job.state === "requested" ? "⟳ Queued…" : "⟳ Scanning…";
+      btn.textContent = job.state === "requested" ? "Queued…" : "Scanning…";
       btn.title = job.state === "requested" ? "Scan is queued" : "Scan is running";
       scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
       return;
@@ -942,14 +1034,14 @@ async function pollRescanJob(serverId, generation) {
     const resultCode = failed ? (job.result_code || job.error || "UNKNOWN_FAILURE") : "";
     if (failed) {
       clearRescanPoll();
-      setRescanRetry(btn, "↻ Retry rescan", "The previous scan failed. Try again.");
+      setRescanRetry(btn, "Retry rescan", "The previous scan failed. Try again.");
       showRescanNotice("Rescan failed: " + resultCode);
       return;
     }
     if (observedActiveJob) {
       setRescanActivityState(btn, "refreshing");
       btn.disabled = true;
-      btn.textContent = "⟳ Refreshing…";
+      btn.textContent = "Refreshing…";
       await refreshOverviewData({ forceReload: true, expectedServerId: targetServerId });
       if (currentServerId === targetServerId && rescanServerId === targetServerId && trackingGeneration === rescanTrackingGeneration) {
         clearRescanPoll();
@@ -965,13 +1057,13 @@ async function pollRescanJob(serverId, generation) {
     if (rescanPollFailures <= 2) {
       setRescanActivityState(btn, "reconnecting");
       btn.disabled = true;
-      btn.textContent = "⟳ Reconnecting…";
+      btn.textContent = "Reconnecting…";
       btn.title = "Scan status is temporarily unavailable; retrying automatically.";
       scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
       return;
     }
     clearRescanPoll();
-    setRescanRetry(btn, "↻ Retry rescan", "Scan status could not be reached. Try again.");
+    setRescanRetry(btn, "Retry rescan", "Scan status could not be reached. Try again.");
     showRescanNotice("Rescan status is temporarily unavailable.");
   } finally {
     if (rescanServerId === targetServerId && trackingGeneration === rescanTrackingGeneration) rescanPollInFlight = false;
@@ -986,7 +1078,7 @@ async function triggerRescan() {
   clearRescanNotice();
   setRescanActivityState(btn, "starting");
   btn.disabled = true;
-  btn.textContent = "⟳ Starting…";
+  btn.textContent = "Starting…";
   try {
     const response = await currentRescanPoster()(targetServerId, currentSession.csrf_token);
     if (rescanServerId !== targetServerId || currentServerId !== targetServerId) return;
@@ -997,7 +1089,7 @@ async function triggerRescan() {
     if (error && error.status === 409 && body.error === "ACTIVE_JOB") {
       if (!body.job && body.remote_active_state) {
         clearRescanPoll();
-        setRescanRetry(btn, "↻ Check later", "A remote scan is already running. Check again after it completes.");
+        setRescanRetry(btn, "Check later", "A remote scan is already running. Check again after it completes.");
         showRescanNotice("A remote scan is already running. Existing data remains visible.");
         return;
       }
@@ -1005,7 +1097,7 @@ async function triggerRescan() {
       const state = body.job && (body.job.state === "requested" || body.job.state === "running") ? body.job.state : "running";
       setRescanActivityState(btn, state);
       btn.disabled = true;
-      btn.textContent = state === "requested" ? "⟳ Queued…" : "⟳ Scanning…";
+      btn.textContent = state === "requested" ? "Queued…" : "Scanning…";
       await pollRescanJob(targetServerId);
       return;
     }
@@ -1013,12 +1105,12 @@ async function triggerRescan() {
     if (error && error.status === 429) {
       const retryAfter = Number(body.retry_after_seconds);
       const suffix = Number.isFinite(retryAfter) && retryAfter > 0 ? " in " + Math.ceil(retryAfter) + "s" : " shortly";
-      setRescanRetry(btn, "↻ Retry rescan", "Rescan is cooling down; try again" + suffix + ".");
+      setRescanRetry(btn, "Retry rescan", "Rescan is cooling down; try again" + suffix + ".");
       showRescanNotice("Rescan is cooling down. Try again" + suffix + ".");
       return;
     }
     const code = body.error || "RESCAN_UNAVAILABLE";
-    setRescanRetry(btn, "↻ Retry rescan", "The scan request failed. Try again.");
+    setRescanRetry(btn, "Retry rescan", "The scan request failed. Try again.");
     showRescanNotice("Rescan request failed: " + code);
     return;
   }
@@ -1125,6 +1217,7 @@ async function init() {
   syncRescanButton();
   setInterval(updateLastUpdated, 30000);
   startAutomaticApiRefresh();
+  startScanStatusMonitoring();
 
   if (initialRoute.serverId) navigateToServer(initialRoute.serverId, { skipHistory: true, tab: initialRoute.tab });
   else navigateToOverview({ skipHistory: true });

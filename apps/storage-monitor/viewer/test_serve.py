@@ -136,6 +136,16 @@ class ApiServerTest(unittest.TestCase):
                     stream.close()
 
 
+    def test_scan_status_read_endpoint_and_unknown_server(self):
+        self.start_server()
+        code, _, status = self.request("GET", "/api/servers/hinton/scan-status")
+        self.assertEqual(code, 200)
+        self.assertEqual(status["state"], "unknown")
+        self.assertEqual(status["last_finished_unix"], 1719200042)
+        self.assertFalse(status["progress_available"])
+        self.assertIsNone(status["next_run_unix"])
+        self.assertEqual(self.request("GET", "/api/servers/unknown/scan-status")[0], 404)
+
     def write_manifest(self, ids):
         rows = []
         for i, sid in enumerate(ids):
@@ -265,6 +275,7 @@ class ApiServerTest(unittest.TestCase):
         self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_DATA_DIR":str(self.sample_dir), "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1"})
         self.assertEqual(self.request("GET", "/api/session")[0], 401)
         self.assertEqual(self.request("GET", "/api/servers")[0], 401)
+        self.assertEqual(self.request("GET", "/api/servers/hinton/scan-status")[0], 401)
         self.assertEqual(self.request("GET", "/data/hinton.sample.json")[0], 401)
         code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"viewer-1"})
         self.assertEqual(code, 200); self.assertFalse(sess["can_rescan"])

@@ -14,6 +14,7 @@ $(BIN): $(SRC)
 
 test: $(BIN)
 	./test_hstscan.sh
+	python3 -m unittest test_progress
 
 clean:
 	rm -f $(BIN)

@@ -251,8 +251,15 @@ class _DevSampleService:
         out = []
         for s in self.servers:
             snap = self.load_snapshot_for_api(s.id)
-            out.append({"id": s.id, "display_name": s.display_name, "order": s.order, "snapshot_availability": "available", "freshness": "fresh", "latest_pull_status": "succeeded", "latest_scan_result": "complete", "configuration_sync": "in_sync", "mount_count": len(snap.get("mounts", [])), "active_job": None})
+            out.append({"id": s.id, "display_name": s.display_name, "order": s.order, "snapshot_availability": "available", "freshness": "fresh", "latest_pull_status": "succeeded", "latest_scan_result": "complete", "configuration_sync": "in_sync", "mount_count": len(snap.get("mounts", [])), "active_job": None, "scan_status": self.scan_status_for_api(s.id)})
         return out
+
+    def scan_status_for_api(self, server_id: str) -> dict[str, Any]:
+        from collector.scan_telemetry import empty_status
+        snap = self.load_snapshot_for_api(server_id)
+        return empty_status() | {"last_finished_unix": snap.get("scan_finished_unix"),
+                                 "last_duration_sec": snap.get("scan_duration_sec"),
+                                 "snapshot_generation": snap.get("scan_generation")}
 
     def load_snapshot_for_api(self, server_id: str) -> Mapping[str, Any] | None:
         return json.loads(self._path(server_id).read_text(encoding="utf-8"))
@@ -562,6 +569,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"error": "api not configured"}, 503)
         if parts == ["api", "servers"]:
             return self._json({"data_mode": getattr(service, "data_mode", "inventory"), "servers": service.server_summaries()})
+        if len(parts) == 4 and parts[1] == "servers" and parts[3] == "scan-status":
+            try:
+                status = service.scan_status_for_api(parts[2])
+            except ValueError:
+                return self._json({"error": "UNKNOWN_SERVER"}, 404)
+            return self._json(status)
         if len(parts) == 4 and parts[1] == "servers" and parts[3] == "snapshot":
             try:
                 snap = service.load_snapshot_for_api(parts[2])

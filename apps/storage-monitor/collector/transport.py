@@ -97,6 +97,35 @@ class OpenSshTransport:
         finally:
             _unlink_quiet(tmp_name)
 
+    def fetch_scan_status(self, server: Server) -> dict[str, Any]:
+        from collector.scan_telemetry import REMOTE_OBSERVATION_SCRIPT, merge_status, parse_timer
+        import math
+        self._validate_server(server)
+        result = self._run_ssh(server, ["python3", "-c", shlex.quote(REMOTE_OBSERVATION_SCRIPT)], timeout=self._active_state_timeout)
+        _check_returncode(result, "TELEMETRY_UNAVAILABLE")
+        raw = getattr(result, "stdout", b"")
+        if not isinstance(raw, (str, bytes)) or len(raw) > 48 * 1024:
+            raise TransportError("BAD_TELEMETRY", "telemetry exceeds maximum size")
+        try:
+            obj = json.loads(raw)
+            for key in ("remote_unix", "remote_monotonic"):
+                if isinstance(obj[key], bool) or not isinstance(obj[key], (float,int)) or not math.isfinite(obj[key]) or not 0 <= obj[key] < 10**12:
+                    raise ValueError("clock")
+            active = obj["service"].strip().removeprefix("ActiveState=")
+            if active not in KNOWN_ACTIVE_STATES:
+                raise TransportError("ACTIVE_STATE_FAILED", "service state is unavailable")
+            for key in ("lifecycle", "progress"):
+                if not isinstance(obj[key], dict) or obj[key].get("invalid"):
+                    raise TransportError("BAD_TELEMETRY", "telemetry file is invalid")
+            if obj["lifecycle"].get("server_id",server.id) != server.id:
+                raise TransportError("BAD_TELEMETRY", "telemetry server mismatch")
+            timer = parse_timer(obj["timer"], remote_unix=obj["remote_unix"], remote_monotonic=obj["remote_monotonic"])
+            return merge_status(obj["lifecycle"],obj["progress"],active,timer,int(obj["remote_unix"]))
+        except TransportError:
+            raise
+        except Exception as exc:
+            raise TransportError("BAD_TELEMETRY", "telemetry is malformed") from exc
+
     def fetch_snapshot(self, server: Server, expected_status: Mapping[str, Any] | None = None) -> Tuple[dict[str, Any], bytes]:
         first = dict(expected_status) if expected_status is not None else self.fetch_status(server)
         generation = validate_snapshot_status(first, server, self._max_snapshot_bytes)

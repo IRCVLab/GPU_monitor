@@ -1,0 +1,59 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+assert.ok(fs.existsSync(__dirname + '/scan-status.js'), 'scan status presentation module must exist');
+const { scanStatusModel, createScanMonitor } = require('./scan-status.js');
+
+const now = 2000;
+const snapshot = { scan_started_unix: 1000, scan_finished_unix: 1100, scan_duration_sec: 100, scan_generation: 'old', selected_roots: [{status:'complete'}] };
+let model = scanStatusModel({}, snapshot, now);
+assert.equal(model.lastFinished, 1100, 'last updated must be completion, not start');
+assert.equal(model.nextRun, null, 'never invent next run by adding six hours');
+assert.equal(scanStatusModel({}, { scan_started_unix: 1000 }, now).lastFinished, null);
+model = scanStatusModel({ state: 'running', started_unix: 1950, updated_unix: 1998, observed_unix: now, progress_available: true, scanned_files: 12500, current_root: '/data', roots_completed: 1, roots_total: 3 }, snapshot, now);
+assert.equal(model.eta, 2050);
+assert.equal(model.elapsed, 50);
+assert.equal(model.files, 12500);
+assert.equal(model.root, '/data');
+assert.equal(model.label, '스캔 중');
+assert.equal(scanStatusModel({ state: 'running', started_unix: 1800, observed_unix: now }, snapshot, now).eta, null, 'overrun cannot look almost complete');
+assert.match(scanStatusModel({ state: 'running', started_unix: 1800, observed_unix: now }, snapshot, now).etaNote, /초과/);
+assert.equal(scanStatusModel({ state: 'running', started_unix: 1950, observed_unix: now }, null, now).eta, null);
+model = scanStatusModel({ state: 'running', started_unix: 1800, updated_unix: 1801, observed_unix: now, progress_available: true, scanned_files: 900 }, snapshot, now);
+assert.equal(model.files, null, 'stale heartbeat must not look live');
+assert.match(model.note, /갱신/);
+assert.equal(scanStatusModel({ state: 'complete', observed_unix: 1800 }, snapshot, now).label, '상태 확인 지연');
+assert.equal(scanStatusModel({ next_run_unix: 2100, timer_state: 'inactive', observed_unix: now }, snapshot, now).nextRun, null);
+assert.equal(scanStatusModel({ next_run_unix: 2100, timer_state: 'active', observed_unix: now }, snapshot, now).nextRun, 2100);
+assert.equal(scanStatusModel({ state: 'failed', error_code: 'SCANNER_FAILED', observed_unix: now }, snapshot, now).label, '스캔 실패');
+
+model = scanStatusModel({state: 'running', started_unix: 1950, updated_unix: 1960, observed_unix: now, error_code: 'STALE_PROGRESS', progress_available: false}, snapshot, now);
+assert.equal(model.eta, null, 'explicit backend stale observation suppresses ETA');
+assert.match(model.note, /갱신/);
+
+assert.equal(scanStatusModel({state:'running',started_unix:1950,observed_unix:now,estimate_duration_sec:null}, snapshot, now).eta, null, 'explicit absent successful baseline is not replaced');
+assert.equal(scanStatusModel({state:'running',started_unix:1950,observed_unix:now}, {...snapshot, selected_roots:[{status:'partial'}]}, now).eta, null, 'partial snapshot cannot estimate full scan');
+model = scanStatusModel({state:'running',started_unix:1950,observed_unix:now,last_duration_sec:20,estimate_duration_sec:100}, snapshot, now);
+assert.equal(model.duration, 20, 'display latest actual duration');
+assert.equal(model.eta, 2050, 'estimate uses last complete scan duration');
+
+async function testMonitor() {
+  let resolveA;
+  const events = [], scheduled = [];
+  const monitor = createScanMonitor({
+    fetchStatus: id => id === 'a' ? new Promise(resolve => { resolveA = resolve; }) : Promise.resolve({ state: 'running' }),
+    onStatus: (id, value) => events.push([id, value.state]),
+    schedule: (fn, ms) => { const timer = { fn, ms }; scheduled.push(timer); return timer; },
+    cancel: timer => { timer.cancelled = true; },
+  });
+  monitor.start('a');
+  monitor.start('b');
+  await new Promise(resolve => setImmediate(resolve));
+  resolveA({ state: 'complete' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events, [['b', 'running']], 'navigation must discard old responses');
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].ms, 5000);
+  monitor.stop();
+  assert.equal(scheduled[0].cancelled, true);
+}
+testMonitor().then(() => console.log('scan status tests passed')).catch(error => { console.error(error); process.exitCode = 1; });

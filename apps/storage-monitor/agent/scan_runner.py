@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from agent.block_media import BlockMediaResolver, MediaResult
@@ -239,6 +240,29 @@ def run_once(
         if not try_lock_fd(lock_fd):
             return RunResult("lock-conflict", error="scan already running")
 
+        lifecycle_path = data_dir / "scan-lifecycle.json"
+        progress_path = run_dir / "scan-progress.json"
+        history = {}
+        try:
+            previous = json.loads(lifecycle_path.read_text())
+            history = {k: previous.get(k) for k in ("last_finished_unix", "last_duration_sec", "estimate_duration_sec")}
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        lifecycle = {"server_id": cfg.server_id, "state": "running", "phase": "preparing",
+                     "started_unix": int(time.time()), "finished_unix": None,
+                     "run_id": uuid.uuid4().hex, **history}
+        def publish_lifecycle(**fields):
+            lifecycle.update(fields)
+            lifecycle["updated_unix"] = int(time.time())
+            try:
+                _write_lifecycle_atomic(lifecycle_path, lifecycle)
+            except OSError:
+                pass  # telemetry must never invalidate last-good publication
+        def failure(message, code, **fields):
+            publish_lifecycle(state="failed", finished_unix=int(time.time()), error_code=code)
+            return RunResult("failed", error=message, **fields)
+        _unlink_quiet(progress_path)
+        publish_lifecycle()
         raw_path = run_dir / "hstscan.raw.json"
 
         try:
@@ -246,21 +270,25 @@ def run_once(
             verified_root_directories = verified_root_directory_paths(entries, lstat=lstat)
             selected = mount_policy.select_scan_roots(entries, root_directory_paths=verified_root_directories)
         except Exception as exc:
-            return RunResult("failed", error=f"mountinfo: {exc}")
+            return failure(f"mountinfo: {exc}", "MOUNTINFO_FAILED")
         if not selected.selected:
-            return RunResult("failed", error="no safe roots selected")
+            return failure("no safe roots selected", "NO_SAFE_ROOTS")
         media_by_major_minor = _resolve_media_by_major_minor(selected, media_resolver if media_resolver is not None else BlockMediaResolver())
 
         argv = _scanner_argv(cfg, raw_path, selected.selected)
+        out_index = argv.index("--out")
+        argv[out_index:out_index] = ["--progress", str(progress_path), "--progress-run-id", lifecycle["run_id"]]
+        publish_lifecycle(phase="scanning", roots_total=len(selected.selected), roots_completed=0)
         try:
             completed = scanner_runner(argv, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         except Exception as exc:
             _unlink_quiet(raw_path)
-            return RunResult("failed", error=f"scanner: {exc}")
+            return failure(f"scanner: {exc}", "SCANNER_FAILED")
         if getattr(completed, "returncode", 1) != 0:
             _unlink_quiet(raw_path)
-            return RunResult("failed", error=f"scanner exited {getattr(completed, 'returncode', 'unknown')}")
+            return failure(f"scanner exited {getattr(completed, 'returncode', 'unknown')}", "SCANNER_FAILED")
 
+        publish_lifecycle(phase="publishing")
         try:
             raw = json.loads(raw_path.read_text(encoding="utf-8"))
             _validate_raw_payload(raw)
@@ -279,21 +307,21 @@ def run_once(
             payload["config_digest"] = cfg.config_digest
         except Exception as exc:
             _unlink_quiet(raw_path)
-            return RunResult("failed", error=f"invalid scanner output: {exc}")
+            return failure(f"invalid scanner output: {exc}", "INVALID_OUTPUT")
         finally:
             _unlink_quiet(raw_path)
 
         snapshot_path = snapshots_dir / f"{generation}.json"
         if snapshot_path.exists():
             # _unique_generation avoids this; keep immutable publication strict.
-            return RunResult("failed", generation=generation, error="generation already exists")
+            return failure("generation already exists", "GENERATION_EXISTS", generation=generation)
         status_path = data_dir / "scan-status.json"
         try:
             _write_json_atomic(snapshot_path, payload)
             digest = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
             byte_size = snapshot_path.stat().st_size
             if not _HEX64_RE.match(digest):
-                return RunResult("failed", generation=generation, error="internal digest failure")
+                return failure("internal digest failure", "DIGEST_FAILED", generation=generation)
             status = {
                 "generation": snapshot_path.name,
                 "byte_size": byte_size,
@@ -307,11 +335,19 @@ def run_once(
             status["retained_generations"] = retained_generations
             _publish_status_atomic(status_path, status)
         except Exception as exc:
-            return RunResult("failed", generation=generation, snapshot_path=snapshot_path if snapshot_path.exists() else None, error=f"publication: {exc}")
+            return failure(f"publication: {exc}", "PUBLICATION_FAILED", generation=generation, snapshot_path=snapshot_path if snapshot_path.exists() else None)
         try:
             _prune_unretained_snapshots(snapshots_dir, retained_generations)
         except Exception as exc:
-            return RunResult("failed", generation=generation, snapshot_path=snapshot_path, status_path=status_path, error=f"retention: {exc}")
+            return failure(f"retention: {exc}", "RETENTION_FAILED", generation=generation, snapshot_path=snapshot_path, status_path=status_path)
+        publish_lifecycle(state=snapshot_status, generation=generation, started_unix=started_unix,
+                          finished_unix=finished_unix, last_finished_unix=finished_unix,
+                          last_duration_sec=scan_duration_sec,
+                          estimate_duration_sec=scan_duration_sec if snapshot_status == "complete" else history.get("estimate_duration_sec"),
+                          roots_completed=len(selected.selected),
+                          scanned_files=sum(m["scanned_files"] for m in raw["mounts"]),
+                          scanned_dirs=sum(m["scanned_dirs"] for m in raw["mounts"]),
+                          scanned_bytes=sum(m["scanned_bytes"] for m in raw["mounts"]))
         return RunResult(snapshot_status, generation, snapshot_path, status_path)
     finally:
         try:
@@ -810,6 +846,18 @@ def _ensure_managed_dir(path: pathlib.Path) -> None:
 
 def _mkdir_private(path: pathlib.Path) -> None:
     path.mkdir(parents=True, exist_ok=True, mode=0o750)
+
+
+def _write_lifecycle_atomic(path: pathlib.Path, payload: Mapping[str, Any]) -> None:
+    """Transient telemetry needs atomic visibility, not snapshot durability."""
+    fd, temporary = tempfile.mkstemp(prefix=".scan-lifecycle.", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o640)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+        os.replace(temporary, path)
+    finally:
+        _unlink_quiet(pathlib.Path(temporary))
 
 
 def _write_json_atomic(path: pathlib.Path, payload: Mapping[str, Any]) -> None:

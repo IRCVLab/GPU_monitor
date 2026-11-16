@@ -58,7 +58,7 @@
     <div class="detail-head detail-only" id="detailHead" hidden>
       <div class="detail-title"><span class="detail-server" id="h-host">—</span></div>
       <div class="detail-meta-wrap">
-        <div class="head-meta">Scanned <b id="h-scan">—</b></div>
+        <div class="head-meta">완료 <b id="h-scan">—</b></div>
         <div class="head-meta" id="h-scanner">—</div>
       </div>
     </div>
@@ -84,6 +84,21 @@
     </section>
 
     <section id="detailView" class="detail-view" hidden>
+      <section id="scanStatusPanel" class="scan-status-panel" aria-label="스캔 상태와 일정" data-state="unknown">
+        <div class="scan-status-heading"><span class="scan-status-eyebrow">SCAN STATUS</span><span id="scanStateLabel" class="scan-state-label" role="status" aria-live="polite">상태 확인 중</span></div>
+        <div class="scan-schedule-grid">
+          <div class="scan-metric"><span class="scan-metric-label">마지막 완료</span><strong id="scanLastCompleted">—</strong><span id="scanLastDuration" class="scan-metric-detail">완료 기록 없음</span></div>
+          <div class="scan-metric"><span class="scan-metric-label">다음 자동 스캔</span><strong id="scanNextRun">예약 정보 확인 중</strong><span id="scanNextRemaining" class="scan-metric-detail"></span></div>
+        </div>
+        <div id="scanProgressDetails" class="scan-progress-details" hidden>
+          <div class="scan-progress-heading"><span id="scanPhase">파일 확인 중</span><span id="scanElapsed"></span></div>
+          <div class="scan-progress-summary"><strong id="scanFileCount">처리량 확인 중</strong><code id="scanRoot">대상 확인 중</code></div>
+          <progress id="scanRootProgress" class="scan-root-progress" aria-label="완료한 스캔 대상 수" max="1" value="0" hidden></progress>
+          <div class="scan-progress-footer"><span id="scanRootCount"></span><span id="scanEta"></span></div>
+          <div id="scanEtaBasis" class="scan-eta-basis"></div>
+        </div>
+        <p id="scanStatusNote" class="scan-status-note" hidden></p>
+      </section>
       <div id="detailError" class="err" hidden></div>
       <div id="detailLoading" class="detail-loading" role="status" aria-live="polite" hidden></div>
       <div id="detailPanels">
@@ -189,6 +204,7 @@
 <script src="treemap.js"></script>
 <script src="tables.js"></script>
 <script src="overview.js"></script>
+<script src="scan-status.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
