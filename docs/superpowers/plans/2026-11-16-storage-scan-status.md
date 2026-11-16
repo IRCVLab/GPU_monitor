@@ -21,7 +21,7 @@
 
 ## Task 3: Integration and review
 - [x] Review spec compliance then implementation quality; resolve findings.
-- [ ] Run full storage checks, repository contracts and diff check.
+- [x] Run full storage checks, repository contracts and diff check.
 - [x] Leave a reviewable local branch and preview, report deployment requirements accurately.
 
 ## Validation notes
@@ -30,3 +30,10 @@
 - Browser QA passed at 320, 390, 820 and 1440 pixels in light/dark themes; stable Rescan dimensions and no horizontal page overflow or JavaScript errors.
 - Use Python 3.12 with pytest and `umask 022` for repository verification. Existing deployment fixtures assume non-group-writable directories; the host default umask 0002 reproduces eight failures on the unchanged baseline.
 - Preserve this local feature branch and preview for review. Production central and remote agent deployment has not been performed.
+
+## Final verification
+
+- `umask 022; PATH=/tmp/storage-scan-py312/bin:$PATH make test-storage`: passed, exit 0 (324 Python tests, 624 subtests, three viewer Node suites, deployment scripts, scanner and tracked-file Linux verification).
+- Repository layout/history contracts: 25 tests passed. `git diff --check`: clean.
+- Central release built from implementation commit `ad89d107690fb83914f7d89a0099a2beed46614c`; extracted collector imports and every browser script dependency verified.
+- Development sample preview: port 8089; runtime and operational agents were not deployed.
