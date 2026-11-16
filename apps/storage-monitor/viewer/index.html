@@ -50,16 +50,28 @@
           <svg class="theme-icon theme-icon-moon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M12.8 10.1A5.4 5.4 0 0 1 5.9 3.2a5.4 5.4 0 1 0 6.9 6.9Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
         </button>
       </nav>
-      <div class="head-actions detail-only" id="detailActions" hidden>
-        <span class="head-meta" id="lastUpd" title="last scan time"></span>
-        <button id="rescanBtn" class="rescan-btn" title="Run a fresh scan now" aria-busy="false">↻ Rescan</button>
-      </div>
     </div>
     <div class="detail-head detail-only" id="detailHead" hidden>
       <div class="detail-title"><span class="detail-server" id="h-host">—</span></div>
-      <div class="detail-meta-wrap">
-        <div class="head-meta">완료 <b id="h-scan">—</b></div>
-        <div class="head-meta" id="h-scanner">—</div>
+      <div class="head-actions detail-only" id="detailActions" hidden>
+        <section id="scanStatusPanel" class="scan-status-strip" aria-label="스캔 상태와 실행" data-state="unknown">
+          <div class="scan-control-row">
+            <div class="scan-summary">
+              <span id="scanStateLabel" class="scan-state-label" role="status" aria-live="polite">상태 확인 중</span>
+              <span id="scanLastCompleted" class="scan-history">완료 기록 없음</span>
+              <span id="scanLastDuration" class="scan-secondary"></span>
+              <span id="scanNextRun" class="scan-next">예약 확인 중</span>
+            </div>
+            <button id="rescanBtn" class="rescan-btn" title="지금 다시 스캔" aria-busy="false">Rescan</button>
+          </div>
+          <div id="scanProgressDetails" class="scan-progress-details" hidden>
+            <strong id="scanFileCount">처리량 확인 중</strong>
+            <span id="scanElapsed"></span>
+            <span id="scanEta" class="scan-eta"></span>
+            <span class="scan-target"><code id="scanRoot"></code><span id="scanRootCount"></span><progress id="scanRootProgress" class="scan-root-progress" aria-label="완료한 스캔 대상 수" max="1" value="0" hidden></progress></span>
+          </div>
+          <p id="scanStatusNote" class="scan-status-note" hidden></p>
+        </section>
       </div>
     </div>
     <div class="warn-banner detail-only" id="warnBanner" hidden></div>
@@ -84,21 +96,6 @@
     </section>
 
     <section id="detailView" class="detail-view" hidden>
-      <section id="scanStatusPanel" class="scan-status-panel" aria-label="스캔 상태와 일정" data-state="unknown">
-        <div class="scan-status-heading"><span class="scan-status-eyebrow">SCAN STATUS</span><span id="scanStateLabel" class="scan-state-label" role="status" aria-live="polite">상태 확인 중</span></div>
-        <div class="scan-schedule-grid">
-          <div class="scan-metric"><span class="scan-metric-label">마지막 완료</span><strong id="scanLastCompleted">—</strong><span id="scanLastDuration" class="scan-metric-detail">완료 기록 없음</span></div>
-          <div class="scan-metric"><span class="scan-metric-label">다음 자동 스캔</span><strong id="scanNextRun">예약 정보 확인 중</strong><span id="scanNextRemaining" class="scan-metric-detail"></span></div>
-        </div>
-        <div id="scanProgressDetails" class="scan-progress-details" hidden>
-          <div class="scan-progress-heading"><span id="scanPhase">파일 확인 중</span><span id="scanElapsed"></span></div>
-          <div class="scan-progress-summary"><strong id="scanFileCount">처리량 확인 중</strong><code id="scanRoot">대상 확인 중</code></div>
-          <progress id="scanRootProgress" class="scan-root-progress" aria-label="완료한 스캔 대상 수" max="1" value="0" hidden></progress>
-          <div class="scan-progress-footer"><span id="scanRootCount"></span><span id="scanEta"></span></div>
-          <div id="scanEtaBasis" class="scan-eta-basis"></div>
-        </div>
-        <p id="scanStatusNote" class="scan-status-note" hidden></p>
-      </section>
       <div id="detailError" class="err" hidden></div>
       <div id="detailLoading" class="detail-loading" role="status" aria-live="polite" hidden></div>
       <div id="detailPanels">

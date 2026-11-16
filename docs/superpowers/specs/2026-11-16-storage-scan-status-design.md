@@ -13,3 +13,9 @@ The detail page polls status independently of whether this browser initiated the
 - Real systemd deadlines use remote monotonic and realtime clock references. Disabled, unavailable, elapsed or invalid schedules remain unknown.
 - A displayed generation is acknowledged only when that snapshot loads. Failed or old-generation downloads retry; downloads do not block status polling. Navigation guards cover A → B → A and per-server requests.
 - Progress files carry a run identifier; lock-conflict attempts cannot overwrite the running scan. Success is published after snapshot publication.
+
+## User-directed compact layout revision
+
+The user rejected the standalone status card for low information density and separation from Rescan. Replace it with a compact toolbar in the server heading, with the action directly adjacent to last completion/duration and next-run countdown. Keep the button label Rescan in all states; show activity and errors beside it. Remove redundant header timestamps/scanner metadata and the SCAN STATUS heading. Sample mode shows only a small badge and completion history, without empty scheduling fields. Running scans add a compact second line with file count, elapsed time, estimated remaining time and target/root progress. Exact timestamps and the ETA basis remain available in tooltips. All collection and polling behavior remains intact.
+
+Verified all three viewer suites and 16 browser scenarios (sample, idle, running, failed at 320/390/820/1440px; light/dark screenshots at390/1440). Idle/sample toolbar height32–34px; no horizontal page overflow or JavaScript errors. Independent review approved.

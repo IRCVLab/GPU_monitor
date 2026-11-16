@@ -361,13 +361,7 @@ function showDetailLoading(summary) {
     rescanNotice.hidden = true;
   }
   const host = document.getElementById("h-host");
-  const scan = document.getElementById("h-scan");
-  const scanner = document.getElementById("h-scanner");
-  const lastUpdated = document.getElementById("lastUpd");
   if (host) host.textContent = displayName;
-  if (scan) scan.textContent = "—";
-  if (scanner) scanner.textContent = "";
-  if (lastUpdated) lastUpdated.textContent = "";
 }
 
 function clearDetailLoading() {
@@ -436,7 +430,6 @@ function renderAll() {
   if (typeof resetCleanupSelectionState === "function") resetCleanupSelectionState();
   else if (typeof renderCleanupPanel === "function") renderCleanupPanel();
   renderHeader();
-  updateLastUpdated();
   renderMountSeg();
   populateFilters();
   requestAnimationFrame(() => {
@@ -692,7 +685,6 @@ async function ensureDetailLoaded(serverId, forceReload, generationOverride, req
   clearDetailLoading();
   clearDetailError();
   renderAll();
-  updateLastUpdated();
   syncRescanButton();
   renderCurrentScanStatus();
 }
@@ -750,27 +742,11 @@ function navigateToOverview(options) {
   });
 }
 
-function fmtRel(unix) {
-  if (!unix) return "—";
-  const s = Math.max(0, Math.floor(Date.now() / 1000) - unix);
-  if (s < 60) return "just now";
-  if (s < 3600) return Math.floor(s / 60) + " min ago";
-  if (s < 86400) return Math.floor(s / 3600) + " h ago";
-  return Math.floor(s / 86400) + " d ago";
-}
-function updateLastUpdated() {
-  const el = document.getElementById("lastUpd"); if (!el) return;
-  if (DATA && DATA.scan_finished_unix) {
-    el.innerHTML = "완료 <b>" + fmtRel(DATA.scan_finished_unix) + "</b>";
-    el.title = "마지막 완료: " + fmtDate(DATA.scan_finished_unix);
-  } else el.textContent = "";
-}
-
 function setRescanUnsupported(btn, message) {
   if (!btn) return;
   setRescanActivityState(btn, "idle");
   btn.disabled = true;
-  btn.textContent = "Manual rescan";
+  btn.textContent = "Rescan";
   btn.title = message || "Manual rescan only: run scanner separately and refresh.";
 }
 
@@ -804,7 +780,7 @@ function setRescanRetry(btn, message, title) {
   if (!btn) return;
   setRescanActivityState(btn, "idle");
   btn.disabled = false;
-  btn.textContent = message || "Retry rescan";
+  btn.textContent = "Rescan";
   btn.title = title || "Try the scan again";
 }
 
@@ -818,7 +794,7 @@ function syncRescanButton() {
   if (status && status.state === "running" && !status.disconnected && Date.now() / 1000 - status.observed_unix <= 90) {
     setRescanActivityState(btn, "running");
     btn.disabled = true;
-    btn.textContent = "Scanning…";
+    btn.textContent = "Rescan";
     btn.title = "서버에서 스캔이 진행 중입니다";
     return;
   }
@@ -913,7 +889,6 @@ async function refreshOverviewData(options) {
         clearDetailLoading();
         clearDetailError();
         renderAll();
-        updateLastUpdated();
       }
       syncRescanButton();
       return { ok: true, preservedRoute: true };
@@ -1009,7 +984,7 @@ async function pollRescanJob(serverId, generation) {
       if (rescanPollFailures <= 2) {
         setRescanActivityState(btn, "reconnecting");
         btn.disabled = true;
-        btn.textContent = "Waiting for scan…";
+        btn.textContent = "Rescan";
         btn.title = "Waiting for the new scan job to become visible.";
         scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
         return;
@@ -1024,7 +999,7 @@ async function pollRescanJob(serverId, generation) {
       rescanSawActive = true;
       setRescanActivityState(btn, job.state);
       btn.disabled = true;
-      btn.textContent = job.state === "requested" ? "Queued…" : "Scanning…";
+      btn.textContent = "Rescan";
       btn.title = job.state === "requested" ? "Scan is queued" : "Scan is running";
       scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
       return;
@@ -1041,7 +1016,7 @@ async function pollRescanJob(serverId, generation) {
     if (observedActiveJob) {
       setRescanActivityState(btn, "refreshing");
       btn.disabled = true;
-      btn.textContent = "Refreshing…";
+      btn.textContent = "Rescan";
       await refreshOverviewData({ forceReload: true, expectedServerId: targetServerId });
       if (currentServerId === targetServerId && rescanServerId === targetServerId && trackingGeneration === rescanTrackingGeneration) {
         clearRescanPoll();
@@ -1057,7 +1032,7 @@ async function pollRescanJob(serverId, generation) {
     if (rescanPollFailures <= 2) {
       setRescanActivityState(btn, "reconnecting");
       btn.disabled = true;
-      btn.textContent = "Reconnecting…";
+      btn.textContent = "Rescan";
       btn.title = "Scan status is temporarily unavailable; retrying automatically.";
       scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
       return;
@@ -1078,7 +1053,7 @@ async function triggerRescan() {
   clearRescanNotice();
   setRescanActivityState(btn, "starting");
   btn.disabled = true;
-  btn.textContent = "Starting…";
+  btn.textContent = "Rescan";
   try {
     const response = await currentRescanPoster()(targetServerId, currentSession.csrf_token);
     if (rescanServerId !== targetServerId || currentServerId !== targetServerId) return;
@@ -1097,7 +1072,7 @@ async function triggerRescan() {
       const state = body.job && (body.job.state === "requested" || body.job.state === "running") ? body.job.state : "running";
       setRescanActivityState(btn, state);
       btn.disabled = true;
-      btn.textContent = state === "requested" ? "Queued…" : "Scanning…";
+      btn.textContent = "Rescan";
       await pollRescanJob(targetServerId);
       return;
     }
@@ -1215,7 +1190,6 @@ async function init() {
   const rb = document.getElementById("rescanBtn");
   if (rb) rb.onclick = triggerRescan;
   syncRescanButton();
-  setInterval(updateLastUpdated, 30000);
   startAutomaticApiRefresh();
   startScanStatusMonitoring();
 

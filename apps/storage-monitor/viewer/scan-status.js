@@ -61,6 +61,12 @@ function scanDate(seconds) {
   return new Date(seconds * 1000).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 }
 
+function scanCompactDate(seconds) {
+  if (seconds === null) return "기록 없음";
+  const date = new Date(seconds * 1000);
+  return (date.getMonth() + 1) + "/" + date.getDate() + " " + String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
+}
+
 function renderScanStatus(status, snapshot, options = {}) {
   const doc = options.document || document;
   const panel = doc.getElementById("scanStatusPanel");
@@ -68,24 +74,33 @@ function renderScanStatus(status, snapshot, options = {}) {
   const now = options.now ?? Date.now() / 1000;
   const model = scanStatusModel(status, snapshot, now);
   const set = (id, value) => { const el = doc.getElementById(id); if (el && el.textContent !== value) el.textContent = value; };
+  const title = (id, value) => { const el = doc.getElementById(id); if (el) el.title = value; };
   panel.dataset.state = model.state;
-  set("scanStateLabel", options.sample ? "샘플 데이터" : model.label);
-  set("scanLastCompleted", scanDate(model.lastFinished));
-  set("scanLastDuration", model.duration !== null ? "소요 " + scanDuration(model.duration) : "완료 기록 없음");
-  set("scanNextRun", options.sample ? "예약 없음" : model.nextRun !== null ? scanDate(model.nextRun) : model.scheduleNote);
-  set("scanNextRemaining", options.sample ? "샘플에서는 스캔하지 않습니다" : model.nextRun !== null ? scanDuration(model.nextRun - now) + " 후 · 서버 예약 기준" : "");
+  panel.dataset.sample = options.sample ? "true" : "false";
+  set("scanStateLabel", options.sample ? "샘플" : model.running && status.phase === "publishing" ? model.phase : model.label);
+  const stateLabel = doc.getElementById("scanStateLabel");
+  if (stateLabel) stateLabel.hidden = !options.sample && ["idle", "complete"].includes(model.state);
+  title("scanStateLabel", options.sample ? "샘플 데이터 · 실제 스캔은 실행되지 않습니다" : model.label);
+  set("scanLastCompleted", "완료 " + scanCompactDate(model.lastFinished));
+  title("scanLastCompleted", "마지막 완료: " + scanDate(model.lastFinished));
+  set("scanLastDuration", model.duration !== null ? "(" + scanDuration(model.duration) + ")" : "");
+  const wait = model.nextRun === null ? null : Math.max(1, Math.ceil((model.nextRun - now) / 60)) * 60;
+  set("scanNextRun", model.nextRun !== null ? "다음 " + scanDuration(wait).replace(/ 0초$/, "") + " 후" : model.scheduleNote);
+  title("scanNextRun", model.nextRun !== null ? "다음 자동 스캔: " + scanDate(model.nextRun) + " · 서버 예약 기준" : model.scheduleNote);
+  const nextRun = doc.getElementById("scanNextRun");
+  if (nextRun) nextRun.hidden = !!options.sample;
   const progress = doc.getElementById("scanProgressDetails");
   if (progress) progress.hidden = !model.running;
-  set("scanPhase", model.phase);
   set("scanRoot", model.root || "대상 확인 중");
-  set("scanFileCount", model.files !== null ? model.files.toLocaleString("ko-KR") + "개 파일 확인" : "처리량 확인 중");
-  set("scanElapsed", "경과 " + scanDuration(model.elapsed));
-  set("scanEta", model.eta !== null ? "예상 완료 " + scanDate(model.eta) + " · 약 " + scanDuration(model.eta - now) + " 남음" : model.etaNote);
-  set("scanEtaBasis", model.eta !== null ? "이전 스캔 소요 시간 기준 추정" : "");
+  title("scanRoot", model.phase + (model.root ? " · " + model.root : ""));
+  set("scanFileCount", model.files !== null ? model.files.toLocaleString("ko-KR") + "개 파일" : "처리량 확인 중");
+  set("scanElapsed", scanDuration(model.elapsed) + " 경과");
+  set("scanEta", model.eta !== null ? "예상 " + scanDuration(model.eta - now) + " 남음" : model.etaNote);
+  title("scanEta", model.eta !== null ? "예상 완료: " + scanDate(model.eta) + " · 이전 성공 스캔 소요 시간 기준 추정" : model.etaNote);
   const meter = doc.getElementById("scanRootProgress");
   const hasRoots = model.rootsTotal > 0 && model.rootsDone !== null;
   if (meter) { meter.hidden = !hasRoots; meter.max = model.rootsTotal || 1; meter.value = Math.min(model.rootsDone || 0, meter.max); }
-  set("scanRootCount", hasRoots ? "스캔 대상 " + model.rootsDone + " / " + model.rootsTotal + "개 완료" : "");
+  set("scanRootCount", hasRoots ? model.rootsDone + "/" + model.rootsTotal + " 완료" : "");
   set("scanStatusNote", options.note || model.note);
   const note = doc.getElementById("scanStatusNote");
   if (note) note.hidden = !(options.note || model.note);

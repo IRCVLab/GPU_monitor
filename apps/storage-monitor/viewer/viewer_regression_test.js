@@ -1138,9 +1138,8 @@ function testDetailCapacityResponsiveCssContract() {
 
 function testDetailHeaderMobileCssContract() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*body\[data-shell-mode=['"]detail['"]\]\s+\.head-row\b[\s\S]*display:\s*grid[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+auto/.test(css), '390px detail header must use a bounded three-column control row');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*body\[data-shell-mode=['"]detail['"]\]\s+\.head-row\b[\s\S]*display:\s*grid[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/.test(css), '390px detail header must use a bounded two-column navigation row');
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*body\[data-shell-mode=['"]detail['"]\]\s+\.brand-shell\b[\s\S]*display:\s*none/.test(css), '390px detail header must omit the redundant product title');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*body\[data-shell-mode=['"]detail['"]\]\s+#lastUpd\b[\s\S]*display:\s*none/.test(css), '390px detail header must omit the redundant last-updated label');
 }
 
 
@@ -1738,7 +1737,7 @@ function testRescanButtonExposesPersistentActivityCue() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(!css.includes('rescan-orbit'), 'rescan control must not rotate');
   assert.match(css, /\.rescan-btn\s*\{[^}]*min-width:/, 'rescan keeps a stable width');
-  assert.match(fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8'), /id="scanStatusPanel"/, 'status has a dedicated panel');
+  assert.match(fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8'), /id="scanStatusPanel"/, 'status remains accessible next to its action');
 }
 
 function apiBootstrapForRescan(snapshots) {
@@ -1826,7 +1825,7 @@ async function testFastFailedRescanShowsRecoverableFailure() {
   const button = viewer.document.getElementById('rescanBtn');
   const warning = viewer.document.getElementById('rescanNotice');
   assert.strictEqual(button.disabled, false, 'a failed rescan must remain retryable');
-  assert.match(button.textContent, /Retry/i);
+  assert.equal(button.textContent, 'Rescan');
   assert.strictEqual(button.getAttribute('aria-busy'), 'false');
   assert.strictEqual(warning.hidden, false);
   assert.strictEqual(warning.classList.contains('show'), true);
@@ -1850,7 +1849,7 @@ async function testActiveJobAndTransientPollErrorsStayRecoverable() {
   await activeViewer.triggerRescan();
   const activeButton = activeViewer.document.getElementById('rescanBtn');
   assert.strictEqual(activeButton.dataset.rescanState, 'running', '409 ACTIVE_JOB must attach to the existing job instead of bricking the button');
-  assert.match(activeButton.textContent, /Scanning/);
+  assert.equal(activeButton.textContent, 'Rescan');
   activeViewer.clearRescanPoll();
 
   const retryViewer = loadViewer();
@@ -1861,7 +1860,8 @@ async function testActiveJobAndTransientPollErrorsStayRecoverable() {
   await retryViewer.triggerRescan();
   const retryButton = retryViewer.document.getElementById('rescanBtn');
   assert.strictEqual(retryButton.disabled, true, 'a transient poll error should retain the in-progress state while retrying');
-  assert.match(retryButton.textContent, /Reconnecting/);
+  assert.equal(retryButton.textContent, 'Rescan');
+  assert.equal(retryButton.dataset.rescanState, 'reconnecting');
   assert.strictEqual(retryViewer.getRescanDebugState().hasTimer, true, 'a transient poll error must schedule a bounded retry');
   retryViewer.clearRescanPoll();
 }
@@ -1899,7 +1899,7 @@ async function testRemoteActiveConflictNeverPollsPersistedTerminalJob() {
   const warning = viewer.document.getElementById('rescanNotice');
   assert.strictEqual(jobLoads, 0, 'remote-active conflicts without a collector job id must not poll and misattribute a persisted terminal job');
   assert.strictEqual(button.disabled, false, 'the user must not be left with a permanently disabled control');
-  assert.match(button.textContent, /Check later/i);
+  assert.equal(button.textContent, 'Rescan');
   assert.match(warning.textContent || '', /remote scan is already running/i);
   assert.doesNotMatch(warning.textContent || '', /OLD_FAILURE/);
 }
@@ -1919,7 +1919,7 @@ async function testCooldownRescanFailureStaysRetryable() {
   const notice = viewer.document.getElementById('rescanNotice');
   assert.strictEqual(button.disabled, false);
   assert.strictEqual(button.getAttribute('aria-busy'), 'false');
-  assert.match(button.textContent, /Retry/);
+  assert.equal(button.textContent, 'Rescan');
   assert.match(notice.textContent || '', /cooling down.*900s/i);
   assert.strictEqual(viewer.getRescanDebugState().hasTimer, false);
 }
