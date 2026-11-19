@@ -625,7 +625,7 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
   assert.strictEqual(findByClass(first, 'overview-media-label')[0].textContent, 'SSD', 'media labels must use neutral storage-class text');
   assert.strictEqual(findByClass(first, 'overview-mount-used-total').length, 0, 'compact mount strip must not render used/total capacity text');
   assert.strictEqual(findByClass(first, 'overview-mount-pct')[0].textContent, '40%', 'utilization percent must be rendered as its own compact field');
-  assert.strictEqual(textTree(findByClass(first, 'overview-mount-capacity')[0]), '총 1000 GB · 여유 600 GB', 'mount rows must expose the filesystem total capacity beside remaining capacity');
+  assert.strictEqual(textTree(findByClass(first, 'overview-mount-capacity')[0]), '볼륨 총 1000 GB · 여유 600 GB', 'mount rows must expose the filesystem total capacity beside remaining capacity');
   assert(accessibleRowText.includes('/home') && accessibleRowText.includes('SSD') && accessibleRowText.includes('40%') && accessibleRowText.includes('총 1000 GB') && accessibleRowText.includes('여유 600 GB'), 'mount path, media, percent, total, and free information must remain accessible as descendant text');
   assert(!accessibleRowText.includes('400 GB / 1000 GB'), 'compact mount strip must omit used/total text');
 
@@ -657,9 +657,9 @@ function testMountStatusTextAppearsOnlyForExceptionalPressure() {
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
   const cells = findByClass(list.children[0].children[0], 'overview-mount');
   const capacityTexts = cells.map(cell => textTree(findByClass(cell, 'overview-mount-capacity')[0]));
-  assert.strictEqual(capacityTexts[0], '총 1000 GB · 여유 600 GB', 'healthy mount capacity text must remain compact and complete');
-  assert.strictEqual(capacityTexts[1], '총 1000 GB · 여유 190 GB', 'warning mount capacity text must remain compact and complete');
-  assert.strictEqual(capacityTexts[2], '총 1000 GB · 여유 70.0 GB', 'critical mount capacity text must remain compact and complete');
+  assert.strictEqual(capacityTexts[0], '볼륨 총 1000 GB · 여유 600 GB', 'healthy mount capacity text must remain compact and complete');
+  assert.strictEqual(capacityTexts[1], '볼륨 총 1000 GB · 여유 190 GB', 'warning mount capacity text must remain compact and complete');
+  assert.strictEqual(capacityTexts[2], '볼륨 총 1000 GB · 여유 70.0 GB', 'critical mount capacity text must remain compact and complete');
   const footerText = textTree(findByClass(list.children[0].children[0], 'overview-card-footer')[0]);
   assert(footerText.includes('주의 1') && footerText.includes('위험 1'), 'non-color pressure labels must be consolidated in the card footer');
   assert(findByClass(list.children[0].children[0], 'overview-mount')[1].getAttribute('aria-label').includes('주의'), 'warning mount must expose its exact state without relying on color');
@@ -716,7 +716,7 @@ function testSharedCapacityOverviewGroupsPhysicalDiskAndPreservesScanPathOrder()
       ],
       mounts: [
         { mount_id: 'home', path: '/home', mountpoint: '/', scan_root: '/home', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3, df_avail: 820 * 1024 ** 3, df_use_pct: 77, scanned_bytes: 700 * 1024 ** 3 },
-        { mount_id: 'data', path: '/data', mountpoint: '/', scan_root: '/data', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3, df_avail: 820 * 1024 ** 3, df_use_pct: 77, scanned_bytes: 20 * 1024 },
+        { mount_id: 'data', path: '/data', mountpoint: '/', scan_root: '/data', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3 + 8192, df_avail: 820 * 1024 ** 3 - 8192, df_use_pct: 77, scanned_bytes: 20 * 1024 },
       ],
     },
     viewer.DEFAULT_CAPACITY_THRESHOLDS,
@@ -728,13 +728,14 @@ function testSharedCapacityOverviewGroupsPhysicalDiskAndPreservesScanPathOrder()
   assert.strictEqual(findByClass(card, 'overview-mount').length, 1, 'shared-capacity scan roots must render one physical-capacity summary');
   assert.strictEqual(findByClass(card, 'overview-pressure-bar').length, 1, 'shared-capacity groups must keep one shared utilization bar');
   const capacityLabel = findByClass(card, 'overview-capacity-label')[0];
+  assert.strictEqual(row.aggregate.totalBytes, 3600 * 1024 ** 3, 'writes between scan roots must not remove the volume from the aggregate');
   const scanPaths = findByClass(card, 'overview-scan-paths')[0];
   assert(capacityLabel, 'multi-root capacity groups must expose a distinct physical-capacity label');
   assert(scanPaths, 'multi-root capacity groups must expose a distinct scan-root line');
-  assert.strictEqual(textTree(capacityLabel), '공유 디스크', 'multi-root capacity groups must name the physical capacity without borrowing a scan-root path');
-  assert.strictEqual(textTree(scanPaths), '탐색 /home · /data', 'shared-capacity groups must expose a secondary ordered scan-root line');
+  assert.strictEqual(textTree(capacityLabel), '볼륨 /', 'shared folders must show their actual volume mount point');
+  assert.deepStrictEqual(scanPaths.children.map(folder => folder.children.map(cell => cell.textContent)), [['/home', '700 GB'], ['/data', '20.0 KB']]);
   assert.strictEqual(textTree(findByClass(card, 'overview-meta')[0]), '2개 마운트', 'server header must still report actionable scan-root count');
-  assert(textTree(card).includes('77%') && textTree(card).includes('총 3.52 TB · 여유 820 GB'), 'shared-capacity overview must render one total for the shared physical capacity');
+  assert(textTree(card).includes('77%') && textTree(card).includes('볼륨 총 3.52 TB · 여유 820 GB'), 'shared-capacity overview must render one total for the shared physical capacity');
 }
 
 function testOverviewSharedCapacityRequiresKnownConsistentMetrics() {
@@ -866,8 +867,8 @@ async function testDetailSharedCapacityUsesOneCapacityRowAndSeparateScanNavigati
         fstype: 'ext4',
         storage_media: 'ssd',
         df_total: 1000 * 1024 ** 3,
-        df_used: 400 * 1024 ** 3,
-        df_avail: 600 * 1024 ** 3,
+        df_used: 400 * 1024 ** 3 + 8192,
+        df_avail: 600 * 1024 ** 3 - 8192,
         df_use_pct: 77,
         scanned_bytes: 20 * 1024,
       },
@@ -883,11 +884,17 @@ async function testDetailSharedCapacityUsesOneCapacityRowAndSeparateScanNavigati
   assert.strictEqual(caps.children[0].getAttribute('data-pressure'), 'warning', 'original df_use_pct must control grouped capacity pressure when byte ratio differs');
   assert.match(groupedHtml, /<div class="cap-pct"[^>]*>77<span>%<\/span>/, 'grouped capacity percentage must preserve original df_use_pct instead of recomputing from used and total');
   assert.doesNotMatch(groupedHtml, />40<span>%<\/span>/, 'grouped capacity percentage must not replace df_use_pct with the byte ratio');
-  assert.match(groupedHtml, /20\.0 KB<\/span>\s*scanned/, 'detail capacity row must label /data with scanned_bytes instead of shared used bytes');
-  assert.match(groupedHtml, /700 GB<\/span>\s*scanned/, 'detail capacity row must keep larger scan-root sizes labeled as scanned bytes');
-  const mountSeg = viewer.document.getElementById('mountSeg');
-  assert.deepStrictEqual(mountSeg.children.map(child => child.textContent), ['/home', '/data'], 'detail navigation must remain per scan root in existing order');
-  assert.strictEqual(mountSeg.children[1].title, '/data · scanned 20.0 KB', 'scan-root navigation must keep the scanned_bytes label for tiny shared-capacity directories');
+  assert.match(groupedHtml, /볼륨 사용량/);
+  const folderButtons = findByClass(caps.children[0], 'cap-folder-button');
+  assert.strictEqual(folderButtons[0].className, 'cap-folder-button');
+  assert.match(folderButtons[0].innerHTML, /700 GB<\/span>/);
+  assert.match(folderButtons[1].innerHTML, /20\.0 KB<\/span>/);
+  assert.deepStrictEqual(folderButtons.map(button => button.dataset.folder), ['/home', '/data'], 'folder navigation must sit under its shared volume');
+  assert.strictEqual(folderButtons[0].getAttribute('aria-pressed'), 'true');
+  folderButtons[1].dispatch('click');
+  assert.strictEqual(folderButtons[1].getAttribute('aria-pressed'), 'true');
+  assert.strictEqual(folderButtons[0].getAttribute('aria-pressed'), 'false');
+  assert.strictEqual(viewer.document.getElementById('treemapFolderLabel').textContent, '/data · 20.0 KB');
 }
 
 async function testDetailSharedCapacityRequiresKnownConsistentMetrics() {
@@ -999,7 +1006,10 @@ async function testDetailCapacityUsesCompactRowsAndFiltersBootMounts() {
   assert(caps.className.split(/\s+/).includes('detail-capacity-rail'), 'detail capacity must use compact rail class');
   assert.strictEqual(caps.children.length, 2, 'boot mounts must be omitted from detail capacity rows');
   assert(caps.children.every(child => child.className.split(/\s+/).includes('detail-capacity-row')), 'each detail mount must render as a compact capacity row');
-  const html = caps.children.map(child => child.innerHTML).join('\n');
+  assert.strictEqual(findByClass(caps, 'cap-scan-roots').length, 2, 'each volume must place its clickable path below the capacity');
+  assert(caps.children.every(row => !row.innerHTML.includes('/data') && row.innerHTML.includes('cap-main')), 'single-path volume headers must not repeat the clickable path');
+  assert.deepStrictEqual(findByClass(caps, 'cap-folder-button').map(button => button.dataset.folder), ['/', '/data']);
+  const html = caps.children.map(textTree).join('\n');
   assert(!html.includes('/boot'), 'boot mount must be absent from legacy detail capacity snapshots');
   assert(html.includes('cap-path') && html.includes('/') && html.includes('/data'), 'mount paths and existing cap-path selector must be preserved');
   assert(html.includes('cap-fs') && html.includes('ext4') && html.includes('xfs'), 'filesystem values must be preserved exactly');
@@ -1089,9 +1099,9 @@ async function testDetailCapacityUnknownNumbersRenderNeutralDashes() {
   const row = viewer.document.getElementById('caps').children[0];
   const html = row.innerHTML;
   assert.strictEqual(row.getAttribute('data-pressure'), 'unknown', 'missing detail capacity metrics must use neutral unknown styling');
-  assert(html.includes('<span class="figure">—</span> used / <span class="figure">—</span>'), 'missing used/total must render em dashes');
+  assert(html.includes('<span class="figure">—</span> / <span class="figure">—</span>'), 'missing used/total must render em dashes');
   assert(html.includes('<div class="cap-pct">—</div>'), 'missing percentage must render an em dash instead of invented 0%');
-  assert(html.includes('<span class="figure">—</span> free'), 'missing available bytes must render an em dash');
+  assert(html.includes('<span class="figure">—</span> 여유'), 'missing available bytes must render an em dash');
   assert(!html.includes('0<span>%</span>') && !html.includes('var(--ok)'), 'unknown detail capacity must not invent healthy 0% styling');
 }
 
@@ -1128,11 +1138,7 @@ function testDetailCapacityResponsiveCssContract() {
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/.test(css), '760px detail capacity rows must switch to a shrinkable two-column layout');
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.detail-capacity-row\s*>\s*\*\s*\{[^}]*min-width:\s*0/.test(css), '760px detail capacity row children must explicitly set min-width:0');
   assert(/@media\s*\(max-width:\s*760px\)[\s\S]*\.cap-bar\b[\s\S]*grid-column:\s*1\s*\/\s*-1/.test(css), '760px detail utilization bar must span the full row to remain visible');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.caps\.detail-capacity-rail\b[\s\S]*padding:\s*8px\s+14px/.test(css), '390px detail capacity rail must reduce side padding to avoid horizontal overflow');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.caps\.detail-capacity-rail\b[\s\S]*grid-auto-flow:\s*column[\s\S]*grid-auto-columns:\s*minmax\(220px,\s*78vw\)/.test(css), '390px detail capacity cards must use one horizontal rail so the treemap remains near the top');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-columns:\s*1fr/.test(css), '390px detail capacity rows must stack into one column');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.detail-capacity-row\b[\s\S]*grid-template-areas:\s*"main"\s*"pct"\s*"sub"\s*"free"\s*"bar"/.test(css), '390px detail capacity rows must override every named area into one column');
-  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.cap-pct\b[\s\S]*text-align:\s*left/.test(css), 'stacked detail percentage must remain readable as normal text');
+  assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.caps\.detail-capacity-rail\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(css), 'mobile volumes must stack vertically without a horizontal rail');
   assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.cap-fill\b[\s\S]*transition:\s*none\s*!important/.test(css), 'detail capacity fill animation must be explicitly disabled for reduced motion');
 }
 
@@ -2852,7 +2858,7 @@ function testThemeControlAndTileFirstDetailLayoutContract() {
   assert.match(css, /\.theme-mode-button\s+\.theme-icon\s*\{[^}]*position:\s*absolute[^}]*transition:[^}]*opacity[^}]*transform/);
   assert.doesNotMatch(css, /html\.dark\s+\.theme-icon-moon\s*,\s*html\.light\s+\.theme-icon-sun\s*\{[^}]*display:\s*none/);
   assert.match(app, /document\.body\.dataset\.shellMode\s*=\s*isDetail\s*\?\s*"detail"\s*:\s*"overview"/);
-  assert.match(css, /\.caps\.detail-capacity-rail\s*\{[^}]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /\.caps\.detail-capacity-rail\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /body\[data-shell-mode=['"]detail['"]\]\s+main\s*\{[^}]*padding-top:\s*8px/);
   assert.match(css, /#treemap\s*\{[^}]*height:\s*calc\(100vh\s*-\s*225px\)/);
 }

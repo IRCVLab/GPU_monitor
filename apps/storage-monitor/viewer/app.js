@@ -430,7 +430,6 @@ function renderAll() {
   if (typeof resetCleanupSelectionState === "function") resetCleanupSelectionState();
   else if (typeof renderCleanupPanel === "function") renderCleanupPanel();
   renderHeader();
-  renderMountSeg();
   populateFilters();
   requestAnimationFrame(() => {
     renderTreemap();

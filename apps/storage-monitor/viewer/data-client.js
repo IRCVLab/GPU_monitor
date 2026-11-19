@@ -349,12 +349,6 @@ function detailScannedBytes(mount, root) {
   if (mountBytes != null) return mountBytes;
   return detailCapacityNumber(root && root.scanned_bytes);
 }
-function sameDetailCapacityMetrics(left, right) {
-  return left.totalBytes === right.totalBytes
-    && left.usedBytes === right.usedBytes
-    && left.availableBytes === right.availableBytes
-    && left.capacityPct === right.capacityPct;
-}
 function detailCapacityMetricsKnown(candidate) {
   return candidate
     && candidate.totalBytes != null
@@ -396,7 +390,7 @@ function groupDetailCapacityMounts(mounts) {
       existing
       && detailCapacityMetricsKnown(existing)
       && detailCapacityMetricsKnown(candidate)
-      && sameDetailCapacityMetrics(existing, candidate)
+      && compatibleCapacityMetrics(existing, candidate)
       && existing.media === candidate.media
       && existing.fstype === candidate.fstype
     );
@@ -439,6 +433,7 @@ function renderHeader() {
     caps.appendChild(empty);
   }
   const capacityGroups = groupDetailCapacityMounts(actionableMounts);
+  const folderButtons = [];
   for (const group of capacityGroups) {
     const usedBytes = group.usedBytes;
     const totalBytes = group.totalBytes;
@@ -453,25 +448,48 @@ function renderHeader() {
         totalCapacityUsed += root.scannedBytes;
       }
     }
-    const media = group.media;
-    const scanRootsHtml = group.scanRoots.map(root =>
-      '<span class="cap-scan-root"><span class="cap-scan-path">' + escapeHtml(root.path) + '</span> <span class="figure">' +
-      humanBytes(root.scannedBytes) + '</span> scanned</span>'
-    ).join('');
+    const volumeTitle = hasVolumeFolderLevel(group.path, group.scanRoots) ? "볼륨 " + group.path : "볼륨";
+    const volumeMedia = '<span class="cap-fs">' + escapeHtml(group.fstype) + '</span>' +
+      '<span class="cap-media">' + escapeHtml(group.media) + '</span>';
     const div = document.createElement("div");
     div.className = "detail-capacity-row";
     div.setAttribute("data-pressure", pressure);
     div.innerHTML =
-      '<div class="cap-main"><span class="cap-path">' + escapeHtml(group.path) + '</span>' +
-        '<span class="cap-fs">' + escapeHtml(group.fstype || "") + '</span>' +
-        '<span class="cap-media">' + escapeHtml(media) + '</span></div>' +
-      '<div class="cap-sub"><span class="figure">' + humanBytes(usedBytes) + '</span> used / <span class="figure">' +
+      '<div class="cap-main"><span class="cap-path">' + escapeHtml(volumeTitle) + '</span>' + volumeMedia + '</div>' +
+      '<div class="cap-sub">볼륨 사용량 <span class="figure">' + humanBytes(usedBytes) + '</span> / <span class="figure">' +
         humanBytes(totalBytes) + '</span></div>' +
       '<div class="cap-pct"' + (color ? ' style="color:' + color + '"' : '') + '>' + (pct == null ? "—" : pct + '<span>%</span>') + '</div>' +
-      '<div class="cap-free"><span class="figure">' + humanBytes(availableBytes) + '</span> free</div>' +
-      '<div class="cap-bar"><div class="cap-fill" style="' + fillStyle + '"></div></div>' +
-      '<div class="cap-scan-roots">' + scanRootsHtml + '</div>';
+      '<div class="cap-free"><span class="figure">' + humanBytes(availableBytes) + '</span> 여유</div>' +
+      '<div class="cap-bar"><div class="cap-fill" style="' + fillStyle + '"></div></div>';
+    const folders = document.createElement("div");
+    folders.className = "cap-scan-roots";
+    folders.setAttribute("role", "group");
+    folders.setAttribute("aria-label", "폴더 스캔");
+    for (const root of group.scanRoots) {
+      const index = actionableMounts.findIndex(mount => mount.path === root.mountPath);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "cap-folder-button";
+      button.dataset.folder = root.path;
+      button.setAttribute("aria-pressed", index === currentMountIdx ? "true" : "false");
+      const pathLabel = '<span class="cap-path cap-scan-path">' + escapeHtml(root.path) + '</span>';
+      const scanSize = '<span class="figure">' + humanBytes(root.scannedBytes) + '</span>';
+      button.innerHTML = pathLabel + scanSize + '<span aria-hidden="true">›</span>';
+      button.addEventListener("click", () => {
+        currentMountIdx = index;
+        for (const folder of folderButtons) {
+          folder.setAttribute("aria-pressed", folder === button ? "true" : "false");
+        }
+        updateTreemapFolderLabel();
+        showTab("treemap");
+        document.getElementById("treemapFolderLabel").scrollIntoView({ block: "nearest" });
+      });
+      folderButtons.push(button);
+      folders.appendChild(button);
+    }
+    div.appendChild(folders);
     caps.appendChild(div);
   }
   if (totalCapacityUsed <= 0) totalCapacityUsed = 1;
+  updateTreemapFolderLabel();
 }

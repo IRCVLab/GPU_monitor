@@ -178,12 +178,13 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
     const usedTotalText = compactBytes(usedBytes) + " / " + compactBytes(totalBytes);
     const totalText = totalBytes == null ? "총용량 미확인" : "총 " + compactBytes(totalBytes);
     const freeText = availableBytes == null ? "여유 미확인" : "여유 " + compactBytes(availableBytes);
-    const capacityText = totalText + " · " + freeText;
+    const capacityText = "볼륨 " + totalText + " · " + freeText;
     const pressure = pressureLevel(usedPct, freeBytes, thresholds);
     return {
       key: String((mount && mount.mount_id) || (mount && mount.path) || index),
       mountId,
       path: String((mount && mount.path) || (mount && mount.mountpoint) || "/"),
+      volumePath: (selectedRoot && selectedRoot.mountpoint) || (mount && mount.mountpoint) || null,
       scanRoot: scanRootPath(mount, selectedRoot),
       scannedBytes: scannedBytesForMount(mount, selectedRoot),
       usedBytes,
@@ -208,6 +209,10 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
   });
 }
 
+function hasVolumeFolderLevel(volumePath, scanRoots) {
+  return scanRoots.length > 1 || scanRoots[0].path !== volumePath;
+}
+
 function summarizeCapacityGroups(mounts) {
   const groups = [];
   const groupsByIdentity = new Map();
@@ -219,7 +224,7 @@ function summarizeCapacityGroups(mounts) {
       existing
       && capacityMetricsKnown(existing)
       && capacityMetricsKnown(mount)
-      && sameCapacityMetrics(existing, mount)
+      && compatibleCapacityMetrics(existing, mount)
       && existing.media === mount.media
       && existing.mediaConfidence === mount.mediaConfidence
     );
@@ -227,6 +232,7 @@ function summarizeCapacityGroups(mounts) {
       const group = {
         key: identityKey || ("path:" + mount.key),
         path: mount.path,
+        volumePath: mount.volumePath,
         usedBytes: mount.usedBytes,
         totalBytes: mount.totalBytes,
         availableBytes: mount.availableBytes,
@@ -297,12 +303,12 @@ function aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial, hasKn
   };
 }
 
-function sameCapacityNumbers(left, right) {
-  return left.totalBytes === right.totalBytes && left.usedBytes === right.usedBytes && left.availableBytes === right.availableBytes;
-}
-
-function sameCapacityMetrics(left, right) {
-  return sameCapacityNumbers(left, right) && left.capacityPct === right.capacityPct;
+function compatibleCapacityMetrics(left, right) {
+  // Scan roots are measured separately. A write can move bytes from available to used
+  // while the filesystem total and the space reserved by the filesystem stay the same.
+  return left.totalBytes === right.totalBytes
+    && left.usedBytes - right.usedBytes === right.availableBytes - left.availableBytes
+    && left.capacityPct === right.capacityPct;
 }
 
 function capacityMetricsKnown(mount) {
@@ -333,7 +339,7 @@ function aggregateMountCapacity(mounts) {
     const first = group[0];
     const identityLabel = first.identity.value || identityKey;
     const allMetricsKnown = group.every(capacityMetricsKnown);
-    const consistent = allMetricsKnown && group.every(mount => sameCapacityMetrics(first, mount));
+    const consistent = allMetricsKnown && group.every(mount => compatibleCapacityMetrics(first, mount));
     if (!consistent) {
       excludedMountCount += group.length;
       const hasInvalidNumbers = group.some(mount => !mount || mount.totalBytes == null || mount.usedBytes == null || mount.availableBytes == null);
@@ -598,14 +604,15 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       mountEl.appendChild(makeEl(doc, "span", "overview-media-label", mount.mediaLabel));
       const body = makeEl(doc, "div", "overview-mount-body");
       const line = makeEl(doc, "div", "overview-mount-line");
-      const pathClassName = mount.scanRoots.length > 1 ? "overview-mount-path overview-mount-path-grouped" : "overview-mount-path";
-      const pathEl = mount.scanRoots.length === 1
-        ? makeEl(doc, "div", pathClassName, mount.scanRoots[0].path)
-        : makeEl(doc, "div", pathClassName);
+      const primaryPath = mount.volumePath || mount.scanRoots[0].path;
+      const nested = hasVolumeFolderLevel(primaryPath, mount.scanRoots);
+      const pathEl = makeEl(doc, "div", "overview-mount-path");
       pathEl.title = mount.scanRoots.map(root => root.path).join("\n");
-      if (mount.scanRoots.length > 1) {
-        pathEl.appendChild(makeEl(doc, "span", "overview-capacity-label", "공유 디스크"));
-        pathEl.appendChild(makeEl(doc, "span", "overview-scan-paths", "탐색 " + mount.scanRoots.map(root => root.path).join(" · ")));
+      if (nested) {
+        const volumeLabel = mount.volumePath ? "볼륨 " + mount.volumePath : "볼륨";
+        pathEl.appendChild(makeEl(doc, "span", "overview-capacity-label", volumeLabel));
+      } else {
+        pathEl.textContent = primaryPath;
       }
       line.appendChild(pathEl);
       line.appendChild(makeEl(doc, "div", "overview-mount-pct", mount.usedPctText));
@@ -619,6 +626,17 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       metrics.appendChild(meter);
       metrics.appendChild(makeEl(doc, "div", "overview-mount-free overview-mount-capacity", mount.capacityText));
       body.appendChild(metrics);
+      if (nested) {
+        const folders = makeEl(doc, "ul", "overview-scan-paths");
+        folders.setAttribute("aria-label", "폴더 스캔");
+        for (const root of mount.scanRoots) {
+          const folder = makeEl(doc, "li", "overview-scan-folder");
+          folder.appendChild(makeEl(doc, "span", "", root.path));
+          folder.appendChild(makeEl(doc, "span", "figure", compactBytes(root.scannedBytes)));
+          folders.appendChild(folder);
+        }
+        body.appendChild(folders);
+      }
       mountEl.appendChild(body);
       mountsWrap.appendChild(mountEl);
     }

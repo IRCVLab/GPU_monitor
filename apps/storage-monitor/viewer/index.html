@@ -76,7 +76,6 @@
     </div>
     <div class="warn-banner detail-only" id="warnBanner" hidden></div>
     <div class="warn-banner detail-only" id="rescanNotice" role="status" aria-live="polite" hidden></div>
-    <div class="caps detail-only" id="caps" hidden></div>
     <nav class="tabs detail-only" id="detailTabs" hidden>
       <div class="seg-tabs" id="tabs" role="tablist">
         <button class="tab active" data-tab="treemap" role="tab">Treemap</button>
@@ -98,10 +97,11 @@
     <section id="detailView" class="detail-view" hidden>
       <div id="detailError" class="err" hidden></div>
       <div id="detailLoading" class="detail-loading" role="status" aria-live="polite" hidden></div>
+      <div class="caps detail-only" id="caps" hidden></div>
       <div id="detailPanels">
         <section class="panel active" id="panel-treemap">
           <div class="toolbar">
-            <div class="grp"><label>Mount</label><div class="seg" id="mountSeg"></div></div>
+            <strong class="treemap-folder-label" id="treemapFolderLabel" aria-live="polite"></strong>
             <button type="button" id="treemapCleanupMode" class="cleanup-mode-btn" aria-pressed="false" title="Click: drill · Ctrl/⌘ click: select for removal · 클릭: 열기 · Ctrl/⌘ 클릭: 삭제 선택">Ctrl/⌘ click: select for removal</button>
             <span class="hint" id="treemapCleanupHint">Click: drill · Ctrl/⌘ click: select for removal · 클릭: 열기 · Ctrl/⌘ 클릭: 삭제 선택</span>
           </div>

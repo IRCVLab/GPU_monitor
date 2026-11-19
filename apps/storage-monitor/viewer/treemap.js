@@ -39,15 +39,10 @@ function squarify(items, x, y, w, h) {
   return nodes;
 }
 
-function renderMountSeg() {
-  const wrap = document.getElementById("mountSeg"); wrap.innerHTML = "";
-  (DATA.mounts || []).forEach((m, i) => {
-    const b = document.createElement("button");
-    b.className = (i === currentMountIdx ? "active" : ""); b.textContent = m.path;
-    b.title = m.path + " · scanned " + humanBytes(m.scanned_bytes);
-    b.onclick = () => { currentMountIdx = i; renderMountSeg(); renderTreemap(); };
-    wrap.appendChild(b);
-  });
+function updateTreemapFolderLabel() {
+  const label = document.getElementById("treemapFolderLabel");
+  const mount = (DATA.mounts || [])[currentMountIdx];
+  label.textContent = mount ? mount.path + " · " + humanBytes(mount.scanned_bytes) : "";
 }
 
 /* Fit the treemap to the viewport: from the chart's top down to the bottom, minus
