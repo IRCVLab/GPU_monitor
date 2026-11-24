@@ -166,6 +166,27 @@ export function powerStatistics(points: PowerPoint[]) {
  return {average:values.length?values.reduce((a,b)=>a+b,0)/values.length:null,min:values.length?Math.min(...values):null,max:values.length?Math.max(...values):null,count:values.length};
 }
 
+interface ObservedPowerPeak {
+ watts: number;
+ at?: string;
+ coverage?: string;
+}
+
+export function observedPowerPeak(points: PowerPoint[], summary?: PowerPeriodSummary | null): ObservedPowerPeak | null {
+ let peak: ObservedPowerPeak | null = null;
+ for (const point of points) {
+  const watts=point.complete?point.power_watts:point.observed_watts;
+  if (!finite(watts) || watts<0) continue;
+  if (!peak || watts>peak.watts || (watts===peak.watts && peak.coverage && point.complete)) {
+   peak={watts,at:point.collected_at,...(point.complete?{}:{coverage:`${point.server_count}/${point.expected_count}`})};
+  }
+ }
+ if (finite(summary?.max_watts) && (!peak || summary.max_watts>peak.watts)) {
+  return {watts:summary.max_watts,at:summary.peak_at??undefined};
+ }
+ return peak;
+}
+
 export interface PowerPeriodSummary {
  peak_at?: string | null;
  energy_wh: number | null;

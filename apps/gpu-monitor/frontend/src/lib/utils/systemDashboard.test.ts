@@ -1,7 +1,7 @@
 // @ts-nocheck
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSystemNode, summarizeSystemNodes, filterSystemNodes, timeLabel, resourceFreshness, powerHistorySegments, powerStatistics, mergePowerHistory } from './systemDashboard.ts';
+import { buildSystemNode, summarizeSystemNodes, filterSystemNodes, timeLabel, resourceFreshness, powerHistorySegments, powerStatistics, observedPowerPeak, mergePowerHistory } from './systemDashboard.ts';
 
 const state = {
  server_id: 2, server_name: 'Hinton', host: 'example', port: 2202,
@@ -189,4 +189,13 @@ test('chart axes follow observed ranges with padding instead of forcing zero',as
  assert.deepEqual(util.observedChartDomain([6000,6000],100,100),{min:5900,max:6100});
  assert.deepEqual(util.observedChartDomain([0],100,100),{min:0,max:100});
  assert.deepEqual(util.observedChartDomain([],100,100),{min:0,max:100});
+});
+
+test('period peak includes the measured sum when some servers are unavailable', () => {
+ const complete = { collected_at:'2026-01-01T00:00:00Z', power_watts:540, server_count:3, expected_count:3, complete:true };
+ const partial = { collected_at:'2026-01-01T00:01:00Z', power_watts:null, observed_watts:620, server_count:2, expected_count:3, complete:false };
+ const missing = { collected_at:'2026-01-01T00:02:00Z', power_watts:null, server_count:0, expected_count:3, complete:false };
+ assert.deepEqual(observedPowerPeak([complete, partial, missing]), {watts:620, at:partial.collected_at, coverage:'2/3'});
+ assert.deepEqual(observedPowerPeak([partial, {...complete, power_watts:700}]), {watts:700, at:complete.collected_at});
+ assert.equal(observedPowerPeak([missing]), null);
 });
