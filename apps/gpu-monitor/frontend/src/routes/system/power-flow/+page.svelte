@@ -150,7 +150,9 @@
  async function refresh(forcePeaks=false){await Promise.allSettled([refreshState(forcePeaks),getCatalog().then(value=>catalog=value).catch(cause=>{error=cause instanceof Error?cause.message:'서버 목록을 불러오지 못했습니다.';})]);}
  function keyboard(event:KeyboardEvent){if(!canEdit||event.target instanceof HTMLInputElement||event.target instanceof HTMLTextAreaElement||event.target instanceof HTMLSelectElement)return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();history=event.shiftKey?redo(history):undo(history);}else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();openSave('save');}}
  beforeNavigate(({willUnload,cancel})=>{
-  if(!editing||!dirty)return;
+  const activeId=current?.id??'draft';
+  const stashedChanges=Array.from(drafts).some(([id,draft])=>id!==activeId&&JSON.stringify({name:draft.name,graph:draft.history.present})!==draft.saved);
+  if(!dirty&&!stashedChanges)return;
   if(willUnload||!window.confirm('저장하지 않은 배선도 변경 사항이 있습니다. 이동할까요?'))cancel();
  });
  onMount(()=>{

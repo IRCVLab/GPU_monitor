@@ -1,7 +1,7 @@
 // @ts-nocheck
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeServerRecordState, selectPolledServerState } from './serverStateMerge.ts';
+import { mergePolledServerStates, mergeServerRecordState, selectPolledServerState } from './serverStateMerge.ts';
 import { isServerStateEqual, normalizeServerState } from '../stores/servers.ts';
 
 function record(id, name, displayOrder) {
@@ -49,6 +49,18 @@ test('polling applies a new sample and rejects a sample older than the current o
 	const later = { ...earlier, last_seen: '2026-07-15T00:00:20Z' };
 	assert.equal(selectPolledServerState(earlier, earlier, later), later);
 	assert.equal(selectPolledServerState(later, later, earlier), later);
+});
+
+test('an authoritative poll removes missing servers but preserves changes received while polling', () => {
+	const removed = status(1, 'Atlas');
+	const unchanged = status(2, 'Orion');
+	const changed = { ...unchanged, status: 'offline' };
+	const added = status(3, 'Zeus');
+	const before = new Map([[1, removed], [2, unchanged]]);
+	const current = new Map([[1, removed], [2, changed], [3, added]]);
+	const incoming = new Map([[2, unchanged]]);
+	assert.deepEqual([...mergePolledServerStates(before, current, incoming, true)], [[2, changed], [3, added]]);
+	assert.deepEqual([...mergePolledServerStates(before, current, incoming, false)], [...current]);
 });
 
 test('catalog display order survives status snapshots that omit display_order', () => {
