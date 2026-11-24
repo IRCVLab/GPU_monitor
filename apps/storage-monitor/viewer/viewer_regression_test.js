@@ -2222,6 +2222,29 @@ async function testOlderSameServerSuccessCannotOverrideNewerSuccess() {
   assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-new', 'obsolete older alpha success must not replace cached snapshot data');
 }
 
+async function testRemovedServerCannotRepopulateTheSnapshotCache() {
+  const viewer = loadViewer();
+  const oldRequest = deferred();
+  const serverId = 'alpha-1';
+  const inventory = apiBootstrapForRescan();
+  viewer.rememberBootstrap(inventory);
+  viewer.loadSnapshotForCurrentSource = () => oldRequest.promise;
+  viewer.navigateToServer(serverId, { skipHistory: true, skipDataLoad: true });
+  const loading = viewer.ensureDetailLoaded(serverId, true);
+
+  viewer.navigateToOverview({ skipHistory: true });
+  await viewer.refreshOverviewData({ bootstrapLoader: async () => ({
+    ...inventory, summaries: inventory.summaries.filter(server => server.id !== serverId),
+  }) });
+  oldRequest.resolve({ server_id: serverId, hostname: 'retired', mounts: [], users: [], top_files: [], stale: [] });
+  await loading;
+  await viewer.refreshOverviewData({ bootstrapLoader: async () => inventory });
+
+  viewer.navigateToServer(serverId, { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data, null,
+    'an old request must not recreate a cache entry for a removed server');
+}
+
 async function testOlderSameServerFailureCannotOverrideNewerSuccess() {
   const viewer = loadViewer();
   const older = deferred();
@@ -3010,6 +3033,7 @@ async function main() {
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
+  await testRemovedServerCannotRepopulateTheSnapshotCache();
   testDeleteCommandQuoting();
   testTreemapCleanupModeBindsCleanupRenderedListenerOnce();
   testCleanupSelectionLifecycleShowsRemovalImmediatelyAndResetsOnServerChange();

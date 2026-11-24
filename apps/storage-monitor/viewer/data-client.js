@@ -185,6 +185,7 @@ function safeServerId(serverId) {
 function createDetailSnapshots() {
   const snapshots = new Map();
   const versions = new Map();
+  let lastVersion = 0;
 
   return {
     get: serverId => snapshots.get(serverId),
@@ -192,14 +193,18 @@ function createDetailSnapshots() {
     retain(serverIds, preserve) {
       if (!preserve) {
         snapshots.clear();
+        versions.clear();
         return;
       }
       for (const serverId of snapshots.keys()) {
         if (!serverIds.has(serverId)) snapshots.delete(serverId);
       }
+      for (const serverId of versions.keys()) {
+        if (!serverIds.has(serverId)) versions.delete(serverId);
+      }
     },
     begin(serverId) {
-      const version = (versions.get(serverId) || 0) + 1;
+      const version = ++lastVersion;
       versions.set(serverId, version);
       return version;
     },
