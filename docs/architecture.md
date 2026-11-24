@@ -61,15 +61,17 @@ runtime dependencies.
    SQLite history columns. Check create, edit conflicts, historical selection,
    and peak coverage with the Power Flow API tests before moving the next
    boundary.
-2. **GPU frontend.** Separate refresh and WebSocket state from rendering in the
-   GPU dashboard route. Preserve tab selection, refresh cadence, and header
-   behavior. Verify the existing source tests and the real browser before
-   extracting another part of the route.
+2. **GPU frontend.** `dashboardRefresh.svelte.ts` owns catalog and status
+   requests, retries, and polling timers. `ws.ts` publishes live updates to
+   the same server store. The dashboard route binds the resulting state to
+   its tabs, cards, and header. Check polling and browser rendering when
+   changing these boundaries.
 3. **Storage runtime.** Trace one rescan from `agent/scan_runner.py` through
    `collector/jobs.py` and `collector/store.py` to `viewer/scan-status.js`.
-   Keep job completion in the collector, polling and display in the viewer,
-   and scan execution on the agent. Exercise a rescan through the existing
-   lifecycle tests and viewer when changing the boundary.
+   The collector owns job completion. `viewer/scan-status.js` interprets the
+   reported job state and `viewer/app.js` handles polling and rendering.
+   The agent executes scans. Exercise a rescan through the lifecycle tests
+   and viewer when changing the boundary.
 4. **Release tools.** Share a rule only when both pullers have the same inputs
    and outcomes. Keep per-app packaging, activation, rollback, and restart
    decisions in each app. Verify the exact-SHA and unchanged-payload tests

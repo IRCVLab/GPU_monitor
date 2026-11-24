@@ -4,6 +4,19 @@ function scanNumber(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+function activeRescanState(job) {
+  if (!job) return null;
+  return job.state === "requested" || job.state === "running" ? job.state : null;
+}
+
+function classifyRescanJob(job, expectedJobId, sawActive) {
+  if (expectedJobId && job && job.id && job.id !== expectedJobId) return "stale";
+  const active = activeRescanState(job);
+  if (active) return active;
+  if (job && job.state === "failed") return "failed";
+  return sawActive ? "refresh" : "idle";
+}
+
 function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
   const s = status || {}, data = snapshot || {};
   const observed = scanNumber(s.observed_unix);

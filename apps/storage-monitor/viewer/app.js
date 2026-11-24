@@ -978,7 +978,8 @@ async function pollRescanJob(serverId, generation) {
     const body = await currentServerJobLoader()(targetServerId);
     if (rescanServerId !== targetServerId || currentServerId !== targetServerId || trackingGeneration !== rescanTrackingGeneration) return;
     const job = body && body.job;
-    if (rescanExpectedJobId && job && job.id && job.id !== rescanExpectedJobId) {
+    const state = classifyRescanJob(job, rescanExpectedJobId, rescanSawActive);
+    if (state === "stale") {
       rescanPollFailures += 1;
       if (rescanPollFailures <= 2) {
         setRescanActivityState(btn, "reconnecting");
@@ -994,25 +995,23 @@ async function pollRescanJob(serverId, generation) {
       return;
     }
     rescanPollFailures = 0;
-    if (job && (job.state === "requested" || job.state === "running")) {
+    if (state === "requested" || state === "running") {
       rescanSawActive = true;
-      setRescanActivityState(btn, job.state);
+      setRescanActivityState(btn, state);
       btn.disabled = true;
       btn.textContent = "Rescan";
-      btn.title = job.state === "requested" ? "Scan is queued" : "Scan is running";
+      btn.title = state === "requested" ? "Scan is queued" : "Scan is running";
       scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
       return;
     }
-    const observedActiveJob = rescanSawActive;
-    const failed = !!(job && job.state === "failed");
-    const resultCode = failed ? (job.result_code || job.error || "UNKNOWN_FAILURE") : "";
-    if (failed) {
+    if (state === "failed") {
+      const resultCode = job.result_code || job.error || "UNKNOWN_FAILURE";
       clearRescanPoll();
       setRescanRetry(btn, "Retry rescan", "The previous scan failed. Try again.");
       showRescanNotice("Rescan failed: " + resultCode);
       return;
     }
-    if (observedActiveJob) {
+    if (state === "refresh") {
       setRescanActivityState(btn, "refreshing");
       btn.disabled = true;
       btn.textContent = "Rescan";
@@ -1068,7 +1067,7 @@ async function triggerRescan() {
         return;
       }
       rescanExpectedJobId = body.job && body.job.id ? String(body.job.id) : null;
-      const state = body.job && (body.job.state === "requested" || body.job.state === "running") ? body.job.state : "running";
+      const state = activeRescanState(body.job) || "running";
       setRescanActivityState(btn, state);
       btn.disabled = true;
       btn.textContent = "Rescan";
