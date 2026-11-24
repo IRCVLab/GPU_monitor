@@ -42,6 +42,8 @@
 	} from '$lib/utils/headerVisibility';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
 	import { createDashboardRefresh, REFRESH_WARNING_AFTER_MS } from '$lib/dashboardRefresh.svelte';
+	import { getExperimentNotes, setExperimentNotesEnabled } from '$lib/api';
+	import type { ExperimentNotes } from '$lib/utils/experimentNotes';
 	import type { ServerRecord, ServerState } from '$lib/types';
 	import { wsConnected } from '$lib/ws';
 	import ServerCard from '$lib/components/ServerCard.svelte';
@@ -50,6 +52,7 @@
 	import ServerDeleteModal from '$lib/components/ServerDeleteModal.svelte';
 	import RefreshRing from '$lib/components/RefreshRing.svelte';
 	import DashboardHeader from '$lib/components/DashboardHeader.svelte';
+	import ExperimentNotesSettings from '$lib/components/ExperimentNotesSettings.svelte';
 
 	type Tab = 'internal' | 'all' | 'external';
 	const TAB_COOKIE = 'activeTab';
@@ -314,6 +317,8 @@
 		window.addEventListener('touchmove', handleHeaderTouchMove, { passive: true });
 		window.addEventListener('touchend', handleHeaderTouchEnd, { passive: true });
 		refresh.start();
+		void loadExperimentNotes();
+		const experimentNotesTimer = window.setInterval(() => void loadExperimentNotes(), 30_000);
 
 		let cleaned = false;
 		const cleanup = () => {
@@ -342,6 +347,9 @@
 			document.documentElement.style.removeProperty('--theme-reveal-y');
 			document.documentElement.style.removeProperty('--theme-reveal-radius');
 			refresh.stop();
+			window.clearInterval(experimentNotesTimer);
+			experimentRead?.abort();
+			experimentWrite?.abort();
 			if (runtime.__monitoringV2PageCleanup === cleanup) {
 				delete runtime.__monitoringV2PageCleanup;
 			}
@@ -474,6 +482,12 @@
 
 	let adminOpen = $state(false);
 	let deleteOpen = $state(false);
+	let experimentSettingsOpen = $state(false);
+	let experimentNotes = $state<ExperimentNotes | null>(null);
+	let experimentLoadError = $state('');
+	let experimentRead: AbortController | null = null;
+	let experimentWrite: AbortController | null = null;
+	let managementButton = $state<HTMLButtonElement | null>(null);
 	let editingServer = $state<ServerRecord | null>(null);
 	let viewMenuOpen = $state(false);
 	let viewMenuEl = $state<HTMLDivElement | null>(null);
@@ -487,6 +501,52 @@
 
 	async function handleSaved() {
 		await refresh.reloadDashboard(true);
+	}
+
+	async function loadExperimentNotes() {
+		if (experimentRead || experimentWrite) return;
+		const request = new AbortController();
+		experimentRead = request;
+		experimentLoadError = '';
+		try {
+			const settings = await getExperimentNotes({ signal: request.signal });
+			if (!request.signal.aborted) experimentNotes = settings;
+		} catch {
+			if (request.signal.aborted) return;
+			experimentNotes = null;
+			experimentLoadError = '자동 실험 메모 상태를 불러오지 못했습니다.';
+		} finally {
+			if (experimentRead === request) experimentRead = null;
+		}
+	}
+
+	async function saveExperimentNotes(enabled: boolean, password: string) {
+		experimentRead?.abort();
+		experimentRead = null;
+		const request = new AbortController();
+		experimentWrite = request;
+		try {
+			const settings = await setExperimentNotesEnabled({ enabled, admin_password: password }, { signal: request.signal });
+			if (!request.signal.aborted) {
+				experimentNotes = settings;
+				experimentLoadError = '';
+			}
+		} finally {
+			if (experimentWrite === request) experimentWrite = null;
+		}
+	}
+
+	function openExperimentSettings() {
+		actionsMenuOpen = false;
+		experimentSettingsOpen = true;
+		revealHeader();
+		void loadExperimentNotes();
+	}
+
+	async function closeExperimentSettings() {
+		experimentSettingsOpen = false;
+		await tick();
+		managementButton?.focus();
 	}
 
 	function handleEditServer(server: ServerState) {
@@ -685,7 +745,7 @@
 			revealHeader();
 		}
 
-		if (adminOpen || deleteOpen) return;
+		if (adminOpen || deleteOpen || experimentSettingsOpen) return;
 		const shortcut = resolveDashboardShortcut(event);
 		if (!shortcut) return;
 
@@ -819,8 +879,16 @@
 						{/if}
 					</div>
 					<div class="relative ops-admin-control" bind:this={actionsMenuEl}>
-						<button class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
-						{#if actionsMenuOpen}<div class="ops-overflow-menu"><button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button><a class="ops-menu-link" href="/logs">이벤트 로그</a>{#if dev}<a class="ops-menu-link" href="/debug">개발 진단</a>{/if}<button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button></div>{/if}
+					<button bind:this={managementButton} class:active={actionsMenuOpen} class="ops-utility-action" onclick={toggleActionsMenu} aria-haspopup="true" aria-expanded={actionsMenuOpen}>관리</button>
+					{#if actionsMenuOpen}
+						<div class="ops-overflow-menu">
+							<button class="ops-menu-link" onclick={() => { actionsMenuOpen = false; adminOpen = true; revealHeader(); }}>서버 등록</button>
+							<button class="ops-menu-link" onclick={openExperimentSettings}>자동 실험 메모</button>
+							<a class="ops-menu-link" href="/logs">이벤트 로그</a>
+							{#if dev}<a class="ops-menu-link" href="/debug">개발 진단</a>{/if}
+							<button class="ops-menu-danger" onclick={() => { actionsMenuOpen = false; deleteOpen = true; revealHeader(); }}>서버 삭제</button>
+						</div>
+					{/if}
 					</div>
 					<button bind:this={themeModeButtonElement} class="ops-mode-action" onclick={() => void runThemeModeReveal(themeModeButtonElement)} aria-label={$themeMode === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'} aria-busy={themeRevealLocked} aria-keyshortcuts="C" data-shortcut-tooltip="C 명암">
 						<span class="ops-mode-icon-stack" aria-hidden="true">
@@ -906,7 +974,13 @@
 									class:ring-1={dragTarget === server.server_id && dragTarget !== dragging}
 									class:ring-blue-500={dragTarget === server.server_id && dragTarget !== dragging}
 								>
-									<ServerCard {server} {nowMs} onEdit={handleEditServer} showNetwork={$activeTab === 'all'} />
+									<ServerCard
+										{server}
+										{nowMs}
+										experimentNotes={experimentNotes?.by_server[server.server_id]}
+										onEdit={handleEditServer}
+										showNetwork={$activeTab === 'all'}
+									/>
 								</div>
 							{/each}
 						</div>
@@ -932,6 +1006,16 @@
 	onClose={() => (deleteOpen = false)}
 	onDeleted={handleSaved}
 />
+
+{#if experimentSettingsOpen}
+	<ExperimentNotesSettings
+		settings={experimentNotes}
+		loadError={experimentLoadError}
+		onRetry={() => void loadExperimentNotes()}
+		onSave={saveExperimentNotes}
+		onClose={() => void closeExperimentSettings()}
+	/>
+{/if}
 
 <style>
 	.monitor-dev-simulation {

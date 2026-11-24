@@ -6,17 +6,20 @@
   import GpuBar from '$lib/components/GpuBar.svelte';
   import NoteForm from '$lib/components/NoteForm.svelte';
   import { getCompactGpuState } from '$lib/utils/compactGpuAvailability';
+  import { experimentEtaLabel, type ExperimentNote } from '$lib/utils/experimentNotes';
   import { classifyLoadRatio, classifyPressure, normalizeLoadRatio, type PressureLevel } from '$lib/utils/resourcePressure';
 
   let {
     server,
     nowMs,
     onEdit,
+    experimentNotes = [],
     showNetwork = true
   }: {
     server: ServerState;
     nowMs: number;
     onEdit?: (server: ServerState) => void;
+    experimentNotes?: ExperimentNote[];
     showNetwork?: boolean;
   } = $props();
 
@@ -27,6 +30,7 @@
   let notesLoading = $state(false);
   let notesError = $state('');
   let notesServerId = $state<number | null>(null);
+  const autoPreview = $derived(experimentNotes[0]);
 
   let deleteState = $state<Record<number, { loading: boolean; error: string }>>({});
   let deletePassword = $state<Record<number, string>>({});
@@ -647,6 +651,11 @@
                     {noteRemainingText(previewNotes[0])}
                   </span>
                 {/if}
+              {:else if autoPreview}
+                <span class="monitor-card__note-preview-main">
+                  <span class="monitor-card__note-preview-user">자동</span>
+                  <span class="monitor-card__note-preview-content" title={autoPreview.summary}>{autoPreview.summary}</span>
+                </span>
               {:else if notesLoaded}
                 <span class="monitor-card__footer-placeholder">메모 없음</span>
               {/if}
@@ -664,6 +673,26 @@
         inert={!notesExpanded}
       >
         <div class="monitor-card__disclosure-inner monitor-card__footer-panel">
+          {#if experimentNotes.length}
+            <div class="monitor-card__memo-group">
+              <div class="monitor-card__memo-group-head">
+                <span class="monitor-card__memo-group-title">자동 실험 메모</span>
+              </div>
+              <div class="monitor-note-list">
+                {#each experimentNotes as experiment (experiment.id)}
+                  <div class="monitor-note-item">
+                    <div class="monitor-note-item__body">
+                      <div class="monitor-note-item__meta">
+                        <span class="monitor-note-item__user">GPU {experiment.gpu_indices.join(', ')}</span>
+                        <span class="monitor-note-item__time">{experimentEtaLabel(experiment, nowMs)}</span>
+                      </div>
+                      <p class="monitor-note-item__content">{experiment.summary}</p>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
           {#if notesLoading}
             <div class="monitor-card__loading-state">
               <span class="inline-block h-3 w-3 animate-spin rounded-full border border-white/20 border-t-white/60"></span>

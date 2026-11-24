@@ -11,12 +11,14 @@ from sqlalchemy import delete
 try:
     from .config import get_settings
     from .database import AsyncSessionLocal, init_db
+    from .experiment_notes import ExperimentNotes
     from .live_database import prepare_live_database
     from .models import EventLog
     from .note_expiry import delete_expired_notes
 except ImportError:  # pragma: no cover - direct execution fallback
     from config import get_settings
     from database import AsyncSessionLocal, init_db
+    from experiment_notes import ExperimentNotes
     from live_database import prepare_live_database
     from models import EventLog
     from note_expiry import delete_expired_notes
@@ -149,6 +151,12 @@ async def lifespan(app: FastAPI):
 
     log_cleanup_task = asyncio.create_task(_log_cleanup_loop())
     note_cleanup_task = asyncio.create_task(_note_cleanup_loop())
+    experiment_notes = ExperimentNotes(settings, AsyncSessionLocal)
+    app.state.experiment_notes = experiment_notes
+    experiment_notes_task = None
+    if experiment_notes.configured:
+        await experiment_notes.load()
+        experiment_notes_task = asyncio.create_task(experiment_notes.run())
 
     yield
 
@@ -161,6 +169,9 @@ async def lifespan(app: FastAPI):
     hardware_monitor.close()
     log_cleanup_task.cancel()
     note_cleanup_task.cancel()
+    if experiment_notes_task is not None:
+        experiment_notes_task.cancel()
+        await asyncio.gather(experiment_notes_task, return_exceptions=True)
 
     logger.info("Shutting down — cancelling collector tasks")
     try:
@@ -188,12 +199,13 @@ app.add_middleware(
 )
 
 try:
-    from .routers import hardware, logs, metrics, notes, power_flow, servers, slack  # noqa: E402
+    from .routers import experiment_notes, hardware, logs, metrics, notes, power_flow, servers, slack  # noqa: E402
 except ImportError:  # pragma: no cover - direct execution fallback
-    from routers import hardware, logs, metrics, notes, power_flow, servers, slack  # noqa: E402
+    from routers import experiment_notes, hardware, logs, metrics, notes, power_flow, servers, slack  # noqa: E402
 
 app.include_router(servers.router)
 app.include_router(notes.router)
+app.include_router(experiment_notes.router)
 app.include_router(metrics.router)
 app.include_router(slack.router)
 app.include_router(logs.router)

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, ForeignKey, Index, JSON, Float, UniqueConstraint, func, text
+    Boolean, Column, Integer, String, Text, DateTime, ForeignKey, Index, JSON, Float, UniqueConstraint, func, text
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -48,6 +48,13 @@ class Note(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     server = relationship("Server", back_populates="notes")
+
+
+class ExperimentNoteSettings(Base):
+    __tablename__ = "experiment_note_settings"
+
+    id = Column(Integer, primary_key=True)
+    enabled = Column(Boolean, nullable=False)
 
 
 class GpuMetric(Base):
