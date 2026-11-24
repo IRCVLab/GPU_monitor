@@ -8,9 +8,7 @@
 	import {
 		serverStates,
 		internalServers,
-		externalServers,
-		isServerStateEqual,
-		normalizeServerState
+		externalServers
 	} from '$lib/stores/servers';
 	import {
 		materialTheme,
@@ -35,7 +33,6 @@
 	import { applyDevScenario, type DevScenario } from '$lib/utils/devScenario';
 	import { resolveDashboardShortcut } from '$lib/utils/dashboardShortcuts';
 	import { countResolvedGridTracks, placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
-	import { mergeServerRecordState } from '$lib/utils/serverStateMerge';
 	import {
 		animateFlip,
 		documentRect,
@@ -50,7 +47,7 @@
 		updateHeaderVisibility
 	} from '$lib/utils/headerVisibility';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
-	import { getServerStatus, getServers } from '$lib/api';
+	import { createDashboardRefresh, REFRESH_WARNING_AFTER_MS } from '$lib/dashboardRefresh.svelte';
 	import type { ServerRecord, ServerState } from '$lib/types';
 	import { wsConnected } from '$lib/ws';
 	import ServerCard from '$lib/components/ServerCard.svelte';
@@ -326,25 +323,14 @@
 
 	const activeTab = writable<Tab>(readTab());
 
-	const POLL_REFRESH_MS = 10_000;
-	const POLL_REQUEST_LEAD_MS = 1_000;
 	const REFRESH_WARNING_FAILURE_COUNT = 2;
-	const REFRESH_WARNING_AFTER_MS = POLL_REFRESH_MS * 2;
-	const VISIBLE_TICK_MS = 1_000;
-	const HIDDEN_TICK_MS = 30_000;
-
-	let nowMs = $state(Date.now());
-	let ticker: ReturnType<typeof setInterval> | null = null;
-	let autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-	let loaded = $state(false);
-	let loadError = $state('');
-	let loadingGuard: ReturnType<typeof setTimeout> | null = null;
-	let serverCatalog = new Map<number, ServerRecord>();
-	let lastRefreshAtMs = $state(0);
-	let nextRefreshAtMs = $state<number | null>(null);
-	let refreshInFlight = $state(false);
-	let queuedFullRefresh = false;
-	let refreshFailureCount = $state(0);
+	const refresh = createDashboardRefresh();
+	const nowMs = $derived(refresh.state.nowMs);
+	const loaded = $derived(refresh.state.loaded);
+	const loadError = $derived(refresh.state.loadError);
+	const lastRefreshAtMs = $derived(refresh.state.lastRefreshAtMs);
+	const retryingInitialLoad = $derived(refresh.state.retryingInitialLoad);
+	const { retryInitialLoad } = refresh;
 	let headerCompact = $state(false);
 	let headerIndicatorVisible = $state(false);
 	let indicatorPanelOpen = $state(false);
@@ -366,199 +352,6 @@
 	let headerScrollDirection: HeaderScrollDirection = null;
 	let headerScrollDistance = 0;
 	let headerTouchY: number | null = null;
-	let retryingInitialLoad = $state(false);
-
-	function mergeStatusSnapshot(
-		current: Map<number, ServerState>,
-		statusMap: Record<number, ServerState>
-	): boolean {
-		const next = new Map(current);
-		let changed = false;
-
-		for (const [idStr, state] of Object.entries(statusMap)) {
-			const id = Number(idStr);
-			const normalized = normalizeServerState(state, id);
-			if (!normalized) continue;
-
-			const existing = next.get(id);
-			const candidate = existing
-				? {
-						...existing,
-						...normalized,
-						display_order: normalized.display_order ?? existing.display_order
-					}
-				: normalized;
-			const resolved = existing && isServerStateEqual(existing, candidate) ? existing : candidate;
-
-			next.set(id, resolved);
-			if (resolved !== existing) {
-				changed = true;
-			}
-		}
-
-		if (changed) {
-			serverStates.set(next);
-		}
-
-		return changed;
-	}
-
-	async function refreshDashboardFull(): Promise<void> {
-		const current = get(serverStates);
-		const [serversResult, statusResult] = await Promise.allSettled([getServers(), getServerStatus()]);
-		const servers = serversResult.status === 'fulfilled' ? serversResult.value : [];
-		const statusMap = statusResult.status === 'fulfilled' ? statusResult.value : {};
-		const hasServerCatalog = serversResult.status === 'fulfilled';
-
-		if (hasServerCatalog) {
-			serverCatalog = new Map(servers.map((record) => [record.id, record]));
-		}
-
-		if (servers.length === 0 && Object.keys(statusMap).length === 0) {
-			if (serversResult.status === 'rejected' && statusResult.status === 'rejected') {
-				throw serversResult.reason;
-			}
-		}
-
-		const next = new Map<number, ServerState>();
-		let changed = false;
-
-		for (const record of servers) {
-			const normalized = normalizeServerState(statusMap[record.id], record.id);
-			const existing = current.get(record.id);
-			const candidate = mergeServerRecordState(record, normalized, existing);
-			const resolved = existing && isServerStateEqual(existing, candidate) ? existing : candidate;
-			next.set(record.id, resolved);
-			if (resolved !== existing) {
-				changed = true;
-			}
-		}
-
-		if (!hasServerCatalog) {
-			for (const [idStr, state] of Object.entries(statusMap)) {
-				const id = Number(idStr);
-				if (next.has(id)) continue;
-				const normalized = normalizeServerState(state, id);
-				if (!normalized) continue;
-				const existing = current.get(id);
-				const resolved = existing && isServerStateEqual(existing, normalized) ? existing : normalized;
-				next.set(id, resolved);
-				if (resolved !== existing) {
-					changed = true;
-				}
-			}
-		}
-
-		if (current.size !== next.size) {
-			changed = true;
-		}
-
-		if (changed) {
-			serverStates.set(next);
-		}
-	}
-
-	async function refreshDashboardStatusOnly(): Promise<void> {
-		const current = get(serverStates);
-		if (current.size === 0) {
-			await refreshDashboardFull();
-			return;
-		}
-
-		const statusMap = await getServerStatus();
-		mergeStatusSnapshot(current, statusMap);
-	}
-
-	function finishLoading() {
-		loaded = true;
-		if (loadingGuard !== null) {
-			clearTimeout(loadingGuard);
-			loadingGuard = null;
-		}
-	}
-
-	async function reloadDashboard(fullRefresh = false): Promise<void> {
-		if (refreshInFlight) {
-			queuedFullRefresh ||= fullRefresh;
-			return;
-		}
-
-		refreshInFlight = true;
-		loadError = '';
-		try {
-			if (fullRefresh || get(serverStates).size === 0) {
-				await refreshDashboardFull();
-			} else {
-				await refreshDashboardStatusOnly();
-			}
-			lastRefreshAtMs = Date.now();
-			refreshFailureCount = 0;
-		} catch (error) {
-			loadError = error instanceof Error ? error.message : '대시보드 데이터를 불러오지 못했습니다.';
-			refreshFailureCount += 1;
-		} finally {
-			const runQueuedFullRefresh = queuedFullRefresh;
-			queuedFullRefresh = false;
-			refreshInFlight = false;
-			finishLoading();
-			if (runQueuedFullRefresh) void reloadDashboard(true);
-		}
-	}
-
-	function cleanupPageRuntime() {
-		if (ticker !== null) {
-			clearInterval(ticker);
-			ticker = null;
-		}
-		if (loadingGuard !== null) {
-			clearTimeout(loadingGuard);
-			loadingGuard = null;
-		}
-		if (autoRefreshTimer !== null) {
-			clearTimeout(autoRefreshTimer);
-			autoRefreshTimer = null;
-		}
-		nextRefreshAtMs = null;
-		queuedFullRefresh = false;
-	}
-
-	function currentTickIntervalMs(): number {
-		if (!browser) return VISIBLE_TICK_MS;
-		return document.visibilityState === 'hidden' ? HIDDEN_TICK_MS : VISIBLE_TICK_MS;
-	}
-
-	function startTicker() {
-		if (ticker !== null) {
-			clearInterval(ticker);
-		}
-
-		nowMs = Date.now();
-		ticker = setInterval(() => {
-			nowMs = Date.now();
-		}, currentTickIntervalMs());
-	}
-
-	function schedulePollingTick(delayMs: number): void {
-		if (autoRefreshTimer !== null) {
-			clearTimeout(autoRefreshTimer);
-		}
-
-		nextRefreshAtMs = Date.now() + delayMs;
-		autoRefreshTimer = setTimeout(() => {
-			schedulePollingTick(POLL_REFRESH_MS);
-			void runAutoRefresh();
-		}, delayMs);
-	}
-
-	function startPollingCadence(): void {
-		schedulePollingTick(POLL_REFRESH_MS - POLL_REQUEST_LEAD_MS);
-	}
-
-	async function runAutoRefresh(): Promise<void> {
-		if (refreshInFlight) return;
-
-		await reloadDashboard();
-	}
 
 	function currentHeaderScrollPosition(): number {
 		const scrollY = Math.max(0, window.scrollY);
@@ -757,19 +550,9 @@
 		};
 		runtime.__monitoringV2PageCleanup?.();
 
-		startTicker();
-		loadingGuard = setTimeout(() => {
-			loadError = '대시보드 응답이 지연되고 있습니다. 잠시 후 다시 시도하세요.';
-			finishLoading();
-		}, 6500);
-
 		const unsubscribeTab = activeTab.subscribe((v) => {
 			writeCookie(TAB_COOKIE, v);
 		});
-		const handleVisibilityChange = () => {
-			startTicker();
-		};
-		document.addEventListener('visibilitychange', handleVisibilityChange);
 		headerPreviousY = currentHeaderScrollPosition();
 		let themeButtonCacheFrame: number | null = requestAnimationFrame(cacheVisibleThemeButtonCenter);
 		window.addEventListener('scroll', handleHeaderScroll, { passive: true });
@@ -778,15 +561,13 @@
 		window.addEventListener('touchstart', handleHeaderTouchStart, { passive: true });
 		window.addEventListener('touchmove', handleHeaderTouchMove, { passive: true });
 		window.addEventListener('touchend', handleHeaderTouchEnd, { passive: true });
-		startPollingCadence();
-		void reloadDashboard(true);
+		refresh.start();
 
 		let cleaned = false;
 		const cleanup = () => {
 			if (cleaned) return;
 			cleaned = true;
 			unsubscribeTab();
-			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('scroll', handleHeaderScroll);
 			window.removeEventListener('resize', handleHeaderResize);
 			window.removeEventListener('wheel', handleHeaderWheel);
@@ -808,7 +589,7 @@
 			document.documentElement.style.removeProperty('--theme-reveal-x');
 			document.documentElement.style.removeProperty('--theme-reveal-y');
 			document.documentElement.style.removeProperty('--theme-reveal-radius');
-			cleanupPageRuntime();
+			refresh.stop();
 			if (runtime.__monitoringV2PageCleanup === cleanup) {
 				delete runtime.__monitoringV2PageCleanup;
 			}
@@ -830,7 +611,7 @@
 
 
 	function refreshWarningText(): string {
-		if (refreshFailureCount >= REFRESH_WARNING_FAILURE_COUNT) return '갱신 지연';
+		if (refresh.state.refreshFailureCount >= REFRESH_WARNING_FAILURE_COUNT) return '갱신 지연';
 		if (
 			!$wsConnected &&
 			lastRefreshAtMs > 0 &&
@@ -953,23 +734,13 @@
 	let continuityFocusTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async function handleSaved() {
-		await reloadDashboard(true);
-	}
-
-	async function retryInitialLoad() {
-		if (retryingInitialLoad) return;
-		retryingInitialLoad = true;
-		try {
-			await reloadDashboard(true);
-		} finally {
-			retryingInitialLoad = false;
-		}
+		await refresh.reloadDashboard(true);
 	}
 
 	function handleEditServer(server: ServerState) {
-		const record = serverCatalog.get(server.server_id);
+		const record = refresh.getServerRecord(server.server_id);
 		if (!record) {
-			loadError = '서버 설정 정보를 아직 불러오지 못했습니다. 잠시 후 다시 시도하세요.';
+			refresh.state.loadError = '서버 설정 정보를 아직 불러오지 못했습니다. 잠시 후 다시 시도하세요.';
 			return;
 		}
 		editingServer = { ...record };

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const pageSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+const refreshSource = readFileSync(new URL('../lib/dashboardRefresh.svelte.ts', import.meta.url), 'utf8');
 const headerSource = readFileSync(new URL('../lib/components/DashboardHeader.svelte', import.meta.url), 'utf8');
 
 test('header exposes Storage directly and view menu exposes the live width control', () => {
@@ -381,10 +382,10 @@ test('collapsed indicator is fixed and reserves no dashboard layout lane', () =>
 });
 
 test('header warning copy appears only after persistent refresh trouble', () => {
-	assert.match(pageSource, /let refreshFailureCount = \$state\(0\)/);
+	assert.match(refreshSource, /refreshFailureCount: 0/);
 	assert.match(pageSource, /const REFRESH_WARNING_FAILURE_COUNT = 2/);
-	assert.match(pageSource, /refreshFailureCount = 0/);
-	assert.match(pageSource, /refreshFailureCount \+= 1/);
+	assert.match(refreshSource, /state\.refreshFailureCount = 0/);
+	assert.match(refreshSource, /state\.refreshFailureCount \+= 1/);
 	const warningBody = functionBody(pageSource, 'refreshWarningText');
 	assert.match(warningBody, /refreshFailureCount >= REFRESH_WARNING_FAILURE_COUNT/);
 	assert.match(warningBody, /nowMs - lastRefreshAtMs >= REFRESH_WARNING_AFTER_MS/);
@@ -421,24 +422,24 @@ test('header and collapsed indicator share a continuous ten-second satellite cad
 });
 
 test('refresh requests run on a fixed cadence independent of response completion', () => {
-	assert.match(pageSource, /const POLL_REFRESH_MS = 10_000/);
-	assert.match(pageSource, /const POLL_REQUEST_LEAD_MS = 1_000/);
-	assert.doesNotMatch(pageSource, /refreshCycleKey|refreshCycleDurationMs|scheduleRefreshRetry/);
-	const startBody = functionBody(pageSource, 'startPollingCadence');
+	assert.match(refreshSource, /const POLL_REFRESH_MS = 10_000/);
+	assert.match(refreshSource, /const POLL_REQUEST_LEAD_MS = 1_000/);
+	assert.doesNotMatch(refreshSource, /refreshCycleKey|refreshCycleDurationMs|scheduleRefreshRetry/);
+	const startBody = functionBody(refreshSource, 'startPollingCadence');
 	assert.match(startBody, /schedulePollingTick\(POLL_REFRESH_MS - POLL_REQUEST_LEAD_MS\)/);
-	const scheduleBody = functionBody(pageSource, 'schedulePollingTick');
+	const scheduleBody = functionBody(refreshSource, 'schedulePollingTick');
 	const nextSchedule = scheduleBody.indexOf('schedulePollingTick(POLL_REFRESH_MS)');
 	const refreshCall = scheduleBody.indexOf('void runAutoRefresh()');
 	assert.ok(nextSchedule >= 0 && refreshCall >= 0 && nextSchedule < refreshCall, 'next cadence must be scheduled before the request starts');
-	const autoBody = functionBody(pageSource, 'runAutoRefresh');
+	const autoBody = functionBody(refreshSource, 'runAutoRefresh');
 	assert.match(autoBody, /if \(refreshInFlight\) return/);
 	assert.match(autoBody, /await reloadDashboard\(\)/);
 	assert.doesNotMatch(autoBody, /schedulePollingTick|startPollingCadence/);
 });
 
 test('dashboard refreshes serialize requests and coalesce a queued full refresh', () => {
-	assert.match(pageSource, /let queuedFullRefresh = false/);
-	const reloadBody = functionBody(pageSource, 'reloadDashboard');
+	assert.match(refreshSource, /let queuedFullRefresh = false/);
+	const reloadBody = functionBody(refreshSource, 'reloadDashboard');
 	assert.match(reloadBody, /if \(refreshInFlight\) \{[\s\S]*queuedFullRefresh \|\|= fullRefresh;[\s\S]*return;/);
 	assert.match(reloadBody, /const runQueuedFullRefresh = queuedFullRefresh;/);
 	assert.match(reloadBody, /queuedFullRefresh = false;/);
@@ -788,9 +789,9 @@ test('Task 6 central material variables are consumed by dashboard, menu, veil, a
 
 
 test('Task 4 full cards receive the page shared visibility-aware nowMs clock', () => {
-	assert.match(pageSource, /let nowMs = \$state\(Date\.now\(\)\)/);
-	assert.match(pageSource, /function currentTickIntervalMs\(\): number[\s\S]*document\.visibilityState === 'hidden' \? HIDDEN_TICK_MS : VISIBLE_TICK_MS/);
-	assert.match(pageSource, /ticker = setInterval\(\(\) => \{[\s\S]*nowMs = Date\.now\(\)[\s\S]*\}, currentTickIntervalMs\(\)\)/);
+	assert.match(refreshSource, /nowMs: Date\.now\(\)/);
+	assert.match(refreshSource, /function currentTickIntervalMs\(\): number[\s\S]*document\.visibilityState === 'hidden' \? HIDDEN_TICK_MS : VISIBLE_TICK_MS/);
+	assert.match(refreshSource, /ticker = setInterval\(\(\) => \{[\s\S]*state\.nowMs = Date\.now\(\)[\s\S]*\}, currentTickIntervalMs\(\)\)/);
 	assert.match(pageSource, /<ServerCard\s+\{server\}\s+\{nowMs\}[\s\S]*onEdit=\{handleEditServer\}[\s\S]*showNetwork=\{\$activeTab === 'all'\}/);
 });
 
