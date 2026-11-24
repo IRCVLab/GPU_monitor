@@ -8,10 +8,13 @@ export interface GpuInfo {
 	memory_total: number;   // MB
 	temperature: number;    // °C
 	power_draw: number;     // W
+	fan_percent?: number | null; // NVIDIA device fan %, unavailable on some GPUs
 	users: string[];        // 사용 중인 유저명 목록
 }
 
 export interface SystemInfo {
+	network_rx_bytes_per_second?: number | null;
+	network_tx_bytes_per_second?: number | null;
 	cpu_percent: number;
 	ram_used: number;       // MB
 	ram_total: number;      // MB

@@ -12,22 +12,22 @@ try:
     from ..config import get_settings
     from ..database import AsyncSessionLocal
     from ..event_logger import get_event_log_health, log_event
-    from ..models import GpuMetric, Server
+    from ..models import GpuMetric, Server, NetworkMetric
     from .gpu import parse_gpustat, parse_nvidia_smi, NVIDIA_SMI_CMD
     from .gpu_health import GpuInventoryTracker
     from .ssh_client import SSHClient
     from .storage import StorageCollector
-    from .system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, calculate_disk_io_rate, parse_system
+    from .system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, calculate_disk_io_rate, calculate_network_io_rate, parse_system
 except ImportError:  # pragma: no cover - direct execution fallback
     from config import get_settings
     from database import AsyncSessionLocal
     from event_logger import get_event_log_health, log_event
-    from models import GpuMetric, Server
+    from models import GpuMetric, Server, NetworkMetric
     from collectors.gpu import parse_gpustat, parse_nvidia_smi, NVIDIA_SMI_CMD
     from collectors.gpu_health import GpuInventoryTracker
     from collectors.ssh_client import SSHClient
     from collectors.storage import StorageCollector
-    from collectors.system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, calculate_disk_io_rate, parse_system
+    from collectors.system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, calculate_disk_io_rate, calculate_network_io_rate, parse_system
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class ServerCollector:
         # GPU user tracking for process_start / process_end events
         self._prev_users: dict[int, set[str]] = {}
         self._last_system_info = None
+        self._last_network_info = None
         self._historical_gpu_indices_loaded: bool = False
         self._gpu_inventory_tracker = GpuInventoryTracker()
 
@@ -228,6 +229,7 @@ class ServerCollector:
     # ------------------------------------------------------------------
 
     def _ssh_reconnect(self) -> None:
+        self._last_network_info = None
         """Blocking reconnect — call from executor."""
         self._ssh.close()
         self._ssh.connect()
@@ -385,7 +387,15 @@ class ServerCollector:
             gpu_failed = True
 
         system_raw = await loop.run_in_executor(None, self._sync_collect_system)
+        previous_network_info = self._last_network_info
+        self._last_network_info = None
         system_info = parse_system(system_raw) if system_raw else None
+        system_collected_at = _utcnow().isoformat()
+        network_rate = calculate_network_io_rate(previous_network_info, system_info)
+        self._last_network_info = system_info
+        if system_info is not None and network_rate is not None:
+            system_info.network_rx_bytes_per_second = network_rate.rx_bytes_per_second
+            system_info.network_tx_bytes_per_second = network_rate.tx_bytes_per_second
         storage_info = await loop.run_in_executor(None, self._sync_collect_storage)
 
         degraded = gpu_failed or system_raw is None
@@ -427,6 +437,7 @@ class ServerCollector:
                     "memory_total": g.memory_total,
                     "temperature": g.temperature,
                     "power_draw": g.power_draw,
+                    "fan_percent": g.fan_percent,
                     "users": g.users,
                 }
                 for g in gpu_data.gpus
@@ -488,9 +499,12 @@ class ServerCollector:
             "server_id": self.server.id,
             "server_name": self.server.name,
             "collected_at": collected_at,
+            "system_collected_at": system_collected_at,
             "gpus": gpus_list,
             "system": (
                 {
+                    "network_rx_bytes_per_second": system_info.network_rx_bytes_per_second,
+                    "network_tx_bytes_per_second": system_info.network_tx_bytes_per_second,
                     "cpu_percent": system_info.cpu_percent,
                     "ram_used": system_info.ram_used,
                     "ram_total": system_info.ram_total,
@@ -540,6 +554,13 @@ class ServerCollector:
         """Persist GPU metrics to DB."""
         try:
             async with AsyncSessionLocal() as session:
+                system = data.get("system") or {}
+                network_at = data.get("system_collected_at")
+                network_at = datetime.fromisoformat(network_at.replace('Z', '+00:00')).astimezone(timezone.utc).replace(tzinfo=None) if network_at else datetime.utcnow()
+                session.add(NetworkMetric(server_id=self.server.id,
+                    network_rx_bytes_per_second=system.get("network_rx_bytes_per_second"),
+                    network_tx_bytes_per_second=system.get("network_tx_bytes_per_second"),
+                    collected_at=network_at, interval_seconds=max(1, get_settings().archive_interval)))
                 for gpu in data.get("gpus", []):
                     metric = GpuMetric(
                         server_id=self.server.id,
@@ -569,6 +590,7 @@ class ServerCollector:
                         GpuMetric.collected_at < cutoff,
                     )
                 )
+                await session.execute(delete(NetworkMetric).where(NetworkMetric.server_id == self.server.id, NetworkMetric.collected_at < cutoff))
                 await session.commit()
             self._last_cleanup = _utcnow()
             logger.debug("History cleanup done for %s (cutoff=%s)", self.server.name, cutoff.date())

@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store';
 import type { ServerState, WsMessage } from '$lib/types';
 import { isServerStateEqual, normalizeServerState, serverStates } from '$lib/stores/servers';
+import { applyHardwareUpdate } from '$lib/stores/hardware';
 
 export const wsConnected = writable(false);
 
@@ -103,6 +104,10 @@ function connect(): void {
 			return;
 		}
 
+		if (msg.type === 'hardware_update') {
+			applyHardwareUpdate(msg.data);
+			return;
+		}
 		applyWsMessage(msg as WsMessage);
 	});
 

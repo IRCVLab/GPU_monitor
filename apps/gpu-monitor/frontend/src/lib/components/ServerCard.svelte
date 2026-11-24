@@ -1,5 +1,6 @@
 <script lang="ts">
   import '$lib/styles/monitor-cards.css';
+  import {kilowattsLabel} from '$lib/utils/powerUnits';
   import type { ServerState, Note, ServerStatus } from '$lib/types';
   import { getNotes, deleteNote } from '$lib/api';
   import GpuBar from '$lib/components/GpuBar.svelte';
@@ -599,7 +600,7 @@
                     <div class="monitor-card__hardware-item">
                       <span class="monitor-card__hardware-index">G{gpu.index}</span>
                       <span class="monitor-card__hardware-value">{gpu.temperature}°C</span>
-                      <span class="monitor-card__hardware-value">{Math.round(gpu.power_draw)}W</span>
+                      <span class="monitor-card__hardware-value">{kilowattsLabel(gpu.power_draw)}</span>
                     </div>
                   {/each}
                 </div>

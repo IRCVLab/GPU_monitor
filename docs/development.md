@@ -95,6 +95,29 @@ Runtime scripts are app-local:
 
 Use them only when explicitly inspecting or changing a local runtime stack.
 
+## System Monitor and Power Flow
+
+System Monitor at `/system` lists internal servers and shows power, temperatures,
+fans, and physical interface traffic. Its **Power Flow** tab lives at
+`/system/power-flow`. The old `/power-flow` address redirects there.
+GPU, System Monitor, and Power Flow share the dashboard header and theme tokens.
+
+Live hardware collection is enabled with `HARDWARE_COLLECT_ENABLED=true`.
+`HARDWARE_COLLECT_INTERVAL` sets the collection target in seconds (30–3600).
+The collector connects over SSH and runs read-only IPMI sensor and DCMI power
+queries. The deployment environment supplies the server credentials.
+
+The System chart uses DCMI power. Dashed segments show the sum of the servers
+measured in that round, with the current coverage shown beside the live value.
+Complete-cohort statistics use full rounds. Power Flow uses PSU AC input and
+shows missing or stale readings as unknown. Power Flow changes the saved diagram
+and does not operate electrical equipment. Saving requires the administrator
+password and records a topology revision.
+
+Keep site diagrams in the deployment database and map server IDs and PSU slots
+before moving a diagram between environments. Test a release against a SQLite
+backup copy with collectors and Slack disabled before publishing to `main`.
+
 ## Storage Monitor development
 
 Run Storage checks through the root target so generated artifacts stay in a disposable clone:

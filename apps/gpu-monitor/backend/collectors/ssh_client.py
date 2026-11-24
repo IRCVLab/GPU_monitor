@@ -1,6 +1,8 @@
 """SSH connection wrapper using Paramiko."""
 import io
 import logging
+import threading
+import time
 
 import paramiko
 from paramiko import RSAKey, Ed25519Key, ECDSAKey
@@ -70,7 +72,13 @@ class SSHClient:
         if not self._client:
             raise RuntimeError("SSH client is not connected.")
 
-        _, stdout, stderr = self._client.exec_command(command, timeout=timeout)
+        try:
+            _, stdout, stderr = self._client.exec_command(command, timeout=timeout)
+        except paramiko.SSHException:
+            # An active transport can still refuse every new command channel.
+            # Invalidate it so collection retries open a fresh SSH connection.
+            self.close()
+            raise
         exit_code = stdout.channel.recv_exit_status()
         out = stdout.read().decode("utf-8", errors="replace").strip()
 
@@ -81,6 +89,64 @@ class SSHClient:
             )
 
         return out
+
+    def run_bounded(self, command: str, timeout: float = 15) -> str:
+        """Hardware-only deadline, including command acknowledgement and exit.
+
+        Channel timeouts do not bound Paramiko recv_exit_status(). Drain output
+        while polling readiness, and close this dedicated connection at deadline
+        to interrupt transport/channel waits as well.
+        """
+        client = self._client
+        if client is None:
+            raise RuntimeError("SSH client is not connected.")
+        expired = threading.Event()
+        deadline = time.monotonic() + timeout
+        channel = None
+
+        def abort():
+            expired.set()
+            client.close()
+
+        watchdog = threading.Timer(timeout, abort)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            transport = client.get_transport()
+            if transport is None:
+                raise RuntimeError("SSH transport unavailable.")
+            channel = transport.open_session(timeout=timeout)
+            channel.exec_command(command)
+            output = bytearray()
+            stderr_size = 0
+            while True:
+                if expired.is_set() or time.monotonic() >= deadline:
+                    raise TimeoutError("Hardware command deadline exceeded.")
+                if channel.recv_ready():
+                    output.extend(channel.recv(65536))
+                if channel.recv_stderr_ready():
+                    stderr_size += len(channel.recv_stderr(65536))
+                if len(output) + stderr_size > 1_000_000:
+                    raise RuntimeError("Hardware command output limit exceeded.")
+                if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                    code = channel.recv_exit_status()
+                    if expired.is_set():
+                        raise TimeoutError("Hardware command deadline exceeded.")
+                    if code != 0:
+                        raise RuntimeError("Hardware command failed.")
+                    return output.decode("utf-8", errors="replace").strip()
+                time.sleep(min(0.02, max(0, deadline-time.monotonic())))
+        except Exception:
+            if expired.is_set():
+                raise TimeoutError("Hardware command deadline exceeded.") from None
+            raise
+        finally:
+            # Keep the watchdog armed until channel cleanup has also finished.
+            try:
+                if channel is not None:
+                    channel.close()
+            finally:
+                watchdog.cancel()
 
     def close(self) -> None:
         if self._client:

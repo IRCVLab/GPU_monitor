@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     history_days: int = 7        # days to keep history
 
     # Development-safe switches. They default to false so production behavior is unchanged.
+    hardware_collect_enabled: bool = False
+    hardware_collect_interval: int = Field(default=60, ge=30, le=3600)
     monitoring_disable_collectors: bool = False
     monitoring_disable_slack: bool = False
     monitoring_expected_server_count: int = 0

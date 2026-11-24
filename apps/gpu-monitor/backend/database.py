@@ -63,6 +63,11 @@ async def init_db():
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA synchronous=NORMAL"))
         await conn.run_sync(Base.metadata.create_all)
+        # Additive indexes also need to be installed when a draft table already
+        # exists; create_all skips indexes for previously-created tables.
+        for table_name in ('power_raw_samples', 'power_psu_readings', 'power_rollups', 'cpu_temperature_observations', 'gpu_metrics', 'network_metrics'):
+            for index in Base.metadata.tables[table_name].indexes:
+                await conn.run_sync(lambda bind, item=index: item.create(bind, checkfirst=True))
         await ensure_notes_expiry_schema(conn)
 
 

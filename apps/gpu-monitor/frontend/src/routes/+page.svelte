@@ -58,6 +58,7 @@
 	import ServerForm from '$lib/components/ServerForm.svelte';
 	import ServerDeleteModal from '$lib/components/ServerDeleteModal.svelte';
 	import RefreshRing from '$lib/components/RefreshRing.svelte';
+	import DashboardHeader from '$lib/components/DashboardHeader.svelte';
 
 	type Tab = 'internal' | 'all' | 'external';
 	const TAB_COOKIE = 'activeTab';
@@ -1224,9 +1225,8 @@
 				</div>
 			</div>
 		</div>
-		<header bind:this={headerSurfaceElement} class="ops-header border-b border-surface-border" inert={headerCompact} aria-hidden={headerCompact}>
-			<div class={`ops-header-inner ${pageShellClass} px-4 sm:px-6`}>
-				<div class="ops-identity">
+		<DashboardHeader bind:surface={headerSurfaceElement} compact={headerCompact} shellClass={pageShellClass}>
+			{#snippet identity()}
 					<h1>GPU <span class="ops-identity__long">Monitor</span></h1>
 					<p
 						class="ops-status"
@@ -1239,17 +1239,16 @@
 							<span class="ops-status-label">{refreshWarningText()}</span>
 						{/if}
 					</p>
-				</div>
-
-				<nav class="ops-network ops-network-desktop" aria-label="네트워크 필터">
+			{/snippet}
+			{#snippet networkControls()}
 					{#each $tabOptions as tab}
 						<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} aria-keyshortcuts={tab.shortcut} data-shortcut-tooltip={tab.tooltip} onclick={() => selectNetwork(tab.value)}>
 							<span>{tab.label}</span><span>{tab.count}</span>
 						</button>
 					{/each}
-				</nav>
-
-				<div class="ops-actions">
+			{/snippet}
+			{#snippet actions()}
+					<a class="ops-utility-action ops-suite-link" href="/system">System</a>
 					<a class="ops-utility-action ops-suite-link" href="http://166.104.167.11:505/">Storage</a>
 					<div class="relative ops-direct-control" bind:this={viewMenuEl}>
 						<button class:active={viewMenuOpen} class="ops-utility-action" onclick={toggleViewMenu} aria-haspopup="true" aria-expanded={viewMenuOpen} aria-keyshortcuts="V">{dashboardViewLabel($dashboardView)} <span aria-hidden="true">⌄</span></button>
@@ -1306,15 +1305,8 @@
 							<svg class:active={$themeMode === 'light'} class="ops-mode-icon ops-mode-icon--moon" aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M20.2 14.3A7.9 7.9 0 0 1 9.7 3.8a.8.8 0 0 0-.8-1.1 9.6 9.6 0 1 0 12.4 12.4.8.8 0 0 0-1.1-.8Z"></path></svg>
 						</span>
 					</button>
-				</div>
-
-				<nav class="ops-network ops-network-mobile" aria-label="네트워크 필터">
-					{#each $tabOptions as tab}
-						<button class:active={$activeTab === tab.value} aria-pressed={$activeTab === tab.value} aria-keyshortcuts={tab.shortcut} data-shortcut-tooltip={tab.tooltip} onclick={() => selectNetwork(tab.value)}><span>{tab.label}</span><span>{tab.count}</span></button>
-					{/each}
-				</nav>
-			</div>
-		</header>
+			{/snippet}
+		</DashboardHeader>
 	</div>
 
 	<main class={pageMainClass}>
