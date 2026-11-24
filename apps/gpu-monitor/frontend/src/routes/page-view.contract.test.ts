@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const pageSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+const headerSource = readFileSync(new URL('../lib/components/DashboardHeader.svelte', import.meta.url), 'utf8');
 
 test('header exposes Storage directly and view menu exposes the live width control', () => {
 	assert.match(
@@ -396,13 +397,14 @@ test('GPU Monitor identity, refresh ring, and health label share one header row'
 	assertDeclaration(identityRule, 'align-items', 'center');
 	const statusRule = cssRule(dashboardCss, '.ops-status');
 	assertDeclaration(statusRule, 'margin', '0');
-	assert.match(pageSource, /<div class="ops-identity">[\s\S]*<h1>GPU <span class="ops-identity__long">Monitor<\/span><\/h1>[\s\S]*<p[\s\S]*class="ops-status"/);
+	assert.match(headerSource, /<div class="ops-identity">\{@render identity\(\)\}<\/div>/);
+	assert.match(pageSource, /\{#snippet identity\(\)\}\s*<h1>GPU <span class="ops-identity__long">Monitor<\/span><\/h1>[\s\S]*<p[\s\S]*class="ops-status"/);
 });
 
 test('narrow mobile header keeps the status ring and visually hides the wordmark from actions', () => {
 	assert.match(pageSource, /<h1>GPU <span class="ops-identity__long">Monitor<\/span><\/h1>/);
-	assert.match(dashboardCss, /@media \(max-width: 480px\) \{[\s\S]*\.ops-identity h1\s*\{[\s\S]*position:\s*absolute;[\s\S]*width:\s*1px;[\s\S]*clip:\s*rect\(0, 0, 0, 0\);/);
-	assert.match(dashboardCss, /@media \(max-width: 480px\) \{[\s\S]*\.ops-identity\s*\{[\s\S]*gap:\s*0;/);
+	assert.match(dashboardCss, /@media \(max-width: 480px\) \{[\s\S]*\.dashboard-page \.ops-identity h1\s*\{[^}]*position:\s*absolute;[^}]*width:\s*1px;[^}]*clip:\s*rect\(0, 0, 0, 0\);/);
+	assert.match(dashboardCss, /@media \(max-width: 480px\) \{[\s\S]*\.dashboard-page \.ops-identity\s*\{[^}]*gap:\s*0;/);
 });
 
 test('header and collapsed indicator share a continuous ten-second satellite cadence', () => {
@@ -759,7 +761,8 @@ test('Task 6 keeps keyboard shortcuts while removing static view clutter', () =>
 	assert.match(pageSource, /aria-keyshortcuts=\{tab\.shortcut\}/);
 	assert.match(pageSource, /data-shortcut-tooltip=\{tab\.tooltip\}/);
 	assert.match(pageSource, /class="ops-indicator-network"[\s\S]*aria-keyshortcuts=\{tab\.shortcut\}/);
-	assert.match(pageSource, /class="ops-network ops-network-desktop"[\s\S]*aria-keyshortcuts=\{tab\.shortcut\}/);
+	assert.match(headerSource, /<nav class="ops-network ops-network-desktop"[^>]*>\{@render networkControls\(\)\}<\/nav>/);
+	assert.match(pageSource, /\{#snippet networkControls\(\)\}[\s\S]*?aria-keyshortcuts=\{tab\.shortcut\}[\s\S]*?\{\/snippet\}/);
 	assert.match(pageSource, /class="ops-mode-action"[\s\S]*aria-keyshortcuts="C"[\s\S]*data-shortcut-tooltip="C 명암"/);
 	assert.match(pageSource, /class="ops-utility-action"[\s\S]*aria-keyshortcuts="V"/);
 	assert.doesNotMatch(pageSource, /class="ops-utility-action"[\s\S]*data-shortcut-tooltip="V 보기"/);

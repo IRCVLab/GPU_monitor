@@ -74,6 +74,7 @@ Frontend checks:
 cd apps/gpu-monitor/frontend
 npm ci
 npm run check
+npm run test:unit
 npm run build
 ```
 
@@ -93,7 +94,43 @@ Runtime scripts are app-local:
 - `apps/gpu-monitor/scripts/run_monitoring.sh`
 - `apps/gpu-monitor/scripts/run_development.sh`
 
-Use them only when explicitly inspecting or changing a local runtime stack.
+Run the development launcher from the repository after installing the app dependencies
+and creating `apps/gpu-monitor/.env` from `apps/gpu-monitor/.env.example`.
+
+```bash
+GPU_MONITOR_DEV_PORT=5175 GPU_MONITOR_DEV_BACKEND_PORT=8101 \
+  apps/gpu-monitor/scripts/run_development.sh start
+```
+
+The launcher keeps both listeners on loopback. It stores the database at
+`apps/gpu-monitor/data/dev_gpu_monitor.db` in the current worktree and disables
+Slack. To enable collection, set `GPU_MONITOR_DEV_COLLECT=true` when starting the
+stack. Set `HARDWARE_COLLECT_ENABLED=true` in the worktree's `.env` to collect
+hardware readings. Choose unused ports for each worktree running on the same host.
+Use `status`, `logs`, or `stop` with the same launcher to manage that worktree.
+
+## System Monitor and Power Flow
+
+System Monitor at `/system` lists internal servers and shows power, temperatures,
+fans, and physical interface traffic. Its **Power Flow** tab lives at
+`/system/power-flow`. The old `/power-flow` address redirects there.
+GPU, System Monitor, and Power Flow share the dashboard header and theme tokens.
+
+Live hardware collection is enabled with `HARDWARE_COLLECT_ENABLED=true`.
+`HARDWARE_COLLECT_INTERVAL` sets the collection target in seconds (30–3600).
+The collector connects over SSH and runs read-only IPMI sensor and DCMI power
+queries. The deployment environment supplies the server credentials.
+
+The System chart uses DCMI power. Dashed segments show the sum of the servers
+measured in that round, with the current coverage shown beside the live value.
+Complete-cohort statistics use full rounds. Power Flow uses PSU AC input and
+shows missing or stale readings as unknown. Power Flow changes the saved diagram
+and does not operate electrical equipment. Saving requires the administrator
+password and records a topology revision.
+
+Keep site diagrams in the deployment database and map server IDs and PSU slots
+before moving a diagram between environments. Test a release against a SQLite
+backup copy with collectors and Slack disabled before publishing to `main`.
 
 ## Storage Monitor development
 
@@ -171,6 +208,12 @@ sudo systemctl status gpu-monitor-frontend@live.service
 sudo systemctl status gpu-monitor-bridge@live.service
 sudo -u gpu-deploy-live /usr/local/libexec/activate-release.sh status live
 ```
+
+Allow up to two minutes for the Live backend listener to appear while the
+database integrity check and backup run. The deployment installer manages
+`/usr/local/libexec/health-check.sh` separately from the application archive.
+Install the updated script before activating a release that depends on this
+startup allowance.
 
 The old GitHub-hosted SSH deployment workflow has been removed. Do not create or maintain a GitHub Environment or GitHub deployment secrets for GPU Live. The existing SSH forced-command path may remain only for manual emergency inspection and rollback:
 

@@ -11,6 +11,8 @@ case "$#:${1:-}" in
     command_path=$PRODUCTION_PATH
     retries=5
     sleep_seconds=2
+    # Live SQLite integrity verification and backup finish before Uvicorn binds.
+    live_backend_listener_retries=61
     ;;
   2:--test-mode)
     case "$2" in dev|live) ;; *) fail "invalid test-mode environment" ;; esac
@@ -20,6 +22,7 @@ case "$#:${1:-}" in
     systemctl_command=systemctl
     ss_command=ss
     retries=${GPU_MONITOR_HEALTH_RETRIES:-5}
+    live_backend_listener_retries=$retries
     sleep_seconds=${GPU_MONITOR_HEALTH_SLEEP_SECONDS:-2}
     ;;
   *)
@@ -235,15 +238,15 @@ managed_unit_snapshot() {
 }
 
 check_listener_binding() {
-  local expected_host=$1 port=$2 label=$3 output attempt=1
+  local expected_host=$1 port=$2 label=$3 limit=${4:-$retries} output attempt=1
   local state recv_q send_q local_address peer_address remainder
-  while (( attempt <= retries )); do
+  while (( attempt <= limit )); do
     output=$("$ss_command" -H -ltn "sport = :$port") ||
       fail "$label listener inspection failed"
     while read -r state recv_q send_q local_address peer_address remainder; do
       [[ "$local_address" == "$expected_host:$port" ]] && return 0
     done <<< "$output"
-    if (( attempt < retries )); then
+    if (( attempt < limit )); then
       sleep "$sleep_seconds"
     fi
     attempt=$((attempt + 1))
@@ -251,21 +254,17 @@ check_listener_binding() {
   fail "$label listener is not bound to $expected_host:$port"
 }
 
-env_root=/
-if [[ "$test_mode" == true && -n "$test_prefix" ]]; then
+runtime_env_file=
+if [[ "$test_mode" != true ]]; then
+  runtime_env_file="/etc/gpu-monitor/$env_name.env"
+elif [[ -n "$test_prefix" ]]; then
   [[ "$test_prefix" == /* && -d "$test_prefix" ]] ||
     fail "test PREFIX must be an existing absolute directory"
-  env_root=$test_prefix
+  runtime_env_file="$test_prefix/etc/gpu-monitor/$env_name.env"
 fi
-runtime_env_file="$env_root/etc/gpu-monitor/$env_name.env"
-expected_server_count=0
-backend_port=
-if runtime_env_output=$(load_runtime_env "$runtime_env_file"); then
+if [[ -n "$runtime_env_file" && -e "$runtime_env_file" ]]; then
+  runtime_env_output=$(load_runtime_env "$runtime_env_file") || exit 1
   eval "$runtime_env_output"
-else
-  exit 1
-fi
-if [[ -e "$runtime_env_file" ]]; then
   [[ "$env_name" != live || ${MONITORING_EXPECTED_SERVER_COUNT+x} ]] ||
     fail "$env_name runtime env is missing MONITORING_EXPECTED_SERVER_COUNT"
   [[ ${GPU_MONITOR_BACKEND_PORT+x} ]] ||
@@ -290,7 +289,7 @@ if [[ "$env_name" == dev ]]; then
   require_server_floor "$expected_server_count" "$backend_port" "dev backend"
 else
   backend_port=${backend_port:-8001}
-  check_listener_binding 127.0.0.1 "$backend_port" "live backend"
+  check_listener_binding 127.0.0.1 "$backend_port" "live backend" "$live_backend_listener_retries"
   check_listener_binding 0.0.0.0 5173 "live frontend"
   check_listener_binding 0.0.0.0 8000 "live bridge"
   check_url "http://127.0.0.1:${backend_port}/health" || fail "live backend health failed"

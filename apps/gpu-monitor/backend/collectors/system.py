@@ -1,5 +1,6 @@
 """Parse CPU/RAM metrics from remote server output."""
 from dataclasses import dataclass
+import math
 
 
 @dataclass
@@ -21,6 +22,12 @@ class SystemInfo:
     load_avg_5: float | None = None
     load_avg_15: float | None = None
     cpu_count: int | None = None
+    network_rx_bytes_total: int | None = None
+    network_tx_bytes_total: int | None = None
+    network_sample_time: float | None = None
+    network_interface_counters: dict[str, tuple[int,int]] | None = None
+    network_rx_bytes_per_second: float | None = None
+    network_tx_bytes_per_second: float | None = None
 
 
 @dataclass
@@ -162,6 +169,44 @@ SYSTEM_CMD_PSUTIL = (
     'print(f\"{psutil.cpu_percent(interval=0.1):.1f},{m.used},{m.total}\")"'
 )
 
+NETWORK_READER_SOURCE = """
+import glob
+import os
+import time
+
+def read_network_counters():
+    try:
+        physical = {os.path.basename(path) for path in glob.glob('/sys/class/net/*')
+                    if os.path.islink(os.path.join(path, 'device'))}
+        if not physical:
+            return '', '', '', ''
+        counters = {}
+        with open('/proc/net/dev') as handle:
+            for line in handle:
+                if ':' not in line:
+                    continue
+                name, fields = line.rsplit(':', 1)
+                name = name.strip()
+                if name not in physical:
+                    continue
+                values = fields.split()
+                if len(values) < 16:
+                    return '', '', '', ''
+                rx, tx = int(values[0]), int(values[8])
+                if rx < 0 or tx < 0:
+                    return '', '', '', ''
+                counters[name] = (rx, tx)
+        if set(counters) != physical:
+            return '', '', '', ''
+        identities = ';'.join(name + ':' + str(counters[name][0]) + ':' + str(counters[name][1]) for name in sorted(counters))
+        return sum(value[0] for value in counters.values()), sum(value[1] for value in counters.values()), time.monotonic(), identities
+    except Exception:
+        return '', '', '', ''
+"""
+SYSTEM_CMD_PROC = SYSTEM_CMD_PROC.replace('def count_nvidia_display_pci_devices():', NETWORK_READER_SOURCE + '\n\ndef count_nvidia_display_pci_devices():')
+SYSTEM_CMD_PROC = SYSTEM_CMD_PROC.replace('pci_gpu_count = count_nvidia_display_pci_devices()', 'network_rx, network_tx, network_time, network_interfaces = read_network_counters()\npci_gpu_count = count_nvidia_display_pci_devices()')
+SYSTEM_CMD_PROC = SYSTEM_CMD_PROC.replace("{cpu_count}')", "{cpu_count},{network_rx},{network_tx},{network_time},{network_interfaces}')")
+
 # 하위 호환 — 기존 코드가 SYSTEM_CMD 를 직접 임포트하는 경우 대비
 SYSTEM_CMD = SYSTEM_CMD_PROC
 
@@ -254,6 +299,7 @@ def parse_system(raw: str) -> SystemInfo:
         load_avg_5=load_avg_5,
         load_avg_15=load_avg_15,
         cpu_count=cpu_count,
+        **_parse_network_fields(parts),
     )
 
 
@@ -286,3 +332,51 @@ def calculate_disk_io_rate(previous: SystemInfo | None, current: SystemInfo | No
         read_bytes_per_second=read_delta / elapsed,
         write_bytes_per_second=write_delta / elapsed,
     )
+
+
+@dataclass
+class NetworkIORate:
+    rx_bytes_per_second: float
+    tx_bytes_per_second: float
+
+
+def _parse_network_fields(parts):
+    if len(parts) < 20:
+        return {}
+    try:
+        rx, tx, at = int(parts[16]), int(parts[17]), float(parts[18])
+        if rx < 0 or tx < 0 or not math.isfinite(at) or at <= 0:
+            return {}
+        counters = {}
+        for entry in parts[19].split(';'):
+            name, received, sent = entry.rsplit(':', 2)
+            values = (int(received), int(sent))
+            if not name or name in counters or min(values) < 0:
+                return {}
+            counters[name] = values
+        if not counters or sum(value[0] for value in counters.values()) != rx or sum(value[1] for value in counters.values()) != tx:
+            return {}
+        return dict(network_rx_bytes_total=rx, network_tx_bytes_total=tx, network_sample_time=at, network_interface_counters=counters)
+    except (ValueError, TypeError):
+        return {}
+
+
+def calculate_network_io_rate(previous: SystemInfo | None, current: SystemInfo | None) -> NetworkIORate | None:
+    if previous is None or current is None:
+        return None
+    before, after = previous.network_interface_counters, current.network_interface_counters
+    if not before or not after or set(before) != set(after):
+        return None
+    if previous.network_sample_time is None or current.network_sample_time is None:
+        return None
+    elapsed = current.network_sample_time - previous.network_sample_time
+    if not math.isfinite(elapsed) or elapsed <= 0:
+        return None
+    rx = tx = 0
+    for name in before:
+        delta_rx = after[name][0] - before[name][0]
+        delta_tx = after[name][1] - before[name][1]
+        if delta_rx < 0 or delta_tx < 0:
+            return None
+        rx += delta_rx; tx += delta_tx
+    return NetworkIORate(rx / elapsed, tx / elapsed)

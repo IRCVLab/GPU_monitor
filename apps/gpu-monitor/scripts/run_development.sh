@@ -1,41 +1,80 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Isolated development stack: its source tree, SQLite DB, tmux sessions, and ports
-# differ from the live monitoring_v2 stack. It never launches the Slack bridge.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BACKEND_SESSION="monitoring_v2_dev_backend"
-FRONTEND_SESSION="monitoring_v2_dev_frontend"
-BACKEND_PORT="8101"
-FRONTEND_PORT="5175"
-BACKEND_CMD="cd \"$ROOT_DIR\" && ./.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port $BACKEND_PORT"
-FRONTEND_CMD="cd \"$ROOT_DIR/frontend\" && if [[ -s \"$HOME/.nvm/nvm.sh\" ]]; then source \"$HOME/.nvm/nvm.sh\"; fi && MONITORING_API_TARGET=http://127.0.0.1:$BACKEND_PORT npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT --strictPort"
+SCRIPT="$ROOT_DIR/scripts/run_development.sh"
+WORKTREE_KEY=$(printf '%s' "$ROOT_DIR" | sha256sum)
+WORKTREE_KEY=${WORKTREE_KEY:0:12}
+BACKEND_SESSION="gpu_dev_${WORKTREE_KEY}_api"
+FRONTEND_SESSION="gpu_dev_${WORKTREE_KEY}_ui"
+BACKEND_PORT=${GPU_MONITOR_DEV_BACKEND_PORT:-8101}
+FRONTEND_PORT=${GPU_MONITOR_DEV_PORT:-5175}
+COLLECT=${GPU_MONITOR_DEV_COLLECT:-false}
 
-session_exists() { tmux has-session -t "$1" 2>/dev/null; }
-start_session() {
-  if session_exists "$1"; then echo "[skip] $1 already running"; else tmux new-session -d -s "$1" "$2" && echo "[ok] started $1"; fi
-}
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+session_exists() { tmux has-session -t "=$1" 2>/dev/null; }
 stop_session() {
-  if session_exists "$1"; then tmux kill-session -t "$1" && echo "[ok] stopped $1"; else echo "[skip] $1 not running"; fi
+  if session_exists "$1"; then tmux kill-session -t "=$1"; fi
 }
-require_dependencies() {
-  [[ -x "$ROOT_DIR/.venv/bin/uvicorn" ]] || { echo "Missing $ROOT_DIR/.venv. Run: python3 -m venv .venv && ./.venv/bin/pip install -r backend/requirements.txt" >&2; exit 1; }
-  [[ -d "$ROOT_DIR/frontend/node_modules" ]] || { echo "Missing frontend/node_modules. Run: (cd frontend && npm ci)" >&2; exit 1; }
+
+validate_port() {
+  [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 )) || fail "Invalid development port: $1"
 }
+
+start() {
+  validate_port "$BACKEND_PORT"
+  validate_port "$FRONTEND_PORT"
+  [[ "$BACKEND_PORT" != "$FRONTEND_PORT" ]] || fail "Use different frontend and backend ports."
+  [[ "$COLLECT" == true || "$COLLECT" == false ]] || fail "GPU_MONITOR_DEV_COLLECT must be true or false."
+  [[ -f "$ROOT_DIR/.env" ]] || fail "Missing $ROOT_DIR/.env. Create it from .env.example."
+  [[ -x "$ROOT_DIR/.venv/bin/uvicorn" ]] || fail "Install the backend dependencies into $ROOT_DIR/.venv."
+  [[ -x "$ROOT_DIR/frontend/node_modules/.bin/vite" ]] || fail "Run npm ci in $ROOT_DIR/frontend."
+  command -v npm >/dev/null || fail "Install Node.js and put npm on PATH."
+
+  if session_exists "$BACKEND_SESSION" || session_exists "$FRONTEND_SESSION"; then
+    fail "A development session already exists for this worktree. Use status or restart."
+  fi
+  for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+    listener=$(ss -H -ltn "sport = :$port") || fail "Could not check port $port."
+    [[ -z "$listener" ]] || fail "Development port $port is already in use."
+  done
+
+  tmux new-session -d -s "$BACKEND_SESSION" bash "$SCRIPT" _backend "$BACKEND_PORT" "$COLLECT"
+  if ! tmux new-session -d -s "$FRONTEND_SESSION" -e "PATH=$PATH" bash "$SCRIPT" _frontend "$FRONTEND_PORT" "$BACKEND_PORT"; then
+    stop_session "$BACKEND_SESSION"
+    fail "Could not create the development frontend session."
+  fi
+  printf 'Development frontend: http://127.0.0.1:%s/\nAPI: http://127.0.0.1:%s/health\n' "$FRONTEND_PORT" "$BACKEND_PORT"
+}
+
 case "${1:-}" in
-  start)
-    require_dependencies
-    start_session "$BACKEND_SESSION" "$BACKEND_CMD"
-    start_session "$FRONTEND_SESSION" "$FRONTEND_CMD"
-    printf '\nDevelopment monitor: http://127.0.0.1:%s/debug\nAPI: http://127.0.0.1:%s/health\nSafety: collectors run against the development DB; Slack Socket Mode and the Slack bridge are disabled.\n' "$FRONTEND_PORT" "$BACKEND_PORT"
+  start) start ;;
+  _backend)
+    cd "$ROOT_DIR"
+    export DATABASE_URL="sqlite+aiosqlite:///$ROOT_DIR/data/dev_gpu_monitor.db"
+    export MONITORING_DISABLE_SLACK=true
+    export MONITORING_EXPECTED_SERVER_COUNT=0 MONITORING_DATABASE_BACKUP_DIR=
+    export MONITORING_DISABLE_COLLECTORS=true
+    if [[ "$3" == true ]]; then export MONITORING_DISABLE_COLLECTORS=false; fi
+    exec ./.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port "$2"
+    ;;
+  _frontend)
+    cd "$ROOT_DIR/frontend"
+    export MONITORING_API_TARGET="http://127.0.0.1:$3"
+    export MONITORING_WS_TARGET="ws://127.0.0.1:$3"
+    exec npm run dev -- --host 127.0.0.1 --port "$2" --strictPort
     ;;
   stop) stop_session "$FRONTEND_SESSION"; stop_session "$BACKEND_SESSION" ;;
-  restart) "$0" stop; "$0" start ;;
+  restart) "$SCRIPT" stop; "$SCRIPT" start ;;
   status)
-    for s in "$BACKEND_SESSION" "$FRONTEND_SESSION"; do if session_exists "$s"; then echo "[up]   $s"; else echo "[down] $s"; fi; done
+    for session in "$BACKEND_SESSION" "$FRONTEND_SESSION"; do
+      if session_exists "$session"; then printf '[up] %s\n' "$session"; else printf '[down] %s\n' "$session"; fi
+    done
     ;;
   logs)
-    for s in "$BACKEND_SESSION" "$FRONTEND_SESSION"; do echo "===== $s ====="; session_exists "$s" && tmux capture-pane -pt "$s:0.0" -S -60 || true; done
+    for session in "$BACKEND_SESSION" "$FRONTEND_SESSION"; do
+      if session_exists "$session"; then tmux capture-pane -pt "=$session" -S -60; fi
+    done
     ;;
-  *) echo "Usage: $0 {start|stop|restart|status|logs}" >&2; exit 1 ;;
+  *) fail "Usage: $0 {start|stop|restart|status|logs}" ;;
 esac

@@ -85,6 +85,29 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up — initialising database")
     await init_db()
     slack_socket_service = None
+    try:
+        from .hardware import HardwareMonitor, read_hardware_snapshots
+        from .routers.hardware import _SNAPSHOT_PATH
+        from .models import Server
+        from .ws_manager import ws_manager
+    except ImportError:  # pragma: no cover - direct execution fallback
+        from hardware import HardwareMonitor, read_hardware_snapshots
+        from routers.hardware import _SNAPSHOT_PATH
+        from models import Server
+        from ws_manager import ws_manager
+    from sqlalchemy import select
+
+    hardware_monitor = HardwareMonitor(AsyncSessionLocal, interval=settings.hardware_collect_interval, gpu_archive_interval=settings.archive_interval)
+    app.state.hardware_monitor = hardware_monitor
+    hardware_task = None
+    if settings.hardware_collect_enabled and not settings.monitoring_disable_collectors:
+        async with AsyncSessionLocal() as db:
+            hardware_servers = (await db.execute(select(Server))).scalars().all()
+        snapshots = read_hardware_snapshots(_SNAPSHOT_PATH)
+        await hardware_monitor.initialize_power_logging(snapshots)
+        await hardware_monitor.seed_snapshots(hardware_servers, snapshots)
+        await hardware_monitor.cleanup()
+        hardware_task = asyncio.create_task(hardware_monitor.run(ws_manager.broadcast))
 
     if settings.monitoring_disable_collectors:
         logger.info("Collector manager disabled by MONITORING_DISABLE_COLLECTORS")
@@ -92,11 +115,9 @@ async def lifespan(app: FastAPI):
         try:
             from sqlalchemy import select
             try:
-                from .database import AsyncSessionLocal
                 from .models import Server
                 from .collectors import manager
             except ImportError:  # pragma: no cover - direct execution fallback
-                from database import AsyncSessionLocal
                 from models import Server
                 import collectors.manager as manager
 
@@ -127,6 +148,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    if hardware_task is not None:
+        hardware_task.cancel()
+        try:
+            await hardware_task
+        except asyncio.CancelledError:
+            pass
+    hardware_monitor.close()
     log_cleanup_task.cancel()
     note_cleanup_task.cancel()
 
@@ -156,15 +184,17 @@ app.add_middleware(
 )
 
 try:
-    from .routers import logs, metrics, notes, servers, slack  # noqa: E402
+    from .routers import hardware, logs, metrics, notes, power_flow, servers, slack  # noqa: E402
 except ImportError:  # pragma: no cover - direct execution fallback
-    from routers import logs, metrics, notes, servers, slack  # noqa: E402
+    from routers import hardware, logs, metrics, notes, power_flow, servers, slack  # noqa: E402
 
 app.include_router(servers.router)
 app.include_router(notes.router)
 app.include_router(metrics.router)
 app.include_router(slack.router)
 app.include_router(logs.router)
+app.include_router(hardware.router)
+app.include_router(power_flow.router)
 
 
 @app.get("/health")

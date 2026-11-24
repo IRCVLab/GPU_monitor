@@ -19,6 +19,10 @@ function toNullableFiniteNumber(value: unknown): number | null {
 	return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function toNullableNonNegativeNumber(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function toStringArray(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
@@ -54,6 +58,7 @@ function sameGpuInfo(a: ServerState['gpus'][number], b: ServerState['gpus'][numb
 		a.memory_total === b.memory_total &&
 		a.temperature === b.temperature &&
 		a.power_draw === b.power_draw &&
+		a.fan_percent === b.fan_percent &&
 		sameStringArray(a.users, b.users)
 	);
 }
@@ -63,6 +68,8 @@ function sameSystemInfo(a: ServerState['system'], b: ServerState['system']): boo
 	if (!a || !b) return a === b;
 	return (
 		a.cpu_percent === b.cpu_percent &&
+		a.network_rx_bytes_per_second === b.network_rx_bytes_per_second &&
+		a.network_tx_bytes_per_second === b.network_tx_bytes_per_second &&
 		a.ram_used === b.ram_used &&
 		a.ram_total === b.ram_total &&
 		a.cpu_pressure_some === b.cpu_pressure_some &&
@@ -177,7 +184,7 @@ export function normalizeServerState(value: unknown, fallbackId?: number): Serve
 
 	const rawGpus = Array.isArray(raw.gpus) ? raw.gpus : [];
 	const gpus = rawGpus
-		.map((gpu) => {
+		.map((gpu): ServerState['gpus'][number] | null => {
 			if (!gpu || typeof gpu !== 'object') return null;
 			const item = gpu as Record<string, unknown>;
 			return {
@@ -188,6 +195,7 @@ export function normalizeServerState(value: unknown, fallbackId?: number): Serve
 				memory_total: toFiniteNumber(item.memory_total),
 				temperature: toFiniteNumber(item.temperature),
 				power_draw: toFiniteNumber(item.power_draw),
+				fan_percent: typeof item.fan_percent === 'number' && Number.isFinite(item.fan_percent) && item.fan_percent >= 0 && item.fan_percent <= 100 ? item.fan_percent : null,
 				users: toStringArray(item.users)
 			};
 		})
@@ -197,6 +205,8 @@ export function normalizeServerState(value: unknown, fallbackId?: number): Serve
 	if (raw.system && typeof raw.system === 'object') {
 		const rawSystem = raw.system as Record<string, unknown>;
 		system = {
+			network_rx_bytes_per_second: toNullableNonNegativeNumber(rawSystem.network_rx_bytes_per_second),
+			network_tx_bytes_per_second: toNullableNonNegativeNumber(rawSystem.network_tx_bytes_per_second),
 			cpu_percent: toFiniteNumber(rawSystem.cpu_percent),
 			ram_used: toFiniteNumber(rawSystem.ram_used),
 			ram_total: toFiniteNumber(rawSystem.ram_total),

@@ -1,11 +1,12 @@
 """Parse GPU metrics from gpustat --json SSH output."""
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 
 NVIDIA_SMI_CMD = (
     "bash -c 'nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,"
-    "memory.total,temperature.gpu,power.draw,gpu_uuid "
+    "memory.total,temperature.gpu,power.draw,gpu_uuid,fan.speed "
     "--format=csv,noheader,nounits 2>/dev/null; "
     'echo "##PROCS##"; '
     "nvidia-smi --query-compute-apps=gpu_uuid,pid "
@@ -25,12 +26,21 @@ class GpuInfo:
     temperature: int       # °C
     power_draw: int        # W (rounded)
     users: list[str] = field(default_factory=list)  # unique usernames
+    fan_percent: float | None = None
 
 
 @dataclass
 class ServerGpuData:
     gpus: list[GpuInfo]
     collected_at: datetime
+
+
+def _fan_percent(raw) -> float | None:
+    try:
+        value = float(raw)
+        return value if math.isfinite(value) and 0 <= value <= 100 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_gpustat(json_str: str) -> ServerGpuData:
@@ -51,6 +61,7 @@ def parse_gpustat(json_str: str) -> ServerGpuData:
             temperature=int(gpu.get("temperature.gpu", 0) or 0),
             power_draw=round(gpu.get("power.draw", 0) or 0),
             users=users,
+            fan_percent=_fan_percent(gpu.get("fan.speed")),
         ))
 
     return ServerGpuData(gpus=gpus, collected_at=datetime.utcnow())
@@ -117,6 +128,7 @@ def parse_nvidia_smi(output: str) -> ServerGpuData:
             temperature=int(temperature) if temperature.lstrip("-").isdigit() else 0,
             power_draw=power_int,
             users=users,
+            fan_percent=_fan_percent(cols[8]) if len(cols) > 8 else None,
         ))
 
     return ServerGpuData(gpus=gpus, collected_at=datetime.utcnow())

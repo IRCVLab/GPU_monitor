@@ -182,6 +182,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             [
                 "cd apps/gpu-monitor/frontend && npm run check",
                 "cd apps/gpu-monitor/frontend && npm run build",
+                "cd apps/gpu-monitor/frontend && npm run test:unit",
                 "cd apps/gpu-monitor/frontend && npm run test:runtime",
                 "cd apps/gpu-monitor && SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password python3.12 -m unittest discover -s backend/tests -v",
             ],
@@ -371,6 +372,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             "git ls-files > /tmp/ci-all-paths.txt",
             "git hash-object -t tree /dev/null",
             "node-version: '22.14.0'",
+            "npm run test:unit",
             "npm run test:runtime",
             "python-version: '3.12.10'",
             "pytest==8.4.1",

@@ -210,6 +210,7 @@ test('reduced motion preserves immediate threshold semantics without timers', ()
 
 
 const pageSource = readFileSync(new URL('../../routes/+page.svelte', import.meta.url), 'utf8');
+const sharedHeaderSource = readFileSync(new URL('../components/DashboardHeader.svelte', import.meta.url), 'utf8');
 const dashboardCss = readFileSync(new URL('../styles/monitor-dashboard.css', import.meta.url), 'utf8');
 const headerVisibilitySource = readFileSync(new URL('./headerVisibility.ts', import.meta.url), 'utf8');
 
@@ -228,7 +229,9 @@ function functionBody(source: string, name: string): string {
 
 test('page derives header direction from a layout-compensated scroll position', () => {
 	assert.match(pageSource, /bind:this=\{headerShellElement\}/);
-	assert.match(pageSource, /bind:this=\{headerSurfaceElement\}/);
+	assert.match(pageSource, /<DashboardHeader\s+bind:surface=\{headerSurfaceElement\}/);
+	assert.match(sharedHeaderSource, /surface=\$bindable<HTMLElement\|null>\(null\)/);
+	assert.match(sharedHeaderSource, /<header\s+bind:this=\{surface\}/);
 
 	const positionBody = functionBody(pageSource, 'currentHeaderScrollPosition');
 	assert.match(positionBody, /compensateHeaderScrollPosition/);
@@ -322,7 +325,8 @@ test('compact CSS does not reopen the full header on hover or focus', () => {
 test('header surface is hidden from interaction while the indicator remains independently focusable', () => {
 	assert.match(pageSource, /<div class=\{`ops-indicator-anchor \$\{pageShellClass\}`\} aria-hidden=\{!headerIndicatorVisible\}/);
 	assert.match(pageSource, /<button\s+[\s\S]*class="ops-indicator-trigger"[\s\S]*>/);
-	assert.match(pageSource, /<header\s+[\s\S]*inert=\{headerCompact\}[\s\S]*aria-hidden=\{headerCompact\}/);
+	assert.match(pageSource, /<DashboardHeader\s+[^>]*compact=\{headerCompact\}/);
+	assert.match(sharedHeaderSource, /<header\s+[^>]*inert=\{compact\}[^>]*aria-hidden=\{compact\}/);
 });
 
 test('compact indicator panel visibility is state-owned without CSS hover or focus display rules', () => {
