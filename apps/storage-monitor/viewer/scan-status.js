@@ -17,6 +17,23 @@ function classifyRescanJob(job, expectedJobId, sawActive) {
   return sawActive ? "refresh" : "idle";
 }
 
+function pendingScanGeneration(status, snapshot) {
+  const displayed = snapshot && snapshot.scan_generation;
+  const displayedTime = scanNumber(snapshot && snapshot.scan_finished_unix);
+  const candidates = [
+    [status.published_generation, status.published_finished_unix],
+    [["complete", "partial"].includes(status.state) ? status.generation : null, status.finished_unix],
+    [status.snapshot_generation, status.snapshot_finished_unix],
+  ];
+  for (const [generation, time] of candidates) {
+    const finished = scanNumber(time);
+    if (!generation) continue;
+    if (generation === displayed) return null;
+    if (finished === null || displayedTime === null || finished >= displayedTime) return generation;
+  }
+  return null;
+}
+
 function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
   const s = status || {}, data = snapshot || {};
   const observed = scanNumber(s.observed_unix);
@@ -24,7 +41,9 @@ function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
   const state = disconnected ? "unknown" : (s.state || "unknown");
   const running = state === "running";
   const started = scanNumber(s.started_unix);
-  const lastFinished = scanNumber(s.last_finished_unix) ?? scanNumber(data.scan_finished_unix);
+  const snapshotFinished = scanNumber(data.scan_finished_unix);
+  const completions = [scanNumber(s.last_finished_unix), scanNumber(s.published_finished_unix), snapshotFinished].filter(time => time !== null);
+  const lastFinished = completions.length ? Math.max(...completions) : null;
   const duration = scanNumber(s.last_duration_sec) ?? scanNumber(data.scan_duration_sec);
   const roots = Array.isArray(data.selected_roots) ? data.selected_roots : [];
   const completeSnapshot = roots.some(root => root.status === "complete") && roots.every(root => ["complete", "skipped"].includes(root.status));
@@ -48,8 +67,10 @@ function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
   const next = scanNumber(s.next_run_unix);
   return {
     state, running, label: disconnected ? "상태 확인 지연" : s.error_code === "SCAN_INTERRUPTED" ? "스캔 중단" : (labels[state] || labels.unknown),
-    lastFinished, duration, elapsed, eta,
-    etaNote: heartbeatStale ? "진행 정보 확인 후 예상 시간 갱신" : predicted !== null && predicted <= now ? "이전 소요 시간 초과 · 계속 진행 중" : "이전 기록 부족으로 예상할 수 없음",
+    lastFinished, duration, elapsed, eta, snapshotFinished,
+    snapshotPending: !!pendingScanGeneration(s, data),
+    etaNote: heartbeatStale ? "진행 정보 확인 후 예상 시간 갱신" : predicted !== null && predicted <= now ? "이전 소요 시간 초과 · 계속 진행 중" : started === null ? "현재 스캔 시작 시각 확인 중" : "같은 범위의 완료 기록이 없어 예상 시간 확인 불가",
+    nextRunLabel: s.schedule_mode === "due-check" ? "다음 확인" : "다음",
     nextRun: !disconnected && s.timer_state === "active" && next > now ? next : null,
     scheduleNote: s.timer_state === "inactive" || s.timer_state === "disabled" ? "자동 스캔 비활성" : "예약 정보 확인 불가",
     root: measurable && typeof s.current_root === "string" ? s.current_root : null,
@@ -94,12 +115,14 @@ function renderScanStatus(status, snapshot, options = {}) {
   const stateLabel = doc.getElementById("scanStateLabel");
   if (stateLabel) stateLabel.hidden = !options.sample && ["idle", "complete"].includes(model.state);
   title("scanStateLabel", options.sample ? "샘플 데이터 · 실제 스캔은 실행되지 않습니다" : model.label);
-  set("scanLastCompleted", "완료 " + scanCompactDate(model.lastFinished));
-  title("scanLastCompleted", "마지막 완료: " + scanDate(model.lastFinished));
-  set("scanLastDuration", model.duration !== null ? "(" + scanDuration(model.duration) + ")" : "");
+  set("scanLastCompleted", model.snapshotFinished === null ? "표시할 스캔 기록 없음" : "화면 데이터 " + scanCompactDate(model.snapshotFinished));
+  title("scanLastCompleted", "화면 데이터 기준: " + scanDate(model.snapshotFinished));
+  set("scanLastDuration", model.lastFinished !== model.snapshotFinished && model.lastFinished !== null
+    ? "최근 스캔 완료 " + scanCompactDate(model.lastFinished)
+    : model.duration !== null ? "(" + scanDuration(model.duration) + ")" : "");
   const wait = model.nextRun === null ? null : Math.max(1, Math.ceil((model.nextRun - now) / 60)) * 60;
-  set("scanNextRun", model.nextRun !== null ? "다음 " + scanDuration(wait).replace(/ 0초$/, "") + " 후" : model.scheduleNote);
-  title("scanNextRun", model.nextRun !== null ? "다음 자동 스캔: " + scanDate(model.nextRun) + " · 서버 예약 기준" : model.scheduleNote);
+  set("scanNextRun", model.nextRun !== null ? model.nextRunLabel + " " + scanDuration(wait).replace(/ 0초$/, "") + " 후" : model.scheduleNote);
+  title("scanNextRun", model.nextRun !== null ? (model.nextRunLabel === "다음 확인" ? "다음 자동 스캔 대상 확인: " : "다음 자동 스캔: ") + scanDate(model.nextRun) + " · 서버 예약 기준" : model.scheduleNote);
   const nextRun = doc.getElementById("scanNextRun");
   if (nextRun) nextRun.hidden = !!options.sample;
   const progress = doc.getElementById("scanProgressDetails");
@@ -150,4 +173,4 @@ function createScanMonitor({ fetchStatus, onStatus, onError = () => {}, schedule
   return { start, stop };
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { scanStatusModel, scanDuration, scanDate, renderScanStatus, createScanMonitor };
+if (typeof module !== "undefined" && module.exports) module.exports = { pendingScanGeneration, scanStatusModel, scanDuration, scanDate, renderScanStatus, createScanMonitor };

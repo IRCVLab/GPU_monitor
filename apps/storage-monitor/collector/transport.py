@@ -22,7 +22,7 @@ from collector.inventory import Server
 STATUS_PATH = "/var/lib/storage-viz/scan-status.json"
 SNAPSHOT_DIR = "/var/lib/storage-viz/snapshots"
 RESCAN_COMMAND = ("sudo", "-n", "/usr/bin/systemctl", "start", "storage-viz-scan.service")
-ACTIVE_STATE_COMMAND = ("/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service")
+ACTIVE_STATE_COMMAND = ("/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service", "storage-viz-scheduled-scan.service")
 ACTIVE_SCAN_STATES = frozenset({"active", "activating", "reloading"})
 KNOWN_ACTIVE_STATES = frozenset({"active", "reloading", "inactive", "failed", "activating", "deactivating", "maintenance"})
 MAX_STATUS_BYTES = 64 * 1024
@@ -111,16 +111,24 @@ class OpenSshTransport:
             for key in ("remote_unix", "remote_monotonic"):
                 if isinstance(obj[key], bool) or not isinstance(obj[key], (float,int)) or not math.isfinite(obj[key]) or not 0 <= obj[key] < 10**12:
                     raise ValueError("clock")
-            active = obj["service"].strip().removeprefix("ActiveState=")
-            if active not in KNOWN_ACTIVE_STATES:
-                raise TransportError("ACTIVE_STATE_FAILED", "service state is unavailable")
+            active, started = observed_scan_service(obj)
             for key in ("lifecycle", "progress"):
                 if not isinstance(obj[key], dict) or obj[key].get("invalid"):
                     raise TransportError("BAD_TELEMETRY", "telemetry file is invalid")
             if obj["lifecycle"].get("server_id",server.id) != server.id:
                 raise TransportError("BAD_TELEMETRY", "telemetry server mismatch")
             timer = parse_timer(obj["timer"], remote_unix=obj["remote_unix"], remote_monotonic=obj["remote_monotonic"])
-            return merge_status(obj["lifecycle"],obj["progress"],active,timer,int(obj["remote_unix"]))
+            result = merge_status(obj["lifecycle"], obj["progress"], active, timer, int(obj["remote_unix"]), service_started=started)
+            published = obj.get("published")
+            if isinstance(published, dict) and published and not published.get("invalid"):
+                try:
+                    published = validate_status_envelope(published, server)
+                except TransportError:
+                    return result
+                if published["status"] in {"complete", "partial"}:
+                    result["published_generation"] = published["generation"].removesuffix(".json")
+                    result["published_finished_unix"] = published["scan_finished_unix"]
+            return result
         except TransportError:
             raise
         except Exception as exc:
@@ -154,12 +162,10 @@ class OpenSshTransport:
             text = bytes(raw).decode("utf-8", errors="replace")
         else:
             raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
-        if len(text) > 64 or text.count("\n") > 1:
+        states = text.split()
+        if len(text) > 64 or not 1 <= len(states) <= 2 or any(state not in KNOWN_ACTIVE_STATES for state in states):
             raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
-        state = text.strip()
-        if state not in KNOWN_ACTIVE_STATES:
-            raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
-        return state
+        return next((state for state in states if state in ACTIVE_SCAN_STATES), states[0])
 
     def start_rescan(self, server: Server) -> None:
         self._validate_server(server)
@@ -247,6 +253,33 @@ def _batch_get(remote: str, local: str) -> bytes:
     if _has_control(remote) or _has_control(local):
         raise TransportError("BAD_PATH", "batch path is unsafe")
     return f"get {shlex.quote(remote)} {shlex.quote(local)}\n".encode("utf-8")
+
+
+def observed_scan_service(observation: Mapping[str, Any]) -> tuple[str, int | None]:
+    services = []
+    observed_monotonic = observation["remote_monotonic"]
+
+    def monotonic(props, key):
+        value = props.get(key, "")
+        if value.isascii() and value.isdecimal() and len(value) <= 20:
+            seconds = int(value) / 1_000_000
+            if 0 < seconds <= observed_monotonic:
+                return seconds
+        return 0
+
+    lines = observation.get("services") or [observation.get("service", "")]
+    for text in lines:
+        props = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+        state = props.get("ActiveState")
+        if state in KNOWN_ACTIVE_STATES:
+            recent = monotonic(props, "StateChangeTimestampMonotonic")
+            started = max(monotonic(props, "ExecMainStartTimestampMonotonic"), monotonic(props, "InactiveExitTimestampMonotonic"))
+            services.append((state in ACTIVE_SCAN_STATES, recent, state, started))
+    if not services:
+        raise TransportError("ACTIVE_STATE_FAILED", "service state is unavailable")
+    active, _, state, started = max(services)
+    started_unix = int(observation["remote_unix"] - observed_monotonic + started) if active and started else None
+    return state, started_unix if started_unix is not None and started_unix > 0 else None
 
 
 def validate_snapshot_status(status: Mapping[str, Any], server: Server, max_snapshot_bytes: int) -> str:

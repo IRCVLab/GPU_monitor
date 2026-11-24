@@ -61,7 +61,7 @@ function renderCurrentScanStatus() {
   if (rescanServerId === currentServerId && localState && status.state !== "running" && !status.disconnected) {
     displayed.state = localState === "running" ? "requested" : localState;
   }
-  const pending = status.generation && (status.state === "complete" || status.state === "partial") && (!DATA || DATA.scan_generation !== status.generation);
+  const pending = pendingScanGeneration(status, DATA);
   renderScanStatus(displayed, DATA, {
     sample: currentDataMode === "sample",
     note: pending ? "새 스캔이 완료되었습니다. 화면 데이터를 갱신하고 있습니다." : "",
@@ -77,13 +77,13 @@ function startScanStatusMonitoring() {
       scanStatusByServer.set(id, status);
       renderCurrentScanStatus();
       syncRescanButton();
-      const needsSnapshot = status.generation && ["complete", "partial"].includes(status.state) && (!DATA || DATA.scan_generation !== status.generation);
+      const needsSnapshot = pendingScanGeneration(status, DATA);
       // Manual job completion owns its refresh. Retry automatically if that refresh failed.
       const activeRefresh = scanSnapshotRefresh.get(id);
       if (needsSnapshot && !rescanServerId && (!activeRefresh || activeRefresh.routeGeneration !== detailLoadGeneration)) {
         const refresh = { routeGeneration: detailLoadGeneration };
         scanSnapshotRefresh.set(id, refresh);
-        void ensureDetailLoaded(id, true).catch(() => {}).finally(() => {
+        void ensureDetailLoaded(id, true, needsSnapshot).catch(() => {}).finally(() => {
           if (scanSnapshotRefresh.get(id) === refresh) scanSnapshotRefresh.delete(id);
           if (isCurrent() && currentServerId === id) renderCurrentScanStatus();
         });
@@ -644,7 +644,7 @@ function isCurrentDetailGeneration(serverId, generation) {
   return currentServerId === serverId && detailLoadGeneration === generation;
 }
 
-async function ensureDetailLoaded(serverId, forceReload) {
+async function ensureDetailLoaded(serverId, forceReload, pendingGeneration = null) {
   const generation = detailLoadGeneration;
   const requestVersion = detailSnapshots.begin(serverId);
   const summary = currentOverviewSummaries.find(item => item.id === serverId);
@@ -658,6 +658,11 @@ async function ensureDetailLoaded(serverId, forceReload) {
     try {
       snapshot = await currentDetailLoader()(serverId);
       if (!detailSnapshots.isCurrent(serverId, requestVersion)) return;
+      const displayed = detailSnapshots.get(serverId);
+      if (pendingGeneration && displayed && (
+        snapshot.scan_generation === displayed.scan_generation ||
+        snapshot.scan_finished_unix < displayed.scan_finished_unix
+      )) return;
       detailSnapshots.set(serverId, snapshot);
       updateSnapshotEntry(serverId, snapshot, null);
       renderOverview();

@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 assert.ok(fs.existsSync(__dirname + '/scan-status.js'), 'scan status presentation module must exist');
-const { scanStatusModel, createScanMonitor } = require('./scan-status.js');
+const { pendingScanGeneration, scanStatusModel, createScanMonitor } = require('./scan-status.js');
 
 const now = 2000;
 const snapshot = { scan_started_unix: 1000, scan_finished_unix: 1100, scan_duration_sec: 100, scan_generation: 'old', selected_roots: [{status:'complete'}] };
@@ -35,6 +35,18 @@ assert.equal(scanStatusModel({state:'running',started_unix:1950,observed_unix:no
 model = scanStatusModel({state:'running',started_unix:1950,observed_unix:now,last_duration_sec:20,estimate_duration_sec:100}, snapshot, now);
 assert.equal(model.duration, 20, 'display latest actual duration');
 assert.equal(model.eta, 2050, 'estimate uses last complete scan duration');
+
+model = scanStatusModel({ state: "running", estimate_duration_sec: 91, observed_unix: now }, snapshot, now);
+assert.match(model.etaNote, /시작 시각/, "start timestamp and history are different evidence");
+assert.equal(pendingScanGeneration({ state: "idle", published_generation: "new", published_finished_unix: 1200, snapshot_generation: "old" }, snapshot), "new");
+assert.equal(pendingScanGeneration({ state: "running", snapshot_generation: "new", snapshot_finished_unix: 1200 }, snapshot), "new");
+assert.equal(pendingScanGeneration({ state: "idle", published_generation: "older", published_finished_unix: 1000 }, snapshot), null);
+model = scanStatusModel({ state: "idle", published_generation: "new", published_finished_unix: 1200 }, snapshot, now);
+assert.equal(model.snapshotFinished, 1100);
+assert.equal(model.lastFinished, 1200);
+assert.equal(model.snapshotPending, true);
+assert.equal(scanStatusModel({ snapshot_finished_unix: 1200 }, null, now).snapshotFinished, null);
+assert.equal(scanStatusModel({ schedule_mode: "due-check" }, snapshot, now).nextRunLabel, "다음 확인");
 
 async function testMonitor() {
   let resolveA;

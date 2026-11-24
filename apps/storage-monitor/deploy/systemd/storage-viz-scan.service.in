@@ -12,6 +12,7 @@ WorkingDirectory=/opt/storage-viz
 ExecStart=/usr/bin/python3 -m agent.scan_runner --config /etc/storage-viz/scanner.yaml
 RuntimeDirectory=storage-viz
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 Nice=19
 IOSchedulingClass=idle
 NoNewPrivileges=yes

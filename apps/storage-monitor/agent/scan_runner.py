@@ -12,6 +12,7 @@ import argparse
 from dataclasses import dataclass
 import errno
 import fcntl
+import gzip
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ import sys
 import tempfile
 import time
 import uuid
+import zlib
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from agent.block_media import BlockMediaResolver, MediaResult
@@ -32,6 +34,8 @@ SCHEMA_VERSION = 1
 DEFAULT_CONFIG = "/etc/storage-viz/scanner.yaml"
 DEFAULT_DATA_DIR = "/var/lib/storage-viz"
 DEFAULT_RUN_DIR = "/run/storage-viz"
+HOURS_PER_SLOW_SCAN = 3
+MAX_STALE_ROWS = 4000
 ALLOWED_KINDS = frozenset({"directory", "file", "symlink", "other"})
 BOUNDED_COUNTER_LIMIT = 10**18
 _ALLOWED_KEYS = frozenset({
@@ -97,6 +101,20 @@ class RunResult:
     snapshot_path: Optional[pathlib.Path] = None
     status_path: Optional[pathlib.Path] = None
     error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ScanCapture:
+    raw: Dict[str, Any]
+    finished_unix: int
+
+
+@dataclass(frozen=True)
+class SlowCapture:
+    token: str
+    fingerprint: str
+    slot: int
+    capture: ScanCapture
 
 
 def _canonical_json(data: Mapping[str, Any]) -> bytes:
@@ -217,6 +235,7 @@ def _parse_major_minor(value: str) -> Optional[Tuple[int, int]]:
 def run_once(
     config_path: os.PathLike[str] | str = DEFAULT_CONFIG,
     *,
+    scheduled: bool = False,
     mountinfo_reader: Callable[[], str] = mount_policy.read_mountinfo,
     scanner_runner: Callable[..., Any] = subprocess.run,
     media_resolver: Optional[Any] = None,
@@ -242,15 +261,30 @@ def run_once(
 
         lifecycle_path = data_dir / "scan-lifecycle.json"
         progress_path = run_dir / "scan-progress.json"
+        status_path = data_dir / "scan-status.json"
+        slow_cache_path = data_dir / "slow-capture.json.gz"
         history = {}
+        estimates = {}
         try:
             previous = json.loads(lifecycle_path.read_text())
-            history = {k: previous.get(k) for k in ("last_finished_unix", "last_duration_sec", "estimate_duration_sec")}
+            history = {key: previous.get(key) for key in ("last_finished_unix", "last_duration_sec")}
+            stored_estimates = previous.get("estimate_by_plan", {})
+            for plan in ("full", "ssd"):
+                seconds = stored_estimates.get(plan)
+                if type(seconds) is int and seconds >= 0:
+                    estimates[plan] = seconds
+            previous_estimate = previous.get("estimate_duration_sec")
+            if "scan_plan" not in previous and type(previous_estimate) is int and previous_estimate >= 0:
+                estimates["full"] = previous_estimate
         except (OSError, ValueError, TypeError, AttributeError):
             pass
-        lifecycle = {"server_id": cfg.server_id, "state": "running", "phase": "preparing",
-                     "started_unix": int(time.time()), "finished_unix": None,
-                     "run_id": uuid.uuid4().hex, **history}
+        lifecycle = {
+            "server_id": cfg.server_id, "state": "running", "phase": "preparing",
+            "started_unix": int(time.time()), "finished_unix": None,
+            "run_id": uuid.uuid4().hex, "estimate_duration_sec": estimates.get("full"),
+            "estimate_by_plan": estimates, **history,
+        }
+
         def publish_lifecycle(**fields):
             lifecycle.update(fields)
             lifecycle["updated_unix"] = int(time.time())
@@ -258,12 +292,10 @@ def run_once(
                 _write_lifecycle_atomic(lifecycle_path, lifecycle)
             except OSError:
                 pass  # telemetry must never invalidate last-good publication
+
         def failure(message, code, **fields):
             publish_lifecycle(state="failed", finished_unix=int(time.time()), error_code=code)
             return RunResult("failed", error=message, **fields)
-        _unlink_quiet(progress_path)
-        publish_lifecycle()
-        raw_path = run_dir / "hstscan.raw.json"
 
         try:
             entries = mount_policy.parse_mountinfo(mountinfo_reader())
@@ -273,31 +305,87 @@ def run_once(
             return failure(f"mountinfo: {exc}", "MOUNTINFO_FAILED")
         if not selected.selected:
             return failure("no safe roots selected", "NO_SAFE_ROOTS")
-        media_by_major_minor = _resolve_media_by_major_minor(selected, media_resolver if media_resolver is not None else BlockMediaResolver())
+        media_by_major_minor = _resolve_media_by_major_minor(
+            selected, media_resolver if media_resolver is not None else BlockMediaResolver()
+        )
+        fast_roots = []
+        slow_roots = []
+        for root in selected.selected:
+            media = media_by_major_minor.get(root.entry.major_minor, _unknown_media())
+            group = fast_roots if media.media == "ssd" and media.confidence == "resolved" else slow_roots
+            group.append(root)
+        fingerprint = _slow_fingerprint(cfg, slow_roots, media_by_major_minor)
+        scheduled_unix = int(clock()) if scheduled else None
+        schedule_slot = scheduled_unix // 3600 if scheduled_unix is not None else None
+        cached_slow = (
+            _reusable_slow_capture(slow_cache_path, status_path, fingerprint, scheduled_unix, slow_roots)
+            if slow_roots and scheduled_unix is not None else None
+        )
+        due_groups = [roots for roots in (fast_roots, slow_roots if cached_slow is None else []) if roots]
+        if not due_groups:
+            return RunResult("not-due")
 
-        argv = _scanner_argv(cfg, raw_path, selected.selected)
-        out_index = argv.index("--out")
-        argv[out_index:out_index] = ["--progress", str(progress_path), "--progress-run-id", lifecycle["run_id"]]
-        publish_lifecycle(phase="scanning", roots_total=len(selected.selected), roots_completed=0)
-        try:
-            completed = scanner_runner(argv, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        except Exception as exc:
+        scan_plan = "ssd" if cached_slow is not None else "full"
+        raw_path = run_dir / "hstscan.raw.json"
+        roots_total = sum(map(len, due_groups))
+        publish_lifecycle(scan_plan=scan_plan, estimate_duration_sec=estimates.get(scan_plan),
+                          roots_total=roots_total, roots_completed=0)
+        fresh: List[ScanCapture] = []
+        observed: Dict[str, int] = {}
+        completed_roots = 0
+        counters = dict.fromkeys(("scanned_files", "scanned_dirs", "scanned_bytes"), 0)
+        slow_capture = cached_slow
+        for roots in due_groups:
+            _unlink_quiet(progress_path)
             _unlink_quiet(raw_path)
-            return failure(f"scanner: {exc}", "SCANNER_FAILED")
-        if getattr(completed, "returncode", 1) != 0:
-            _unlink_quiet(raw_path)
-            return failure(f"scanner exited {getattr(completed, 'returncode', 'unknown')}", "SCANNER_FAILED")
+            argv = _scanner_argv(cfg, raw_path, roots)
+            out_index = argv.index("--out")
+            progress_run_id = uuid.uuid4().hex
+            argv[out_index:out_index] = ["--progress", str(progress_path), "--progress-run-id", progress_run_id]
+            publish_lifecycle(phase="scanning", roots_completed=completed_roots, progress_run_id=progress_run_id, **counters)
+            try:
+                completed = scanner_runner(argv, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            except Exception as exc:
+                _unlink_quiet(raw_path)
+                return failure(f"scanner: {exc}", "SCANNER_FAILED")
+            if getattr(completed, "returncode", 1) != 0:
+                _unlink_quiet(raw_path)
+                return failure(f"scanner exited {getattr(completed, 'returncode', 'unknown')}", "SCANNER_FAILED")
+            try:
+                raw = json.loads(raw_path.read_text(encoding="utf-8"))
+                _validate_raw_payload(raw)
+                capture = ScanCapture(raw, int(clock()))
+                if capture.finished_unix < raw["scan_started_unix"]:
+                    raise ValueError("scan_finished_unix precedes scan_started_unix")
+            except Exception as exc:
+                return failure(f"invalid scanner output: {exc}", "INVALID_OUTPUT")
+            finally:
+                _unlink_quiet(raw_path)
+            fresh.append(capture)
+            for mount in capture.raw["mounts"]:
+                observed[mount["path"]] = capture.finished_unix
+                for key in counters:
+                    counters[key] += mount[key]
+            completed_roots += len(roots)
+            if roots is slow_roots:
+                slot = schedule_slot if schedule_slot is not None else raw["scan_started_unix"] // 3600
+                slow_capture = SlowCapture(uuid.uuid4().hex, fingerprint, slot, capture)
 
-        publish_lifecycle(phase="publishing")
+        publish_lifecycle(phase="publishing", roots_completed=completed_roots, progress_run_id=None, **counters)
         try:
-            raw = json.loads(raw_path.read_text(encoding="utf-8"))
-            _validate_raw_payload(raw)
+            captures = [*fresh]
+            if cached_slow is not None:
+                captures.append(cached_slow.capture)
+                for mount in cached_slow.capture.raw["mounts"]:
+                    observed[mount["path"]] = cached_slow.capture.finished_unix
+            raw = _merge_captures(captures, cfg.top)
             payload, snapshot_status = _enrich_payload(raw, selected, media_by_major_minor)
-            started_unix = raw["scan_started_unix"]
-            finished_unix = int(clock())
+            for root in payload["selected_roots"]:
+                if root["status"] in {"complete", "partial"}:
+                    root["scan_finished_unix"] = observed[root["scan_root"]]
+            started_unix = min(capture.raw["scan_started_unix"] for capture in fresh)
+            finished_unix = fresh[-1].finished_unix
             scan_duration_sec = finished_unix - started_unix
-            if scan_duration_sec < 0:
-                raise ValueError("scan_finished_unix precedes scan_started_unix")
             generation = _generation_name(cfg.server_id, started_unix)
             payload["server_id"] = cfg.server_id
             payload["scan_started_unix"] = started_unix
@@ -306,16 +394,12 @@ def run_once(
             payload["scan_generation"] = generation
             payload["config_digest"] = cfg.config_digest
         except Exception as exc:
-            _unlink_quiet(raw_path)
             return failure(f"invalid scanner output: {exc}", "INVALID_OUTPUT")
-        finally:
-            _unlink_quiet(raw_path)
 
         snapshot_path = snapshots_dir / f"{generation}.json"
         if snapshot_path.exists():
             # _unique_generation avoids this; keep immutable publication strict.
             return failure("generation already exists", "GENERATION_EXISTS", generation=generation)
-        status_path = data_dir / "scan-status.json"
         try:
             _write_json_atomic(snapshot_path, payload)
             digest = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
@@ -333,6 +417,13 @@ def run_once(
             }
             retained_generations = _retained_generation_order(status_path, snapshot_path.name, snapshots_dir, keep=2)
             status["retained_generations"] = retained_generations
+            if slow_capture is not None:
+                try:
+                    if slow_capture is not cached_slow:
+                        _persist_slow_capture(slow_cache_path, slow_capture)
+                    status["slow_capture"] = _slow_metadata(slow_capture)
+                except OSError as exc:
+                    print(f"could not persist slow capture: {exc}", file=sys.stderr)
             _publish_status_atomic(status_path, status)
         except Exception as exc:
             return failure(f"publication: {exc}", "PUBLICATION_FAILED", generation=generation, snapshot_path=snapshot_path if snapshot_path.exists() else None)
@@ -340,20 +431,100 @@ def run_once(
             _prune_unretained_snapshots(snapshots_dir, retained_generations)
         except Exception as exc:
             return failure(f"retention: {exc}", "RETENTION_FAILED", generation=generation, snapshot_path=snapshot_path, status_path=status_path)
+        if snapshot_status == "complete":
+            estimates[scan_plan] = scan_duration_sec
         publish_lifecycle(state=snapshot_status, generation=generation, started_unix=started_unix,
                           finished_unix=finished_unix, last_finished_unix=finished_unix,
-                          last_duration_sec=scan_duration_sec,
-                          estimate_duration_sec=scan_duration_sec if snapshot_status == "complete" else history.get("estimate_duration_sec"),
-                          roots_completed=len(selected.selected),
-                          scanned_files=sum(m["scanned_files"] for m in raw["mounts"]),
-                          scanned_dirs=sum(m["scanned_dirs"] for m in raw["mounts"]),
-                          scanned_bytes=sum(m["scanned_bytes"] for m in raw["mounts"]))
+                          last_duration_sec=scan_duration_sec, estimate_duration_sec=estimates.get(scan_plan),
+                          **counters)
         return RunResult(snapshot_status, generation, snapshot_path, status_path)
     finally:
         try:
             os.close(lock_fd)
         except OSError:
             pass
+
+
+def _slow_fingerprint(
+    cfg: ScannerConfig, roots: Sequence[mount_policy.SelectedRoot], media: Mapping[str, MediaResult]
+) -> str:
+    identity = [
+        (
+            root.mountpoint, root.source_mount_id, root.entry.major_minor, root.entry.source,
+            root.entry.root, root.entry.fstype, _media_fields(media.get(root.entry.major_minor, _unknown_media())),
+        )
+        for root in sorted(roots, key=lambda item: item.mountpoint)
+    ]
+    return hashlib.sha256(_canonical_json({"config": cfg.config_digest, "roots": identity})).hexdigest()
+
+
+def _reusable_slow_capture(
+    cache_path: pathlib.Path, status_path: pathlib.Path, fingerprint: str,
+    now: int, roots: Sequence[mount_policy.SelectedRoot],
+) -> Optional[SlowCapture]:
+    try:
+        metadata = json.loads(status_path.read_bytes()).get("slow_capture")
+        if not isinstance(metadata, dict) or metadata.get("fingerprint") != fingerprint:
+            return None
+        slot = metadata["slot"]
+        finished = metadata["finished_unix"]
+        token = metadata["token"]
+        if (
+            type(slot) is not int or not 0 <= now // 3600 - slot < HOURS_PER_SLOW_SCAN
+            or type(finished) is not int or finished > now or not isinstance(token, str)
+        ):
+            return None
+        with gzip.open(cache_path, "rb") as handle:
+            saved = json.load(handle)
+        if saved["metadata"] != metadata:
+            return None
+        capture = ScanCapture(saved["raw"], finished)
+        _validate_raw_payload(capture.raw)
+        mounts = capture.raw["mounts"]
+        if (
+            finished < capture.raw["scan_started_unix"]
+            or len(mounts) != len(roots)
+            or {mount["path"] for mount in mounts if mount["errors"] == 0}
+            != {root.mountpoint for root in roots}
+        ):
+            return None
+        return SlowCapture(token, fingerprint, slot, capture)
+    except (OSError, EOFError, ValueError, TypeError, KeyError, AttributeError, zlib.error):
+        return None
+
+
+def _slow_metadata(slow: SlowCapture) -> Dict[str, Any]:
+    return {
+        "token": slow.token, "fingerprint": slow.fingerprint, "slot": slow.slot,
+        "finished_unix": slow.capture.finished_unix,
+    }
+
+
+def _persist_slow_capture(path: pathlib.Path, slow: SlowCapture) -> None:
+    payload = {"metadata": _slow_metadata(slow), "raw": slow.capture.raw}
+    _write_bytes_atomic(path, gzip.compress(_canonical_json(payload), compresslevel=1))
+
+
+def _merge_captures(captures: Sequence[ScanCapture], top: int) -> Dict[str, Any]:
+    if len(captures) == 1:
+        return captures[0].raw
+    payload = dict(captures[0].raw)
+    for key in ("mounts", "blocked"):
+        payload[key] = [row for capture in captures for row in capture.raw.get(key, [])]
+    for key, limit in (("top_files", top), ("stale", MAX_STALE_ROWS)):
+        rows = [row for capture in captures for row in capture.raw.get(key, [])]
+        payload[key] = sorted(rows, key=lambda row: (-row["bytes"], row["path"]))[:limit]
+    users: Dict[int, Dict[str, Any]] = {}
+    for capture in captures:
+        for row in capture.raw.get("users", []):
+            user = users.setdefault(row["uid"], {
+                "uid": row["uid"], "name": row["name"], "bytes": 0, "files": 0, "by_mount": {},
+            })
+            user["bytes"] += row["bytes"]
+            user["files"] += row["files"]
+            user["by_mount"].update(row["by_mount"])
+    payload["users"] = list(users.values())
+    return payload
 
 
 def _scanner_argv(cfg: ScannerConfig, out_path: pathlib.Path, roots: Sequence[mount_policy.SelectedRoot]) -> List[str]:
@@ -961,10 +1132,13 @@ def _unlink_quiet(path: os.PathLike[str] | str) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run hstscan and publish an immutable local storage-viz snapshot")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
+    parser.add_argument("--scheduled", action="store_true")
     args = parser.parse_args(argv)
-    result = run_once(args.config)
+    result = run_once(args.config, scheduled=args.scheduled)
     if result.status in ("complete", "partial"):
         print(result.snapshot_path)
+        return 0
+    if result.status == "not-due":
         return 0
     if result.status == "lock-conflict":
         print(result.error or "lock conflict", file=sys.stderr)

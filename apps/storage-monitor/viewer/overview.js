@@ -187,6 +187,7 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       volumePath: (selectedRoot && selectedRoot.mountpoint) || (mount && mount.mountpoint) || null,
       scanRoot: scanRootPath(mount, selectedRoot),
       scannedBytes: scannedBytesForMount(mount, selectedRoot),
+      scanFinished: selectedRoot && selectedRoot.scan_finished_unix,
       usedBytes,
       totalBytes,
       availableBytes,
@@ -251,13 +252,13 @@ function summarizeCapacityGroups(mounts) {
         pressure: mount.pressure,
         pressureLabel: mount.pressureLabel,
         metricText: mount.metricText,
-        scanRoots: [{ path: mount.scanRoot, scannedBytes: mount.scannedBytes }],
+        scanRoots: [{ path: mount.scanRoot, scannedBytes: mount.scannedBytes, scanFinished: mount.scanFinished }],
       };
       groups.push(group);
       if (identityKey) groupsByIdentity.set(identityKey, group);
       continue;
     }
-    existing.scanRoots.push({ path: mount.scanRoot, scannedBytes: mount.scannedBytes });
+    existing.scanRoots.push({ path: mount.scanRoot, scannedBytes: mount.scannedBytes, scanFinished: mount.scanFinished });
   }
   return groups;
 }
@@ -607,7 +608,9 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       const primaryPath = mount.volumePath || mount.scanRoots[0].path;
       const nested = hasVolumeFolderLevel(primaryPath, mount.scanRoots);
       const pathEl = makeEl(doc, "div", "overview-mount-path");
-      pathEl.title = mount.scanRoots.map(root => root.path).join("\n");
+      const refreshedRoot = root => typeof scanDate === "function" && Number.isSafeInteger(root.scanFinished)
+        ? "스캔 " + scanDate(root.scanFinished) : "";
+      pathEl.title = mount.scanRoots.map(root => [root.path, refreshedRoot(root)].filter(Boolean).join(" · ")).join("\n");
       if (nested) {
         const volumeLabel = mount.volumePath ? "볼륨 " + mount.volumePath : "볼륨";
         pathEl.appendChild(makeEl(doc, "span", "overview-capacity-label", volumeLabel));
@@ -626,13 +629,16 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       metrics.appendChild(meter);
       metrics.appendChild(makeEl(doc, "div", "overview-mount-free overview-mount-capacity", mount.capacityText));
       body.appendChild(metrics);
+      if (!nested && refreshedRoot(mount.scanRoots[0])) {
+        body.appendChild(makeEl(doc, "div", "overview-mount-capacity", refreshedRoot(mount.scanRoots[0])));
+      }
       if (nested) {
         const folders = makeEl(doc, "ul", "overview-scan-paths");
         folders.setAttribute("aria-label", "폴더 스캔");
         for (const root of mount.scanRoots) {
           const folder = makeEl(doc, "li", "overview-scan-folder");
           folder.appendChild(makeEl(doc, "span", "", root.path));
-          folder.appendChild(makeEl(doc, "span", "figure", compactBytes(root.scannedBytes)));
+          folder.appendChild(makeEl(doc, "span", "figure", [compactBytes(root.scannedBytes), refreshedRoot(root)].filter(Boolean).join(" · ")));
           folders.appendChild(folder);
         }
         body.appendChild(folders);
@@ -658,9 +664,9 @@ function createOverviewRowElement(doc, row, handlers = {}) {
 
   if (typeof scanStatusModel === "function") {
     const timing = scanStatusModel(row.scanStatus, row.snapshot);
-    const last = timing.lastFinished !== null ? "완료 " + scanDate(timing.lastFinished) : "완료 기록 없음";
-    const outcome = ["running", "failed", "partial", "unknown"].includes(timing.state) && row.scanStatus ? timing.label + " · " : "";
-    const next = outcome + (timing.nextRun !== null ? "다음 " + scanDate(timing.nextRun) : timing.scheduleNote);
+    const last = timing.snapshotFinished !== null ? "화면 데이터 " + scanDate(timing.snapshotFinished) : "완료 기록 없음";
+    const outcome = (timing.snapshotPending ? "새 스캔 반영 중 · " : "") + (["running", "failed", "partial", "unknown"].includes(timing.state) && row.scanStatus ? timing.label + " · " : "");
+    const next = outcome + (timing.nextRun !== null ? timing.nextRunLabel + " " + scanDate(timing.nextRun) : timing.scheduleNote);
     card.appendChild(makeEl(doc, "div", "overview-scan-timing", last + " · " + next));
   }
   const activate = () => {

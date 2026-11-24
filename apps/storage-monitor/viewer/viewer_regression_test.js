@@ -2967,7 +2967,7 @@ async function testScanStatusContinuesDuringSnapshotDownload() {
 }
 
 async function testScanStatusRetriesUntilNewSnapshotDisplayed() {
-  const viewer = loadViewer({fetch: async () => ({ok:true,json:async()=>({state:'complete',generation:'new',observed_unix:Date.now()/1000})})});
+  const viewer = loadViewer({fetch: async () => ({ok:true,json:async()=>({state:'idle',published_generation:'new',observed_unix:Date.now()/1000})})});
   const timers=[];
   viewer.setTimeout=(fn,ms)=>{const timer={fn,ms};timers.push(timer);return timer;};
   viewer.clearTimeout=t=>{t.cancelled=true;};

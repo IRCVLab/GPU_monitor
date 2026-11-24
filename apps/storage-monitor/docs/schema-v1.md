@@ -15,7 +15,7 @@ identity fields for deterministic merging.
 | `server_id` | string | Stable privacy-safe server key used by multiserver manifests. For the sample, `hinton`. |
 | `scanner_version` | string | Scanner binary version. |
 | `scan_started_unix` | number | Scan start time as Unix seconds. |
-| `scan_finished_unix` | number | Scan finish time as Unix seconds. |
+| `scan_finished_unix` | number | Finish time of the run that published this generation, as Unix seconds. |
 | `scan_duration_sec` | number | Wall-clock scan duration in whole seconds; `scan_finished_unix == scan_started_unix + scan_duration_sec`. |
 | `scan_generation` | string | Deterministic generation id for a snapshot, e.g. `<server_id>-<scan_started_unix>-v1`. |
 | `run_as_root` | boolean | Whether the scanner process had effective UID 0. |
@@ -48,6 +48,7 @@ not leak machine-local private paths beyond the displayed scan roots.
 | `blocked_count` | number | Non-negative bounded count of blocked paths under this selected root. |
 | `error_count` | number | Non-negative bounded count of scanner errors for this selected root. |
 | `error_code` | string or null | Representative scanner error code, or `null` when there is no root-level error code. |
+| `scan_finished_unix` | integer | Optional observation time for a tree-producing root, as Unix seconds. A reused root retains its original observation time, which can precede the generation start and cannot be later than the generation finish. Older agents omit this field. |
 
 Optional storage identity/media fields may appear on any selected root. They are
 additive v1 fields; absence means an older producer did not publish media

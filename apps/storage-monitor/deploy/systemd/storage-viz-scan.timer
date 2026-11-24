@@ -1,12 +1,12 @@
 [Unit]
-Description=Run storage-viz local filesystem scan every six hours
+Description=Check storage-viz scan groups every hour
 
 [Timer]
-OnBootSec=15m
-OnUnitActiveSec=6h
+OnCalendar=*-*-* *:00:00 UTC
+AccuracySec=1m
 Persistent=true
-RandomizedDelaySec=30m
-Unit=storage-viz-scan.service
+RandomizedDelaySec=5m
+Unit=storage-viz-scheduled-scan.service
 
 [Install]
 WantedBy=timers.target

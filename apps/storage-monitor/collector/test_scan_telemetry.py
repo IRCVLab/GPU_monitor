@@ -74,6 +74,10 @@ class TelemetryTests(unittest.TestCase):
                 self.assertEqual(result['state'],'running')
                 self.assertEqual(result['observed_unix'],200)
                 self.assertEqual(result['scanned_files'],9)
+                self.assertTrue(entered.wait(1))
+                busy = svc.scan_status_for_api('alpha-1')
+                self.assertEqual(busy['state'], 'running')
+                self.assertEqual(busy['observed_unix'], 200)
             finally:
                 release.set()
                 for worker in svc._telemetry_threads.values(): worker.join(3)
@@ -93,6 +97,8 @@ class TelemetryTests(unittest.TestCase):
         from collector.scan_telemetry import parse_timer
         result = parse_timer('ActiveState=active\nNextElapseUSecMonotonic=1h 2min 3s\n',remote_unix=10000,remote_monotonic=3600)
         self.assertEqual(result['next_run_unix'],10123)
+        scheduled = parse_timer('ActiveState=active\nUnit=storage-viz-scheduled-scan.service\n')
+        self.assertEqual(scheduled["schedule_mode"], "due-check")
         result = parse_timer('ActiveState=inactive\nNextElapseUSecMonotonic=1h 2min 3s\n',remote_unix=10000,remote_monotonic=3600)
         self.assertIsNone(result['next_run_unix'])
 
@@ -126,6 +132,64 @@ class TelemetryTests(unittest.TestCase):
             self.assertEqual(svc.load_snapshot_for_api('alpha-1')['scan_generation'],payload['scan_generation'])
             self.assertEqual(svc.scan_status_for_api('alpha-1')['snapshot_generation'],payload['scan_generation'])
 
+    def test_legacy_scan_start_and_published_generation_are_independent(self):
+        import json
+        from collector.test_service import payload_for, status_data
+        from collector.test_transport import FakeRunner, server
+        payload = payload_for()
+        published, _ = status_data(payload)
+        runner = FakeRunner()
+        runner.ssh_stdout_next = json.dumps({
+            "lifecycle": {}, "progress": {}, "published": published,
+            "services": ["ActiveState=inactive\n", "ActiveState=activating\nExecMainStartTimestampMonotonic=90000000\nInactiveExitTimestampMonotonic=89000000\n"],
+            "timer": "", "remote_unix": 1719200120, "remote_monotonic": 100,
+        }).encode()
+        result = transport.OpenSshTransport(runner=runner).fetch_scan_status(server())
+        self.assertEqual(result["state"], "running")
+        self.assertEqual(result["started_unix"], 1719200110)
+        self.assertFalse(result["progress_available"])
+        self.assertEqual(result["published_generation"], payload["scan_generation"])
+        self.assertEqual(result["published_finished_unix"], payload["scan_finished_unix"])
+
+    def test_legacy_idle_publication_refreshes_without_new_rescan(self):
+        from collector.test_service import payload_for, status_data
+        with tempfile.TemporaryDirectory() as td:
+            payload = payload_for()
+            tx = FakeTransport()
+            tx.status["alpha-1"], data = status_data(payload)
+            tx.downloads["alpha-1"] = (tx.status["alpha-1"], data)
+            tx.fetch_scan_status = lambda _: {
+                "state": "idle", "published_generation": payload["scan_generation"],
+                "published_finished_unix": payload["scan_finished_unix"],
+            }
+            svc = PollService([make_server()], CentralStore(td), tx)
+            svc.scan_status_for_api("alpha-1")
+            svc._refresh_threads["alpha-1"].join(3)
+            status = svc.scan_status_for_api("alpha-1")
+            self.assertEqual(status["snapshot_generation"], payload["scan_generation"])
+            self.assertEqual(status["snapshot_finished_unix"], payload["scan_finished_unix"])
+            self.assertEqual(tx.rescans, [])
+
+    def test_scheduled_progress_sums_subprocess_and_preserves_scan_scope(self):
+        from collector.scan_telemetry import merge_status
+        lifecycle = {"state": "running", "started_unix": 100, "updated_unix": 110,
+                     "run_id": "overall", "progress_run_id": "second", "scan_plan": "full",
+                     "phase": "scanning", "roots_completed": 2, "roots_total": 4, "scanned_files": 500}
+        progress = {"run_id": "second", "updated_unix": 113, "phase": "publishing",
+                    "roots_completed": 1, "roots_total": 2, "scanned_files": 90}
+        status = merge_status(lifecycle, progress, "activating", {}, 114)
+        self.assertEqual(status["roots_completed"], 3)
+        self.assertEqual(status["roots_total"], 4)
+        self.assertEqual(status["scanned_files"], 590)
+        self.assertEqual(status["phase"], "scanning")
+        stale = merge_status(lifecycle, dict(progress, run_id="first"), "activating", {}, 114)
+        self.assertFalse(stale["progress_available"])
+        self.assertEqual(stale["roots_completed"], 2)
+        replacement = merge_status(lifecycle, progress, "activating", {}, 200, service_started=190)
+        self.assertEqual(replacement["started_unix"], 190)
+        self.assertFalse(replacement["progress_available"])
+        self.assertIsNone(replacement["scan_plan"])
+
     def test_partial_duration_is_not_successful_eta_baseline(self):
         from collector.test_service import payload_for
         from collector.service import _overview_snapshot
@@ -138,7 +202,11 @@ class TelemetryTests(unittest.TestCase):
             svc._overview_cache['alpha-1'] = _overview_snapshot(complete)
             result = svc._status_with_history('alpha-1',{'last_finished_unix':999,'last_duration_sec':12,'estimate_duration_sec':None})
             self.assertEqual(result['last_duration_sec'],12)
-            self.assertIsNone(result['estimate_duration_sec'])
+            self.assertEqual(result['estimate_duration_sec'], 42)
+            scoped = svc._status_with_history('alpha-1', {'scan_plan': 'ssd', 'estimate_duration_sec': None})
+            self.assertIsNone(scoped["estimate_duration_sec"])
+            complete["selected_roots"][0]["scan_finished_unix"] = complete["scan_finished_unix"]
+            self.assertIsNone(_overview_snapshot(complete)["estimate_duration_sec"])
 
     def test_missing_run_identity_does_not_validate_uncorrelated_progress(self):
         from collector.scan_telemetry import merge_status
@@ -164,7 +232,7 @@ class TelemetryTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv,0,stdout='ActiveState=active\nNextElapseUSecMonotonic=2month 1d 3min 3s\n')
             return subprocess.CompletedProcess(argv,0,stdout='ActiveState=inactive\n')
         with tempfile.TemporaryDirectory() as td:
-            script = REMOTE_OBSERVATION_SCRIPT.replace('/var/lib/storage-viz/scan-lifecycle.json',td+'/life').replace('/run/storage-viz/scan-progress.json',td+'/progress')
+            script = REMOTE_OBSERVATION_SCRIPT.replace('/var/lib/storage-viz/scan-lifecycle.json',td+'/life').replace('/run/storage-viz/scan-progress.json',td+'/progress').replace('/var/lib/storage-viz/scan-status.json',td+'/status')
             output = io.StringIO()
             with patch('subprocess.run',side_effect=run), contextlib.redirect_stdout(output):
                 exec(script,{})

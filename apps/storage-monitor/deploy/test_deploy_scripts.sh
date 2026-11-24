@@ -184,10 +184,11 @@ grep -Fq 'remote_cleanup=failed' "$ROOT/output/verification/linux-verification.t
 ! grep -Fq 'overall_exit_code=0' "$ROOT/output/verification/linux-verification.txt" || fail "cleanup failure produced zero overall result"
 pass "verify-linux fails when remote cleanup fails"
 
-assert_contains "$TIMER" "OnUnitActiveSec=6h"
+assert_contains "$TIMER" "OnCalendar=*-*-* *:00:00 UTC"
+assert_contains "$TIMER" "Unit=storage-viz-scheduled-scan.service"
 assert_contains "$TIMER" "Persistent=true"
-assert_contains "$TIMER" "RandomizedDelaySec=30m"
-pass "timer has six-hour persistent randomized cadence"
+assert_contains "$TIMER" "RandomizedDelaySec=5m"
+pass "timer checks due groups once per UTC hour with persistent scheduling"
 
 assert_contains "$SERVICE" "User=root"
 assert_contains "$SERVICE" "Group=storage-viz-collector"
@@ -209,6 +210,7 @@ assert_not_grep "$SERVICE" 'CAP_SYS_ADMIN|CAP_DAC_OVERRIDE|CAP_SYS_PTRACE|CAP_NE
 assert_contains "$SERVICE" "ExecStart=/usr/bin/python3 -m agent.scan_runner --config /etc/storage-viz/scanner.yaml"
 assert_contains "$SERVICE" "RuntimeDirectory=storage-viz"
 assert_contains "$SERVICE" "RuntimeDirectoryMode=0750"
+assert_contains "$SERVICE" "RuntimeDirectoryPreserve=yes"
 assert_not_grep "$SERVICE" 'flock|scan\.lock' "outer systemd/flock lock; agent.scan_runner owns nonblocking lock"
 grep -Fq "lock_path = run_dir / \"scan.lock\"" "$ROOT/agent/scan_runner.py" || fail "agent.scan_runner lock contract not found"
 grep -Fq "if not try_lock_fd(lock_fd):" "$ROOT/agent/scan_runner.py" || fail "agent.scan_runner nonblocking lock not found"
@@ -271,6 +273,12 @@ FAKE_LOG="$TMP/install.log" PATH="$FAKEBIN:$PATH" "$INSTALL" --dry-run --prefix 
 [[ -f "$DRY_PREFIX/etc/storage-viz/scanner.yaml" ]] || fail "dry-run did not render scanner config under temp prefix"
 [[ -f "$DRY_PREFIX/etc/systemd/system/storage-viz-scan.service" ]] || fail "dry-run did not render service under temp prefix"
 [[ -f "$DRY_PREFIX/etc/systemd/system/storage-viz-scan.timer" ]] || fail "dry-run did not render timer under temp prefix"
+SCHEDULED="$DRY_PREFIX/etc/systemd/system/storage-viz-scheduled-scan.service"
+assert_contains "$SCHEDULED" "ExecStart=/usr/bin/python3 -m agent.scan_runner --config /etc/storage-viz/scanner.yaml --scheduled"
+assert_contains "$SCHEDULED" "RuntimeDirectoryPreserve=yes"
+assert_contains "$SCHEDULED" "SuccessExitStatus=75"
+assert_not_grep "$DRY_PREFIX/etc/systemd/system/storage-viz-scan.service" "[[:space:]]--scheduled" "cadence flag in the manual service"
+
 [[ -f "$DRY_PREFIX/etc/sudoers.d/storage-viz-monitoring" ]] || fail "dry-run did not render sudoers under temp prefix"
 python3 -m json.tool "$DRY_PREFIX/etc/storage-viz/scanner.yaml" >/dev/null || fail "scanner config is not strict JSON-compatible"
 [[ "$(file_mode "$DRY_PREFIX/etc/storage-viz/scanner.yaml")" == "644" ]] || fail "scanner config mode is not 0644"
@@ -337,11 +345,46 @@ FAKE_LOG="$TMP/real-install.log" PATH="$FAKEBIN:$PATH" SYSTEMCTL="$FAKEBIN/syste
 grep -q 'make .* clean hstscan' "$TMP/real-install.log" || fail "real install did not rebuild scanner with clean hstscan"
 grep -q 'fresh scanner' "$REAL_PREFIX/opt/storage-viz/scanner/hstscan" || fail "real install copied stale scanner instead of rebuilt target binary"
 grep -q '^systemctl enable --now storage-viz-scan.timer$' "$TMP/real-install.log" || fail "real install did not enable and start scan timer"
+grep -q '^systemctl restart storage-viz-scan.timer$' "$TMP/real-install.log" || fail "real install did not reload the active timer schedule"
 grep -q 'timer enabled and started' "$TMP/real-install.out" || fail "real install reported stale initial-scan status"
 id_line="$(grep -n '^id monitoring' "$TMP/real-install.log" | head -1 | cut -d: -f1)"
 group_line="$(grep -n '^groupadd' "$TMP/real-install.log" | head -1 | cut -d: -f1)"
 [[ -n "$id_line" && -n "$group_line" && "$id_line" -lt "$group_line" ]] || fail "installer did not verify monitoring user before creating group"
 pass "real install test mode rebuilds scanner and checks monitoring before group creation"
+
+UPGRADE_CONFIG="$REAL_PREFIX/etc/storage-viz/scanner.yaml"
+UPGRADE_SERVICE="$REAL_PREFIX/etc/systemd/system/storage-viz-scan.service"
+cat > "$UPGRADE_CONFIG" <<'JSON'
+{
+  "server_id": "host-a",
+  "scanner_path": "/opt/storage-viz/scanner/hstscan",
+  "threads": 7,
+  "top": 42
+}
+JSON
+cp "$UPGRADE_CONFIG" "$TMP/scanner-before.json"
+FAKE_LOG="$TMP/upgrade.log" PATH="$FAKEBIN:$PATH" SYSTEMCTL="$FAKEBIN/systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 "$INSTALL" --prefix "$REAL_PREFIX" >"$TMP/upgrade.out"
+cmp -s "$UPGRADE_CONFIG" "$TMP/scanner-before.json" || fail "upgrade changed a valid scanner configuration"
+grep -q 'server_id: host-a' "$TMP/upgrade.out" || fail "upgrade did not inherit the installed server id"
+grep -q '^systemctl restart storage-viz-scan.timer$' "$TMP/upgrade.log" || fail "upgrade did not restart the timer"
+
+printf '# untouched on rejected upgrade\n' >> "$UPGRADE_SERVICE"
+cp "$UPGRADE_SERVICE" "$TMP/service-before"
+if FAKE_LOG="$TMP/rejected-upgrade.log" PATH="$FAKEBIN:$PATH" SYSTEMCTL="$FAKEBIN/systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 "$INSTALL" --prefix "$REAL_PREFIX" --server-id host-b >"$TMP/rejected-upgrade.out" 2>&1; then
+  fail "upgrade accepted a server id different from the installed config"
+fi
+grep -q 'server_id' "$TMP/rejected-upgrade.out" || fail "mismatched id rejection did not identify the config field"
+cmp -s "$UPGRADE_CONFIG" "$TMP/scanner-before.json" || fail "rejected upgrade changed the config"
+cmp -s "$UPGRADE_SERVICE" "$TMP/service-before" || fail "rejected upgrade changed a service file"
+[[ ! -e "$TMP/rejected-upgrade.log" ]] || fail "rejected upgrade reached account, build or service commands"
+
+printf '%s\n' '{"server_id":"host-a","scanner_path":"/opt/storage-viz/scanner/hstscan","threads":0}' > "$UPGRADE_CONFIG"
+if FAKE_LOG="$TMP/invalid-upgrade.log" PATH="$FAKEBIN:$PATH" SYSTEMCTL="$FAKEBIN/systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 "$INSTALL" --prefix "$REAL_PREFIX" >"$TMP/invalid-upgrade.out" 2>&1; then
+  fail "upgrade accepted an invalid existing scanner config"
+fi
+cmp -s "$UPGRADE_SERVICE" "$TMP/service-before" || fail "upgrade with invalid config changed a service file"
+[[ ! -e "$TMP/invalid-upgrade.log" ]] || fail "invalid config reached account, build or service commands"
+pass "agent upgrade preserves scanner settings and rejects invalid or mismatched config before mutation"
 
 cat > "$FAKEBIN/ssh" <<'FAKE'
 #!/usr/bin/env bash
@@ -1149,7 +1192,7 @@ assert_grep "$ROOT/docs/operations.md" '127\.0\.0\.1' "loopback dashboard defaul
 assert_grep "$ROOT/docs/operations.md" '8088' "dashboard port"
 assert_grep "$ROOT/docs/operations.md" 'storage-viz-dashboard\.service' "central service name"
 assert_grep "$ROOT/docs/operations.md" 'storage-viz-scan\.service' "agent scan service name"
-assert_grep "$ROOT/docs/operations.md" 'OnUnitActiveSec=6h|six-hour|6-hour' "six-hour collection cadence"
+assert_grep "$ROOT/docs/operations.md" 'SSD roots every hour' "media-aware collection cadence"
 assert_grep "$ROOT/docs/operations.md" 'reverse proxy|trusted proxy' "reverse-proxy auth documentation"
 assert_grep "$ROOT/docs/operations.md" 'STORAGE_VIZ_ALLOWED_ORIGINS' "exact-origin allowlist"
 assert_grep "$ROOT/docs/operations.md" 'CSRF|X-CSRF-Token' "CSRF protection"

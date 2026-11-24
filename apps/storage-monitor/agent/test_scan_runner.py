@@ -1547,3 +1547,109 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(lifecycle['last_finished_unix'],200)
             self.assertEqual(lifecycle['last_duration_sec'],100)
             self.assertEqual(lifecycle['estimate_duration_sec'],100)
+
+
+class ScheduleTests(unittest.TestCase):
+    write_config = ScanRunnerTests.write_config
+
+    def test_hourly_tick_reuses_hdd_until_third_hour_and_manual_refreshes_both(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config, _ = self.write_config(tmp)
+            mountinfo = "\n".join((
+                mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"),
+                mi(2, 1, "8:2", "/", "/data", "rw", "xfs", "/dev/sdb1"),
+            ))
+            calls = []
+
+            class Resolver:
+                def resolve(self, device):
+                    media = {"8:1": "ssd", "8:2": "hdd"}[device]
+                    return scan_runner.MediaResult("dev-" + device.replace(":", "-"), media, "resolved")
+
+            def scan(hour, scheduled=True, *, delay=30, duration=7, remount=False, slow_errors=0):
+                now = 3600 * hour + delay
+                started = now - duration
+                expected_status = "partial" if slow_errors else "complete"
+
+                def fake(argv, **kwargs):
+                    paths = argv[argv.index("--out") + 3::3]
+                    calls.append(tuple(paths))
+                    raw = raw_payload_many(paths, errors_by_path={"/data": slow_errors})
+                    raw.update(
+                        scan_started_unix=started,
+                        users=[{"uid": 0, "name": "root", "bytes": 50 * len(paths),
+                                "files": len(paths), "by_mount": dict.fromkeys(paths, 50)}],
+                        top_files=[{"path": f"{path}/one", "kind": "file", "bytes": 50,
+                                    "uid": 0, "owner": "root", "mtime": 12}
+                                   for path in paths],
+                        stale=[],
+                    )
+                    pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw))
+                    return scan_runner.CompletedScan(0)
+
+                outcome = scan_runner.run_once(
+                    config, scheduled=scheduled,
+                    mountinfo_reader=lambda: mountinfo.replace("2 1 8:2", "12 1 8:2") if remount else mountinfo,
+                    scanner_runner=fake, media_resolver=Resolver(),
+                    clock=Clock(max(started, 3600 * hour), now) if scheduled else Clock(now),
+                )
+                self.assertEqual(outcome.status, expected_status, outcome)
+                payload = json.loads(outcome.snapshot_path.read_bytes())
+                status = json.loads(outcome.status_path.read_bytes())
+                validate_download(status, outcome.snapshot_path.read_bytes(),
+                                  DesiredServer(status["server_id"], status["config_digest"]))
+                by_root = {root["scan_root"]: root["scan_finished_unix"] for root in payload["selected_roots"]
+                           if root["status"] in {"complete", "partial"}}
+                self.assertEqual(payload["users"][0]["files"], 2)
+                self.assertEqual(payload["users"][0]["by_mount"], {"/home": 50, "/data": 50})
+                self.assertEqual({row["path"] for row in payload["top_files"]}, {"/home/one", "/data/one"})
+                return by_root
+
+            self.assertEqual(scan(1), {"/home": 3630, "/data": 3630})
+            self.assertEqual(scan(2, delay=0, duration=0), {"/home": 7200, "/data": 3630})
+            lifecycle = json.loads((tmp / "data" / "scan-lifecycle.json").read_bytes())
+            self.assertEqual(lifecycle["scan_plan"], "ssd")
+            self.assertEqual(lifecycle["estimate_by_plan"], {"full": 7, "ssd": 0})
+            self.assertEqual(stat.S_IMODE((tmp / "data" / "slow-capture.json.gz").stat().st_mode), 0o640)
+            self.assertEqual(scan(3), {"/home": 10830, "/data": 3630})
+            self.assertEqual(scan(4), {"/home": 14430, "/data": 14430})
+            self.assertEqual(scan(5, scheduled=False), {"/home": 18030, "/data": 18030})
+            self.assertEqual(scan(6), {"/home": 21630, "/data": 18030})
+            self.assertEqual(calls, [("/home",), ("/data",), ("/home",), ("/home",),
+                                     ("/home",), ("/data",), ("/home",), ("/data",), ("/home",)])
+            self.assertEqual(scan(9), {"/home": 32430, "/data": 32430})
+            self.assertEqual(scan(10, remount=True, slow_errors=1), {"/home": 36030, "/data": 36030})
+            self.assertEqual(scan(11, remount=True), {"/home": 39630, "/data": 39630})
+            (tmp / "data" / "slow-capture.json.gz").write_bytes(b"corrupt capture")
+            self.assertEqual(scan(12, remount=True), {"/home": 43230, "/data": 43230})
+
+    def test_hdd_only_intermediate_tick_preserves_snapshot_and_lifecycle(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            config, _ = self.write_config(tmp)
+            mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+
+            class Resolver:
+                def resolve(self, device):
+                    return scan_runner.MediaResult("dev-8-1", "hdd", "resolved")
+
+            def fake(argv, **kwargs):
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home", started=3600)))
+                return scan_runner.CompletedScan(0)
+
+            inputs = dict(scheduled=True, mountinfo_reader=lambda: mountinfo, media_resolver=Resolver())
+            first = scan_runner.run_once(config, **inputs, scanner_runner=fake, clock=Clock(3650))
+            self.assertEqual(first.status, "complete")
+            before = {path.name: path.read_bytes() for path in (tmp / "data").iterdir() if path.is_file()}
+            skipped = scan_runner.run_once(config, **inputs, scanner_runner=lambda *a, **kw: self.fail("not due"),
+                                           clock=Clock(7250))
+            self.assertEqual(skipped.status, "not-due")
+            self.assertEqual({path.name: path.read_bytes() for path in (tmp / "data").iterdir() if path.is_file()}, before)
+
+            abandoned = tmp / "run" / "hstscan.raw.json"
+            abandoned.write_text(json.dumps(raw_payload("/home", started=14400)))
+            invalid = scan_runner.run_once(config, **inputs, scanner_runner=lambda *a, **kw: scan_runner.CompletedScan(0),
+                                            clock=Clock(14450))
+            self.assertEqual(invalid.status, "failed")
+            self.assertEqual((tmp / "data" / "scan-status.json").read_bytes(), before["scan-status.json"])
