@@ -2245,6 +2245,34 @@ async function testRemovedServerCannotRepopulateTheSnapshotCache() {
     'an old request must not recreate a cache entry for a removed server');
 }
 
+async function testInventoryRefreshEvictsPreviouslyDisplayedDetails() {
+  for (const lightweight of [false, true]) {
+    const viewer = loadViewer();
+    const id = 'alpha-1';
+    const snapshot = { server_id: id, hostname: 'retired', mounts: [], users: [], top_files: [], stale: [] };
+    const inventory = apiBootstrapForRescan([{ id, snapshot }]);
+    const removed = inventory.summaries.filter(row => row.id !== id);
+    viewer.rememberBootstrap(inventory);
+    viewer.navigateToServer(id, { skipHistory: true, skipDataLoad: true });
+    assert.equal(viewer.getCurrentDetailDebugState().data.hostname, 'retired');
+
+    if (lightweight) {
+      viewer.navigateToOverview({ skipHistory: true });
+      viewer.loadServerSummaries = async () => ({ servers: removed });
+      await viewer.refreshScanOverview();
+    } else {
+      await viewer.refreshOverviewData({ bootstrapLoader: async () => ({
+        ...inventory, summaries: removed, snapshots: [],
+      }) });
+      assert.equal(viewer.getCurrentDetailDebugState().data, null);
+    }
+    viewer.navigateToOverview({ skipHistory: true });
+    await viewer.refreshOverviewData({ bootstrapLoader: async () => ({ ...inventory, snapshots: [] }) });
+    viewer.navigateToServer(id, { skipHistory: true, skipDataLoad: true });
+    assert.equal(viewer.getCurrentDetailDebugState().data, null);
+  }
+}
+
 async function testOlderSameServerFailureCannotOverrideNewerSuccess() {
   const viewer = loadViewer();
   const older = deferred();
@@ -3034,6 +3062,7 @@ async function main() {
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
   await testRemovedServerCannotRepopulateTheSnapshotCache();
+  await testInventoryRefreshEvictsPreviouslyDisplayedDetails();
   testDeleteCommandQuoting();
   testTreemapCleanupModeBindsCleanupRenderedListenerOnce();
   testCleanupSelectionLifecycleShowsRemovalImmediatelyAndResetsOnServerChange();

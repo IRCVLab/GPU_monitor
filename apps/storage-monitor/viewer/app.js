@@ -42,7 +42,9 @@ async function refreshScanOverview() {
   try {
     const envelope = await loadServerSummaries();
     if (currentServerId || generation !== overviewLoadGeneration) return;
-    currentOverviewSummaries = envelope.servers;
+    const currentIds = new Set(envelope.servers.map(server => server.id));
+    if (currentOverviewSummaries.some(server => !currentIds.has(server.id))) overviewLoadGeneration += 1;
+    replaceOverviewInventory(envelope.servers, true);
     renderOverview();
   } catch (_) {
     // Retain the last observation; its timestamp makes stale status visible.
@@ -573,16 +575,27 @@ async function loadBootstrapData() {
   return loadBootstrapDataWith();
 }
 
+function replaceOverviewInventory(summaries, preserveSnapshotCache) {
+  currentOverviewSummaries = summaries;
+  const currentIds = new Set(summaries.map(item => item && item.id).filter(Boolean));
+  detailSnapshots.retain(currentIds, preserveSnapshotCache);
+  currentOverviewSnapshotEntries = currentOverviewSnapshotEntries.filter(entry => entry && currentIds.has(entry.id));
+  for (const id of scanStatusByServer.keys()) {
+    if (!currentIds.has(id)) scanStatusByServer.delete(id);
+  }
+  for (const id of scanSnapshotRefresh.keys()) {
+    if (!currentIds.has(id)) scanSnapshotRefresh.delete(id);
+  }
+}
+
 function rememberBootstrap(bootstrap, options) {
   const opts = options || {};
   currentDataSource = bootstrap.mode;
   currentDataMode = bootstrap.dataMode || bootstrap.data_mode || "inventory";
   setSampleDataMarker(currentDataMode);
   currentSession = bootstrap.session || { authenticated: false, can_rescan: false, csrf_token: "" };
-  currentOverviewSummaries = bootstrap.summaries || [];
   currentOverviewSnapshotEntries = bootstrap.snapshots || [];
-  const currentIds = new Set(currentOverviewSummaries.map(item => item && item.id).filter(Boolean));
-  detailSnapshots.retain(currentIds, opts.preserveSnapshotCache);
+  replaceOverviewInventory(bootstrap.summaries || [], opts.preserveSnapshotCache);
   for (const entry of currentOverviewSnapshotEntries) {
     if (entry && entry.id && entry.snapshot && !entry.overviewOnly) detailSnapshots.set(entry.id, entry.snapshot);
   }
@@ -602,7 +615,7 @@ function startOverviewSnapshotHydration(bootstrap, generation) {
   if (!bootstrap || typeof bootstrap.startSnapshotLoading !== "function") return;
   const detailVersionsAtStart = detailSnapshots.checkpoint();
   void bootstrap.startSnapshotLoading((entry) => {
-    if (generation !== overviewLoadGeneration || !entry || !entry.id) return;
+    if (generation !== overviewLoadGeneration || !entry || !currentOverviewSummaries.some(item => item.id === entry.id)) return;
     if (!detailSnapshots.acceptHydrated(entry, detailVersionsAtStart)) return;
     updateSnapshotEntry(entry.id, entry.snapshot || null, entry.error || null);
     renderOverview();
@@ -862,7 +875,8 @@ async function refreshOverviewData(options) {
     if (selectedServerId) {
       currentServerSummary = currentOverviewSummaries.find(item => item.id === selectedServerId) || null;
       const refreshedSelectedData = detailSnapshots.get(selectedServerId);
-      if (refreshedSelectedData) DATA = refreshedSelectedData;
+      if (!currentServerSummary) DATA = null;
+      else if (refreshedSelectedData) DATA = refreshedSelectedData;
       else if (selectedData) {
         DATA = selectedData;
         detailSnapshots.set(selectedServerId, selectedData);
@@ -870,6 +884,12 @@ async function refreshOverviewData(options) {
     }
     renderOverview();
     startOverviewSnapshotHydration(bootstrap, generation);
+    if (selectedServerId && !currentServerSummary) {
+      clearRescanPoll();
+      showDetailError("Unknown server: " + selectedServerId);
+      syncRescanButton();
+      return { ok: true, preservedRoute: true };
+    }
     const expectedRouteStillActive = !opts.expectedServerId || opts.expectedServerId === selectedServerId;
     if (navigationChanged || !expectedRouteStillActive) {
       if (selectedServerId && DATA) {
