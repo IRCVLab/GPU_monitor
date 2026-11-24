@@ -54,7 +54,7 @@ class RescanJobManager:
         self.max_concurrent = _bounded_int(max_concurrent, "max_concurrent", 1, 16)
         self._servers = {s.id: _ServerRef(s.id) for s in service.servers if getattr(s, "enabled", True)}
         self._lock = threading.RLock()
-        self._active_global = 0
+        self._active_jobs: dict[str, dict[str, Any]] = {}
         self._last_requested: dict[str, int] = {}
         self._threads: list[threading.Thread] = []
         self._audit: list[dict[str, Any]] = []
@@ -70,7 +70,7 @@ class RescanJobManager:
             return 404, {"error": "UNKNOWN_SERVER", "audit": event}
         with self._lock:
             self._prune_threads_locked()
-            current = self.store.load_state(sid).get("active_job")
+            current = self._active_jobs.get(sid) or self.store.load_state(sid).get("active_job")
             if isinstance(current, Mapping) and current.get("state") in {"requested", "running"}:
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", _safe_field(current.get("id", "job")))
                 return 409, {"error": "ACTIVE_JOB", "job": dict(current), "audit": event}
@@ -87,7 +87,7 @@ class RescanJobManager:
             if last is not None and now - last < self.cooldown_seconds:
                 event = self._record(now, actor_id, sid, "COOLDOWN", None)
                 return 429, {"error": "COOLDOWN", "retry_after_seconds": self.cooldown_seconds - (now - last), "audit": event}
-            if self._active_global >= self.max_concurrent:
+            if len(self._active_jobs) >= self.max_concurrent:
                 event = self._record(now, actor_id, sid, "GLOBAL_CONCURRENCY", None)
                 return 429, {"error": "GLOBAL_CONCURRENCY", "audit": event}
             self._counter += 1
@@ -95,7 +95,7 @@ class RescanJobManager:
             job = {"id": job_id, "server_id": sid, "kind": "rescan", "state": "running", "actor": actor_id, "requested_unix": now, "started_unix": now, "finished_unix": None, "result_code": None}
             self.store.update_state(sid, active_job=job)
             self._last_requested[sid] = now
-            self._active_global += 1
+            self._active_jobs[sid] = job
             event = self._record(now, actor_id, sid, "ACCEPTED", job_id)
             thread = threading.Thread(target=self._run, args=(sid, job), daemon=True)
             self._threads.append(thread)
@@ -173,7 +173,7 @@ class RescanJobManager:
             self._persist_terminal(sid, terminal)
         finally:
             with self._lock:
-                self._active_global = max(0, self._active_global - 1)
+                self._active_jobs.pop(sid, None)
                 self._prune_threads_locked()
 
     def _persist_terminal(self, sid: str, terminal: dict[str, Any]) -> None:

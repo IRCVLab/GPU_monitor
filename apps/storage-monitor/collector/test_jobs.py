@@ -166,6 +166,35 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 202)
         jobs.wait_for_idle(timeout=3)
 
+    def test_host_stays_owned_until_terminal_store_call_returns(self):
+        server = make_server()
+        self.store.update_state(server.id, latest_pull_status="succeeded", latest_scan_result="complete")
+        svc = BlockingService([server], self.store)
+        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0, max_concurrent=2)
+        published = threading.Event()
+        release_write = threading.Event()
+        update_state = self.store.update_state
+
+        def hold_after_publish(server_id, **updates):
+            state = update_state(server_id, **updates)
+            if state["active_job"]["state"] == "succeeded":
+                published.set()
+                release_write.wait(3)
+            return state
+
+        with mock.patch.object(self.store, "update_state", side_effect=hold_after_publish):
+            try:
+                self.assertEqual(jobs.request_rescan(server.id, "operator")[0], 202)
+                svc.release.set()
+                self.assertTrue(published.wait(2))
+                self.assertEqual(jobs.job_for(server.id)[1]["job"]["state"], "succeeded")
+                self.assertEqual(jobs.request_rescan(server.id, "operator")[0], 409)
+            finally:
+                release_write.set()
+                jobs.wait_for_idle(timeout=3)
+        self.assertEqual(jobs.request_rescan(server.id, "operator")[0], 202)
+        jobs.wait_for_idle(timeout=3)
+
     def test_terminal_io_error_is_reported_and_restart_recovers_job(self):
         from collector import store
 
