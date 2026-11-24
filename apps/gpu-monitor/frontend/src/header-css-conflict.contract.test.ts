@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 const appCss = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
 const dashboardCss = readFileSync(new URL('./lib/styles/monitor-dashboard.css', import.meta.url), 'utf8');
 const pageSource = readFileSync(new URL('./routes/+page.svelte', import.meta.url), 'utf8');
+const headerSource = readFileSync(new URL('./lib/components/DashboardHeader.svelte', import.meta.url), 'utf8');
 
 function cssBlocks(css) {
 	return Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g)).map(([, selector, declarations]) => ({
@@ -297,8 +298,9 @@ test('compact indicator lane masks passing card content without restoring a full
 
 
 test('header controls and dashboard cards share the same framed content gutter', () => {
-	assert.ok(pageSource.includes('class="ops-header border-b border-surface-border"'));
-	assert.ok(pageSource.includes('ops-header-inner $' + '{pageShellClass} px-4 sm:px-6'));
+	assert.ok(headerSource.includes('class="ops-header border-b border-surface-border"'));
+	assert.ok(headerSource.includes('ops-header-inner ${shellClass} px-4 sm:px-6'));
+	assert.match(pageSource, /<DashboardHeader[^>]*shellClass=\{pageShellClass\}/);
 	assert.ok(
 		pageSource.includes("$dashboardLayoutWidth === 'full' ? 'w-full' : 'max-w-7xl mx-auto'")
 	);

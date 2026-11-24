@@ -700,11 +700,27 @@
 }
 
 @media (max-width: 480px) {
-	.ops-identity {
+	.dashboard-page .ops-identity {
+		gap: 0;
+	}
+
+	.dashboard-page .ops-identity h1 {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
+	:is(.system-page, .pf-page) .ops-identity {
 		gap: 0.35rem;
 	}
 
-	.ops-identity__long {
+	:is(.system-page, .pf-page) .ops-identity__long {
 		display: none;
 	}
 }
