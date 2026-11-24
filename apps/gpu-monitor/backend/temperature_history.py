@@ -7,10 +7,10 @@ from sqlalchemy import select,delete,func,case
 from sqlalchemy.dialects.sqlite import insert
 try:
     from .models import CpuTemperatureObservation,GpuMetric,Server
-    from .power_logging import utc,naive,parse_at
+    from .telemetry_time import utc,utc_naive,parse_at
 except ImportError:
     from models import CpuTemperatureObservation,GpuMetric,Server
-    from power_logging import utc,naive,parse_at
+    from telemetry_time import utc,utc_naive,parse_at
 
 
 def cpu_sensor(name):
@@ -36,13 +36,13 @@ async def record_round(db,round_id,servers,snapshots,at,interval):
         for name,sensor in sensors.items():
             value=temperature(sensor.get('value'))
             if str(sensor.get('status','')).lower() in ('na','n/a','ns','unavailable','disabled','not present'):value=None
-            rows.append(dict(round_id=round_id,server_id=server.id,network=server.network,sensor_name=name,temperature=value,observed_at=naive(observed),interval_seconds=interval))
+            rows.append(dict(round_id=round_id,server_id=server.id,network=server.network,sensor_name=name,temperature=value,observed_at=utc_naive(observed),interval_seconds=interval))
     for offset in range(0,len(rows),50):
         await db.execute(insert(CpuTemperatureObservation).values(rows[offset:offset+50]).on_conflict_do_nothing(index_elements=['round_id','server_id','sensor_name']))
 
 
 async def prune(db,cutoff):
-    await db.execute(delete(CpuTemperatureObservation).where(CpuTemperatureObservation.observed_at<naive(cutoff)))
+    await db.execute(delete(CpuTemperatureObservation).where(CpuTemperatureObservation.observed_at<utc_naive(cutoff)))
 
 
 def point(at,maximum,average,count,interval):
@@ -101,7 +101,7 @@ def downsample(points,limit=1500):
 async def history(db,hours,network,now,cpu_interval,gpu_interval=60):
     end=utc(now);start=end-timedelta(hours=hours)
     cpu=CpuTemperatureObservation
-    query=select(func.max(cpu.observed_at),func.max(cpu.temperature),func.avg(cpu.temperature),func.count(cpu.temperature),func.min(cpu.interval_seconds)).where(cpu.observed_at>=naive(start),cpu.observed_at<=naive(end))
+    query=select(func.max(cpu.observed_at),func.max(cpu.temperature),func.avg(cpu.temperature),func.count(cpu.temperature),func.min(cpu.interval_seconds)).where(cpu.observed_at>=utc_naive(start),cpu.observed_at<=utc_naive(end))
     if network!='all':query=query.where(cpu.network==network)
     query=query.group_by(cpu.round_id).order_by(func.max(cpu.observed_at))
     cpu_rows=(await db.execute(query)).all()
@@ -112,7 +112,7 @@ async def history(db,hours,network,now,cpu_interval,gpu_interval=60):
     gpu=GpuMetric
     valid=case((gpu.temperature.between(1,150),gpu.temperature),else_=None)
     minute=func.strftime('%Y-%m-%dT%H:%M:00',gpu.collected_at)
-    device_query=select(minute.label('minute'),func.max(gpu.collected_at).label('at'),func.max(valid).label('maximum'),func.avg(valid).label('average')).join(Server,Server.id==gpu.server_id).where(gpu.collected_at>=naive(start),gpu.collected_at<=naive(end),func.lower(Server.name)!='poseidon')
+    device_query=select(minute.label('minute'),func.max(gpu.collected_at).label('at'),func.max(valid).label('maximum'),func.avg(valid).label('average')).join(Server,Server.id==gpu.server_id).where(gpu.collected_at>=utc_naive(start),gpu.collected_at<=utc_naive(end),func.lower(Server.name)!='poseidon')
     if network!='all':device_query=device_query.where(Server.network==network)
     devices=device_query.group_by(minute,gpu.server_id,gpu.gpu_index).subquery()
     gpu_query=select(func.max(devices.c.at),func.max(devices.c.maximum),func.avg(devices.c.average),func.count(devices.c.average)).group_by(devices.c.minute).order_by(func.max(devices.c.at))

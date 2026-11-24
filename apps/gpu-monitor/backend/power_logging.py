@@ -13,19 +13,11 @@ from collections import defaultdict
 from sqlalchemy import select, delete, func
 from sqlalchemy.dialects.sqlite import insert
 try:
+    from .telemetry_time import parse_at, utc, utc_naive
     from .models import HardwarePowerObservation, PowerRawSample, PowerPsuReading, PowerPsuIdentity, PowerRollup, PowerCheckpoint
 except ImportError:
+    from telemetry_time import parse_at, utc, utc_naive
     from models import HardwarePowerObservation, PowerRawSample, PowerPsuReading, PowerPsuIdentity, PowerRollup, PowerCheckpoint
-
-
-def utc(at):
-    return at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
-
-
-def naive(at): return utc(at).replace(tzinfo=None)
-
-
-def parse_at(at): return utc(datetime.fromisoformat(at.replace('Z','+00:00')))
 
 
 def valid_power(value):
@@ -110,14 +102,14 @@ async def record_round(db,round_id,servers,snapshots,at,interval):
         for name,direction in expected[server.id]-present:
             readings.append({'name':name,'direction':direction,'power_watts':None,'status':'missing'})
         for item in readings:
-            db.add(PowerPsuReading(round_id=round_id,server_id=server.id,sensor_name=item['name'],direction=item['direction'],power_watts=item['power_watts'],status=item['status'],observed_at=naive(observed)))
-            rows.append(dict(round_id=round_id,scope=f"psu:{server.id}:{item['direction']}:{item['name']}",source='ac_input' if item['direction']=='input' else 'psu_output',observed_at=naive(observed),power_watts=item['power_watts'],
+            db.add(PowerPsuReading(round_id=round_id,server_id=server.id,sensor_name=item['name'],direction=item['direction'],power_watts=item['power_watts'],status=item['status'],observed_at=utc_naive(observed)))
+            rows.append(dict(round_id=round_id,scope=f"psu:{server.id}:{item['direction']}:{item['name']}",source='ac_input' if item['direction']=='input' else 'psu_output',observed_at=utc_naive(observed),power_watts=item['power_watts'],
                              cohort=str(server.id),expected_count=1,server_count=int(item['power_watts'] is not None),interval_seconds=interval))
         values={'dcmi':valid_power(snapshot.get('power_watts')),'ac_input':psu_total(readings,'input')}
         server_samples[server.id]=(observed,values)
         signatures[server.id]={'dcmi':str(server.id),'ac_input':str(server.id)+':'+','.join(sorted(item['name'] for item in readings if item['direction']=='input'))}
         for source,value in values.items():
-            rows.append(dict(round_id=round_id,scope=f'server:{server.id}',source=source,observed_at=naive(observed),power_watts=value,
+            rows.append(dict(round_id=round_id,scope=f'server:{server.id}',source=source,observed_at=utc_naive(observed),power_watts=value,
                              cohort=signatures[server.id][source],expected_count=1,server_count=int(value is not None),interval_seconds=interval))
     for network in ('internal','external','all'):
         cohort=[server for server in servers if network=='all' or server.network==network]
@@ -127,7 +119,7 @@ async def record_round(db,round_id,servers,snapshots,at,interval):
             membership='|'.join(signatures[server.id][source] for server in sorted(cohort,key=lambda server:server.id))
             values=[server_samples[server.id][1][source] for server in cohort]
             subtotal, count = observed_power(values)
-            rows.append(dict(round_id=round_id,scope=f'network:{network}',source=source,observed_at=naive(timestamp),power_watts=subtotal if count==len(values) else None,
+            rows.append(dict(round_id=round_id,scope=f'network:{network}',source=source,observed_at=utc_naive(timestamp),power_watts=subtotal if count==len(values) else None,
                              cohort=membership,expected_count=len(values),server_count=count,interval_seconds=interval))
     if rows:
         for offset in range(0,len(rows),50):
@@ -176,7 +168,7 @@ async def refresh_rollups(db,start,end):
     low=utc(start)-timedelta(seconds=span);high=utc(end)+timedelta(seconds=span)
     query_low=bucket_floor(low,3600)-timedelta(seconds=span)
     query_high=bucket_floor(high,3600)+timedelta(seconds=3600+span)
-    rows=(await db.execute(select(PowerRawSample).where(PowerRawSample.observed_at>=naive(query_low),PowerRawSample.observed_at<=naive(query_high)).order_by(PowerRawSample.observed_at,PowerRawSample.id))).scalars().all()
+    rows=(await db.execute(select(PowerRawSample).where(PowerRawSample.observed_at>=utc_naive(query_low),PowerRawSample.observed_at<=utc_naive(query_high)).order_by(PowerRawSample.observed_at,PowerRawSample.id))).scalars().all()
     series=defaultdict(list)
     for row in rows:series[(row.scope,row.source)].append(as_sample(row))
     checkpoints={(row.scope,row.source):row for row in (await db.execute(select(PowerCheckpoint))).scalars()}
@@ -190,7 +182,7 @@ async def refresh_rollups(db,start,end):
             for at,values in build_buckets(samples,width).items():
                 if at<bucket_floor(low,width) or at>bucket_floor(high,width):continue
                 if checkpoint and at<utc(checkpoint.closed_before):continue
-                output.append(dict(scope=scope,source=source,resolution=resolution,bucket_start=naive(at),**values))
+                output.append(dict(scope=scope,source=source,resolution=resolution,bucket_start=utc_naive(at),**values))
     if output:
         # Bound parameter count across SQLite builds.
         for offset in range(0,len(output),50):
@@ -201,9 +193,9 @@ async def refresh_rollups(db,start,end):
 async def prune(db,now):
     """Commit rollups/checkpoints and raw deletion atomically via caller transaction."""
     cutoff=bucket_floor(utc(now)-timedelta(days=30),3600)
-    oldest=await db.scalar(select(func.min(PowerRawSample.observed_at)).where(PowerRawSample.observed_at<naive(cutoff)))
+    oldest=await db.scalar(select(func.min(PowerRawSample.observed_at)).where(PowerRawSample.observed_at<utc_naive(cutoff)))
     if oldest is not None:
-        latest_old=await db.scalar(select(func.max(PowerRawSample.observed_at)).where(PowerRawSample.observed_at<naive(cutoff)))
+        latest_old=await db.scalar(select(func.max(PowerRawSample.observed_at)).where(PowerRawSample.observed_at<utc_naive(cutoff)))
         span=2.5*(await db.scalar(select(func.max(PowerRawSample.interval_seconds))) or 60)
         refresh_end=min(cutoff,utc(latest_old)+timedelta(seconds=span))
         cursor=utc(oldest)
@@ -211,7 +203,7 @@ async def prune(db,now):
             end=min(cursor+timedelta(days=1),refresh_end)
             await refresh_rollups(db,cursor,end)
             cursor=end
-        ranked=select(PowerRawSample.id.label('id'),func.row_number().over(partition_by=(PowerRawSample.scope,PowerRawSample.source),order_by=(PowerRawSample.observed_at.desc(),PowerRawSample.id.desc())).label('rank')).where(PowerRawSample.observed_at<naive(cutoff)).subquery()
+        ranked=select(PowerRawSample.id.label('id'),func.row_number().over(partition_by=(PowerRawSample.scope,PowerRawSample.source),order_by=(PowerRawSample.observed_at.desc(),PowerRawSample.id.desc())).label('rank')).where(PowerRawSample.observed_at<utc_naive(cutoff)).subquery()
         old=(await db.execute(select(PowerRawSample).where(PowerRawSample.id.in_(select(ranked.c.id).where(ranked.c.rank==1))))).scalars().all()
         latest={}
         for row in old:latest[(row.scope,row.source)]=row
@@ -219,21 +211,21 @@ async def prune(db,now):
             checkpoint=await db.get(PowerCheckpoint,(scope,source))
             if checkpoint is None:
                 checkpoint=PowerCheckpoint(scope=scope,source=source);db.add(checkpoint)
-            checkpoint.closed_before=naive(cutoff);checkpoint.anchor=json_sample(as_sample(row))
+            checkpoint.closed_before=utc_naive(cutoff);checkpoint.anchor=json_sample(as_sample(row))
         await db.flush()
-        await db.execute(delete(PowerRawSample).where(PowerRawSample.observed_at<naive(cutoff)))
-    await db.execute(delete(PowerPsuReading).where(PowerPsuReading.observed_at<naive(cutoff)))
-    await db.execute(delete(PowerRollup).where(PowerRollup.resolution=='minute',PowerRollup.bucket_start<naive(utc(now)-timedelta(days=365))))
-    return naive(cutoff)
+        await db.execute(delete(PowerRawSample).where(PowerRawSample.observed_at<utc_naive(cutoff)))
+    await db.execute(delete(PowerPsuReading).where(PowerPsuReading.observed_at<utc_naive(cutoff)))
+    await db.execute(delete(PowerRollup).where(PowerRollup.resolution=='minute',PowerRollup.bucket_start<utc_naive(utc(now)-timedelta(days=365))))
+    return utc_naive(cutoff)
 
 
 async def history(db,hours,network,source,now,interval):
     end=utc(now);start=end-timedelta(hours=hours)
     span=timedelta(seconds=9000) # max allowed interval (3600 s) x 2.5
     rows=(await db.execute(select(PowerRawSample).where(PowerRawSample.scope==f'network:{network}',PowerRawSample.source==source,
-        PowerRawSample.observed_at>=naive(start-span),PowerRawSample.observed_at<=naive(end)).order_by(PowerRawSample.observed_at,PowerRawSample.id))).scalars().all()
+        PowerRawSample.observed_at>=utc_naive(start-span),PowerRawSample.observed_at<=utc_naive(end)).order_by(PowerRawSample.observed_at,PowerRawSample.id))).scalars().all()
     summary=summarize([as_sample(row) for row in rows],start,end);summary['source']=source
-    peaks=[row for row in rows if row.observed_at>=naive(start) and row.power_watts is not None]
+    peaks=[row for row in rows if row.observed_at>=utc_naive(start) and row.power_watts is not None]
     summary['peak_at']=utc(max(peaks,key=lambda row:row.power_watts).observed_at).isoformat() if peaks else None
     observed_subtotals = {}
     if source == 'dcmi' and any(0 < row.server_count < row.expected_count for row in rows):
@@ -242,7 +234,7 @@ async def history(db,hours,network,source,now,interval):
             observation, observation.round_id == PowerRawSample.round_id
         ).where(
             PowerRawSample.scope == f'network:{network}', PowerRawSample.source == source,
-            PowerRawSample.observed_at >= naive(start), PowerRawSample.observed_at <= naive(end),
+            PowerRawSample.observed_at >= utc_naive(start), PowerRawSample.observed_at <= utc_naive(end),
             PowerRawSample.server_count > 0, PowerRawSample.server_count < PowerRawSample.expected_count,
             observation.power_watts >= 0,
         )
@@ -255,7 +247,7 @@ async def history(db,hours,network,source,now,interval):
     points=[]
     previous_row=None
     for row in rows:
-        if row.observed_at<naive(start):continue
+        if row.observed_at<utc_naive(start):continue
         if previous_row is not None:
             previous=utc(previous_row.observed_at)
             elapsed=(utc(row.observed_at)-previous).total_seconds()
@@ -281,7 +273,7 @@ async def read_rollups(db,resolution,days,network,source,now,after=None):
     start=utc(now)-timedelta(days=days)
     if after is not None: start=max(start,utc(after))
     rows=(await db.execute(select(PowerRollup).where(PowerRollup.scope==f'network:{network}',PowerRollup.source==source,
-        PowerRollup.resolution==resolution,PowerRollup.bucket_start>=naive(start),PowerRollup.bucket_start<=naive(utc(now))).order_by(PowerRollup.bucket_start).limit(10001))).scalars().all()
+        PowerRollup.resolution==resolution,PowerRollup.bucket_start>=utc_naive(start),PowerRollup.bucket_start<=utc_naive(utc(now))).order_by(PowerRollup.bucket_start).limit(10001))).scalars().all()
     # Minute queries can span one year; paginate using actual timestamp cursor.
     truncated=len(rows)>10000;rows=rows[:10000]
     buckets=[]

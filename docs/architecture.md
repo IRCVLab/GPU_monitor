@@ -8,7 +8,7 @@ apps/
   storage-monitor/   Storage dashboard, collector, scanner, agent, deploy templates
 docs/                Architecture, development, and migration records
 scripts/             Repository-level verification helpers
-.github/             Ownership metadata only at the foundation stage
+.github/             Ownership metadata and path-aware CI
 ```
 
 ## Product boundaries
@@ -22,7 +22,7 @@ GPU Monitor owns:
 - Slack bridge behavior;
 - GPU-specific configuration, tests, ports, scripts, and release history.
 
-Production-style app-local ports are defined by `apps/gpu-monitor/scripts/run_monitoring.sh`:
+The managed Live services use these default ports:
 
 - backend API: `127.0.0.1:8001`;
 - frontend preview: `0.0.0.0:5173`;
@@ -46,6 +46,37 @@ Storage central dashboard deployment and per-host scanner/agent rollout are sepa
 At the foundation stage, shared code is intentionally minimal. Root files provide repository contracts, ownership, security guidance, and verification entry points. Shared backend state, shared application models, cross-application API clients, and framework-specific shared UI components are not introduced.
 
 Future shared packages may be added only when repeated duplication proves the maintenance cost and compatible runtime contracts exist.
+
+## Refactoring sequence
+
+Keep the app boundary. GPU and Storage have different data stores, release artifacts,
+and activation checks. Root commands own repository verification. Each app owns its
+runtime dependencies.
+
+1. **GPU backend.** Keep HTTP validation and authorization in routers. A Power Flow
+   diagram is a saved pointer to immutable revisions. `power_flow/diagrams.py`
+   owns those records and selects the revision at the requested time.
+   `power_flow/service.py` reads telemetry and computes the readings for that
+   revision. `telemetry_time.py` owns UTC conversion for API timestamps and
+   SQLite history columns. Check create, edit conflicts, historical selection,
+   and peak coverage with the Power Flow API tests before moving the next
+   boundary.
+2. **GPU frontend.** Separate refresh and WebSocket state from rendering in the
+   GPU dashboard route. Preserve tab selection, refresh cadence, and header
+   behavior. Verify the existing source tests and the real browser before
+   extracting another part of the route.
+3. **Storage runtime.** Trace one rescan from `agent/scan_runner.py` through
+   `collector/jobs.py` and `collector/store.py` to `viewer/scan-status.js`.
+   Keep job completion in the collector, polling and display in the viewer,
+   and scan execution on the agent. Exercise a rescan through the existing
+   lifecycle tests and viewer when changing the boundary.
+4. **Release tools.** Share a rule only when both pullers have the same inputs
+   and outcomes. Keep per-app packaging, activation, rollback, and restart
+   decisions in each app. Verify the exact-SHA and unchanged-payload tests
+   before changing installed tools.
+
+Use independently reviewable commits. Preserve public routes, payloads, SQLite
+tables, deployment paths, and active services during development.
 
 ## History architecture
 
@@ -90,6 +121,8 @@ The active release is inspected with `status live`, the `current` generation poi
 
 If a newer successful `main` SHA builds to the same GPU release digest, the puller records the SHA and does not restart Live. Documentation-only and Storage-only changes therefore cannot restart GPU Live when the GPU runtime payload is unchanged.
 
-Storage remains a separate deployment architecture. Storage-only changes may run Storage CI, but they never enter the GPU Live puller and cannot restart GPU Live.
+The Storage puller owns Storage activation. A Storage-only commit can advance
+the GPU puller's recorded SHA when the verified GPU artifact digest matches
+the live deployment.
 
 The legacy tmux stack is retained only as the first managed cutover fallback until the first promoted release and one subsequent no-op puller cycle are verified. After that first-cutover boundary, GPU rollback uses immutable release pointers and the exact emergency command `rollback live`; emergency inspection uses `status live`.

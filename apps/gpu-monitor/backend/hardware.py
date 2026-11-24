@@ -10,10 +10,10 @@ from sqlalchemy import select, delete, func
 
 try:
     from .models import Server, HardwareRound, HardwarePowerObservation, HardwareImport, PowerRawSample
-    from . import power_logging, temperature_history, server_history
+    from . import power_logging, temperature_history, server_history, telemetry_time
 except ImportError:
     from models import Server, HardwareRound, HardwarePowerObservation, HardwareImport, PowerRawSample
-    import power_logging, temperature_history, server_history
+    import power_logging, temperature_history, server_history, telemetry_time
 from pathlib import Path
 from typing import Literal
 
@@ -101,7 +101,7 @@ def _eligible(servers):
 def _point(at, values):
     subtotal, count = power_logging.observed_power(values)
     complete = bool(values) and count == len(values)
-    point = {'collected_at': power_logging.utc(at).isoformat(), 'power_watts': subtotal if complete else None,
+    point = {'collected_at': telemetry_time.utc(at).isoformat(), 'power_watts': subtotal if complete else None,
              'server_count': count, 'expected_count': len(values), 'complete': complete}
     if count and not complete:
         point['observed_watts'] = subtotal
@@ -165,14 +165,14 @@ class HardwareMonitor:
         await self.archive_round(servers, snapshots, at)
         # Use the identical latest actual host observation as the persisted
         # internal-network series, so WS/API merges identify the same round.
-        point_at = max((power_logging.parse_at(snapshot['collected_at']) for snapshot in snapshots.values()), default=at)
+        point_at = max((telemetry_time.parse_at(snapshot['collected_at']) for snapshot in snapshots.values()), default=at)
         point = _point(point_at, [snapshots.get(str(server.id), {}).get('power_watts') for server in servers if server.network == 'internal'])
         self.current = {'mode': 'live', 'servers': snapshots, 'point': point}
         return self.current
 
     async def archive_round(self, servers, snapshots, at, *, db=None):
         async def write(session):
-            round_ = HardwareRound(collected_at=power_logging.naive(at))
+            round_ = HardwareRound(collected_at=telemetry_time.utc_naive(at))
             session.add(round_)
             await session.flush()
             for server in _eligible(servers):
@@ -180,7 +180,7 @@ class HardwareMonitor:
                 observed_at = snapshot.get('collected_at')
                 session.add(HardwarePowerObservation(round_id=round_.id, server_id=server.id,
                     network=server.network, power_watts=snapshot.get('power_watts'),
-                    observed_at=power_logging.parse_at(observed_at).replace(tzinfo=None) if observed_at else None))
+                    observed_at=telemetry_time.parse_at(observed_at).replace(tzinfo=None) if observed_at else None))
             await session.flush()
             await power_logging.record_round(session, round_.id, _eligible(servers), snapshots, at, self.interval)
             await temperature_history.record_round(session, round_.id, _eligible(servers), snapshots, at, self.interval)
@@ -227,9 +227,9 @@ class HardwareMonitor:
                     servers = [SimpleNamespace(id=row.server_id,network=row.network) for row in observations]
                     observed = {}
                     for row in observations:
-                        at = power_logging.utc(row.observed_at or round_.collected_at)
+                        at = telemetry_time.utc(row.observed_at or round_.collected_at)
                         original = snapshots.get(str(row.server_id), {})
-                        sensors = original.get('sensors', []) if original.get('collected_at') and power_logging.parse_at(original['collected_at']) == at else []
+                        sensors = original.get('sensors', []) if original.get('collected_at') and telemetry_time.parse_at(original['collected_at']) == at else []
                         observed[str(row.server_id)] = {'power_watts':row.power_watts,'collected_at':at.isoformat(),'sensors':sensors}
                     await power_logging.record_round(db, round_.id, servers, observed, round_.collected_at, self.interval)
                 await db.commit()
