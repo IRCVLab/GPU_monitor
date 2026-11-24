@@ -35,6 +35,12 @@ def valid_power(value):
     except (TypeError,ValueError): return None
 
 
+def observed_power(values: list[float | None]) -> tuple[float | None, int]:
+    measured = [value for value in values if value is not None]
+    total = sum(measured) if measured else None
+    return total, len(measured)
+
+
 def psu_readings(snapshot):
     result=[]
     for sensor in snapshot.get('sensors',[]):
@@ -120,8 +126,8 @@ async def record_round(db,round_id,servers,snapshots,at,interval):
         for source in ('dcmi','ac_input'):
             membership='|'.join(signatures[server.id][source] for server in sorted(cohort,key=lambda server:server.id))
             values=[server_samples[server.id][1][source] for server in cohort]
-            count=sum(value is not None for value in values)
-            rows.append(dict(round_id=round_id,scope=f'network:{network}',source=source,observed_at=naive(timestamp),power_watts=sum(values) if count==len(values) else None,
+            subtotal, count = observed_power(values)
+            rows.append(dict(round_id=round_id,scope=f'network:{network}',source=source,observed_at=naive(timestamp),power_watts=subtotal if count==len(values) else None,
                              cohort=membership,expected_count=len(values),server_count=count,interval_seconds=interval))
     if rows:
         for offset in range(0,len(rows),50):

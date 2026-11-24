@@ -94,25 +94,17 @@ SENSOR_COMMAND = 'sudo -n /usr/bin/ipmitool sensor list'
 POWER_COMMAND = 'sudo -n /usr/bin/ipmitool dcmi power reading'
 
 
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
-
-
-def _naive(value: datetime) -> datetime:
-    return _utc(value).replace(tzinfo=None)
-
-
 def _eligible(servers):
     return [server for server in servers if server.name.casefold() != 'poseidon']
 
 
 def _point(at, values):
-    observed = [value for value in values if value is not None]
-    complete = bool(values) and len(observed) == len(values)
-    point = {'collected_at': _utc(at).isoformat(), 'power_watts': sum(observed) if complete else None,
-             'server_count': len(observed), 'expected_count': len(values), 'complete': complete}
-    if observed and not complete:
-        point['observed_watts'] = sum(observed)
+    subtotal, count = power_logging.observed_power(values)
+    complete = bool(values) and count == len(values)
+    point = {'collected_at': power_logging.utc(at).isoformat(), 'power_watts': subtotal if complete else None,
+             'server_count': count, 'expected_count': len(values), 'complete': complete}
+    if count and not complete:
+        point['observed_watts'] = subtotal
     return point
 
 
@@ -180,7 +172,7 @@ class HardwareMonitor:
 
     async def archive_round(self, servers, snapshots, at, *, db=None):
         async def write(session):
-            round_ = HardwareRound(collected_at=_naive(at))
+            round_ = HardwareRound(collected_at=power_logging.naive(at))
             session.add(round_)
             await session.flush()
             for server in _eligible(servers):
@@ -188,7 +180,7 @@ class HardwareMonitor:
                 observed_at = snapshot.get('collected_at')
                 session.add(HardwarePowerObservation(round_id=round_.id, server_id=server.id,
                     network=server.network, power_watts=snapshot.get('power_watts'),
-                    observed_at=_naive(datetime.fromisoformat(observed_at.replace('Z', '+00:00'))) if observed_at else None))
+                    observed_at=power_logging.parse_at(observed_at).replace(tzinfo=None) if observed_at else None))
             await session.flush()
             await power_logging.record_round(session, round_.id, _eligible(servers), snapshots, at, self.interval)
             await temperature_history.record_round(session, round_.id, _eligible(servers), snapshots, at, self.interval)
@@ -235,7 +227,7 @@ class HardwareMonitor:
                     servers = [SimpleNamespace(id=row.server_id,network=row.network) for row in observations]
                     observed = {}
                     for row in observations:
-                        at = _utc(row.observed_at or round_.collected_at)
+                        at = power_logging.utc(row.observed_at or round_.collected_at)
                         original = snapshots.get(str(row.server_id), {})
                         sensors = original.get('sensors', []) if original.get('collected_at') and power_logging.parse_at(original['collected_at']) == at else []
                         observed[str(row.server_id)] = {'power_watts':row.power_watts,'collected_at':at.isoformat(),'sensors':sensors}
