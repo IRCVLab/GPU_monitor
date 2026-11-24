@@ -74,6 +74,7 @@ Frontend checks:
 cd apps/gpu-monitor/frontend
 npm ci
 npm run check
+npm run test:unit
 npm run build
 ```
 
@@ -93,7 +94,20 @@ Runtime scripts are app-local:
 - `apps/gpu-monitor/scripts/run_monitoring.sh`
 - `apps/gpu-monitor/scripts/run_development.sh`
 
-Use them only when explicitly inspecting or changing a local runtime stack.
+Run the development launcher from the repository after installing the app dependencies
+and creating `apps/gpu-monitor/.env` from `apps/gpu-monitor/.env.example`.
+
+```bash
+GPU_MONITOR_DEV_PORT=5175 GPU_MONITOR_DEV_BACKEND_PORT=8101 \
+  apps/gpu-monitor/scripts/run_development.sh start
+```
+
+The launcher keeps both listeners on loopback. It stores the database at
+`apps/gpu-monitor/data/dev_gpu_monitor.db` in the current worktree and disables
+Slack. To enable collection, set `GPU_MONITOR_DEV_COLLECT=true` when starting the
+stack. Set `HARDWARE_COLLECT_ENABLED=true` in the worktree's `.env` to collect
+hardware readings. Choose unused ports for each worktree running on the same host.
+Use `status`, `logs`, or `stop` with the same launcher to manage that worktree.
 
 ## System Monitor and Power Flow
 
