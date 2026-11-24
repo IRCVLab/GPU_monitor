@@ -238,6 +238,8 @@ class ServerCollector:
             raw = self._ssh.run("gpustat --json --no-header 2>/dev/null")
             return parse_gpustat(raw)
         except Exception:
+            if not self._ssh.is_connected:
+                raise
             raw = self._ssh.run(NVIDIA_SMI_CMD)
             return parse_nvidia_smi(raw)
 

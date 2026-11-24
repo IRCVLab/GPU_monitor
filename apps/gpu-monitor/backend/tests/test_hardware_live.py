@@ -237,19 +237,21 @@ class HardwareDeadlineTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             ssh.run_bounded(hardware.SENSOR_COMMAND, timeout=0.03)
         self.assertLess(time.monotonic()-started, 0.5)
-        self.assertTrue(closed.is_set())
+        self.assertTrue(closed.wait(0.5))
 
     def test_hung_channel_never_waits_for_unready_exit_status(self):
+        import threading
         import time
         from backend.collectors.ssh_client import SSHClient
+        closed = threading.Event()
         class Channel:
-            closed = False
+            def settimeout(self, timeout): pass
             def exec_command(self, command): pass
-            def recv_ready(self): return False
-            def recv_stderr_ready(self): return False
+            def recv(self, size): return b''
+            def recv_stderr(self, size): return b''
             def exit_status_ready(self): return False
             def recv_exit_status(self): raise AssertionError('must not wait for exit')
-            def close(self): self.closed = True
+            def close(self): closed.set()
         channel = Channel()
         class Transport:
             def open_session(self, timeout): return channel
@@ -262,18 +264,18 @@ class HardwareDeadlineTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             ssh.run_bounded(hardware.SENSOR_COMMAND, timeout=0.03)
         self.assertLess(time.monotonic()-started, 0.5)
-        self.assertTrue(channel.closed)
+        self.assertTrue(closed.wait(0.5))
 
     def test_exit_status_never_waits_before_channel_reports_ready(self):
         from backend.collectors.ssh_client import SSHClient
         class Channel:
             def __init__(self): self.output = b'actual sensor output'
+            def settimeout(self, timeout): pass
             def exec_command(self, command): pass
-            def recv_ready(self): return bool(self.output)
             def recv(self, size):
                 data, self.output = self.output, b''
                 return data
-            def recv_stderr_ready(self): return False
+            def recv_stderr(self, size): return b''
             def exit_status_ready(self): return not self.output
             def recv_exit_status(self):
                 if self.output: raise AssertionError('unbounded wait')
