@@ -134,6 +134,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Set up deployment Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.10'
+      - name: Verify GPU dependencies on deployment Python
+        run: |
+          python -m venv "$RUNNER_TEMP/gpu-runtime-venv"
+          . "$RUNNER_TEMP/gpu-runtime-venv/bin/activate"
+          python -m pip install -r backend/requirements.txt
+          python -m pip check
+          SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password \
+            python -c 'import backend.main; import backend.slack_bridge'
+        working-directory: apps/gpu-monitor
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
