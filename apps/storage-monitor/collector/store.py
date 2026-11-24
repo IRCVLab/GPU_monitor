@@ -40,6 +40,10 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 MAX_TS = 4_102_444_800
 
 
+class StoreLockedError(BlockingIOError):
+    pass
+
+
 class AtomicWriteDurabilityUncertain(Exception):
     pass
 
@@ -156,8 +160,8 @@ class CentralStore:
             os.fchmod(fd, 0o600)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError as exc:
-                raise BlockingIOError("store locked") from exc
+            except BlockingIOError as exc:
+                raise StoreLockedError("store locked") from exc
             yield
         finally:
             try:

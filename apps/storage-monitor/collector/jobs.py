@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import re
 import threading
 import time
 from typing import Any, Mapping, Protocol
+
+from collector.store import AtomicWriteDurabilityUncertain, StoreLockedError
+
+_LOG = logging.getLogger(__name__)
+_TERMINAL_WRITE_RETRY_SECONDS = 2.0
+_TERMINAL_WRITE_RETRY_INTERVAL_SECONDS = 0.025
 
 SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 SAFE_FIELD_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
@@ -144,7 +151,7 @@ class RescanJobManager:
                 "finished_unix": max(now, started),
                 "result_code": "INTERRUPTED",
             }
-            self.store.update_state(sid, active_job=terminal)
+            self._persist_terminal(sid, terminal)
 
     def _prune_threads_locked(self) -> None:
         self._threads = [thread for thread in self._threads if thread.is_alive()]
@@ -160,14 +167,36 @@ class RescanJobManager:
         except Exception:
             state = "failed"
             result_code = "RESCAN_FAILED"
-        finished = int(self.clock.time())
+        finished = max(int(self.clock.time()), job["started_unix"])
         terminal = dict(job, state=state, finished_unix=finished, result_code=result_code)
         try:
-            self.store.update_state(sid, active_job=terminal)
+            self._persist_terminal(sid, terminal)
         finally:
             with self._lock:
                 self._active_global = max(0, self._active_global - 1)
                 self._prune_threads_locked()
+
+    def _persist_terminal(self, sid: str, terminal: dict[str, Any]) -> None:
+        deadline = time.monotonic() + _TERMINAL_WRITE_RETRY_SECONDS
+        while True:
+            try:
+                self.store.update_state(sid, active_job=terminal)
+                return
+            except StoreLockedError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    failure = exc
+                    break
+                time.sleep(min(remaining, _TERMINAL_WRITE_RETRY_INTERVAL_SECONDS))
+            except (OSError, ValueError, AtomicWriteDurabilityUncertain) as exc:
+                failure = exc
+                break
+        # The persisted running state keeps this server reserved until reconciliation.
+        self._record(int(self.clock.time()), terminal["actor"], sid, "JOB_STATE_WRITE_FAILED", terminal["id"])
+        _LOG.error(
+            "Failed to persist terminal rescan state for server %s, job %s, result %s (%s, errno=%s)",
+            sid, terminal["id"], terminal["result_code"], type(failure).__name__, getattr(failure, "errno", None),
+        )
 
     def _record(self, ts: int, actor: str, server_id: str, result_code: str, job_id: str | None) -> dict[str, Any]:
         event = {"timestamp_unix": ts, "actor": _safe_field(actor), "server_id": _safe_field(server_id), "result_code": _safe_field(result_code), "job_id": _safe_field(job_id or "none")}

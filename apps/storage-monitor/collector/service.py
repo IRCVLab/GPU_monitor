@@ -9,7 +9,7 @@ from typing import Any, Mapping, Protocol
 from collector.inventory import Server
 from collector import snapshot
 from collector.scan_telemetry import empty_status
-from collector.store import CentralStore
+from collector.store import CentralStore, StoreLockedError
 from collector.transport import ACTIVE_SCAN_STATES, TransportError, status_tuple, validate_status_envelope
 
 DEFAULT_POLL_INTERVAL_SECONDS = 900
@@ -104,6 +104,8 @@ class PollService:
             return self.store.load_state(server.id)
         try:
             return self._poll_server_locked(server)
+        except StoreLockedError:
+            return self.store.load_state(server.id)
         finally:
             lock.release()
 

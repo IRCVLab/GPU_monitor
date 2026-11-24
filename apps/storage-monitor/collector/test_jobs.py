@@ -1,8 +1,10 @@
+import errno
 import pathlib
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from collector.inventory import Server
 from collector.jobs import RescanJobManager
@@ -121,6 +123,76 @@ class JobsTest(unittest.TestCase):
         cooldown = jobs.request_rescan("alpha-1", "operator-1")
         self.assertEqual(cooldown[0], 429)
         self.assertEqual(cooldown[1]["error"], "COOLDOWN")
+
+    def test_contended_terminal_write_keeps_job_owned_and_other_host_can_finish(self):
+        from collector import store
+
+        alpha, beta = make_server(), make_server("beta-2")
+        for server in (alpha, beta):
+            self.store.update_state(server.id, latest_pull_status="succeeded", latest_scan_result="complete")
+        svc = BlockingService([alpha, beta], self.store)
+        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0, max_concurrent=2)
+        self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 202)
+        self.assertTrue(svc.entered.wait(2))
+        self.addCleanup(jobs.wait_for_idle, 3)
+        self.addCleanup(svc.release.set)
+        contended = threading.Event()
+        beta_finished = threading.Event()
+        update_state = self.store.update_state
+
+        def observe_write(server_id, **updates):
+            try:
+                state = update_state(server_id, **updates)
+            except BlockingIOError:
+                contended.set()
+                raise
+            if server_id == beta.id and state["active_job"]["state"] == "succeeded":
+                beta_finished.set()
+            return state
+
+        lock_path = self.store.root / alpha.id / "store.lock"
+        with mock.patch.object(self.store, "update_state", side_effect=observe_write):
+            with lock_path.open("rb") as lock:
+                store.fcntl.flock(lock, store.fcntl.LOCK_EX | store.fcntl.LOCK_NB)
+                svc.release.set()
+                self.assertTrue(contended.wait(2))
+                self.assertEqual(jobs.active_thread_count(), 1)
+                self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 409)
+                self.assertEqual(jobs.request_rescan(beta.id, "operator")[0], 202)
+                self.assertTrue(beta_finished.wait(2))
+                self.assertEqual(jobs.job_for(alpha.id)[1]["job"]["state"], "running")
+            jobs.wait_for_idle(timeout=3)
+        self.assertEqual(jobs.job_for(alpha.id)[1]["job"]["state"], "succeeded")
+        self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 202)
+        jobs.wait_for_idle(timeout=3)
+
+    def test_terminal_io_error_is_reported_and_restart_recovers_job(self):
+        from collector import store
+
+        server = make_server()
+        svc = BlockingService([server], self.store)
+        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0)
+        code, response = jobs.request_rescan(server.id, "operator")
+        self.assertEqual(code, 202)
+        self.assertTrue(svc.entered.wait(2))
+        with self.assertLogs("collector.jobs", level="ERROR") as logs:
+            with mock.patch.object(store.os, "replace", side_effect=OSError(errno.EIO, "write failed")) as replace:
+                svc.release.set()
+                jobs.wait_for_idle(timeout=3)
+        self.assertEqual(replace.call_count, 1)
+        self.assertIn(response["job"]["id"], logs.output[0])
+        self.assertEqual(jobs.audit_events()[-1]["result_code"], "JOB_STATE_WRITE_FAILED")
+        self.assertEqual(jobs.audit_events()[-1]["job_id"], response["job"]["id"])
+        self.assertEqual(jobs.request_rescan(server.id, "operator")[0], 409)
+        restarted_store = CentralStore(self.store.root)
+        restarted_svc = BlockingService([server], restarted_store)
+        restarted = RescanJobManager(restarted_svc, clock=self.clock, cooldown_seconds=0)
+        job = restarted.job_for(server.id)[1]["job"]
+        self.assertEqual(job["id"], response["job"]["id"])
+        self.assertEqual((job["state"], job["result_code"]), ("failed", "INTERRUPTED"))
+        restarted_svc.release.set()
+        self.assertEqual(restarted.request_rescan(server.id, "operator")[0], 202)
+        restarted.wait_for_idle(timeout=3)
 
     def test_completed_threads_are_removed_from_bounded_bookkeeping(self):
         a = make_server("alpha-1")
