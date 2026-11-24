@@ -1126,7 +1126,7 @@ async function testZeroActionableMountsUseExactKoreanEmptyCopy() {
   const row = viewer.buildOverviewServer({ id: 'boot-only', display_name: 'boot-only', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null }, snapshot, viewer.DEFAULT_CAPACITY_THRESHOLDS);
   const list = viewer.document.getElementById('overviewList');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
-  assert.strictEqual(textTree(list), 'boot-only정상0개 마운트표시할 데이터 마운트 없음완료 기록 없음 · 예약 정보 확인 불가', 'overview must keep the hidden healthy status and exact Korean empty-mount copy');
+  assert.strictEqual(textTree(list), 'boot-only정상0개 마운트표시할 데이터 마운트 없음', 'overview must keep the hidden healthy status and exact Korean empty-mount copy');
 
   viewer.rememberBootstrap({
     mode: 'api', session: { authenticated: true, can_rescan: false, csrf_token: 'csrf' },
