@@ -239,6 +239,8 @@ class DashboardReleaseActivationTest(unittest.TestCase):
     maxDiff = None
 
     def setUp(self) -> None:
+        previous_umask = os.umask(0o022)
+        self.addCleanup(os.umask, previous_umask)
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.root = Path(self.tempdir.name)
@@ -1855,6 +1857,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
 
 class StorageVizProxyLauncherTest(unittest.TestCase):
     def setUp(self) -> None:
+        previous_umask = os.umask(0o022)
+        self.addCleanup(os.umask, previous_umask)
         self.tempdir = tempfile.TemporaryDirectory(); self.addCleanup(self.tempdir.cleanup)
         self.root = Path(self.tempdir.name)
         self.module = self._load("storage_viz_proxy_launcher", REPO_ROOT / "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py")
