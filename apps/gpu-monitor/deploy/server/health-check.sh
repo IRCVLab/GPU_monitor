@@ -254,21 +254,17 @@ check_listener_binding() {
   fail "$label listener is not bound to $expected_host:$port"
 }
 
-env_root=/
-if [[ "$test_mode" == true && -n "$test_prefix" ]]; then
+runtime_env_file=
+if [[ "$test_mode" != true ]]; then
+  runtime_env_file="/etc/gpu-monitor/$env_name.env"
+elif [[ -n "$test_prefix" ]]; then
   [[ "$test_prefix" == /* && -d "$test_prefix" ]] ||
     fail "test PREFIX must be an existing absolute directory"
-  env_root=$test_prefix
+  runtime_env_file="$test_prefix/etc/gpu-monitor/$env_name.env"
 fi
-runtime_env_file="$env_root/etc/gpu-monitor/$env_name.env"
-expected_server_count=0
-backend_port=
-if runtime_env_output=$(load_runtime_env "$runtime_env_file"); then
+if [[ -n "$runtime_env_file" && -e "$runtime_env_file" ]]; then
+  runtime_env_output=$(load_runtime_env "$runtime_env_file") || exit 1
   eval "$runtime_env_output"
-else
-  exit 1
-fi
-if [[ -e "$runtime_env_file" ]]; then
   [[ "$env_name" != live || ${MONITORING_EXPECTED_SERVER_COUNT+x} ]] ||
     fail "$env_name runtime env is missing MONITORING_EXPECTED_SERVER_COUNT"
   [[ ${GPU_MONITOR_BACKEND_PORT+x} ]] ||
