@@ -1144,12 +1144,18 @@ class ScanRunnerTests(unittest.TestCase):
             config_path, _ = self.write_config(tmp)
             mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
             starts = iter((2100, 2101, 2102))
+
+            class Resolver:
+                def resolve(self, device):
+                    return scan_runner.MediaResult("dev-8-1", "hdd", "resolved")
+
+            resolver = Resolver()
             def fake(argv, **kwargs):
                 pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload("/home", started=next(starts))), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
 
-            first = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2105))
-            second = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2106))
+            first = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, media_resolver=resolver, clock=Clock(2105))
+            second = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, media_resolver=resolver, clock=Clock(2106))
             status_path = tmp / "data" / "scan-status.json"
             snapshots_dir = tmp / "data" / "snapshots"
             previous_status_text = status_path.read_text(encoding="utf-8")
@@ -1159,13 +1165,17 @@ class ScanRunnerTests(unittest.TestCase):
             original_fsync_dir = scan_runner._fsync_dir
             fail_once = {"armed": True}
             def fail_status_dir_once(path):
-                if fail_once["armed"] and pathlib.Path(path) == tmp / "data":
+                if (
+                    fail_once["armed"]
+                    and pathlib.Path(path) == tmp / "data"
+                    and status_path.read_text(encoding="utf-8") != previous_status_text
+                ):
                     fail_once["armed"] = False
                     raise OSError("injected post-replace status dir fsync failure")
                 return original_fsync_dir(path)
             scan_runner._fsync_dir = fail_status_dir_once
             try:
-                result = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(2107))
+                result = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, media_resolver=resolver, clock=Clock(2107))
             finally:
                 scan_runner._fsync_dir = original_fsync_dir
 
