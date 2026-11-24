@@ -56,14 +56,21 @@ The server-side puller uses the same outbound-only hardening pattern as GPU Live
 
 Central Storage deployment changes only the central dashboard/proxy release. It never changes the GPU application and never installs, restarts, enables, disables, or rewrites remote `storage-viz-scan.service` or `storage-viz-scan.timer` agents.
 
-## Central install
+## Standalone central install
+
+Storage Live uses the managed deployer at `deploy/server/install-dashboard-deployer.sh`
+and the puller described above. For a separate standalone dashboard on a host
+without the managed installation, run the following from the Storage source directory.
 
 ```bash
 ./install.sh --dry-run
 sudo ./install.sh
 ```
 
-Dry-run renders central assets and does not call `systemctl`, connect to remote hosts, change unrelated services, or start scans.
+Dry-run renders central assets in a temporary directory. Pass `--prefix PATH`
+to choose the output directory. Dry-run skips service control, remote connections,
+and scans. The standalone installer rejects symbolic links in the application
+destination and its parents before writing files, including in dry-run mode.
 
 Central defaults:
 

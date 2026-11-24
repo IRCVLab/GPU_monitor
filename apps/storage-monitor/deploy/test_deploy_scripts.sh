@@ -1188,6 +1188,31 @@ assert_contains "$RENDERED_UNIT" "ReadWritePaths=/srv/storage-viz-data /srv/stor
 [[ "$(file_mode "$RENDER_PREFIX/srv/storage-viz-etc/known_hosts")" == "644" ]] || fail "known_hosts mode is not 0644"
 ! grep -q "^systemctl" "$RENDER_LOG" 2>/dev/null || fail "dry-run override rendering called systemctl"
 
+MANAGED_RELEASE="$TMP/managed-release"
+mkdir -p "$MANAGED_RELEASE/viewer"
+printf 'managed viewer sentinel\n' > "$MANAGED_RELEASE/viewer/sentinel"
+for LINK_LAYOUT in app ancestor; do
+  LINK_PREFIX="$TMP/link-prefix-$LINK_LAYOUT"
+  mkdir -p "$LINK_PREFIX"
+  if [[ "$LINK_LAYOUT" == app ]]; then
+    mkdir "$LINK_PREFIX/opt"
+    ln -s "$MANAGED_RELEASE" "$LINK_PREFIX/opt/storage-viz-dashboard"
+  else
+    ln -s "$MANAGED_RELEASE" "$LINK_PREFIX/opt"
+  fi
+  for INSTALL_MODE in --dry-run --no-enable; do
+    if FAKE_LOG="$RENDER_LOG" PATH="$FAKEBIN:$PATH" "$ROOT/install.sh" \
+        "$INSTALL_MODE" --prefix "$LINK_PREFIX" >"$TMP/linked-install.out" 2>"$TMP/linked-install.err"; then
+      fail "central installer accepted $LINK_LAYOUT symlink in $INSTALL_MODE"
+    fi
+    grep -Fq "symbolic link" "$TMP/linked-install.err" || fail "installer did not identify the symbolic link"
+    assert_contains "$MANAGED_RELEASE/viewer/sentinel" "managed viewer sentinel"
+    [[ ! -e "$LINK_PREFIX/etc" && ! -e "$MANAGED_RELEASE/storage-viz-dashboard" ]] || \
+      fail "central installer wrote files before rejecting the linked app path"
+  done
+done
+pass "central installer rejects managed links before writing any files"
+
 BAD_RENDER_PREFIX="$TMP/bad-render-prefix"
 if STORAGE_VIZ_DASHBOARD_ROOT="/srv/storage viz" "$ROOT/install.sh" --dry-run --prefix "$BAD_RENDER_PREFIX" >"$TMP/bad-render.out" 2>"$TMP/bad-render.err"; then
   fail "installer accepted unsafe whitespace in template value"
