@@ -19,7 +19,8 @@ async def get_hardware_snapshots(request: Request):
     monitor = request.app.state.hardware_monitor
     if monitor.current is not None:
         return {'mode': 'live', 'servers': monitor.current['servers'], 'interval': monitor.interval}
-    return {'mode': 'snapshot', 'servers': read_hardware_snapshots(_SNAPSHOT_PATH), 'interval': monitor.interval}
+    snapshots = monitor.with_psu_ratings(read_hardware_snapshots(_SNAPSHOT_PATH))
+    return {'mode': 'snapshot', 'servers': snapshots, 'interval': monitor.interval}
 
 
 @router.get('/power-history')

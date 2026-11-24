@@ -110,16 +110,25 @@ def _point(at, values):
 
 class HardwareMonitor:
     """Independent, bounded hardware worker; never shares GPU SSH connections."""
-    def __init__(self, sessions, *, interval=60, concurrency=3, ssh_factory=None, gpu_archive_interval=60):
+    def __init__(self, sessions, *, interval=60, concurrency=3, ssh_factory=None, gpu_archive_interval=60,
+                 psu_ratings: dict[int, dict[str, float]] | None = None):
         self.sessions = sessions
         self.interval = max(30, interval)
         self.gpu_archive_interval = max(1, gpu_archive_interval)
         self.ssh_factory = ssh_factory
+        self.psu_ratings = {str(server_id): slots for server_id, slots in (psu_ratings or {}).items()}
         self.executor = ThreadPoolExecutor(max_workers=max(1, min(concurrency, 7)), thread_name_prefix='hardware-ipmi')
         self.current = None
 
     def close(self):
         self.executor.shutdown(wait=False, cancel_futures=True)
+
+    def with_psu_ratings(self, snapshots: dict) -> dict:
+        return {
+            server_id: {**snapshot, 'psu_rated_output_watts': self.psu_ratings[server_id]}
+            if server_id in self.psu_ratings else snapshot
+            for server_id, snapshot in snapshots.items()
+        }
 
     def _collect(self, server):
         factory = self.ssh_factory
@@ -167,7 +176,7 @@ class HardwareMonitor:
         # internal-network series, so WS/API merges identify the same round.
         point_at = max((telemetry_time.parse_at(snapshot['collected_at']) for snapshot in snapshots.values()), default=at)
         point = _point(point_at, [snapshots.get(str(server.id), {}).get('power_watts') for server in servers if server.network == 'internal'])
-        self.current = {'mode': 'live', 'servers': snapshots, 'point': point}
+        self.current = {'mode': 'live', 'servers': self.with_psu_ratings(snapshots), 'point': point}
         return self.current
 
     async def archive_round(self, servers, snapshots, at, *, db=None):

@@ -97,7 +97,11 @@ async def lifespan(app: FastAPI):
         from ws_manager import ws_manager
     from sqlalchemy import select
 
-    hardware_monitor = HardwareMonitor(AsyncSessionLocal, interval=settings.hardware_collect_interval, gpu_archive_interval=settings.archive_interval)
+    hardware_monitor = HardwareMonitor(
+        AsyncSessionLocal, interval=settings.hardware_collect_interval,
+        gpu_archive_interval=settings.archive_interval,
+        psu_ratings=settings.hardware_psu_rated_output_watts,
+    )
     app.state.hardware_monitor = hardware_monitor
     hardware_task = None
     if settings.hardware_collect_enabled and not settings.monitoring_disable_collectors:

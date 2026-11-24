@@ -16,6 +16,7 @@ export interface HardwareSnapshot {
  bmc_ip: string | null;
  power_watts: number | null;
  sensors: HardwareSensor[];
+ psu_rated_output_watts?: Record<string,number>;
 }
 
 export interface SystemNode {
@@ -192,15 +193,16 @@ export function normalizePowerSummary(value: unknown): PowerPeriodSummary | null
  };
 }
 
-export interface PsuRow {name:string;inputWatts:number|null;outputWatts:number|null}
-export function buildPsuRows(inputs:HardwareSensor[],outputs:HardwareSensor[]):PsuRow[] {
- const rows=new Map<string,PsuRow>();
+export interface PsuRow {name:string;inputWatts:number|null;outputWatts:number|null;ratedOutputWatts:number|null}
+export function buildPsuRows(inputs:HardwareSensor[],outputs:HardwareSensor[],ratings:Record<string,number>={}):PsuRow[] {
+ const rows=new Map<string,PsuRow>(Object.entries(ratings).map(([name,ratedOutputWatts])=>[name,{name,inputWatts:null,outputWatts:null,ratedOutputWatts}]));
  for(const [sensors,field] of [[inputs,'inputWatts'],[outputs,'outputWatts']] as const){
   for(const sensor of sensors){
    const index=sensor.name.match(/(?:psu?|power supply)[ _-]*(\d+)/i)?.[1];
    const name=index?`PSU${Number(index)}`:sensor.name.replace(/input|output|power|pwr/gi,'').replace(/(?:^|[_\s])(?:in|out)(?:$|[_\s])/gi,' ').replace(/[_\s]+/g,' ').trim();
-   const row=rows.get(name)??{name,inputWatts:null,outputWatts:null};
-   row[field]=finite(sensor.value)?sensor.value:null;
+   const row=rows.get(name)??{name,inputWatts:null,outputWatts:null,ratedOutputWatts:null};
+   row[field]=finite(sensor.value)&&sensor.value>=0&&!/^(na|n\/a|ns|disabled|not present|unavailable)$/i.test(sensor.status??'')
+    ?sensor.value:null;
    rows.set(name,row);
   }
  }

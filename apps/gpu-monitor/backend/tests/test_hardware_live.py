@@ -131,12 +131,16 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
                 if 'dcmi' in command: raise RuntimeError('unsupported')
                 return 'CPU1 | 35 | degrees C | ok'
             def close(self): calls.append(('close', self.server.id))
-        service = hardware.HardwareMonitor(self.sessions, ssh_factory=FakeSSH, concurrency=1)
+        service = hardware.HardwareMonitor(
+            self.sessions, ssh_factory=FakeSSH, concurrency=1, psu_ratings={1: {'PSU1': 1600}},
+        )
         self.addCleanup(service.close)
         payload = await service.collect_round()
         self.assertEqual(payload['mode'], 'live')
         self.assertIsNone(payload['servers']['1']['power_watts'])
         self.assertEqual(payload['servers']['1']['sensors'][0]['value'], 35)
+        self.assertEqual(payload['servers']['1']['psu_rated_output_watts'], {'PSU1': 1600})
+        self.assertNotIn('psu_rated_output_watts', payload['servers']['2'])
         self.assertEqual([x for x in calls if x[0] == 'new'], [('new', 1), ('new', 2)])
         self.assertEqual(len([x for x in calls if x[0] == 'close']), 2)
         self.assertIsNone(payload['point']['power_watts'])

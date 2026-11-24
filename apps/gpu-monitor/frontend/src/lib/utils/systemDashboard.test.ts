@@ -152,8 +152,8 @@ test('actual PSU sensor names classify Power In/Out and Pwr_PSUx_In/Out separate
 });
 test('PSU table pairs input and output by device, sorts numeric indices and preserves unknowns',async()=>{
  const { buildPsuRows }=await import('./systemDashboard.ts');
- const rows=buildPsuRows([{name:'PSU4 Power In',value:512},{name:'Pwr_PSU1_In',value:0},{name:'PSU3 Power In',value:null}],[{name:'PSU1 Power Out',value:480},{name:'Pwr_PSU2_Out',value:256}]);
- assert.deepEqual(rows,[{name:'PSU1',inputWatts:0,outputWatts:480},{name:'PSU2',inputWatts:null,outputWatts:256},{name:'PSU3',inputWatts:null,outputWatts:null},{name:'PSU4',inputWatts:512,outputWatts:null}]);
+ const rows=buildPsuRows([{name:'PSU4 Power In',value:512},{name:'Pwr_PSU1_In',value:0},{name:'PSU3 Power In',value:null}],[{name:'PSU1 Power Out',value:480},{name:'Pwr_PSU2_Out',value:256}],{PSU1:1600,PSU5:800});
+ assert.deepEqual(rows,[{name:'PSU1',inputWatts:0,outputWatts:480,ratedOutputWatts:1600},{name:'PSU2',inputWatts:null,outputWatts:256,ratedOutputWatts:null},{name:'PSU3',inputWatts:null,outputWatts:null,ratedOutputWatts:null},{name:'PSU4',inputWatts:512,outputWatts:null,ratedOutputWatts:null},{name:'PSU5',inputWatts:null,outputWatts:null,ratedOutputWatts:800}]);
 });
 
 test('all power readings use kW while preserving small PSU values and missing data',async()=>{
