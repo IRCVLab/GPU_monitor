@@ -149,6 +149,9 @@ jobs:
       - name: Build frontend
         run: npm run build
         working-directory: apps/gpu-monitor/frontend
+      - name: Test frontend source
+        run: npm run test:unit
+        working-directory: apps/gpu-monitor/frontend
       - name: Test frontend runtime proxy
         run: npm run test:runtime
         working-directory: apps/gpu-monitor/frontend
