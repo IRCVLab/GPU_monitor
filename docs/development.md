@@ -47,7 +47,8 @@ Install Node.js 22 and Python 3.12. Run these commands from the repository root:
 npm --prefix apps/gpu-monitor/frontend ci
 python3.12 -m venv apps/gpu-monitor/.venv
 . apps/gpu-monitor/.venv/bin/activate
-python -m pip install -r apps/gpu-monitor/backend/requirements.txt pytest==8.4.1
+python -m pip install -r apps/gpu-monitor/backend/requirements.txt
+python -m pip install pytest==8.4.1
 make verify
 ```
 
@@ -67,6 +68,12 @@ make test-gpu
 
 `make test-gpu` runs frontend type checks, the build, source and proxy tests, and
 backend tests. The GPU CI job uses this same command.
+
+The backend requirements lock includes direct and transitive dependencies with
+SHA-256 wheel hashes. CI and Live install the same lock on Python 3.12.
+When updating dependencies, review the resolved versions and wheel hashes,
+then install the lock in a fresh Python 3.12 virtual environment and run
+`python -m pip check` and `make test-gpu`.
 
 Runtime scripts are app-local:
 
