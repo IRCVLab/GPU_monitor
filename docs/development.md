@@ -195,6 +195,12 @@ sudo systemctl status gpu-monitor-bridge@live.service
 sudo -u gpu-deploy-live /usr/local/libexec/activate-release.sh status live
 ```
 
+Allow up to two minutes for the Live backend listener to appear while the
+database integrity check and backup run. The deployment installer manages
+`/usr/local/libexec/health-check.sh` separately from the application archive.
+Install the updated script before activating a release that depends on this
+startup allowance.
+
 The old GitHub-hosted SSH deployment workflow has been removed. Do not create or maintain a GitHub Environment or GitHub deployment secrets for GPU Live. The existing SSH forced-command path may remain only for manual emergency inspection and rollback:
 
 ```text

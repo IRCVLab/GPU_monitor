@@ -11,6 +11,8 @@ case "$#:${1:-}" in
     command_path=$PRODUCTION_PATH
     retries=5
     sleep_seconds=2
+    # Live SQLite integrity verification and backup finish before Uvicorn binds.
+    live_backend_listener_retries=61
     ;;
   2:--test-mode)
     case "$2" in dev|live) ;; *) fail "invalid test-mode environment" ;; esac
@@ -20,6 +22,7 @@ case "$#:${1:-}" in
     systemctl_command=systemctl
     ss_command=ss
     retries=${GPU_MONITOR_HEALTH_RETRIES:-5}
+    live_backend_listener_retries=$retries
     sleep_seconds=${GPU_MONITOR_HEALTH_SLEEP_SECONDS:-2}
     ;;
   *)
@@ -235,15 +238,15 @@ managed_unit_snapshot() {
 }
 
 check_listener_binding() {
-  local expected_host=$1 port=$2 label=$3 output attempt=1
+  local expected_host=$1 port=$2 label=$3 limit=${4:-$retries} output attempt=1
   local state recv_q send_q local_address peer_address remainder
-  while (( attempt <= retries )); do
+  while (( attempt <= limit )); do
     output=$("$ss_command" -H -ltn "sport = :$port") ||
       fail "$label listener inspection failed"
     while read -r state recv_q send_q local_address peer_address remainder; do
       [[ "$local_address" == "$expected_host:$port" ]] && return 0
     done <<< "$output"
-    if (( attempt < retries )); then
+    if (( attempt < limit )); then
       sleep "$sleep_seconds"
     fi
     attempt=$((attempt + 1))
@@ -290,7 +293,7 @@ if [[ "$env_name" == dev ]]; then
   require_server_floor "$expected_server_count" "$backend_port" "dev backend"
 else
   backend_port=${backend_port:-8001}
-  check_listener_binding 127.0.0.1 "$backend_port" "live backend"
+  check_listener_binding 127.0.0.1 "$backend_port" "live backend" "$live_backend_listener_retries"
   check_listener_binding 0.0.0.0 5173 "live frontend"
   check_listener_binding 0.0.0.0 8000 "live bridge"
   check_url "http://127.0.0.1:${backend_port}/health" || fail "live backend health failed"
