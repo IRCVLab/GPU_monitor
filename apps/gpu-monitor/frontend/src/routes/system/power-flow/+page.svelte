@@ -16,9 +16,10 @@
  import {FlowApiError,cloneDiagram,createDiagram,evaluateGraph,getCatalog,getDiagram,getDiagrams,getFlowState,saveDiagram} from '$lib/power-flow/api';
  import '$lib/styles/power-flow.css';
  let catalog=$state<FlowCatalog|null>(null),diagrams=$state<DiagramSummary[]>([]),current=$state<FlowDiagram|null>(null);
- let history=$state<EditorHistory>(createHistory(emptyGraph()));
+ const initialDraft={name:'새 전원 배선도',graph:emptyGraph()};
+ let history=$state<EditorHistory>(createHistory(initialDraft.graph));
  let flowState=$state<FlowState|null>(null),selection=$state<FlowSelection|null>(null);
- let name=$state('새 전원 배선도'),saved=$state(''),editing=$state(false),loading=$state(true),busy=$state(false),error=$state(''),notice=$state('');
+ let name=$state(initialDraft.name),saved=$state(JSON.stringify(initialDraft)),editing=$state(false),loading=$state(true),busy=$state(false),error=$state(''),notice=$state('');
  let settingsOpen=$state(false),peaksLoading=$state(false),peaksError=$state('');
  let autoMode=$state(true),layoutBusy=$state(false),layoutError=$state(''),arranged=$state<FlowGraph|null>(null),routes=$state<FlowRoutes>({}),editorRoutes=$state<FlowRoutes>({}),editorRouteKey=$state('');
  let focusNodeId=$state<string|null>(null),focusVersion=$state(0);
@@ -159,7 +160,7 @@
   let disposed=false;let ready=false;
   function round(){if(!ready||historical)return;clearTimeout(roundTimer);roundTimer=setTimeout(()=>{void refresh();},150);}
   const unsubscribers=[hardwareSnapshots.subscribe(round),powerHistory.subscribe(round),wsConnected.subscribe(connected=>{if(connected)round();})];
-  void (async()=>{try{const results=await Promise.allSettled([getCatalog(),getDiagrams()]);if(disposed)return;if(results[0].status==='fulfilled')catalog=results[0].value;else error=results[0].reason instanceof Error?results[0].reason.message:'서버 목록을 불러오지 못했습니다.';if(results[1].status==='fulfilled'){diagrams=results[1].value;if(diagrams.length)await selectDocument(diagrams[0].id);else editing=true;}else error='저장된 도면을 불러오지 못했습니다.';}finally{if(!disposed){loading=false;mounted=true;ready=true;if(!saved)saved=JSON.stringify({name,graph});}}})();
+  void (async()=>{try{const results=await Promise.allSettled([getCatalog(),getDiagrams()]);if(disposed)return;if(results[0].status==='fulfilled')catalog=results[0].value;else error=results[0].reason instanceof Error?results[0].reason.message:'서버 목록을 불러오지 못했습니다.';if(results[1].status==='fulfilled'){diagrams=results[1].value;if(diagrams.length)await selectDocument(diagrams[0].id);else editing=true;}else error='저장된 도면을 불러오지 못했습니다.';}finally{if(!disposed){loading=false;mounted=true;ready=true;}}})();
   return()=>{disposed=true;mounted=false;liveRequests.cancel();peakRequests.cancel();layoutRequest++;clearTimeout(previewTimer);clearTimeout(roundTimer);for(const unsubscribe of unsubscribers)unsubscribe();password='';};
  });
 </script>
