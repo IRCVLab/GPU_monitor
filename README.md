@@ -13,17 +13,8 @@ Run setup and checks from each application directory.
 
 ### GPU monitor
 
-```bash
-cd apps/gpu-monitor/backend
-python3.12 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-
-cd ../frontend
-npm install
-npm run check
-npm run build
-```
+Follow the [GPU Monitor development guide](docs/development.md#gpu-monitor-development)
+to install dependencies, start a worktree-local instance, and run the same checks as CI.
 
 ### Storage monitor
 

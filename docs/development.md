@@ -68,26 +68,18 @@ The app-local virtual environment is ignored by Git.
 
 ## GPU Monitor development
 
-Frontend checks:
+Install Node.js 22 and Python 3.12, then run these commands from the repository root.
 
 ```bash
-cd apps/gpu-monitor/frontend
-npm ci
-npm run check
-npm run test:unit
-npm run build
+python3.12 -m venv apps/gpu-monitor/.venv
+. apps/gpu-monitor/.venv/bin/activate
+python -m pip install -r apps/gpu-monitor/backend/requirements.txt
+npm --prefix apps/gpu-monitor/frontend ci
+make test-gpu
 ```
 
-Backend tests:
-
-```bash
-cd apps/gpu-monitor
-python3.12 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r backend/requirements.txt
-SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password \
-  python -m unittest discover -s backend/tests -v
-```
+`make test-gpu` runs frontend type checks, the build, source and proxy tests, and
+backend tests. The GPU CI job uses this same command.
 
 Runtime scripts are app-local:
 

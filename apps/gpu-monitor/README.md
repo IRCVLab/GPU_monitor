@@ -13,22 +13,8 @@ make build-gpu
 
 The root Makefile delegates into `apps/gpu-monitor` and `apps/gpu-monitor/frontend`; it does not require a shared monorepo package manager.
 
-## Clean baseline
-
-```bash
-cd apps/gpu-monitor/frontend
-npm ci
-npm run check
-npm run build
-cd ..
-python3.12 -m venv .venv
-. .venv/bin/activate
-pip install -r backend/requirements.txt
-SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password \
-  python -m unittest discover -s backend/tests -v
-deactivate
-rm -rf .venv
-```
+The [development guide](../../docs/development.md#gpu-monitor-development)
+shows how to install dependencies and start a local instance.
 
 ## App-local scripts
 
