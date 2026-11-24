@@ -64,6 +64,42 @@ with open(os.path.join(root, b"bad-\xff-name.bin"), "wb") as fh:
     fh.write(b"\0" * 4096)
 PYEOF
 
+UTF8_DIR="$TMP/utf8"
+mkdir -p "$UTF8_DIR"
+$PY - "$UTF8_DIR" <<'PYEOF'
+import os, sys
+root = os.fsencode(sys.argv[1])
+for name in ("보고서.txt", "été.txt", "emoji😀.txt", 'quote"\r\n.txt'):
+    with open(os.path.join(root, name.encode()), "wb") as fh:
+        fh.write(b"x")
+for name in (b"bad-\xff.txt", b"short-\xf0", b"surrogate-\xed\xa0\x80"):
+    with open(os.path.join(root, name), "wb") as fh:
+        fh.write(b"x")
+PYEOF
+UTF8_DEV="$($PY -c 'import os, sys; dev = os.stat(sys.argv[1]).st_dev; print(f"{os.major(dev)}:{os.minor(dev)}")' "$UTF8_DIR")"
+"$BIN" --threads 2 --top 20 --out "$TMP/utf8.json" --target "$UTF8_DIR" "$UTF8_DEV" \
+    || fail "UTF-8 fixture scan failed"
+$PY - "$TMP/utf8.json" "$UTF8_DIR" <<'PYEOF' || fail "JSON paths did not preserve UTF-8"
+import json, sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+def paths(value):
+    if isinstance(value, dict):
+        nested = paths(list(value.values()))
+        if "path" in value:
+            nested.add(value["path"])
+        return nested
+    if isinstance(value, list):
+        return set().union(*(paths(child) for child in value))
+    return set()
+
+actual = paths(payload)
+for name in ("보고서.txt", "été.txt", "emoji😀.txt", 'quote"\r\n.txt',
+             "bad-�.txt", "short-�", "surrogate-���"):
+    assert str(Path(sys.argv[2]) / name) in actual, actual
+PYEOF
+
 # Reference: du disk usage of the whole tree (one filesystem, block size 1).
 # du dedups hardlinks and does not follow symlinks, matching hstscan.
 # Run du with the dir readable but noaccess unreadable -> du also reports the

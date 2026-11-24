@@ -4,13 +4,12 @@ No observations are cached across rounds. Shared node/cable/port leaf sets share
 one calculation, and timestamp formatting happens only when returning peaks.
 """
 import math
-from datetime import timezone
-from .evaluator import _get, normalize_slot, iso
+try:
+    from ..telemetry_time import iso, utc_naive
+except ImportError:  # pragma: no cover - direct execution fallback
+    from telemetry_time import iso, utc_naive
 
-
-def _naive_utc(value):
-    if value.tzinfo is None:return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+from .evaluator import _get, normalize_slot
 
 
 class CompiledPeaks:
@@ -59,7 +58,7 @@ class CompiledPeaks:
         self.incomplete=False;self.sensor_indices={}
 
     def add_round(self,readings,at):
-        at_naive=_naive_utc(at)
+        at_naive=utc_naive(at)
         watts=[fixed for fixed,_ in self.leaves]
         observed=[None]*len(self.leaves);seen=set()
         for row in readings:
@@ -75,7 +74,7 @@ class CompiledPeaks:
             seen.add(index)
             value=_get(row,'power_watts');timestamp=_get(row,'observed_at')
             if value is None or not math.isfinite(value) or value<0 or timestamp is None:continue
-            timestamp=_naive_utc(timestamp)
+            timestamp=utc_naive(timestamp)
             if not 0<=(at_naive-timestamp).total_seconds()<=self.max_age:continue
             watts[index]=value;observed[index]=timestamp
         amps=[value/denominator if value is not None else None for value,(_,denominator) in zip(watts,self.leaves)]

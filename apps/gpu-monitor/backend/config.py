@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from typing import Annotated
+from pydantic import AliasChoices, Field, PositiveInt, StringConstraints, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -9,6 +10,9 @@ _ENV_FILE = Path(__file__).parent.parent / ".env"
 
 # DB 기본 경로를 backend/ 기준 절대경로로 고정
 _DEFAULT_DB = Path(__file__).parent / "data" / "gpu_monitor.db"
+
+PsuSlot = Annotated[str, StringConstraints(pattern=r'^PSU[1-9][0-9]*$')]
+RatedWatts = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 
 class Settings(BaseSettings):
@@ -33,6 +37,7 @@ class Settings(BaseSettings):
     # Development-safe switches. They default to false so production behavior is unchanged.
     hardware_collect_enabled: bool = False
     hardware_collect_interval: int = Field(default=60, ge=30, le=3600)
+    hardware_psu_rated_output_watts: dict[PositiveInt, dict[PsuSlot, RatedWatts]] = Field(default_factory=dict)
     monitoring_disable_collectors: bool = False
     monitoring_disable_slack: bool = False
     monitoring_expected_server_count: int = 0

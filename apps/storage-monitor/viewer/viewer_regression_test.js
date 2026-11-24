@@ -545,16 +545,27 @@ async function testOverviewOnlySnapshotNeverSatisfiesDetailLoading() {
   assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-full');
 }
 
-function testOverviewHydrationCannotOverwriteANewerDetailRequest() {
-  const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
-  const start = app.indexOf('function startOverviewSnapshotHydration');
-  const end = app.indexOf('\nasync function loadSnapshotForCurrentSource', start);
-  assert(start >= 0 && end > start, 'overview hydration helper must exist');
-  const body = app.slice(start, end);
-  assert(/const detailVersionsAtStart = new Map\(detailRequestVersions\);/.test(body), 'background hydration must capture per-server detail versions before requests start');
-  const guard = body.indexOf('(detailRequestVersions.get(entry.id) || 0) !== (detailVersionsAtStart.get(entry.id) || 0)');
-  const cacheWrite = body.indexOf('snapshotCache.set(entry.id, entry.snapshot)');
-  assert(guard >= 0 && guard < cacheWrite, 'a newer detail request must invalidate stale background snapshot writes');
+async function testOverviewHydrationCannotOverwriteANewerDetailRequest() {
+  const viewer = loadViewer();
+  let publishHydrated;
+  const serverId = 'alpha-1';
+  const summary = { id: serverId, display_name: 'alpha', mount_count: 1 };
+  const snapshot = hostname => ({ server_id: serverId, hostname, selected_roots: [], mounts: [], users: [], top_files: [], stale: [] });
+
+  await viewer.refreshOverviewData({ bootstrapLoader: async () => ({
+    mode: 'api', summaries: [summary], snapshots: [],
+    startSnapshotLoading(onEntry) {
+      publishHydrated = onEntry;
+      return Promise.resolve();
+    },
+  }) });
+  viewer.applyRouteState({ serverId, tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.loadSnapshotForCurrentSource = async () => snapshot('new-detail');
+  await viewer.ensureDetailLoaded(serverId, true);
+  publishHydrated({ id: serverId, snapshot: snapshot('old-overview'), error: null });
+
+  await viewer.ensureDetailLoaded(serverId, false);
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'new-detail');
 }
 
 function testSampleMarkerAndCompactOverviewOmitsAggregateSurface() {
@@ -2211,6 +2222,57 @@ async function testOlderSameServerSuccessCannotOverrideNewerSuccess() {
   assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-new', 'obsolete older alpha success must not replace cached snapshot data');
 }
 
+async function testRemovedServerCannotRepopulateTheSnapshotCache() {
+  const viewer = loadViewer();
+  const oldRequest = deferred();
+  const serverId = 'alpha-1';
+  const inventory = apiBootstrapForRescan();
+  viewer.rememberBootstrap(inventory);
+  viewer.loadSnapshotForCurrentSource = () => oldRequest.promise;
+  viewer.navigateToServer(serverId, { skipHistory: true, skipDataLoad: true });
+  const loading = viewer.ensureDetailLoaded(serverId, true);
+
+  viewer.navigateToOverview({ skipHistory: true });
+  await viewer.refreshOverviewData({ bootstrapLoader: async () => ({
+    ...inventory, summaries: inventory.summaries.filter(server => server.id !== serverId),
+  }) });
+  oldRequest.resolve({ server_id: serverId, hostname: 'retired', mounts: [], users: [], top_files: [], stale: [] });
+  await loading;
+  await viewer.refreshOverviewData({ bootstrapLoader: async () => inventory });
+
+  viewer.navigateToServer(serverId, { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data, null,
+    'an old request must not recreate a cache entry for a removed server');
+}
+
+async function testInventoryRefreshEvictsPreviouslyDisplayedDetails() {
+  for (const lightweight of [false, true]) {
+    const viewer = loadViewer();
+    const id = 'alpha-1';
+    const snapshot = { server_id: id, hostname: 'retired', mounts: [], users: [], top_files: [], stale: [] };
+    const inventory = apiBootstrapForRescan([{ id, snapshot }]);
+    const removed = inventory.summaries.filter(row => row.id !== id);
+    viewer.rememberBootstrap(inventory);
+    viewer.navigateToServer(id, { skipHistory: true, skipDataLoad: true });
+    assert.equal(viewer.getCurrentDetailDebugState().data.hostname, 'retired');
+
+    if (lightweight) {
+      viewer.navigateToOverview({ skipHistory: true });
+      viewer.loadServerSummaries = async () => ({ servers: removed });
+      await viewer.refreshScanOverview();
+    } else {
+      await viewer.refreshOverviewData({ bootstrapLoader: async () => ({
+        ...inventory, summaries: removed, snapshots: [],
+      }) });
+      assert.equal(viewer.getCurrentDetailDebugState().data, null);
+    }
+    viewer.navigateToOverview({ skipHistory: true });
+    await viewer.refreshOverviewData({ bootstrapLoader: async () => ({ ...inventory, snapshots: [] }) });
+    viewer.navigateToServer(id, { skipHistory: true, skipDataLoad: true });
+    assert.equal(viewer.getCurrentDetailDebugState().data, null);
+  }
+}
+
 async function testOlderSameServerFailureCannotOverrideNewerSuccess() {
   const viewer = loadViewer();
   const older = deferred();
@@ -2905,7 +2967,7 @@ async function testScanStatusContinuesDuringSnapshotDownload() {
 }
 
 async function testScanStatusRetriesUntilNewSnapshotDisplayed() {
-  const viewer = loadViewer({fetch: async () => ({ok:true,json:async()=>({state:'complete',generation:'new',observed_unix:Date.now()/1000})})});
+  const viewer = loadViewer({fetch: async () => ({ok:true,json:async()=>({state:'idle',published_generation:'new',observed_unix:Date.now()/1000})})});
   const timers=[];
   viewer.setTimeout=(fn,ms)=>{const timer={fn,ms};timers.push(timer);return timer;};
   viewer.clearTimeout=t=>{t.cancelled=true;};
@@ -2951,7 +3013,7 @@ async function main() {
   await testApiBootstrapRendersBeforeSlowSnapshotsAndStreamsCompletedServers();
   await testApiBootstrapUsesEmbeddedOverviewSnapshotsWithoutFullDownloads();
   await testOverviewOnlySnapshotNeverSatisfiesDetailLoading();
-  testOverviewHydrationCannotOverwriteANewerDetailRequest();
+  await testOverviewHydrationCannotOverwriteANewerDetailRequest();
   testSampleMarkerAndCompactOverviewOmitsAggregateSurface();
   testMountCentricOverviewDomFieldsAndStableNavigation();
   testMountStatusTextAppearsOnlyForExceptionalPressure();
@@ -2999,6 +3061,8 @@ async function main() {
   await testDetailNavigationGuardsAgainstStaleAsyncCompletion();
   await testOlderSameServerSuccessCannotOverrideNewerSuccess();
   await testOlderSameServerFailureCannotOverrideNewerSuccess();
+  await testRemovedServerCannotRepopulateTheSnapshotCache();
+  await testInventoryRefreshEvictsPreviouslyDisplayedDetails();
   testDeleteCommandQuoting();
   testTreemapCleanupModeBindsCleanupRenderedListenerOnce();
   testCleanupSelectionLifecycleShowsRemovalImmediatelyAndResetsOnServerChange();

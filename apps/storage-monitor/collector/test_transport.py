@@ -186,14 +186,14 @@ class OpenSshTransportTests(unittest.TestCase):
         from collector.transport import OpenSshTransport
 
         fake = FakeRunner()
-        fake.ssh_stdout_next = b"active\n"
+        fake.ssh_stdout_next = b"inactive\n\nactivating\n"
         state = OpenSshTransport(runner=fake, active_state_timeout_seconds=7).scan_active_state(server())
 
-        self.assertEqual(state, "active")
+        self.assertEqual(state, "activating")
         argv = fake.calls[0]["argv"]
         dash_index = argv.index("--")
         self.assertEqual(argv[dash_index + 1], "alpha.example.test")
-        self.assertEqual(argv[dash_index + 2:], ["/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service"])
+        self.assertEqual(argv[dash_index + 2:], ["/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service", "storage-viz-scheduled-scan.service"])
         self.assertIn("User=monitoring", "\0".join(argv))
         self.assertNotIn("sudo", argv[dash_index + 2:])
         self.assertFalse(fake.calls[0]["shell"])

@@ -182,6 +182,42 @@ function safeServerId(serverId) {
   if (!isSafeHostToken(serverId)) throw new Error("invalid server id");
   return serverId;
 }
+function createDetailSnapshots() {
+  const snapshots = new Map();
+  const versions = new Map();
+  let lastVersion = 0;
+
+  return {
+    get: serverId => snapshots.get(serverId),
+    set: (serverId, snapshot) => snapshots.set(serverId, snapshot),
+    retain(serverIds, preserve) {
+      if (!preserve) {
+        snapshots.clear();
+        versions.clear();
+        return;
+      }
+      for (const serverId of snapshots.keys()) {
+        if (!serverIds.has(serverId)) snapshots.delete(serverId);
+      }
+      for (const serverId of versions.keys()) {
+        if (!serverIds.has(serverId)) versions.delete(serverId);
+      }
+    },
+    begin(serverId) {
+      const version = ++lastVersion;
+      versions.set(serverId, version);
+      return version;
+    },
+    isCurrent: (serverId, version) => versions.get(serverId) === version,
+    checkpoint: () => new Map(versions),
+    acceptHydrated(entry, checkpoint) {
+      if (versions.get(entry.id) !== checkpoint.get(entry.id)) return false;
+      if (entry.snapshot) snapshots.set(entry.id, entry.snapshot);
+      return true;
+    },
+  };
+}
+
 async function loadServerSnapshot(serverId) {
   return fetchJson("/api/servers/" + encodeURIComponent(safeServerId(serverId)) + "/snapshot");
 }
@@ -226,7 +262,7 @@ if (typeof globalThis !== "undefined") {
   Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken });
 }
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken };
+  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken, createDetailSnapshots };
 }
 
 /* =========================================================================

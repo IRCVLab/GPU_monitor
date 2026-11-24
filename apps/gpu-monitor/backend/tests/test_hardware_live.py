@@ -131,12 +131,16 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
                 if 'dcmi' in command: raise RuntimeError('unsupported')
                 return 'CPU1 | 35 | degrees C | ok'
             def close(self): calls.append(('close', self.server.id))
-        service = hardware.HardwareMonitor(self.sessions, ssh_factory=FakeSSH, concurrency=1)
+        service = hardware.HardwareMonitor(
+            self.sessions, ssh_factory=FakeSSH, concurrency=1, psu_ratings={1: {'PSU1': 1600}},
+        )
         self.addCleanup(service.close)
         payload = await service.collect_round()
         self.assertEqual(payload['mode'], 'live')
         self.assertIsNone(payload['servers']['1']['power_watts'])
         self.assertEqual(payload['servers']['1']['sensors'][0]['value'], 35)
+        self.assertEqual(payload['servers']['1']['psu_rated_output_watts'], {'PSU1': 1600})
+        self.assertNotIn('psu_rated_output_watts', payload['servers']['2'])
         self.assertEqual([x for x in calls if x[0] == 'new'], [('new', 1), ('new', 2)])
         self.assertEqual(len([x for x in calls if x[0] == 'close']), 2)
         self.assertIsNone(payload['point']['power_watts'])
@@ -233,19 +237,21 @@ class HardwareDeadlineTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             ssh.run_bounded(hardware.SENSOR_COMMAND, timeout=0.03)
         self.assertLess(time.monotonic()-started, 0.5)
-        self.assertTrue(closed.is_set())
+        self.assertTrue(closed.wait(0.5))
 
     def test_hung_channel_never_waits_for_unready_exit_status(self):
+        import threading
         import time
         from backend.collectors.ssh_client import SSHClient
+        closed = threading.Event()
         class Channel:
-            closed = False
+            def settimeout(self, timeout): pass
             def exec_command(self, command): pass
-            def recv_ready(self): return False
-            def recv_stderr_ready(self): return False
+            def recv(self, size): return b''
+            def recv_stderr(self, size): return b''
             def exit_status_ready(self): return False
             def recv_exit_status(self): raise AssertionError('must not wait for exit')
-            def close(self): self.closed = True
+            def close(self): closed.set()
         channel = Channel()
         class Transport:
             def open_session(self, timeout): return channel
@@ -258,18 +264,18 @@ class HardwareDeadlineTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             ssh.run_bounded(hardware.SENSOR_COMMAND, timeout=0.03)
         self.assertLess(time.monotonic()-started, 0.5)
-        self.assertTrue(channel.closed)
+        self.assertTrue(closed.wait(0.5))
 
     def test_exit_status_never_waits_before_channel_reports_ready(self):
         from backend.collectors.ssh_client import SSHClient
         class Channel:
             def __init__(self): self.output = b'actual sensor output'
+            def settimeout(self, timeout): pass
             def exec_command(self, command): pass
-            def recv_ready(self): return bool(self.output)
             def recv(self, size):
                 data, self.output = self.output, b''
                 return data
-            def recv_stderr_ready(self): return False
+            def recv_stderr(self, size): return b''
             def exit_status_ready(self): return not self.output
             def recv_exit_status(self):
                 if self.output: raise AssertionError('unbounded wait')

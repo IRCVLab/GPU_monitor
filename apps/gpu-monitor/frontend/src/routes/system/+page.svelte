@@ -1,11 +1,14 @@
 <script lang="ts">
  import { onMount } from 'svelte';
+ import { get } from 'svelte/store';
  import { getServerStatus } from '$lib/api';
  import { serverStates, normalizeServerState } from '$lib/stores/servers';
  import { hardwareSnapshots, powerHistory, applyHardwareUpdate, normalizePowerPoint } from '$lib/stores/hardware';
  import { dashboardLayoutWidth } from '$lib/stores/dashboardPrefs';
  import {normalizeServerHistories} from '$lib/stores/systemTelemetry';
+ import type {ServerState} from '$lib/types';
  import type {ServerTelemetryHistory} from '$lib/utils/systemTelemetryVisuals';
+ import { mergePolledServerStates } from '$lib/utils/serverStateMerge';
  import SystemIcon from '$lib/components/SystemIcon.svelte';
  import SystemHeader from '$lib/components/SystemHeader.svelte';
  import SystemPowerChart from '$lib/components/SystemPowerChart.svelte';
@@ -88,19 +91,20 @@
   if(refreshing)return;
   refreshing=true;loadError='';sensorError='';
   loadController?.abort();const controller=new AbortController();loadController=controller;
+  const atRequestStart=get(serverStates);
   const timeout=setTimeout(()=>controller.abort(),12000);
   try {
-   const [statusResult,hardwareResult]=await Promise.allSettled([getServerStatus(),fetch('/api/system/hardware',{signal:controller.signal}).then(async response=>{if(!response.ok)throw new Error();return response.json();})]);
+   const [statusResult,hardwareResult]=await Promise.allSettled([getServerStatus({signal:controller.signal}),fetch('/api/system/hardware',{signal:controller.signal}).then(async response=>{if(!response.ok)throw new Error();return response.json();})]);
    if(controller.signal.aborted)throw new Error();
-   if(statusResult.status==='fulfilled')serverStates.update(current=>{
-    const next=new Map(current);
-    for(const [key,raw]of Object.entries(statusResult.value)){
-     const incoming=normalizeServerState(raw,Number(key));if(!incoming)continue;
-     const existing=next.get(incoming.server_id);
-     if(existing?.last_seen && incoming.last_seen && Date.parse(existing.last_seen)>Date.parse(incoming.last_seen))continue;
-     next.set(incoming.server_id,incoming);
-    }return next;
-   });else loadError='서버 연결 오류';
+   if(statusResult.status==='fulfilled'&&statusResult.value&&typeof statusResult.value==='object'&&!Array.isArray(statusResult.value)){
+    const rows=Object.entries(statusResult.value);
+    const incoming=new Map<number,ServerState>();
+    for(const [key,raw]of rows){
+     const state=normalizeServerState(raw,Number(key));
+     if(state?.server_id===Number(key))incoming.set(state.server_id,state);
+    }
+    serverStates.update(current=>mergePolledServerStates(atRequestStart,current,incoming,incoming.size===rows.length));
+   }else loadError='서버 연결 오류';
    if(hardwareResult.status==='fulfilled')applyHardwareUpdate(hardwareResult.value);
    else sensorError='센서 연결 오류';
   }catch{loadError='연결을 확인한 뒤 다시 시도해 주세요.';}

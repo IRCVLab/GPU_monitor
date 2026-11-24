@@ -66,6 +66,22 @@ install_file() {
   chmod "$mode" "$dest"
 }
 
+reject_symbolic_links() {
+  local path="$1" parent
+  while [[ "$path" != "/" && "$path" != "." ]]; do
+    while [[ "$path" == */ && "$path" != "/" ]]; do
+      path="${path%/}"
+    done
+    if [[ -L "$path" ]]; then
+      printf 'ERROR: standalone install cannot write through symbolic link %s\n' "$path" >&2
+      exit 2
+    fi
+    parent="$(dirname -- "$path")"
+    [[ "$parent" != "$path" ]] || break
+    path="$parent"
+  done
+}
+
 validate_template_value() {
   local name="$1" value="$2"
   if [[ -z "$value" || "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" =~ [[:cntrl:]] || "$value" =~ [[:space:]] ]]; then
@@ -147,6 +163,16 @@ DATA_DEST="$(prefix_path "$DATA_DIR")"
 STATE_DEST="$(prefix_path "$STATE_DIR")"
 ENV_DEST="$(prefix_path "$CONFIG_DIR/dashboard.env")"
 INV_DEST="$(prefix_path "$INVENTORY_FILE")"
+
+reject_symbolic_links "$APP_DEST"
+if [[ "$SOURCE_ROOT" != "$APP_DEST" ]]; then
+  reject_symbolic_links "$APP_DEST/install.sh"
+  reject_symbolic_links "$APP_DEST/data"
+  for sample in "$SOURCE_ROOT"/data/hosts.json "$SOURCE_ROOT"/data/*.sample.json; do
+    [[ -e "$sample" ]] || continue
+    reject_symbolic_links "$APP_DEST/data/$(basename "$sample")"
+  done
+fi
 
 printf '[*] source      : %s\n' "$SOURCE_ROOT"
 printf '[*] app root    : %s\n' "$DASHBOARD_ROOT"

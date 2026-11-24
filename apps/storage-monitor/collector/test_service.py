@@ -143,6 +143,26 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(state["freshness"], "fresh")
         self.assertEqual(state["snapshot_availability"], "available")
 
+    def test_contended_store_write_does_not_skip_other_hosts_in_poll_cycle(self):
+        from collector import store
+
+        alpha, beta = make_server(), make_server("beta-2")
+        self.store.update_state(alpha.id, freshness="unknown")
+        for server in (alpha, beta):
+            payload = payload_for(server.id, digest=server.scanner_digest)
+            status, data = status_data(payload)
+            self.tx.status[server.id] = status
+            self.tx.downloads[server.id] = (status, data)
+        svc = self.service([alpha, beta])
+
+        with (self.store.root / alpha.id / "store.lock").open("rb") as lock:
+            store.fcntl.flock(lock, store.fcntl.LOCK_EX | store.fcntl.LOCK_NB)
+            results = svc.poll_once()
+
+        self.assertEqual(results[alpha.id]["latest_pull_status"], "not_installed")
+        self.assertEqual(results[beta.id]["latest_pull_status"], "succeeded")
+        self.assertEqual(svc.poll_server(alpha.id)["latest_pull_status"], "succeeded")
+
     def test_new_complete_and_partial_snapshots_apply_and_failed_root_remains_visible(self):
         s = make_server(); self.seed(s)
         payload = payload_for(s.id, started=1719201000, digest=s.scanner_digest, partial=True)
@@ -343,7 +363,7 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(overview["server_id"], "alpha-1")
         self.assertEqual(set(overview["selected_roots"][0]), {
             "mount_id", "capacity_id", "major_minor", "storage_media", "block_media",
-            "storage_media_confidence", "block_media_confidence",
+            "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
         })
         self.assertEqual(set(overview["mounts"][0]), {
             "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
@@ -354,6 +374,21 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(svc.load_snapshot_for_api("alpha-1")["server_id"], "alpha-1")
         with self.assertRaises(ValueError):
             svc.load_state_for_api("../alpha-1")
+
+    def test_retained_roots_age_independently_after_faster_scan(self):
+        from collector.service import _snapshot_freshness
+        now = self.clock.now
+        legacy = {"scan_finished_unix": now - 6 * 3600, "selected_roots": [{"storage_media": "ssd"}]}
+        self.assertEqual(_snapshot_freshness(legacy, now, 900), "fresh")
+        payload = {"scan_finished_unix": now, "selected_roots": [
+            {"storage_media": "ssd", "scan_finished_unix": now - 4790},
+            {"storage_media": "hdd", "scan_finished_unix": now - 4 * 3600},
+        ]}
+        self.assertEqual(_snapshot_freshness(payload, now, 900), "stale")
+        payload["selected_roots"][1]["scan_finished_unix"] = now - 3 * 3600
+        self.assertEqual(_snapshot_freshness(payload, now, 900), "fresh")
+        payload["selected_roots"][0]["scan_finished_unix"] = now - 4861
+        self.assertEqual(_snapshot_freshness(payload, now, 900), "stale")
 
     def test_overview_snapshot_omits_root_metadata_without_a_visible_mount(self):
         from collector.service import _overview_snapshot

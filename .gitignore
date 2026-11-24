@@ -3,3 +3,5 @@
 **/__pycache__/
 *.py[cod]
 .pytest_cache/
+/tests/browser/node_modules/
+/tests/browser/test-results/

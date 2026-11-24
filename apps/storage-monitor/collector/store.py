@@ -5,18 +5,27 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
 import json
+import logging
 import os
 import pathlib
 import re
 import tempfile
-import time
-from typing import Any, Dict, Iterator, Mapping, Optional
+from typing import Any, Dict, Iterator, Mapping, Optional, TextIO
+from uuid import uuid4
 
 from collector import snapshot
+
+_LOG = logging.getLogger(__name__)
 
 SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SNAPSHOT_BASENAME_RE = re.compile(r"^snapshot-[A-Za-z0-9_.-]+\.json$")
 STATE_BASENAME_RE = re.compile(r"^state-[A-Za-z0-9_.-]+\.json$")
+# The older release's names are excluded from automatic cleanup.
+_MANAGED_GENERATION = r"(?:state-v2-[a-f0-9]{32}|snapshot-v2-[a-f0-9]{64})"
+MANAGED_GENERATION_RE = re.compile(rf"{_MANAGED_GENERATION}\.json")
+STAGED_WRITE_RE = re.compile(rf"\.(?:{_MANAGED_GENERATION}|current|previous)\.json\.[a-z0-9_]{{8}}\.tmp")
+Manifest = dict[str, Optional[str]]
+EMPTY_MANIFEST: Manifest = {"snapshot": None, "state": None}
 STATE_DEFAULTS = {
     "snapshot_availability": "absent",
     "freshness": "unknown",
@@ -38,6 +47,14 @@ ENUMS = {
 ERROR_CODE_RE = re.compile(r"^[A-Z0-9_:-]{1,128}$")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 MAX_TS = 4_102_444_800
+
+
+class StoreLockedError(BlockingIOError):
+    pass
+
+
+class _IncompleteGeneration(ValueError):
+    pass
 
 
 class AtomicWriteDurabilityUncertain(Exception):
@@ -71,7 +88,7 @@ class CentralStore:
                         raise ValueError("validated server_id mismatch")
                 except Exception as exc:
                     self._merge_state_best_effort(sid, {
-                        "snapshot_availability": "available" if self._current_snapshot_name(sid) else "absent",
+                        "snapshot_availability": "available" if self._load_committed(sid)[0].get("snapshot") else "absent",
                         "latest_pull_status": "invalid_snapshot",
                         "latest_scan_result": "failed",
                         "configuration_sync": "unknown",
@@ -88,7 +105,11 @@ class CentralStore:
                     "last_error_unix": None,
                 }
                 try:
-                    _, durability_uncertain = self._commit_pair(sid, snapshot_payload=valid.payload, state_updates=state_patch)
+                    _, durability_uncertain = self._commit_pair(
+                        sid, state_updates=state_patch,
+                        snapshot_name=f"snapshot-v2-{status['sha256']}.json",
+                        snapshot_payload=valid.payload,
+                    )
                     if durability_uncertain:
                         return ApplyResult(True, "DURABILITY_UNCERTAIN", "current manifest visible but directory fsync failed")
                     return ApplyResult(True)
@@ -102,7 +123,7 @@ class CentralStore:
     def update_state(self, server_id: str, **updates: Any) -> Dict[str, Any]:
         sid = self._server_id(server_id)
         with self._locked(sid):
-            state, _ = self._commit_pair(sid, snapshot_payload=None, state_updates=updates)
+            state, _ = self._commit_pair(sid, state_updates=updates)
             return state
 
     def load_snapshot(self, server_id: str) -> Optional[Dict[str, Any]]:
@@ -111,10 +132,19 @@ class CentralStore:
         legacy = d / "snapshot.json"
         if legacy.is_symlink():
             raise ValueError("snapshot file must not be a symlink")
-        manifest = self._load_manifest(sid, allow_missing=True)
-        if manifest is None or manifest.get("snapshot") is None:
+        if not d.exists():
             return None
-        return _read_json_file(d / _safe_snapshot_basename(manifest["snapshot"], "manifest snapshot"), "snapshot")
+        with _generation_lock(d, fcntl.LOCK_SH):
+            manifest, _, _ = self._load_committed(sid)
+            name = manifest["snapshot"]
+            if name is None:
+                return None
+            path = d / name
+            _reject_symlink(path, "snapshot")
+            stream = path.open(encoding="utf-8")
+        # An open descriptor keeps the snapshot readable after its name is pruned.
+        with stream:
+            return _decode_json(stream, "snapshot")
 
     def load_state(self, server_id: str) -> Dict[str, Any]:
         sid = self._server_id(server_id)
@@ -122,10 +152,11 @@ class CentralStore:
         legacy = d / "state.json"
         if legacy.is_symlink():
             raise ValueError("state file must not be a symlink")
-        manifest = self._load_manifest(sid, allow_missing=True)
-        if manifest is None or manifest.get("state") is None:
+        if not d.exists():
             return dict(STATE_DEFAULTS)
-        return _validate_state(_read_json_file(d / _safe_state_basename(manifest["state"], "manifest state"), "state"), sid)
+        with _generation_lock(d, fcntl.LOCK_SH):
+            _, state, _ = self._load_committed(sid)
+            return state
 
     def _server_id(self, server_id: str) -> str:
         if not isinstance(server_id, str) or not SERVER_ID_RE.match(server_id) or server_id in {".", ".."} or len(server_id) > 128:
@@ -156,8 +187,8 @@ class CentralStore:
             os.fchmod(fd, 0o600)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError as exc:
-                raise BlockingIOError("store locked") from exc
+            except BlockingIOError as exc:
+                raise StoreLockedError("store locked") from exc
             yield
         finally:
             try:
@@ -165,81 +196,139 @@ class CentralStore:
             finally:
                 os.close(fd)
 
-    def _current_snapshot_name(self, sid: str) -> Optional[str]:
-        manifest = self._load_manifest(sid, allow_missing=True)
-        if manifest is None:
-            return None
-        snap = manifest.get("snapshot")
-        return snap if isinstance(snap, str) else None
-
-    def _load_manifest(self, sid: str, *, allow_missing: bool) -> Optional[Dict[str, Any]]:
+    def _load_manifest(self, sid: str, filename: str) -> Optional[Manifest]:
         d = self._server_dir(sid)
-        path = d / "current.json"
-        if path.is_symlink():
-            raise ValueError("STORE_INCOHERENT: current manifest is a symlink")
-        if not path.exists():
-            if allow_missing:
-                return None
-            raise ValueError("STORE_INCOHERENT: missing current manifest")
-        manifest = _read_json_file(path, "manifest")
+        try:
+            manifest = _read_json_file(d / filename, "manifest")
+        except FileNotFoundError:
+            return None
         if not isinstance(manifest, dict) or set(manifest) != {"snapshot", "state"}:
-            raise ValueError("STORE_INCOHERENT: invalid manifest structure")
-        snap = manifest.get("snapshot")
-        state = manifest.get("state")
-        if snap is not None:
-            _safe_snapshot_basename(snap, "manifest snapshot")
-            _reject_symlink(d / snap, "snapshot")
-        if state is not None:
-            _safe_state_basename(state, "manifest state")
-            _reject_symlink(d / state, "state")
+            raise _IncompleteGeneration("STORE_INCOHERENT: invalid manifest structure")
+        for label, validate_name in (("snapshot", _safe_snapshot_basename), ("state", _safe_state_basename)):
+            name = manifest[label]
+            if name is not None:
+                path = d / validate_name(name, f"manifest {label}")
+                _reject_symlink(path, label)
+                if not path.is_file():
+                    raise _IncompleteGeneration(f"STORE_INCOHERENT: missing {label} generation")
         return manifest
 
-    def _commit_pair(self, sid: str, *, snapshot_payload: Optional[Mapping[str, Any]], state_updates: Mapping[str, Any]) -> tuple[Dict[str, Any], bool]:
-        d = self._ensure_server_dir(sid)
-        current = self._load_manifest(sid, allow_missing=True) or {"snapshot": None, "state": None}
-        current_state = dict(STATE_DEFAULTS)
-        if current.get("state") is not None:
-            current_state = _validate_state(_read_json_file(d / _safe_state_basename(current["state"], "manifest state"), "state"), sid)
-        new_state = dict(current_state)
-        new_state.update(state_updates)
-        new_state = _validate_state(new_state, sid)
-        if snapshot_payload is None:
-            snapshot_name = current.get("snapshot")
-        else:
-            gen = _safe_generation(snapshot_payload.get("scan_generation"))
-            snapshot_name = f"snapshot-{gen}.json"
-            _write_json_atomic(d / snapshot_name, snapshot_payload)
-        state_name = f"state-{time.time_ns()}.json"
-        _write_json_atomic(d / state_name, new_state)
-        manifest = {"snapshot": snapshot_name, "state": state_name}
-        durability_uncertain = False
+    def _load_committed(self, sid: str) -> tuple[Manifest, Dict[str, Any], bool]:
+        error = None
+        try:
+            manifest = self._load_manifest(sid, "current.json")
+            if manifest is not None:
+                return manifest, self._read_state(sid, manifest), False
+        except (_IncompleteGeneration, FileNotFoundError) as exc:
+            error = exc
+
+        previous = self._load_manifest(sid, "previous.json")
+        if previous is not None:
+            return previous, self._read_state(sid, previous), True
+        if error is not None:
+            raise error
+        return EMPTY_MANIFEST, dict(STATE_DEFAULTS), False
+
+    def _read_state(self, sid: str, manifest: Manifest) -> Dict[str, Any]:
+        name = manifest["state"]
+        if name is None:
+            return dict(STATE_DEFAULTS)
+        return _validate_state(_read_json_file(self._server_dir(sid) / name, "state"), sid)
+
+    def _commit_pair(
+        self, sid: str, *, state_updates: Mapping[str, Any],
+        snapshot_name: Optional[str] = None, snapshot_payload: Optional[Mapping[str, Any]] = None,
+    ) -> tuple[Dict[str, Any], bool]:
+        d = self._server_dir(sid)
+        current, current_state, recovered = self._load_committed(sid)
+        new_state = _validate_state({**current_state, **state_updates}, sid)
+        new_snapshot_name = snapshot_name or current["snapshot"]
+        same_snapshot = new_snapshot_name == current["snapshot"]
+        same_state = new_state == current_state
+        if same_snapshot and same_state and not recovered:
+            # A retry may see a previous manifest rename whose directory sync failed.
+            if current != EMPTY_MANIFEST:
+                try:
+                    _fsync_dir(d)
+                except OSError:
+                    return current_state, True
+            return current_state, False
+
+        try:
+            previous = self._load_manifest(sid, "previous.json") or EMPTY_MANIFEST
+        except _IncompleteGeneration:
+            previous = EMPTY_MANIFEST
+        # Discard abandoned staging files before starting another attempt.
+        _prune_generations(d, current, previous)
+
+        if not same_snapshot and snapshot_payload is not None:
+            _write_json_atomic(d / _safe_snapshot_basename(new_snapshot_name, "new snapshot"), snapshot_payload)
+        state_name = current["state"]
+        if not same_snapshot or not same_state:
+            state_name = f"state-v2-{uuid4().hex}.json"
+            _write_json_atomic(d / state_name, new_state)
+        manifest = {"snapshot": new_snapshot_name, "state": state_name}
+
+        if current not in (EMPTY_MANIFEST, previous):
+            _write_json_atomic(d / "previous.json", current)
         try:
             _write_json_atomic(d / "current.json", manifest)
         except AtomicWriteDurabilityUncertain:
             if not self._visible_manifest_matches(sid, manifest):
                 raise
-            durability_uncertain = True
-        return new_state, durability_uncertain
+            return new_state, True
 
-    def _visible_manifest_matches(self, sid: str, intended: Mapping[str, Any]) -> bool:
+        _prune_generations(d, manifest, current)
+        return new_state, False
+
+    def _visible_manifest_matches(self, sid: str, intended: Manifest) -> bool:
         try:
-            manifest = self._load_manifest(sid, allow_missing=False)
-            if manifest != intended:
+            manifest = self._load_manifest(sid, "current.json")
+            if manifest is None or manifest != intended:
                 return False
             d = self._server_dir(sid)
-            if intended.get("snapshot") is not None:
-                _read_json_file(d / _safe_snapshot_basename(intended["snapshot"], "manifest snapshot"), "snapshot")
-            if intended.get("state") is not None:
-                _validate_state(_read_json_file(d / _safe_state_basename(intended["state"], "manifest state"), "state"), sid)
+            if manifest["snapshot"] is not None:
+                _read_json_file(d / manifest["snapshot"], "snapshot")
+            self._read_state(sid, manifest)
             return True
         except Exception:
             return False
 
     def _merge_state_best_effort(self, sid: str, updates: Mapping[str, Any]) -> None:
         try:
-            self._commit_pair(sid, snapshot_payload=None, state_updates=updates)
+            self._commit_pair(sid, state_updates=updates)
         except Exception:
             pass
+
+
+@contextmanager
+def _generation_lock(directory: pathlib.Path, operation: int) -> Iterator[None]:
+    # Publication is atomic. Only cleanup must wait for readers of old names.
+    fd = os.open(directory / "generations.lock", os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, operation)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _prune_generations(directory: pathlib.Path, *manifests: Manifest) -> None:
+    keep = {name for manifest in manifests for name in manifest.values() if name is not None}
+    try:
+        obsolete = [
+            path for path in directory.iterdir()
+            if path.name not in keep and (MANAGED_GENERATION_RE.fullmatch(path.name) or STAGED_WRITE_RE.fullmatch(path.name))
+        ]
+        if not obsolete:
+            return
+        # A previous attempt may have published a visible but unsynced current pointer.
+        _fsync_dir(directory)
+        with _generation_lock(directory, fcntl.LOCK_EX):
+            for path in obsolete:
+                path.unlink(missing_ok=True)
+            _fsync_dir(directory)
+    except OSError as exc:
+        _LOG.warning("Unable to prune storage generations for server %s (errno=%s)", directory.name, exc.errno)
 
 
 def _scan_result(payload: Mapping[str, Any]) -> str:
@@ -374,10 +463,15 @@ def _write_json_atomic(path: pathlib.Path, data: Mapping[str, Any]) -> None:
 
 def _read_json_file(path: pathlib.Path, label: str) -> Any:
     _reject_symlink(path, label)
+    with path.open(encoding="utf-8") as stream:
+        return _decode_json(stream, label)
+
+
+def _decode_json(stream: TextIO, label: str) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"STORE_INCOHERENT: invalid {label} JSON") from exc
+        return json.load(stream)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise _IncompleteGeneration(f"STORE_INCOHERENT: invalid {label} JSON") from exc
 
 
 def _reject_symlink(path: pathlib.Path, label: str) -> None:
@@ -396,12 +490,6 @@ def _safe_state_basename(value: Any, label: str) -> str:
 def _typed_basename(value: Any, label: str, pattern: re.Pattern[str]) -> str:
     if not isinstance(value, str) or not pattern.match(value) or "/" in value or "\\" in value or value in {".", ".."}:
         raise ValueError(f"STORE_INCOHERENT: unsafe {label} basename")
-    return value
-
-
-def _safe_generation(value: Any) -> str:
-    if not isinstance(value, str) or not SERVER_ID_RE.match(value) or len(value) > 180:
-        raise ValueError("unsafe snapshot generation")
     return value
 
 

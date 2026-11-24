@@ -4,20 +4,19 @@ from typing import Annotated
 import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import Field, SecretStr, field_validator
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 try:
+    from .. import telemetry_time
     from ..config import get_settings
     from ..database import get_db
-    from ..models import PowerFlowDiagram
     from ..power_flow.schema import Contract, FlowGraph
-    from ..power_flow import service
+    from ..power_flow import diagrams, service
 except ImportError:  # pragma: no cover - direct execution fallback
+    import telemetry_time
     from config import get_settings
     from database import get_db
-    from models import PowerFlowDiagram
     from power_flow.schema import Contract, FlowGraph
-    from power_flow import service
+    from power_flow import diagrams, service
 
 router=APIRouter(prefix='/power-flow',tags=['power-flow'])
 Hours=Annotated[int,Field(ge=1,le=720)]
@@ -71,46 +70,45 @@ def check_admin(password):
 
 @router.get('/catalog')
 async def get_catalog(db:AsyncSession=Depends(get_db)):
-    return await service.catalog(db,service.now_utc(),get_settings().hardware_collect_interval)
+    return await service.catalog(db,telemetry_time.now_utc(),get_settings().hardware_collect_interval)
 
 
 @router.get('/diagrams')
 async def list_diagrams(db:AsyncSession=Depends(get_db)):
-    rows=(await db.execute(select(PowerFlowDiagram).order_by(PowerFlowDiagram.updated_at.desc(),PowerFlowDiagram.id))).scalars().all()
-    return [service.summary(row) for row in rows]
+    return await diagrams.list_diagrams(db)
 
 
 @router.post('/diagrams',status_code=201)
 async def create_diagram(body:CreateRequest,db:AsyncSession=Depends(get_db)):
     check_admin(body.admin_password)
-    return await service.create_diagram(db,body.name,body.graph,body.is_scenario)
+    return await diagrams.create_diagram(db, body.name, body.graph, body.is_scenario)
 
 
 @router.post('/evaluate')
 async def evaluate_graph(body:EvaluateRequest,db:AsyncSession=Depends(get_db)):
-    return await service.evaluate_state(db,body.graph,body.at or service.now_utc(),body.hours,interval_seconds=get_settings().hardware_collect_interval,include_peaks=body.include_peaks)
+    return await service.evaluate_state(db,body.graph,body.at or telemetry_time.now_utc(),body.hours,interval_seconds=get_settings().hardware_collect_interval,include_peaks=body.include_peaks)
 
 
 @router.get('/diagrams/{diagram_id}')
 async def get_diagram(diagram_id:str,db:AsyncSession=Depends(get_db)):
-    return await service.current_document(db,diagram_id)
+    return await diagrams.current_document(db,diagram_id)
 
 
 @router.put('/diagrams/{diagram_id}')
 async def save_diagram(diagram_id:str,body:SaveRequest,db:AsyncSession=Depends(get_db)):
     check_admin(body.admin_password)
-    return await service.save_diagram(db,diagram_id,body.base_version,body.name,body.graph)
+    return await diagrams.save_diagram(db, diagram_id, body.base_version, body.name, body.graph)
 
 
 @router.post('/diagrams/{diagram_id}/clone',status_code=201)
 async def clone_diagram(diagram_id:str,body:CloneRequest,db:AsyncSession=Depends(get_db)):
     check_admin(body.admin_password)
-    source=await service.current_document(db,diagram_id)
-    return await service.create_diagram(db,body.name,FlowGraph.model_validate(source['graph']),True)
+    source=await diagrams.current_document(db,diagram_id)
+    return await diagrams.create_diagram(db, body.name, FlowGraph.model_validate(source['graph']), True)
 
 
 @router.get('/diagrams/{diagram_id}/state')
 async def get_state(diagram_id:str,hours:Annotated[int,Query(ge=1,le=720)]=24,at:datetime | None=None,include_peaks:bool=True,db:AsyncSession=Depends(get_db)):
     try:check_at(at)
     except ValueError as exc:raise HTTPException(422,str(exc))
-    return await service.diagram_state(db,diagram_id,at or service.now_utc(),hours,get_settings().hardware_collect_interval,include_peaks=include_peaks)
+    return await service.diagram_state(db,diagram_id,at or telemetry_time.now_utc(),hours,get_settings().hardware_collect_interval,include_peaks=include_peaks)

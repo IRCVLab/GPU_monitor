@@ -5,10 +5,10 @@ from datetime import datetime,timedelta
 from sqlalchemy import select,func,case,and_,cast,String,literal
 try:
     from .models import Server,PowerRawSample,PowerPsuReading,CpuTemperatureObservation,GpuMetric,NetworkMetric
-    from .power_logging import utc,naive
+    from .telemetry_time import utc,utc_naive
 except ImportError:
     from models import Server,PowerRawSample,PowerPsuReading,CpuTemperatureObservation,GpuMetric,NetworkMetric
-    from power_logging import utc,naive
+    from telemetry_time import utc,utc_naive
 
 
 class Series:
@@ -75,7 +75,7 @@ async def history(db,hours,network,now,gpu_interval=60):
     series={server_id:{key:Series(start,end) for key in keys} for server_id in ids}
     psus={server_id:{} for server_id in ids}
     if not ids:return {'servers':{}}
-    bounds=lambda column:(column>=naive(start),column<=naive(end))
+    bounds=lambda column:(column>=utc_naive(start),column<=utc_naive(end))
     async def stream(query):
         result=await db.stream(query.execution_options(yield_per=1000))
         async for row in result:yield row

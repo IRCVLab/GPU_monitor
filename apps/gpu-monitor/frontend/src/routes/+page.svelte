@@ -8,9 +8,7 @@
 	import {
 		serverStates,
 		internalServers,
-		externalServers,
-		isServerStateEqual,
-		normalizeServerState
+		externalServers
 	} from '$lib/stores/servers';
 	import {
 		materialTheme,
@@ -27,20 +25,13 @@
 		dashboardView,
 		setDashboardLayout,
 		setDashboardLayoutWidth,
-		setDashboardView,
-		type DashboardLayoutWidth
+		setDashboardView
 	} from '$lib/stores/dashboardPrefs';
 	import { activeDevScenario, resetDevScenario } from '$lib/stores/devScenario';
 	import { dashboardViewLabel } from '$lib/utils/dashboardViewLabel';
 	import { applyDevScenario, type DevScenario } from '$lib/utils/devScenario';
 	import { resolveDashboardShortcut } from '$lib/utils/dashboardShortcuts';
-	import { countResolvedGridTracks, placeOrderedMasonryItems } from '$lib/utils/orderedMasonry';
-	import { mergeServerRecordState } from '$lib/utils/serverStateMerge';
-	import {
-		animateFlip,
-		documentRect,
-		type FlipRect
-	} from '$lib/utils/layoutFlip';
+	import { masonry } from '$lib/actions/dashboardMasonry';
 	import {
 		compensateHeaderScrollPosition,
 		HEADER_INDICATOR_TOP_MAX_PX,
@@ -50,7 +41,7 @@
 		updateHeaderVisibility
 	} from '$lib/utils/headerVisibility';
 	import { readCookie, writeCookie } from '$lib/utils/cookies';
-	import { getServerStatus, getServers } from '$lib/api';
+	import { createDashboardRefresh, REFRESH_WARNING_AFTER_MS } from '$lib/dashboardRefresh.svelte';
 	import type { ServerRecord, ServerState } from '$lib/types';
 	import { wsConnected } from '$lib/ws';
 	import ServerCard from '$lib/components/ServerCard.svelte';
@@ -77,248 +68,6 @@
 		easing: cubicOut
 	};
 
-	type MasonryOptions = {
-		enabled: boolean;
-		layoutWidth: DashboardLayoutWidth;
-	};
-
-	function masonry(node: HTMLDivElement, initialOptions: MasonryOptions) {
-		let frame = 0;
-		let enabled = initialOptions.enabled;
-		let layoutWidth = initialOptions.layoutWidth;
-		let responsiveLayoutInvalidated = false;
-		let itemObserver: ResizeObserver | null = null;
-		let previousRects = new Map<HTMLElement, FlipRect>();
-		let assignedColumns = new Map<HTMLElement, number>();
-		let measuredHeights = new Map<HTMLElement, number>();
-		let assignedItems: HTMLElement[] = [];
-		let assignedColumnCount = 0;
-		const layoutAnimations = new Map<HTMLElement, Animation>();
-		const activeHeightTransitions = new Set<EventTarget>();
-		const containerObserver = new ResizeObserver(() => schedule());
-		const mutationObserver = new MutationObserver(() => observeItems());
-
-		function schedule(): void {
-			if (frame !== 0) return;
-			frame = requestAnimationFrame(layout);
-		}
-
-		function rowSize(styles: CSSStyleDeclaration): number {
-			const value = Number.parseFloat(styles.getPropertyValue('--monitor-dashboard-masonry-row'));
-			return Number.isFinite(value) && value > 0 ? value : 8;
-		}
-
-		function rowGap(styles: CSSStyleDeclaration): number {
-			const value = Number.parseFloat(styles.rowGap);
-			return Number.isFinite(value) && value >= 0 ? value : 16;
-		}
-
-		function masonryItemBorderBoxBlockSize(child: HTMLElement, entry?: ResizeObserverEntry): number {
-			const borderBoxSize = entry?.borderBoxSize as ResizeObserverSize | readonly ResizeObserverSize[] | undefined;
-			const firstBorderBoxSize = Array.isArray(borderBoxSize) ? borderBoxSize[0] : borderBoxSize;
-			const blockSize = firstBorderBoxSize?.blockSize;
-			return Number.isFinite(blockSize) && blockSize > 0 ? blockSize : child.getBoundingClientRect().height;
-		}
-
-		function clearPlacement(child: HTMLElement): void {
-			child.style.removeProperty('grid-column-start');
-			child.style.removeProperty('grid-row-start');
-			child.style.removeProperty('grid-row-end');
-		}
-
-		function clearAssignments(): void {
-			assignedColumns.clear();
-			assignedItems = [];
-			assignedColumnCount = 0;
-		}
-
-		function clearMasonryState(): void {
-			clearAssignments();
-			measuredHeights.clear();
-		}
-
-		function isHeightTransition(event: TransitionEvent): boolean {
-			return event.propertyName === 'grid-template-rows';
-		}
-
-		function handleHeightTransitionRun(event: TransitionEvent): void {
-			if (!isHeightTransition(event) || !event.target) return;
-			activeHeightTransitions.add(event.target);
-		}
-
-		function handleHeightTransitionSettled(event: TransitionEvent): void {
-			if (!isHeightTransition(event) || !event.target) return;
-			activeHeightTransitions.delete(event.target);
-			schedule();
-		}
-
-		function layout(): void {
-			frame = 0;
-			const items = Array.from(node.children).filter(
-				(child): child is HTMLElement => child instanceof HTMLElement
-			);
-			const visualRects = new Map(
-				items.map((child) => {
-					const rect = child.getBoundingClientRect();
-					return [
-						child,
-						{
-							left: rect.left + window.scrollX,
-							top: rect.top + window.scrollY,
-							width: rect.width,
-							height: rect.height
-						}
-					];
-				})
-			);
-			const animateResponsiveResize = responsiveLayoutInvalidated;
-
-			if (responsiveLayoutInvalidated) {
-				clearAssignments();
-				measuredHeights.clear();
-				for (const child of items) clearPlacement(child);
-				responsiveLayoutInvalidated = false;
-			}
-
-			if (enabled) {
-				const styles = getComputedStyle(node);
-				const currentColumnCount = countResolvedGridTracks(styles.gridTemplateColumns);
-				const columnCountChanged = currentColumnCount !== assignedColumnCount;
-				const structureChanged =
-					columnCountChanged ||
-					items.length !== assignedItems.length ||
-					items.some((child, index) => child !== assignedItems[index]);
-
-				if (structureChanged) clearAssignments();
-				if (columnCountChanged) measuredHeights.clear();
-
-				const currentRowSize = rowSize(styles);
-				const currentGap = rowGap(styles);
-				const spans = items.map((child) => {
-					const height = measuredHeights.get(child) ?? masonryItemBorderBoxBlockSize(child);
-					measuredHeights.set(child, height);
-					return Math.max(1, Math.ceil((height + currentGap) / (currentRowSize + currentGap)));
-				});
-				const placements = placeOrderedMasonryItems({
-					columnCount: currentColumnCount,
-					spans,
-					preferredColumns: items.map((child) => assignedColumns.get(child) ?? null)
-				});
-
-				items.forEach((child, index) => {
-					const placement = placements[index];
-					assignedColumns.set(child, placement.gridColumnStart);
-					child.style.gridColumnStart = String(placement.gridColumnStart);
-					child.style.gridRowStart = String(placement.gridRowStart);
-					child.style.gridRowEnd = placement.gridRowEnd;
-				});
-				assignedItems = items;
-				assignedColumnCount = currentColumnCount;
-			} else {
-				clearMasonryState();
-				for (const child of items) clearPlacement(child);
-			}
-
-			const nextRects = new Map(items.map((child) => [child, documentRect(child)]));
-			const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-			const animateLayoutMoves = activeHeightTransitions.size === 0;
-			const moves = items.flatMap((child) => {
-				const previousFinal = previousRects.get(child);
-				const next = nextRects.get(child);
-				if (!previousFinal || !next) return [];
-				if (
-					Math.abs(previousFinal.left - next.left) < 0.5 &&
-					Math.abs(previousFinal.top - next.top) < 0.5 &&
-					(!animateResponsiveResize || Math.abs((previousFinal.width ?? 0) - (next.width ?? 0)) < 0.5)
-				) return [];
-				const previous = layoutAnimations.has(child) ? visualRects.get(child) ?? previousFinal : previousFinal;
-				return [{ child, previous, next }];
-			});
-
-			if (!animateLayoutMoves) {
-				for (const animation of layoutAnimations.values()) animation.cancel();
-				layoutAnimations.clear();
-				previousRects = nextRects;
-				return;
-			}
-
-			if (moves.length > 0) {
-				for (const animation of layoutAnimations.values()) animation.cancel();
-				layoutAnimations.clear();
-			}
-
-			for (const { child, previous, next } of moves) {
-				const animation = animateFlip(child, previous, next, reducedMotion, animateResponsiveResize);
-				if (!animation) continue;
-				layoutAnimations.set(child, animation);
-				animation.addEventListener('finish', () => layoutAnimations.delete(child), { once: true });
-				animation.addEventListener('cancel', () => layoutAnimations.delete(child), { once: true });
-			}
-			previousRects = nextRects;
-		}
-
-		function observeItems(): void {
-			itemObserver?.disconnect();
-			clearAssignments();
-			const currentItems = Array.from(node.children).filter(
-				(child): child is HTMLElement => child instanceof HTMLElement
-			);
-			const currentSet = new Set(currentItems);
-			for (const child of Array.from(measuredHeights.keys())) {
-				if (!currentSet.has(child)) measuredHeights.delete(child);
-			}
-			itemObserver = new ResizeObserver((entries) => {
-				for (const entry of entries) {
-					if (entry.target instanceof HTMLElement) {
-						measuredHeights.set(entry.target, masonryItemBorderBoxBlockSize(entry.target, entry));
-					}
-				}
-				schedule();
-			});
-			for (const child of currentItems) itemObserver.observe(child);
-			schedule();
-		}
-
-		containerObserver.observe(node);
-		mutationObserver.observe(node, { childList: true });
-		node.addEventListener('transitionrun', handleHeightTransitionRun);
-		node.addEventListener('transitionend', handleHeightTransitionSettled);
-		node.addEventListener('transitioncancel', handleHeightTransitionSettled);
-		observeItems();
-
-		return {
-			update(nextOptions: MasonryOptions) {
-				const widthChanged = nextOptions.layoutWidth !== layoutWidth;
-				if (enabled !== nextOptions.enabled) {
-					clearMasonryState();
-				}
-				if (widthChanged) {
-					responsiveLayoutInvalidated = true;
-				}
-				enabled = nextOptions.enabled;
-				layoutWidth = nextOptions.layoutWidth;
-				schedule();
-			},
-			destroy() {
-				if (frame !== 0) cancelAnimationFrame(frame);
-				node.removeEventListener('transitionrun', handleHeightTransitionRun);
-				node.removeEventListener('transitionend', handleHeightTransitionSettled);
-				node.removeEventListener('transitioncancel', handleHeightTransitionSettled);
-				activeHeightTransitions.clear();
-				for (const animation of layoutAnimations.values()) animation.cancel();
-				layoutAnimations.clear();
-				previousRects.clear();
-				clearMasonryState();
-				itemObserver?.disconnect();
-				containerObserver.disconnect();
-				mutationObserver.disconnect();
-				for (const child of Array.from(node.children)) {
-					if (child instanceof HTMLElement) clearPlacement(child);
-				}
-			}
-		};
-	}
-
 	function readTab(): Tab {
 		const value = readCookie(TAB_COOKIE);
 		return tabOrder.includes(value as Tab) ? (value as Tab) : 'internal';
@@ -326,25 +75,14 @@
 
 	const activeTab = writable<Tab>(readTab());
 
-	const POLL_REFRESH_MS = 10_000;
-	const POLL_REQUEST_LEAD_MS = 1_000;
 	const REFRESH_WARNING_FAILURE_COUNT = 2;
-	const REFRESH_WARNING_AFTER_MS = POLL_REFRESH_MS * 2;
-	const VISIBLE_TICK_MS = 1_000;
-	const HIDDEN_TICK_MS = 30_000;
-
-	let nowMs = $state(Date.now());
-	let ticker: ReturnType<typeof setInterval> | null = null;
-	let autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-	let loaded = $state(false);
-	let loadError = $state('');
-	let loadingGuard: ReturnType<typeof setTimeout> | null = null;
-	let serverCatalog = new Map<number, ServerRecord>();
-	let lastRefreshAtMs = $state(0);
-	let nextRefreshAtMs = $state<number | null>(null);
-	let refreshInFlight = $state(false);
-	let queuedFullRefresh = false;
-	let refreshFailureCount = $state(0);
+	const refresh = createDashboardRefresh();
+	const nowMs = $derived(refresh.state.nowMs);
+	const loaded = $derived(refresh.state.loaded);
+	const loadError = $derived(refresh.state.loadError);
+	const lastRefreshAtMs = $derived(refresh.state.lastRefreshAtMs);
+	const retryingInitialLoad = $derived(refresh.state.retryingInitialLoad);
+	const { retryInitialLoad } = refresh;
 	let headerCompact = $state(false);
 	let headerIndicatorVisible = $state(false);
 	let indicatorPanelOpen = $state(false);
@@ -366,199 +104,6 @@
 	let headerScrollDirection: HeaderScrollDirection = null;
 	let headerScrollDistance = 0;
 	let headerTouchY: number | null = null;
-	let retryingInitialLoad = $state(false);
-
-	function mergeStatusSnapshot(
-		current: Map<number, ServerState>,
-		statusMap: Record<number, ServerState>
-	): boolean {
-		const next = new Map(current);
-		let changed = false;
-
-		for (const [idStr, state] of Object.entries(statusMap)) {
-			const id = Number(idStr);
-			const normalized = normalizeServerState(state, id);
-			if (!normalized) continue;
-
-			const existing = next.get(id);
-			const candidate = existing
-				? {
-						...existing,
-						...normalized,
-						display_order: normalized.display_order ?? existing.display_order
-					}
-				: normalized;
-			const resolved = existing && isServerStateEqual(existing, candidate) ? existing : candidate;
-
-			next.set(id, resolved);
-			if (resolved !== existing) {
-				changed = true;
-			}
-		}
-
-		if (changed) {
-			serverStates.set(next);
-		}
-
-		return changed;
-	}
-
-	async function refreshDashboardFull(): Promise<void> {
-		const current = get(serverStates);
-		const [serversResult, statusResult] = await Promise.allSettled([getServers(), getServerStatus()]);
-		const servers = serversResult.status === 'fulfilled' ? serversResult.value : [];
-		const statusMap = statusResult.status === 'fulfilled' ? statusResult.value : {};
-		const hasServerCatalog = serversResult.status === 'fulfilled';
-
-		if (hasServerCatalog) {
-			serverCatalog = new Map(servers.map((record) => [record.id, record]));
-		}
-
-		if (servers.length === 0 && Object.keys(statusMap).length === 0) {
-			if (serversResult.status === 'rejected' && statusResult.status === 'rejected') {
-				throw serversResult.reason;
-			}
-		}
-
-		const next = new Map<number, ServerState>();
-		let changed = false;
-
-		for (const record of servers) {
-			const normalized = normalizeServerState(statusMap[record.id], record.id);
-			const existing = current.get(record.id);
-			const candidate = mergeServerRecordState(record, normalized, existing);
-			const resolved = existing && isServerStateEqual(existing, candidate) ? existing : candidate;
-			next.set(record.id, resolved);
-			if (resolved !== existing) {
-				changed = true;
-			}
-		}
-
-		if (!hasServerCatalog) {
-			for (const [idStr, state] of Object.entries(statusMap)) {
-				const id = Number(idStr);
-				if (next.has(id)) continue;
-				const normalized = normalizeServerState(state, id);
-				if (!normalized) continue;
-				const existing = current.get(id);
-				const resolved = existing && isServerStateEqual(existing, normalized) ? existing : normalized;
-				next.set(id, resolved);
-				if (resolved !== existing) {
-					changed = true;
-				}
-			}
-		}
-
-		if (current.size !== next.size) {
-			changed = true;
-		}
-
-		if (changed) {
-			serverStates.set(next);
-		}
-	}
-
-	async function refreshDashboardStatusOnly(): Promise<void> {
-		const current = get(serverStates);
-		if (current.size === 0) {
-			await refreshDashboardFull();
-			return;
-		}
-
-		const statusMap = await getServerStatus();
-		mergeStatusSnapshot(current, statusMap);
-	}
-
-	function finishLoading() {
-		loaded = true;
-		if (loadingGuard !== null) {
-			clearTimeout(loadingGuard);
-			loadingGuard = null;
-		}
-	}
-
-	async function reloadDashboard(fullRefresh = false): Promise<void> {
-		if (refreshInFlight) {
-			queuedFullRefresh ||= fullRefresh;
-			return;
-		}
-
-		refreshInFlight = true;
-		loadError = '';
-		try {
-			if (fullRefresh || get(serverStates).size === 0) {
-				await refreshDashboardFull();
-			} else {
-				await refreshDashboardStatusOnly();
-			}
-			lastRefreshAtMs = Date.now();
-			refreshFailureCount = 0;
-		} catch (error) {
-			loadError = error instanceof Error ? error.message : '대시보드 데이터를 불러오지 못했습니다.';
-			refreshFailureCount += 1;
-		} finally {
-			const runQueuedFullRefresh = queuedFullRefresh;
-			queuedFullRefresh = false;
-			refreshInFlight = false;
-			finishLoading();
-			if (runQueuedFullRefresh) void reloadDashboard(true);
-		}
-	}
-
-	function cleanupPageRuntime() {
-		if (ticker !== null) {
-			clearInterval(ticker);
-			ticker = null;
-		}
-		if (loadingGuard !== null) {
-			clearTimeout(loadingGuard);
-			loadingGuard = null;
-		}
-		if (autoRefreshTimer !== null) {
-			clearTimeout(autoRefreshTimer);
-			autoRefreshTimer = null;
-		}
-		nextRefreshAtMs = null;
-		queuedFullRefresh = false;
-	}
-
-	function currentTickIntervalMs(): number {
-		if (!browser) return VISIBLE_TICK_MS;
-		return document.visibilityState === 'hidden' ? HIDDEN_TICK_MS : VISIBLE_TICK_MS;
-	}
-
-	function startTicker() {
-		if (ticker !== null) {
-			clearInterval(ticker);
-		}
-
-		nowMs = Date.now();
-		ticker = setInterval(() => {
-			nowMs = Date.now();
-		}, currentTickIntervalMs());
-	}
-
-	function schedulePollingTick(delayMs: number): void {
-		if (autoRefreshTimer !== null) {
-			clearTimeout(autoRefreshTimer);
-		}
-
-		nextRefreshAtMs = Date.now() + delayMs;
-		autoRefreshTimer = setTimeout(() => {
-			schedulePollingTick(POLL_REFRESH_MS);
-			void runAutoRefresh();
-		}, delayMs);
-	}
-
-	function startPollingCadence(): void {
-		schedulePollingTick(POLL_REFRESH_MS - POLL_REQUEST_LEAD_MS);
-	}
-
-	async function runAutoRefresh(): Promise<void> {
-		if (refreshInFlight) return;
-
-		await reloadDashboard();
-	}
 
 	function currentHeaderScrollPosition(): number {
 		const scrollY = Math.max(0, window.scrollY);
@@ -757,19 +302,9 @@
 		};
 		runtime.__monitoringV2PageCleanup?.();
 
-		startTicker();
-		loadingGuard = setTimeout(() => {
-			loadError = '대시보드 응답이 지연되고 있습니다. 잠시 후 다시 시도하세요.';
-			finishLoading();
-		}, 6500);
-
 		const unsubscribeTab = activeTab.subscribe((v) => {
 			writeCookie(TAB_COOKIE, v);
 		});
-		const handleVisibilityChange = () => {
-			startTicker();
-		};
-		document.addEventListener('visibilitychange', handleVisibilityChange);
 		headerPreviousY = currentHeaderScrollPosition();
 		let themeButtonCacheFrame: number | null = requestAnimationFrame(cacheVisibleThemeButtonCenter);
 		window.addEventListener('scroll', handleHeaderScroll, { passive: true });
@@ -778,15 +313,13 @@
 		window.addEventListener('touchstart', handleHeaderTouchStart, { passive: true });
 		window.addEventListener('touchmove', handleHeaderTouchMove, { passive: true });
 		window.addEventListener('touchend', handleHeaderTouchEnd, { passive: true });
-		startPollingCadence();
-		void reloadDashboard(true);
+		refresh.start();
 
 		let cleaned = false;
 		const cleanup = () => {
 			if (cleaned) return;
 			cleaned = true;
 			unsubscribeTab();
-			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('scroll', handleHeaderScroll);
 			window.removeEventListener('resize', handleHeaderResize);
 			window.removeEventListener('wheel', handleHeaderWheel);
@@ -808,7 +341,7 @@
 			document.documentElement.style.removeProperty('--theme-reveal-x');
 			document.documentElement.style.removeProperty('--theme-reveal-y');
 			document.documentElement.style.removeProperty('--theme-reveal-radius');
-			cleanupPageRuntime();
+			refresh.stop();
 			if (runtime.__monitoringV2PageCleanup === cleanup) {
 				delete runtime.__monitoringV2PageCleanup;
 			}
@@ -830,7 +363,7 @@
 
 
 	function refreshWarningText(): string {
-		if (refreshFailureCount >= REFRESH_WARNING_FAILURE_COUNT) return '갱신 지연';
+		if (refresh.state.refreshFailureCount >= REFRESH_WARNING_FAILURE_COUNT) return '갱신 지연';
 		if (
 			!$wsConnected &&
 			lastRefreshAtMs > 0 &&
@@ -953,23 +486,13 @@
 	let continuityFocusTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async function handleSaved() {
-		await reloadDashboard(true);
-	}
-
-	async function retryInitialLoad() {
-		if (retryingInitialLoad) return;
-		retryingInitialLoad = true;
-		try {
-			await reloadDashboard(true);
-		} finally {
-			retryingInitialLoad = false;
-		}
+		await refresh.reloadDashboard(true);
 	}
 
 	function handleEditServer(server: ServerState) {
-		const record = serverCatalog.get(server.server_id);
+		const record = refresh.getServerRecord(server.server_id);
 		if (!record) {
-			loadError = '서버 설정 정보를 아직 불러오지 못했습니다. 잠시 후 다시 시도하세요.';
+			refresh.state.loadError = '서버 설정 정보를 아직 불러오지 못했습니다. 잠시 후 다시 시도하세요.';
 			return;
 		}
 		editingServer = { ...record };

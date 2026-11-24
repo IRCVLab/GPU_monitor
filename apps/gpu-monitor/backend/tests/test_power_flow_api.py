@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from backend.models import Base, Server, HardwareRound, PowerPsuReading, PowerPsuIdentity, PowerRawSample, PowerFlowRevision
+from backend import telemetry_time
 from backend.power_flow import service
 from backend.tests.test_power_flow_engine import graph, neumann_graph, T
 
@@ -28,7 +29,7 @@ class PowerFlowApiTests(unittest.IsolatedAsyncioTestCase):
         app=FastAPI();app.include_router(power_flow.router);app.dependency_overrides[power_flow.get_db]=session
         self.router_config_patch=patch.object(power_flow,'get_settings',return_value=self.settings);self.router_config_patch.start();self.addCleanup(self.router_config_patch.stop)
         self.client=httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test')
-        self.clock=patch.object(service,'now_utc',return_value=T);self.clock.start();self.addCleanup(self.clock.stop)
+        self.clock=patch.object(telemetry_time,'now_utc',return_value=T);self.clock.start();self.addCleanup(self.clock.stop)
         self.auth={'admin_password':self.settings.admin_password}
         async with self.sessions() as db:
             db.add(Server(id=1,name='A',host='a',ssh_user='monitor'));db.add(PowerPsuIdentity(server_id=1,sensor_name='PS1 Input Power',direction='input'));await db.commit()
@@ -77,8 +78,8 @@ class PowerFlowApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(metric['watts'],220)
                 self.assertEqual(metric['peak_watts'],770)
                 self.assertEqual(metric['peak_amps'],4)
-                self.assertEqual(metric['peak_watts_at'],service.iso(watts_peak_at))
-                self.assertEqual(metric['peak_amps_at'],service.iso(amp_peak_at))
+                self.assertEqual(metric['peak_watts_at'],telemetry_time.iso(watts_peak_at))
+                self.assertEqual(metric['peak_amps_at'],telemetry_time.iso(amp_peak_at))
             self.assertEqual(state['nodes']['p']['peak_watts'],440)
             self.assertEqual(state['nodes']['p2']['peak_watts'],660)
             self.assertNotEqual(state['nodes']['b']['peak_watts'],440+660)
@@ -147,7 +148,7 @@ class PowerFlowApiTests(unittest.IsolatedAsyncioTestCase):
         actual=(await self.client.get(f'/power-flow/diagrams/{created["id"]}/state')).json()
         self.assertEqual(actual['history_status'],'partial');self.assertEqual(actual['nodes']['b']['peak_watts'],110)
         later=T+timedelta(minutes=1)
-        with patch.object(service,'now_utc',return_value=later):
+        with patch.object(telemetry_time,'now_utc',return_value=later):
             await self.client.put(f'/power-flow/diagrams/{created["id"]}',json=dict(base_version=1,name='Changed',graph=graph(),**self.auth))
         historical=(await self.client.get(f'/power-flow/diagrams/{created["id"]}/state',params={'at':T.isoformat()})).json()
         self.assertEqual(historical['version'],1);self.assertEqual(historical['effective_from'],created['effective_from'])
@@ -197,7 +198,7 @@ class PowerFlowApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['peaks_included']);self.assertEqual(result['nodes']['b']['peak_watts'],220)
 
     async def test_fast_history_is_pending_until_historical_gaps_are_scanned(self):
-        with patch.object(service,'now_utc',return_value=T-timedelta(hours=2)):
+        with patch.object(telemetry_time,'now_utc',return_value=T-timedelta(hours=2)):
             created=await self.create()
         await self.record(T-timedelta(minutes=30),[None])
         await self.record(T,[220])

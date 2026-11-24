@@ -16,6 +16,7 @@ export interface HardwareSnapshot {
  bmc_ip: string | null;
  power_watts: number | null;
  sensors: HardwareSensor[];
+ psu_rated_output_watts?: Record<string,number>;
 }
 
 export interface SystemNode {
@@ -165,6 +166,27 @@ export function powerStatistics(points: PowerPoint[]) {
  return {average:values.length?values.reduce((a,b)=>a+b,0)/values.length:null,min:values.length?Math.min(...values):null,max:values.length?Math.max(...values):null,count:values.length};
 }
 
+interface ObservedPowerPeak {
+ watts: number;
+ at?: string;
+ coverage?: string;
+}
+
+export function observedPowerPeak(points: PowerPoint[], summary?: PowerPeriodSummary | null): ObservedPowerPeak | null {
+ let peak: ObservedPowerPeak | null = null;
+ for (const point of points) {
+  const watts=point.complete?point.power_watts:point.observed_watts;
+  if (!finite(watts) || watts<0) continue;
+  if (!peak || watts>peak.watts || (watts===peak.watts && peak.coverage && point.complete)) {
+   peak={watts,at:point.collected_at,...(point.complete?{}:{coverage:`${point.server_count}/${point.expected_count}`})};
+  }
+ }
+ if (finite(summary?.max_watts) && (!peak || summary.max_watts>peak.watts)) {
+  return {watts:summary.max_watts,at:summary.peak_at??undefined};
+ }
+ return peak;
+}
+
 export interface PowerPeriodSummary {
  peak_at?: string | null;
  energy_wh: number | null;
@@ -192,15 +214,16 @@ export function normalizePowerSummary(value: unknown): PowerPeriodSummary | null
  };
 }
 
-export interface PsuRow {name:string;inputWatts:number|null;outputWatts:number|null}
-export function buildPsuRows(inputs:HardwareSensor[],outputs:HardwareSensor[]):PsuRow[] {
- const rows=new Map<string,PsuRow>();
+export interface PsuRow {name:string;inputWatts:number|null;outputWatts:number|null;ratedOutputWatts:number|null}
+export function buildPsuRows(inputs:HardwareSensor[],outputs:HardwareSensor[],ratings:Record<string,number>={}):PsuRow[] {
+ const rows=new Map<string,PsuRow>(Object.entries(ratings).map(([name,ratedOutputWatts])=>[name,{name,inputWatts:null,outputWatts:null,ratedOutputWatts}]));
  for(const [sensors,field] of [[inputs,'inputWatts'],[outputs,'outputWatts']] as const){
   for(const sensor of sensors){
    const index=sensor.name.match(/(?:psu?|power supply)[ _-]*(\d+)/i)?.[1];
    const name=index?`PSU${Number(index)}`:sensor.name.replace(/input|output|power|pwr/gi,'').replace(/(?:^|[_\s])(?:in|out)(?:$|[_\s])/gi,' ').replace(/[_\s]+/g,' ').trim();
-   const row=rows.get(name)??{name,inputWatts:null,outputWatts:null};
-   row[field]=finite(sensor.value)?sensor.value:null;
+   const row=rows.get(name)??{name,inputWatts:null,outputWatts:null,ratedOutputWatts:null};
+   row[field]=finite(sensor.value)&&sensor.value>=0&&!/^(na|n\/a|ns|disabled|not present|unavailable)$/i.test(sensor.status??'')
+    ?sensor.value:null;
    rows.set(name,row);
   }
  }

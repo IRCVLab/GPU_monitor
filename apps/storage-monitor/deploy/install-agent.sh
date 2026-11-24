@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DRY_RUN=0
 PREFIX="/"
 SERVER_ID="$(hostname -s 2>/dev/null || printf 'storage-viz-host')"
+SERVER_ID_EXPLICIT=0
 SYSTEMCTL="${SYSTEMCTL:-/usr/bin/systemctl}"
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 GROUP_NAME="storage-viz-collector"
@@ -17,6 +18,8 @@ Usage: $0 [--dry-run] [--prefix DIR] [--server-id ID]
 
 Installs the hardened storage-viz scan agent. Dry-run renders into a temp prefix
 (default) or supplied --prefix and performs no privileged or systemd changes.
+An existing scanner configuration is validated and preserved. If supplied,
+--server-id must match that configuration.
 USAGE
 }
 
@@ -24,7 +27,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --prefix) [[ $# -ge 2 ]] || { echo "ERROR: --prefix requires a directory" >&2; exit 2; }; PREFIX="$2"; shift ;;
-    --server-id) [[ $# -ge 2 ]] || { echo "ERROR: --server-id requires a value" >&2; exit 2; }; SERVER_ID="$2"; shift ;;
+    --server-id) [[ $# -ge 2 ]] || { echo "ERROR: --server-id requires a value" >&2; exit 2; }; SERVER_ID="$2"; SERVER_ID_EXPLICIT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -108,6 +111,33 @@ SUDOERS_DIR="$(prefix_path /etc/sudoers.d)"
 SUDOERS_FILE="$SUDOERS_DIR/storage-viz-monitoring"
 SCANNER_BIN="$OPT_DIR/scanner/hstscan"
 
+HAS_CONFIG=0
+if [[ -e "$CONFIG_FILE" || -L "$CONFIG_FILE" ]]; then
+  if [[ ! -f "$CONFIG_FILE" || -L "$CONFIG_FILE" ]]; then
+    echo "ERROR: existing scanner config must be a regular file: $CONFIG_FILE" >&2
+    exit 2
+  fi
+  installed_id="$(
+    PYTHONDONTWRITEBYTECODE=1 "$PYTHON_BIN" - "$REPO_ROOT" "$CONFIG_FILE" <<'PY'
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from agent.scan_runner import load_config
+
+try:
+    print(load_config(sys.argv[2]).server_id)
+except (OSError, ValueError) as exc:
+    sys.exit(f"ERROR: invalid existing scanner configuration: {exc}")
+PY
+  )"
+  if [[ "$SERVER_ID_EXPLICIT" == "1" && "$SERVER_ID" != "$installed_id" ]]; then
+    echo "ERROR: requested server_id '$SERVER_ID' does not match installed server_id '$installed_id'" >&2
+    exit 2
+  fi
+  SERVER_ID="$installed_id"
+  HAS_CONFIG=1
+fi
+
 printf '[*] mode: %s\n' "$([[ "$DRY_RUN" == "1" ]] && echo dry-run || echo install)"
 printf '[*] prefix: %s\n' "$PREFIX"
 printf '[*] server_id: %s\n' "$SERVER_ID"
@@ -146,7 +176,8 @@ else
   chmod 0750 "$DATA_DIR" "$SNAPSHOT_DIR" "$RUN_DIR"
 fi
 
-atomic_write "$CONFIG_FILE" 0644 root:root <<JSON
+if [[ "$HAS_CONFIG" == "0" ]]; then
+  atomic_write "$CONFIG_FILE" 0644 root:root <<JSON
 {
   "server_id": "$SERVER_ID",
   "scanner_path": "/opt/storage-viz/scanner/hstscan",
@@ -159,10 +190,17 @@ atomic_write "$CONFIG_FILE" 0644 root:root <<JSON
   "stale_days": 180
 }
 JSON
+fi
 
 sed \
   -e "s#/usr/bin/python3#$PYTHON_BIN#g" \
   "$SCRIPT_DIR/systemd/storage-viz-scan.service.in" | atomic_write "$UNIT_DIR/storage-viz-scan.service" 0644 root:root
+sed \
+  -e "s#/usr/bin/python3#$PYTHON_BIN#g" \
+  -e 's/^Description=storage-viz local filesystem scan$/Description=storage-viz scheduled filesystem scan/' \
+  -e '/^Type=oneshot$/a SuccessExitStatus=75' \
+  -e '/^ExecStart=/s/$/ --scheduled/' \
+  "$SCRIPT_DIR/systemd/storage-viz-scan.service.in" | atomic_write "$UNIT_DIR/storage-viz-scheduled-scan.service" 0644 root:root
 install -m 0644 "$SCRIPT_DIR/systemd/storage-viz-scan.timer" "$UNIT_DIR/storage-viz-scan.timer"
 install -m 0440 "$SCRIPT_DIR/sudoers/storage-viz-monitoring" "$SUDOERS_FILE"
 
@@ -175,7 +213,7 @@ else
 fi
 
 if command -v systemd-analyze >/dev/null 2>&1; then
-  systemd-analyze verify "$UNIT_DIR/storage-viz-scan.service" "$UNIT_DIR/storage-viz-scan.timer"
+  systemd-analyze verify "$UNIT_DIR/storage-viz-scan.service" "$UNIT_DIR/storage-viz-scheduled-scan.service" "$UNIT_DIR/storage-viz-scan.timer"
 else
   echo "[!] systemd-analyze not found; skipped unit validation"
 fi
@@ -187,4 +225,5 @@ fi
 
 "$SYSTEMCTL" daemon-reload
 "$SYSTEMCTL" enable --now storage-viz-scan.timer
+"$SYSTEMCTL" restart storage-viz-scan.timer
 echo "[✓] installed storage-viz scan agent; timer enabled and started"

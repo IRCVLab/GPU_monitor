@@ -212,6 +212,18 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertNotEqual(untracked.returncode, 0)
         self.assertIn("clean", untracked.stderr.lower())
 
+    def test_fails_when_packaged_schema_is_deleted(self) -> None:
+        schema = APP_ROOT / "docs/schema-v1.md"
+        (self.repo / schema).unlink()
+        self._git("add", "-u", str(schema))
+        self._git("commit", "-q", "-m", "remove packaged schema")
+        self.sha = self._git("rev-parse", "HEAD").stdout.strip()
+
+        failed = self._run_builder()
+
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn(f"required tracked release file is missing: {schema}", failed.stderr)
+
     def test_rejects_required_tracked_symlinks_and_unsafe_paths(self) -> None:
         (self.repo / APP_ROOT / "viewer/app.js").unlink()
         os.symlink("serve.py", self.repo / APP_ROOT / "viewer/app.js")
@@ -239,6 +251,8 @@ class DashboardReleaseActivationTest(unittest.TestCase):
     maxDiff = None
 
     def setUp(self) -> None:
+        previous_umask = os.umask(0o022)
+        self.addCleanup(os.umask, previous_umask)
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.root = Path(self.tempdir.name)
@@ -266,7 +280,8 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        with mock.patch.object(sys, "path", [str(script.parent), *sys.path]):
+            spec.loader.exec_module(module)
         return module
 
     def test_activation_state_is_group_readable_using_parent_runtime_group(self) -> None:
@@ -359,6 +374,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "viewer/echarts.min.js": b"/*! echarts */\n",
             "viewer/index.html": b"<html></html>\n",
             "viewer/overview.js": b"export const overview = {};\n",
+            "viewer/scan-status.js": b"export const scanStatus = {};\n",
             "viewer/selection.js": b"export const selection = {};\n",
             "viewer/styles.css": b"body { color: black; }\n",
             "viewer/tables.js": b"export const tables = {};\n",
@@ -368,6 +384,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "collector/inventory.py": b"def load_inventory(): pass\n",
             "collector/jobs.py": b"class RescanJobManager: pass\n",
             "collector/service.py": b"class PollService: pass\n",
+            "collector/scan_telemetry.py": b"def empty_status(): return {}\n",
             "collector/snapshot.py": b"class Snapshot: pass\n",
             "collector/store.py": b"class CentralStore: pass\n",
             "collector/transport.py": b"class OpenSshTransport: pass\n",
@@ -735,13 +752,19 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(staged, set())
 
     def test_rejects_missing_runtime_file_and_manifest_file_hash_mismatch(self) -> None:
-        for missing in ["deploy/direct_proxy.py", "viewer/styles.css"]:
+        for missing in ["deploy/direct_proxy.py", "viewer/styles.css", "viewer/scan-status.js", "collector/scan_telemetry.py"]:
             with self.subTest(missing=missing):
                 files = self._runtime_files()
                 files.pop(missing)
                 archive, metadata, digest = self._archive(files=files)
                 with self.assertRaises(self.module.ActivationError):
                     self._activate(archive, metadata, digest)
+
+        files = self._runtime_files()
+        files["viewer/index.html"] = b'<script src="./missing.js?revision=3"></script>'
+        archive, metadata, digest = self._archive(files=files)
+        with self.assertRaisesRegex(self.module.ActivationError, "missing viewer assets: viewer/missing.js"):
+            self._activate(archive, metadata, digest)
 
         files = self._runtime_files()
         manifest = self._manifest(files)
@@ -1107,6 +1130,12 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "status": "active",
             "source_sha": self.sha,
             "archive_digest": "b" * 64,
+            "runtime_digest": "c" * 64,
+            "previous_release_metadata": {
+                "archive": "previous.tar.gz",
+                "archive_digest": "d" * 64,
+                "runtime_digest": "e" * 64,
+            },
             "release": str(failed_target),
             "previous": str(previous_target),
             "legacy_backup": None,
@@ -1125,6 +1154,10 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(persisted["release"], str(previous_target))
         self.assertEqual(persisted["current"], str(previous_target))
         self.assertEqual(persisted["source_sha"], self.old_sha)
+        self.assertEqual(persisted["archive"], "previous.tar.gz")
+        self.assertEqual(persisted["archive_digest"], "d" * 64)
+        self.assertEqual(persisted["runtime_digest"], "e" * 64)
+        self.assertNotIn("previous_release_metadata", persisted)
         for key in ("failed_release", "failed_source_sha", "failed_archive_digest", "activation_error", "rollback_restart_error"):
             self.assertNotIn(key, persisted)
 
@@ -1247,11 +1280,19 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         (previous_target / "old.txt").write_text("old", encoding="utf-8")
         self.app_path.parent.mkdir(parents=True)
         self.app_path.symlink_to(previous_target)
+        previous_metadata = {
+            "archive": f"storage-monitor-dashboard-{self.old_sha}.tar.gz",
+            "archive_digest": "a" * 64,
+            "runtime_digest": "b" * 64,
+        }
+        self.state_path.parent.mkdir(parents=True)
+        self.state_path.write_text(json.dumps({"release": str(previous_target), **previous_metadata}), encoding="utf-8")
         archive, metadata, digest = self._archive()
 
         status = self._activate(archive, metadata, digest)
 
         self.assertEqual(Path(status["previous"]).resolve(), previous_target.resolve())
+        self.assertEqual(status["previous_release_metadata"], previous_metadata)
         self.assertEqual(self.app_path.resolve(), (self.release_root / self.sha / "storage-monitor").resolve())
         self.assertEqual(self.restart_calls, ["activate"])
 
@@ -1278,8 +1319,13 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(status["status"], "active")
         self.assertEqual(self.restart_calls, ["activate"])
 
-        (self.release_root / self.sha / "storage-monitor/viewer/app.js").chmod(0o644)
-        (self.release_root / self.sha / "storage-monitor/viewer/app.js").write_bytes(b"tampered")
+        viewer_script = self.release_root / self.sha / "storage-monitor/viewer/app.js"
+        viewer_script.chmod(0o755)
+        with self.assertRaisesRegex(self.module.ActivationError, "existing release mode mismatch"):
+            self._activate(archive, metadata, digest)
+
+        viewer_script.chmod(0o644)
+        viewer_script.write_bytes(b"tampered")
         with self.assertRaises(self.module.ActivationError):
             self._activate(archive, metadata, digest)
 
@@ -1855,6 +1901,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
 
 class StorageVizProxyLauncherTest(unittest.TestCase):
     def setUp(self) -> None:
+        previous_umask = os.umask(0o022)
+        self.addCleanup(os.umask, previous_umask)
         self.tempdir = tempfile.TemporaryDirectory(); self.addCleanup(self.tempdir.cleanup)
         self.root = Path(self.tempdir.name)
         self.module = self._load("storage_viz_proxy_launcher", REPO_ROOT / "apps/storage-monitor/deploy/server/storage-viz-proxy-launcher.py")

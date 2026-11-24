@@ -5,15 +5,10 @@ capacity stays unknown; incomplete readings preserve a known lower bound.
 """
 import math
 import re
-from datetime import timezone
-
-
-def utc(value):
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
-
-
-def iso(value):
-    return utc(value).isoformat() if value is not None else None
+try:
+    from ..telemetry_time import iso, utc
+except ImportError:  # pragma: no cover - direct execution fallback
+    from telemetry_time import iso, utc
 
 
 def normalize_slot(sensor_name):

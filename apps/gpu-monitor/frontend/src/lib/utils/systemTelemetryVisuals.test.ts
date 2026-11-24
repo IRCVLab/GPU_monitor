@@ -9,9 +9,20 @@ test('thermal thresholds change functional color and missing values stay neutral
  assert.equal(visuals.temperatureTone(null),'unknown');assert.equal(visuals.temperatureTone(45),'normal');assert.equal(visuals.temperatureTone(80),'warning');assert.equal(visuals.temperatureTone(95),'critical');
  assert.equal(visuals.temperatureTone(70,65,85),'warning');
 });
-test('PSU bars use actual capacity when supplied and otherwise explicitly represent input share',()=>{
- assert.deepEqual(visuals.psuLoad(250,1000),{ratio:.25,kind:'share'});assert.deepEqual(visuals.psuLoad(250,1000,500),{ratio:.5,kind:'capacity'});
- assert.deepEqual(visuals.psuLoad(null,1000),{ratio:null,kind:'share'});assert.equal(visuals.psuLoad(0,1000).ratio,0);
+test('PSU load uses measured output divided by rated output and preserves zero and overload',()=>{
+ assert.equal(visuals.psuLoad(250,500),.5);
+ assert.equal(visuals.psuLoad(0,500),0);
+ assert.equal(visuals.psuLoad(750,500),1.5);
+ assert.equal(visuals.psuLoad(250,null),null);
+ assert.equal(visuals.psuLoad(null,500),null);
+ assert.equal(visuals.psuLoad(-1,500),null);
+});
+test('input distribution uses one denominator for available measurements',()=>{
+ const rows=[{name:'PSU1',inputWatts:300},{name:'PSU2',inputWatts:100},{name:'PSU3',inputWatts:null}];
+ assert.deepEqual(visuals.psuInputDistribution(rows),[
+  {name:'PSU1',ratio:.75},{name:'PSU2',ratio:.25},
+ ]);
+ assert.deepEqual(visuals.psuInputDistribution([{name:'PSU1',inputWatts:0}]),[]);
 });
 test('telemetry geometry keeps actual time spacing, valid zero, isolated points and gaps',()=>{
  const at=seconds=>new Date(seconds*1000).toISOString();

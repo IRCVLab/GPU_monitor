@@ -9,17 +9,19 @@ from typing import Any, Mapping, Protocol
 from collector.inventory import Server
 from collector import snapshot
 from collector.scan_telemetry import empty_status
-from collector.store import CentralStore
+from collector.store import CentralStore, StoreLockedError
 from collector.transport import ACTIVE_SCAN_STATES, TransportError, status_tuple, validate_status_envelope
 
 DEFAULT_POLL_INTERVAL_SECONDS = 900
 LOCAL_SCAN_CADENCE_SECONDS = 6 * 60 * 60
 FRESHNESS_GRACE_SECONDS = 60 * 60
 FRESH_SNAPSHOT_SECONDS = LOCAL_SCAN_CADENCE_SECONDS + FRESHNESS_GRACE_SECONDS
+SCHEDULED_TIMER_DELAY_SECONDS = 6 * 60
+ROOT_SCAN_CADENCE_SECONDS = {"ssd": 3600, "hdd": 3 * 3600, "mixed": 3 * 3600, "unknown": 3 * 3600}
 SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 OVERVIEW_ROOT_FIELDS = (
     "mount_id", "capacity_id", "major_minor", "storage_media", "block_media",
-    "storage_media_confidence", "block_media_confidence",
+    "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
 )
 OVERVIEW_MOUNT_FIELDS = (
     "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
@@ -47,12 +49,17 @@ def _overview_snapshot(payload: Mapping[str, Any] | None) -> dict[str, Any] | No
         for row in _overview_rows(payload.get("selected_roots"), OVERVIEW_ROOT_FIELDS)
         if row.get("mount_id") in visible_mount_ids
     ]
+    roots = payload.get("selected_roots") or []
+    legacy_success = (
+        any(root.get("status") == "complete" for root in roots)
+        and all(root.get("status") in {"complete", "skipped"} and root.get("scan_finished_unix") is None for root in roots)
+    )
     return {
         "server_id": payload.get("server_id"),
         "scan_generation": payload.get("scan_generation"),
         "scan_finished_unix": payload.get("scan_finished_unix"),
         "scan_duration_sec": payload.get("scan_duration_sec"),
-        "estimate_duration_sec": payload.get("scan_duration_sec") if payload.get("selected_roots") and all(r.get("status") in {"complete", "skipped"} for r in payload["selected_roots"]) else None,
+        "estimate_duration_sec": payload.get("scan_duration_sec") if legacy_success else None,
         "selected_roots": selected_roots,
         "mounts": mounts,
     }
@@ -104,6 +111,8 @@ class PollService:
             return self.store.load_state(server.id)
         try:
             return self._poll_server_locked(server)
+        except StoreLockedError:
+            return self.store.load_state(server.id)
         finally:
             lock.release()
 
@@ -191,8 +200,11 @@ class PollService:
                       estimate_duration_sec=overview.get("estimate_duration_sec"),
                       snapshot_generation=overview.get("scan_generation"))
         if status:
-            result.update({k:v for k,v in status.items() if v is not None or k == "estimate_duration_sec"})
+            result.update({k: v for k, v in status.items() if v is not None})
+            if status.get("scan_plan") and "estimate_duration_sec" in status:
+                result["estimate_duration_sec"] = status["estimate_duration_sec"]
         result["snapshot_generation"] = overview.get("scan_generation")
+        result["snapshot_finished_unix"] = overview.get("scan_finished_unix")
         return result
 
     def scan_status_for_api(self, server_id: str) -> dict[str, Any]:
@@ -203,8 +215,9 @@ class PollService:
             return self._status_with_history(server.id, cached[1])
         lock = self._telemetry_locks[server.id]
         if not lock.acquire(blocking=False):
-            result = self._status_with_history(server.id)
-            result["error_code"] = "OBSERVATION_PENDING"
+            result = self._status_with_history(server.id, cached[1] if cached else None)
+            if not cached:
+                result["error_code"] = "OBSERVATION_PENDING"
             return result
         try:
             try:
@@ -219,7 +232,10 @@ class PollService:
                 status = {"state":"unknown", "error_code":getattr(exc,"code","TELEMETRY_UNAVAILABLE"), "progress_available":False}
             self._telemetry_cache[server.id] = (self.clock.time(), status)
             result = self._status_with_history(server.id,status)
-            if result["state"] in {"complete","partial"} and result.get("generation") and result["generation"] != result.get("snapshot_generation"):
+            published = result.get("published_generation")
+            if not published and result["state"] in {"complete", "partial"}:
+                published = result.get("generation")
+            if published and published != result.get("snapshot_generation"):
                 worker = self._refresh_threads.get(server.id)
                 if worker is None or not worker.is_alive():
                     worker = threading.Thread(target=self.poll_server,args=(server.id,),daemon=True)
@@ -251,7 +267,7 @@ class PollService:
                     "display_name": server.display_name,
                     "order": server.order,
                     "snapshot_availability": state["snapshot_availability"],
-                    "freshness": state["freshness"],
+                    "freshness": _snapshot_freshness(overview, int(self.clock.time()), self.poll_interval_seconds),
                     "latest_pull_status": state["latest_pull_status"],
                     "latest_scan_result": state["latest_scan_result"],
                     "configuration_sync": state["configuration_sync"],
@@ -293,12 +309,7 @@ class PollService:
 
     def _freshness(self, server_id: str) -> str:
         current = self._snapshot(server_id)
-        if current is None:
-            return "unknown"
-        finished = current.get("scan_finished_unix")
-        if not isinstance(finished, int) or isinstance(finished, bool):
-            return "unknown"
-        return "fresh" if int(self.clock.time()) - finished <= FRESH_SNAPSHOT_SECONDS else "stale"
+        return _snapshot_freshness(current, int(self.clock.time()), self.poll_interval_seconds)
 
     def _mark_unreachable(self, server_id: str, exc: TransportError) -> dict[str, Any]:
         return self.store.update_state(
@@ -359,6 +370,24 @@ class PollService:
             last_error_message=None,
             last_error_unix=None,
         )
+
+
+def _snapshot_freshness(payload, now: int, polling_interval: int) -> str:
+    if not payload:
+        return "unknown"
+    finished = payload.get("scan_finished_unix")
+    if not isinstance(finished, int) or isinstance(finished, bool):
+        return "unknown"
+    if now - finished > FRESH_SNAPSHOT_SECONDS:
+        return "stale"
+    for root in payload.get("selected_roots", ()):
+        root_finished = root.get("scan_finished_unix")
+        if root_finished is not None:
+            cadence = ROOT_SCAN_CADENCE_SECONDS.get(root.get("storage_media"), ROOT_SCAN_CADENCE_SECONDS["unknown"])
+            if now - root_finished > cadence + polling_interval + SCHEDULED_TIMER_DELAY_SECONDS:
+                return "stale"
+    return "fresh"
+
 
 
 def _config_sync(status: Mapping[str, Any], server: Server) -> str:

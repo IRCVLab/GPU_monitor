@@ -139,6 +139,8 @@ def _validate_payload(payload: Any, server_id: str, generation_filename: str, st
     problem_roots = 0
     for root in roots:
         _validate_root(root, budget)
+        if "scan_finished_unix" in root:
+            _int(root["scan_finished_unix"], "selected root scan_finished_unix", 0, finished + 1)
         mid = root["mount_id"]
         scan_root = root["scan_root"]
         if mid in roots_by_id or scan_root in roots_by_scan_root:

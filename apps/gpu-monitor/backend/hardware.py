@@ -10,10 +10,10 @@ from sqlalchemy import select, delete, func
 
 try:
     from .models import Server, HardwareRound, HardwarePowerObservation, HardwareImport, PowerRawSample
-    from . import power_logging, temperature_history, server_history
+    from . import power_logging, temperature_history, server_history, telemetry_time
 except ImportError:
     from models import Server, HardwareRound, HardwarePowerObservation, HardwareImport, PowerRawSample
-    import power_logging, temperature_history, server_history
+    import power_logging, temperature_history, server_history, telemetry_time
 from pathlib import Path
 from typing import Literal
 
@@ -94,40 +94,41 @@ SENSOR_COMMAND = 'sudo -n /usr/bin/ipmitool sensor list'
 POWER_COMMAND = 'sudo -n /usr/bin/ipmitool dcmi power reading'
 
 
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
-
-
-def _naive(value: datetime) -> datetime:
-    return _utc(value).replace(tzinfo=None)
-
-
 def _eligible(servers):
     return [server for server in servers if server.name.casefold() != 'poseidon']
 
 
 def _point(at, values):
-    observed = [value for value in values if value is not None]
-    complete = bool(values) and len(observed) == len(values)
-    point = {'collected_at': _utc(at).isoformat(), 'power_watts': sum(observed) if complete else None,
-             'server_count': len(observed), 'expected_count': len(values), 'complete': complete}
-    if observed and not complete:
-        point['observed_watts'] = sum(observed)
+    subtotal, count = power_logging.observed_power(values)
+    complete = bool(values) and count == len(values)
+    point = {'collected_at': telemetry_time.utc(at).isoformat(), 'power_watts': subtotal if complete else None,
+             'server_count': count, 'expected_count': len(values), 'complete': complete}
+    if count and not complete:
+        point['observed_watts'] = subtotal
     return point
 
 
 class HardwareMonitor:
     """Independent, bounded hardware worker; never shares GPU SSH connections."""
-    def __init__(self, sessions, *, interval=60, concurrency=3, ssh_factory=None, gpu_archive_interval=60):
+    def __init__(self, sessions, *, interval=60, concurrency=3, ssh_factory=None, gpu_archive_interval=60,
+                 psu_ratings: dict[int, dict[str, float]] | None = None):
         self.sessions = sessions
         self.interval = max(30, interval)
         self.gpu_archive_interval = max(1, gpu_archive_interval)
         self.ssh_factory = ssh_factory
+        self.psu_ratings = {str(server_id): slots for server_id, slots in (psu_ratings or {}).items()}
         self.executor = ThreadPoolExecutor(max_workers=max(1, min(concurrency, 7)), thread_name_prefix='hardware-ipmi')
         self.current = None
 
     def close(self):
         self.executor.shutdown(wait=False, cancel_futures=True)
+
+    def with_psu_ratings(self, snapshots: dict) -> dict:
+        return {
+            server_id: {**snapshot, 'psu_rated_output_watts': self.psu_ratings[server_id]}
+            if server_id in self.psu_ratings else snapshot
+            for server_id, snapshot in snapshots.items()
+        }
 
     def _collect(self, server):
         factory = self.ssh_factory
@@ -173,14 +174,14 @@ class HardwareMonitor:
         await self.archive_round(servers, snapshots, at)
         # Use the identical latest actual host observation as the persisted
         # internal-network series, so WS/API merges identify the same round.
-        point_at = max((power_logging.parse_at(snapshot['collected_at']) for snapshot in snapshots.values()), default=at)
+        point_at = max((telemetry_time.parse_at(snapshot['collected_at']) for snapshot in snapshots.values()), default=at)
         point = _point(point_at, [snapshots.get(str(server.id), {}).get('power_watts') for server in servers if server.network == 'internal'])
-        self.current = {'mode': 'live', 'servers': snapshots, 'point': point}
+        self.current = {'mode': 'live', 'servers': self.with_psu_ratings(snapshots), 'point': point}
         return self.current
 
     async def archive_round(self, servers, snapshots, at, *, db=None):
         async def write(session):
-            round_ = HardwareRound(collected_at=_naive(at))
+            round_ = HardwareRound(collected_at=telemetry_time.utc_naive(at))
             session.add(round_)
             await session.flush()
             for server in _eligible(servers):
@@ -188,7 +189,7 @@ class HardwareMonitor:
                 observed_at = snapshot.get('collected_at')
                 session.add(HardwarePowerObservation(round_id=round_.id, server_id=server.id,
                     network=server.network, power_watts=snapshot.get('power_watts'),
-                    observed_at=_naive(datetime.fromisoformat(observed_at.replace('Z', '+00:00'))) if observed_at else None))
+                    observed_at=telemetry_time.parse_at(observed_at).replace(tzinfo=None) if observed_at else None))
             await session.flush()
             await power_logging.record_round(session, round_.id, _eligible(servers), snapshots, at, self.interval)
             await temperature_history.record_round(session, round_.id, _eligible(servers), snapshots, at, self.interval)
@@ -235,9 +236,9 @@ class HardwareMonitor:
                     servers = [SimpleNamespace(id=row.server_id,network=row.network) for row in observations]
                     observed = {}
                     for row in observations:
-                        at = _utc(row.observed_at or round_.collected_at)
+                        at = telemetry_time.utc(row.observed_at or round_.collected_at)
                         original = snapshots.get(str(row.server_id), {})
-                        sensors = original.get('sensors', []) if original.get('collected_at') and power_logging.parse_at(original['collected_at']) == at else []
+                        sensors = original.get('sensors', []) if original.get('collected_at') and telemetry_time.parse_at(original['collected_at']) == at else []
                         observed[str(row.server_id)] = {'power_watts':row.power_watts,'collected_at':at.isoformat(),'sensors':sensors}
                     await power_logging.record_round(db, round_.id, servers, observed, round_.collected_at, self.interval)
                 await db.commit()

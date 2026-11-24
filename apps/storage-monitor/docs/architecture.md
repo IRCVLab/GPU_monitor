@@ -7,7 +7,7 @@
 | Boundary | Files | Responsibility | Extension rule |
 |---|---|---|---|
 | Scanner | `scanner/hstscan.c`, `scanner/Makefile` | Fast local filesystem walker used only by the agent. | Preserve local-only scan roots and JSON correctness. |
-| Agent runtime | `agent/`, `deploy/install-agent.sh`, `deploy/systemd/storage-viz-scan.*` | Root scan runner, six-hour timer, status envelope, atomic snapshots, and exact sudo policy for the `monitoring` account. | Do not accept arbitrary paths or commands from central. |
+| Agent runtime | `agent/`, `deploy/install-agent.sh`, `deploy/systemd/storage-viz-scan.*` | Root scan runner, hourly scheduling with per-media intervals, status envelope, atomic snapshots, and exact sudo policy for the `monitoring` account. | Do not accept arbitrary paths or commands from central. |
 | Central collector | `collector/`, `config/servers.example.yaml` | Strict inventory validation, OpenSSH/SFTP transport, state store, polling, and bounded manual rescan. | Inventory references external identity/known-host paths and must not contain secrets. |
 | Central dashboard | `viewer/serve.py`, `deploy/systemd/storage-viz-dashboard.service.in`, `install.sh` | Loopback HTTP API/UI, trusted-proxy auth, exact-origin/CSRF checks, pulled snapshot serving. | Bind loopback by default and publish only through an authenticating reverse proxy. |
 | Data fixtures | `data/hosts.json`, `data/*.sample.json`, `data/gen_sample.py` | Tracked demo metadata and scrubbed fixtures. | Generated production snapshots remain ignored. |
@@ -17,11 +17,12 @@
 
 ```text
 configured storage server
-  └─ storage-viz-scan.timer (OnUnitActiveSec=6h)
-      └─ storage-viz-scan.service
-          └─ agent.scan_runner + scanner/hstscan
-              ├─ /var/lib/storage-viz/scan-status.json
-              └─ /var/lib/storage-viz/snapshots/<server>-<generation>-v1.json
+  ├─ storage-viz-scan.timer (hourly)
+  │   └─ storage-viz-scheduled-scan.service (due groups)
+  └─ storage-viz-scan.service (manual full scan)
+      └─ agent.scan_runner + scanner/hstscan (shared lock)
+          ├─ /var/lib/storage-viz/scan-status.json
+          └─ /var/lib/storage-viz/snapshots/<server>-<generation>-v1.json
 
 central host
   └─ storage-viz-dashboard.service on 127.0.0.1:8088

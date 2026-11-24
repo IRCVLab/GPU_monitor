@@ -9,7 +9,9 @@ let currentOverviewRows = [];
 let currentDataSource = "static";
 let currentDataMode = "inventory";
 let staticHostById = new Map();
-let snapshotCache = new Map();
+const detailSnapshots = typeof module !== "undefined" && module.exports
+  ? require("./data-client.js").createDetailSnapshots()
+  : createDetailSnapshots();
 let resizeTimer = null;
 let rescanTimer = null;
 let rescanSawActive = false;
@@ -19,7 +21,6 @@ let rescanPollFailures = 0;
 let rescanTrackingGeneration = 0;
 let rescanExpectedJobId = null;
 let detailLoadGeneration = 0;
-let detailRequestVersions = new Map();
 let themeRevealLocked = false;
 let overviewLoadGeneration = 0;
 let echartsLoadPromise = null;
@@ -41,7 +42,9 @@ async function refreshScanOverview() {
   try {
     const envelope = await loadServerSummaries();
     if (currentServerId || generation !== overviewLoadGeneration) return;
-    currentOverviewSummaries = envelope.servers;
+    const currentIds = new Set(envelope.servers.map(server => server.id));
+    if (currentOverviewSummaries.some(server => !currentIds.has(server.id))) overviewLoadGeneration += 1;
+    replaceOverviewInventory(envelope.servers, true);
     renderOverview();
   } catch (_) {
     // Retain the last observation; its timestamp makes stale status visible.
@@ -58,7 +61,7 @@ function renderCurrentScanStatus() {
   if (rescanServerId === currentServerId && localState && status.state !== "running" && !status.disconnected) {
     displayed.state = localState === "running" ? "requested" : localState;
   }
-  const pending = status.generation && (status.state === "complete" || status.state === "partial") && (!DATA || DATA.scan_generation !== status.generation);
+  const pending = pendingScanGeneration(status, DATA);
   renderScanStatus(displayed, DATA, {
     sample: currentDataMode === "sample",
     note: pending ? "새 스캔이 완료되었습니다. 화면 데이터를 갱신하고 있습니다." : "",
@@ -74,13 +77,13 @@ function startScanStatusMonitoring() {
       scanStatusByServer.set(id, status);
       renderCurrentScanStatus();
       syncRescanButton();
-      const needsSnapshot = status.generation && ["complete", "partial"].includes(status.state) && (!DATA || DATA.scan_generation !== status.generation);
+      const needsSnapshot = pendingScanGeneration(status, DATA);
       // Manual job completion owns its refresh. Retry automatically if that refresh failed.
       const activeRefresh = scanSnapshotRefresh.get(id);
       if (needsSnapshot && !rescanServerId && (!activeRefresh || activeRefresh.routeGeneration !== detailLoadGeneration)) {
         const refresh = { routeGeneration: detailLoadGeneration };
         scanSnapshotRefresh.set(id, refresh);
-        void ensureDetailLoaded(id, true).catch(() => {}).finally(() => {
+        void ensureDetailLoaded(id, true, needsSnapshot).catch(() => {}).finally(() => {
           if (scanSnapshotRefresh.get(id) === refresh) scanSnapshotRefresh.delete(id);
           if (isCurrent() && currentServerId === id) renderCurrentScanStatus();
         });
@@ -572,19 +575,29 @@ async function loadBootstrapData() {
   return loadBootstrapDataWith();
 }
 
+function replaceOverviewInventory(summaries, preserveSnapshotCache) {
+  currentOverviewSummaries = summaries;
+  const currentIds = new Set(summaries.map(item => item && item.id).filter(Boolean));
+  detailSnapshots.retain(currentIds, preserveSnapshotCache);
+  currentOverviewSnapshotEntries = currentOverviewSnapshotEntries.filter(entry => entry && currentIds.has(entry.id));
+  for (const id of scanStatusByServer.keys()) {
+    if (!currentIds.has(id)) scanStatusByServer.delete(id);
+  }
+  for (const id of scanSnapshotRefresh.keys()) {
+    if (!currentIds.has(id)) scanSnapshotRefresh.delete(id);
+  }
+}
+
 function rememberBootstrap(bootstrap, options) {
   const opts = options || {};
-  const previousSnapshotCache = opts.preserveSnapshotCache ? snapshotCache : new Map();
   currentDataSource = bootstrap.mode;
   currentDataMode = bootstrap.dataMode || bootstrap.data_mode || "inventory";
   setSampleDataMarker(currentDataMode);
   currentSession = bootstrap.session || { authenticated: false, can_rescan: false, csrf_token: "" };
-  currentOverviewSummaries = bootstrap.summaries || [];
   currentOverviewSnapshotEntries = bootstrap.snapshots || [];
-  const currentIds = new Set(currentOverviewSummaries.map(item => item && item.id).filter(Boolean));
-  snapshotCache = new Map(Array.from(previousSnapshotCache.entries()).filter(([serverId]) => currentIds.has(serverId)));
+  replaceOverviewInventory(bootstrap.summaries || [], opts.preserveSnapshotCache);
   for (const entry of currentOverviewSnapshotEntries) {
-    if (entry && entry.id && entry.snapshot && !entry.overviewOnly) snapshotCache.set(entry.id, entry.snapshot);
+    if (entry && entry.id && entry.snapshot && !entry.overviewOnly) detailSnapshots.set(entry.id, entry.snapshot);
   }
 }
 
@@ -600,11 +613,10 @@ function updateSnapshotEntry(serverId, snapshot, error) {
 
 function startOverviewSnapshotHydration(bootstrap, generation) {
   if (!bootstrap || typeof bootstrap.startSnapshotLoading !== "function") return;
-  const detailVersionsAtStart = new Map(detailRequestVersions);
+  const detailVersionsAtStart = detailSnapshots.checkpoint();
   void bootstrap.startSnapshotLoading((entry) => {
-    if (generation !== overviewLoadGeneration || !entry || !entry.id) return;
-    if ((detailRequestVersions.get(entry.id) || 0) !== (detailVersionsAtStart.get(entry.id) || 0)) return;
-    if (entry.snapshot) snapshotCache.set(entry.id, entry.snapshot);
+    if (generation !== overviewLoadGeneration || !entry || !currentOverviewSummaries.some(item => item.id === entry.id)) return;
+    if (!detailSnapshots.acceptHydrated(entry, detailVersionsAtStart)) return;
     updateSnapshotEntry(entry.id, entry.snapshot || null, entry.error || null);
     renderOverview();
   }).catch((error) => {
@@ -632,37 +644,32 @@ function isCurrentDetailGeneration(serverId, generation) {
   return currentServerId === serverId && detailLoadGeneration === generation;
 }
 
-function beginDetailRequestVersion(serverId) {
-  const next = (detailRequestVersions.get(serverId) || 0) + 1;
-  detailRequestVersions.set(serverId, next);
-  return next;
-}
-
-function isCurrentDetailRequestVersion(serverId, version) {
-  return detailRequestVersions.get(serverId) === version;
-}
-
-async function ensureDetailLoaded(serverId, forceReload, generationOverride, requestVersionOverride) {
-  const generation = generationOverride == null ? detailLoadGeneration : generationOverride;
-  const requestVersion = requestVersionOverride == null ? beginDetailRequestVersion(serverId) : requestVersionOverride;
+async function ensureDetailLoaded(serverId, forceReload, pendingGeneration = null) {
+  const generation = detailLoadGeneration;
+  const requestVersion = detailSnapshots.begin(serverId);
   const summary = currentOverviewSummaries.find(item => item.id === serverId);
   currentServerSummary = summary || null;
   if (!summary) {
     if (isCurrentDetailGeneration(serverId, generation)) showDetailError("Unknown server: " + serverId);
     return;
   }
-  let snapshot = !forceReload ? snapshotCache.get(serverId) : null;
+  let snapshot = !forceReload ? detailSnapshots.get(serverId) : null;
   if (!snapshot) {
     try {
       snapshot = await currentDetailLoader()(serverId);
-      if (!isCurrentDetailRequestVersion(serverId, requestVersion)) return;
-      snapshotCache.set(serverId, snapshot);
+      if (!detailSnapshots.isCurrent(serverId, requestVersion)) return;
+      const displayed = detailSnapshots.get(serverId);
+      if (pendingGeneration && displayed && (
+        snapshot.scan_generation === displayed.scan_generation ||
+        snapshot.scan_finished_unix < displayed.scan_finished_unix
+      )) return;
+      detailSnapshots.set(serverId, snapshot);
       updateSnapshotEntry(serverId, snapshot, null);
       renderOverview();
     } catch (error) {
-      if (!isCurrentDetailRequestVersion(serverId, requestVersion)) return;
+      if (!detailSnapshots.isCurrent(serverId, requestVersion)) return;
       console.error("[storage-viz] failed to load snapshot", serverId, error);
-      const existingSnapshot = DATA && DATA.server_id === serverId ? DATA : snapshotCache.get(serverId);
+      const existingSnapshot = DATA && DATA.server_id === serverId ? DATA : detailSnapshots.get(serverId);
       updateSnapshotEntry(serverId, existingSnapshot || null, error);
       renderOverview();
       if (isCurrentDetailGeneration(serverId, generation)) {
@@ -699,7 +706,7 @@ function applyRouteState(route, options) {
   detailLoadGeneration += 1;
   currentServerId = safeRoute.serverId;
   currentServerSummary = safeRoute.serverId ? (currentOverviewSummaries.find(item => item.id === safeRoute.serverId) || null) : null;
-  DATA = safeRoute.serverId ? (snapshotCache.get(safeRoute.serverId) || null) : null;
+  DATA = safeRoute.serverId ? (detailSnapshots.get(safeRoute.serverId) || null) : null;
   if (typeof resetCleanupSelectionState === "function") resetCleanupSelectionState();
   clearDetailError();
   setShellMode(!!safeRoute.serverId);
@@ -716,8 +723,7 @@ function applyRouteState(route, options) {
   if (!DATA) showDetailLoading(currentServerSummary);
   showTab(safeRoute.tab, { updateRoute: false });
   if (!opts.skipDataLoad) {
-    const requestVersion = beginDetailRequestVersion(safeRoute.serverId);
-    void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload, detailLoadGeneration, requestVersion);
+    void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload);
   }
   return safeRoute;
 }
@@ -873,15 +879,22 @@ async function refreshOverviewData(options) {
     rememberBootstrap(bootstrap, { preserveSnapshotCache: true });
     if (selectedServerId) {
       currentServerSummary = currentOverviewSummaries.find(item => item.id === selectedServerId) || null;
-      const refreshedSelectedData = snapshotCache.get(selectedServerId);
-      if (refreshedSelectedData) DATA = refreshedSelectedData;
+      const refreshedSelectedData = detailSnapshots.get(selectedServerId);
+      if (!currentServerSummary) DATA = null;
+      else if (refreshedSelectedData) DATA = refreshedSelectedData;
       else if (selectedData) {
         DATA = selectedData;
-        snapshotCache.set(selectedServerId, selectedData);
+        detailSnapshots.set(selectedServerId, selectedData);
       }
     }
     renderOverview();
     startOverviewSnapshotHydration(bootstrap, generation);
+    if (selectedServerId && !currentServerSummary) {
+      clearRescanPoll();
+      showDetailError("Unknown server: " + selectedServerId);
+      syncRescanButton();
+      return { ok: true, preservedRoute: true };
+    }
     const expectedRouteStillActive = !opts.expectedServerId || opts.expectedServerId === selectedServerId;
     if (navigationChanged || !expectedRouteStillActive) {
       if (selectedServerId && DATA) {
@@ -895,8 +908,7 @@ async function refreshOverviewData(options) {
     if (selectedServerId) {
       if (opts.forceReload) {
         applyRouteState({ serverId: selectedServerId, tab: selectedTab }, { skipHistory: true, skipDataLoad: true, forceReload: true });
-        const requestVersion = beginDetailRequestVersion(selectedServerId);
-        await ensureDetailLoaded(selectedServerId, true, detailLoadGeneration, requestVersion);
+        await ensureDetailLoaded(selectedServerId, true);
       } else {
         navigateToServer(selectedServerId, { skipHistory: true, tab: selectedTab });
       }
@@ -978,7 +990,8 @@ async function pollRescanJob(serverId, generation) {
     const body = await currentServerJobLoader()(targetServerId);
     if (rescanServerId !== targetServerId || currentServerId !== targetServerId || trackingGeneration !== rescanTrackingGeneration) return;
     const job = body && body.job;
-    if (rescanExpectedJobId && job && job.id && job.id !== rescanExpectedJobId) {
+    const state = classifyRescanJob(job, rescanExpectedJobId, rescanSawActive);
+    if (state === "stale") {
       rescanPollFailures += 1;
       if (rescanPollFailures <= 2) {
         setRescanActivityState(btn, "reconnecting");
@@ -994,25 +1007,23 @@ async function pollRescanJob(serverId, generation) {
       return;
     }
     rescanPollFailures = 0;
-    if (job && (job.state === "requested" || job.state === "running")) {
+    if (state === "requested" || state === "running") {
       rescanSawActive = true;
-      setRescanActivityState(btn, job.state);
+      setRescanActivityState(btn, state);
       btn.disabled = true;
       btn.textContent = "Rescan";
-      btn.title = job.state === "requested" ? "Scan is queued" : "Scan is running";
+      btn.title = state === "requested" ? "Scan is queued" : "Scan is running";
       scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
       return;
     }
-    const observedActiveJob = rescanSawActive;
-    const failed = !!(job && job.state === "failed");
-    const resultCode = failed ? (job.result_code || job.error || "UNKNOWN_FAILURE") : "";
-    if (failed) {
+    if (state === "failed") {
+      const resultCode = job.result_code || job.error || "UNKNOWN_FAILURE";
       clearRescanPoll();
       setRescanRetry(btn, "Retry rescan", "The previous scan failed. Try again.");
       showRescanNotice("Rescan failed: " + resultCode);
       return;
     }
-    if (observedActiveJob) {
+    if (state === "refresh") {
       setRescanActivityState(btn, "refreshing");
       btn.disabled = true;
       btn.textContent = "Rescan";
@@ -1068,7 +1079,7 @@ async function triggerRescan() {
         return;
       }
       rescanExpectedJobId = body.job && body.job.id ? String(body.job.id) : null;
-      const state = body.job && (body.job.state === "requested" || body.job.state === "running") ? body.job.state : "running";
+      const state = activeRescanState(body.job) || "running";
       setRescanActivityState(btn, state);
       btn.disabled = true;
       btn.textContent = "Rescan";
@@ -1204,7 +1215,7 @@ function getCurrentDetailDebugState() {
     currentServerSummary,
     data: DATA,
     detailLoadGeneration,
-    detailRequestVersions: new Map(detailRequestVersions),
+    detailRequestVersions: detailSnapshots.checkpoint(),
   };
 }
 

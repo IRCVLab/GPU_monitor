@@ -372,8 +372,7 @@ class RepositoryLayoutTest(unittest.TestCase):
             "git ls-files > /tmp/ci-all-paths.txt",
             "git hash-object -t tree /dev/null",
             "node-version: '22.14.0'",
-            "npm run test:unit",
-            "npm run test:runtime",
+            "make test-gpu",
             "python-version: '3.12.10'",
             "pytest==8.4.1",
         ):
@@ -385,11 +384,19 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertNotIn("node-version: '20'", content)
         self.assertNotIn("run: python3.12 -m pip install pytest\n", content)
 
-        check_index = content.index("- name: Check frontend")
-        build_index = content.index("- name: Build frontend")
-        runtime_index = content.index("- name: Test frontend runtime proxy")
-        self.assertLess(check_index, build_index)
-        self.assertLess(build_index, runtime_index)
+        gpu_job = content.split("\n  gpu:", 1)[1].split("\n  storage:", 1)[0]
+        repository_job = content.split("\n  repository:", 1)[1].split("\n  gpu:", 1)[0]
+        storage_job = content.split("\n  storage:", 1)[1].split("\n  required:", 1)[0]
+        for job, command in (
+            (repository_job, "make test"),
+            (gpu_job, "make test-gpu"),
+            (storage_job, "make test-storage"),
+        ):
+            self.assertIn("node-version: '22.14.0'", job)
+            self.assertLess(job.index("node-version: '22.14.0'"), job.index(command))
+        verify_index = gpu_job.index("make test-gpu")
+        self.assertLess(gpu_job.index("- name: Install frontend dependencies"), verify_index)
+        self.assertLess(gpu_job.index("- name: Install backend dependencies"), verify_index)
 
     def test_tracked_files_exclude_generated_runtime_and_local_environment_data(self):
         disallowed = [path for path in tracked_paths() if is_disallowed_tracked_path(path)]

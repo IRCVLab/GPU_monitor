@@ -1,11 +1,15 @@
 import hashlib
 import importlib.util
+import io
 import json
+import shutil
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, run
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +25,8 @@ def load_puller():
     spec = importlib.util.spec_from_file_location("storage_monitor_release_puller", PULLER_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    with mock.patch.object(sys, "path", [str(PULLER_PATH.parent), *sys.path]):
+        spec.loader.exec_module(module)
     return module
 
 
@@ -78,11 +83,28 @@ class StorageReleasePullerTest(unittest.TestCase):
             timeout_seconds=30,
         )
 
-    def write_artifact(self, outdir, sha=SHA1, content=b"artifact"):
+    def write_artifact(self, outdir, sha=SHA1, *, missing=None):
         outdir.mkdir(parents=True, exist_ok=True)
         archive = outdir / f"storage-monitor-dashboard-{sha}.tar.gz"
-        archive.write_bytes(content)
-        digest = hashlib.sha256(content).hexdigest()
+        with mock.patch.object(sys, "path", [str(PULLER_PATH.parent), *sys.path]):
+            from storage_dashboard_release import REQUIRED_RELEASE_FILES
+
+        files = {path: path.encode() for path in REQUIRED_RELEASE_FILES if path != missing}
+        manifest = {
+            "application_name": "storage-monitor",
+            "archive": archive.name,
+            "artifact_format_version": 1,
+            "schema_version": 1,
+            "source_sha": sha,
+            "included_paths": sorted(files),
+            "files": {path: hashlib.sha256(content).hexdigest() for path, content in files.items()},
+        }
+        with tarfile.open(archive, "w:gz") as tar:
+            for path, content in {**files, "RELEASE-MANIFEST.json": json.dumps(manifest).encode()}.items():
+                member = tarfile.TarInfo(f"storage-monitor/{path}")
+                member.size = len(content)
+                tar.addfile(member, io.BytesIO(content))
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (outdir / f"storage-monitor-dashboard-{sha}.sha256.json").write_text(json.dumps({
             "application_name": "storage-monitor",
             "archive": archive.name,
@@ -93,15 +115,18 @@ class StorageReleasePullerTest(unittest.TestCase):
         }, sort_keys=True) + "\n", encoding="utf-8")
         return archive, digest
 
-    def write_activation_state(self, path, *, sha="", digest=""):
+    def write_activation_state(self, path, *, sha="", digest="", runtime_digest=""):
         if sha:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({
+            payload = {
                 "status": "active",
                 "source_sha": sha,
                 "archive_digest": digest,
                 "release": f"/srv/storage-viz-dashboard/releases/{sha}/storage-monitor",
-            }) + "\n", encoding="utf-8")
+            }
+            if runtime_digest:
+                payload["runtime_digest"] = runtime_digest
+            path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     def test_fetches_current_main_first_and_exits_cheaply_when_already_current(self):
         puller = load_puller()
@@ -143,6 +168,7 @@ class StorageReleasePullerTest(unittest.TestCase):
                         "status": "active",
                         "source_sha": SHA1,
                         "archive_digest": digest,
+                        "runtime_digest": puller.validate_artifact(Path(argv[argv.index("--metadata") + 1]).parent, SHA1)[2],
                         "release": f"/srv/storage-viz-dashboard/releases/{SHA1}/storage-monitor",
                     }) + "\n", "")
                 if argv[0] == "python3" and str(cfg.authorizer) in argv:
@@ -251,13 +277,15 @@ class StorageReleasePullerTest(unittest.TestCase):
     def test_matching_live_digest_records_new_sha_without_invoking_activator(self):
         puller = load_puller()
         events = []
-        live_digest = hashlib.sha256(b"artifact").hexdigest()
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self.config(tmp)
             cfg.state_dir.mkdir(parents=True)
             (cfg.state_dir / "current-live-sha").write_text(SHA2 + "\n", encoding="utf-8")
             (cfg.state_dir / "failed-release.json").write_text(json.dumps({"failures": 2, "retry_after": 1.0, "sha": SHA1}) + "\n", encoding="utf-8")
-            self.write_activation_state(cfg.activation_state_path, sha=SHA2, digest=live_digest)
+            outdir = Path(tmp) / "previous"
+            self.write_artifact(outdir, sha=SHA2)
+            _, live_digest, runtime_digest = puller.validate_artifact(outdir, SHA2)
+            self.write_activation_state(cfg.activation_state_path, sha=SHA2, digest=live_digest, runtime_digest=runtime_digest)
             github = FakeGitHub(SHA1)
 
             def run_command(argv, **kwargs):
@@ -275,11 +303,102 @@ class StorageReleasePullerTest(unittest.TestCase):
                 return CompletedProcess(argv, 0, "", "")
 
             result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
-            self.assertEqual(result, "unchanged-artifact")
+            self.assertEqual(result, "unchanged-runtime")
             self.assertEqual((cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip(), SHA1)
             self.assertFalse((cfg.state_dir / "failed-release.json").exists())
             self.assertFalse((cfg.work_dir / "out").exists())
         self.assertEqual(events, ["authorize", "checkout", "build", "authorize"])
+
+    def test_real_builder_distinguishes_runtime_changes_from_empty_and_documentation_commits(self):
+        puller = load_puller()
+        with mock.patch.object(sys, "path", [str(PULLER_PATH.parent), *sys.path]):
+            from storage_dashboard_release import REQUIRED_RELEASE_FILES
+
+        app_path = Path("apps/storage-monitor")
+        builder = REPO_ROOT / app_path / "deploy/build-dashboard-release.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            cfg = self.config(tmp)
+            for relative in REQUIRED_RELEASE_FILES:
+                destination = repo / app_path / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(REPO_ROOT / app_path / relative, destination)
+
+            def git(*args):
+                return run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+            def commit(message):
+                git("add", ".")
+                git("commit", "--allow-empty", "-qm", message)
+                return git("rev-parse", "HEAD")
+
+            git("init", "-q")
+            git("config", "user.name", "Release Test")
+            git("config", "user.email", "release-test@example.invalid")
+            git("config", "core.filemode", "true")
+            baseline = commit("original Storage runtime")
+            self.write_activation_state(cfg.activation_state_path, sha=baseline, digest=DIGEST)
+
+            github = FakeGitHub()
+            validated = []
+            activation_calls = []
+            missing_file = None
+
+            def run_command(argv, **kwargs):
+                if argv[0] == "python3" and str(cfg.authorizer) in argv:
+                    return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": github.sha}), "")
+                if argv[0] == str(cfg.activate):
+                    metadata = Path(argv[argv.index("--metadata") + 1])
+                    _, digest, runtime_digest = puller.validate_artifact(metadata.parent, github.sha)
+                    self.assertEqual(hashlib.sha256(kwargs["stdin"].read()).hexdigest(), digest)
+                    activation_calls.append(github.sha)
+                    self.write_activation_state(
+                        cfg.activation_state_path, sha=github.sha, digest=digest, runtime_digest=runtime_digest,
+                    )
+                    return CompletedProcess(argv, 0, cfg.activation_state_path.read_text(encoding="utf-8"), "")
+                if any(str(part).endswith("build-dashboard-release.py") for part in argv):
+                    output = Path(argv[argv.index("--output-dir") + 1])
+                    if missing_file:
+                        self.write_artifact(output, github.sha, missing=missing_file)
+                    else:
+                        result = run(
+                            [sys.executable, str(builder), "--sha", github.sha, "--output-dir", str(output)],
+                            cwd=repo, check=True, capture_output=True, text=True, timeout=30,
+                        )
+                        self.assertIn(github.sha, result.stdout)
+                        _, digest, runtime_digest = puller.validate_artifact(output, github.sha)
+                        validated.append((digest, runtime_digest))
+                return CompletedProcess(argv, 0, "", "")
+
+            def pull(message, expected, activations):
+                github.sha = commit(message)
+                before = len(activation_calls)
+                self.assertEqual(puller.run_once(cfg, get_json=github.get_json, run_command=run_command), expected)
+                self.assertEqual(len(activation_calls) - before, activations)
+                self.assertEqual(puller.read_state_sha(cfg), github.sha)
+
+            pull("first candidate with pre-upgrade activation state", "activated", 1)
+            pull("empty commit", "unchanged-runtime", 0)
+            (repo / app_path / "docs/schema-v1.md").write_text("# Revised schema explanation\n", encoding="utf-8")
+            pull("packaged documentation only", "unchanged-runtime", 0)
+            script = repo / app_path / "viewer/app.js"
+            script.chmod(script.stat().st_mode ^ 0o100)
+            pull("mode-only change", "activated", 1)
+            with script.open("a", encoding="utf-8") as handle:
+                handle.write("\n// Updated runtime file\n")
+            pull("runtime content change", "activated", 1)
+
+            self.assertEqual(len({archive for archive, _ in validated}), 5)
+            self.assertEqual(len({runtime for _, runtime in validated[:3]}), 1)
+            self.assertEqual(len({runtime for _, runtime in validated[2:]}), 3)
+
+            missing_file = "collector/scan_telemetry.py"
+            github.sha = commit("candidate with incomplete artifact")
+            with self.assertRaisesRegex(puller.PullError, "missing required runtime files: collector/scan_telemetry.py"):
+                puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
+            self.assertEqual(len(activation_calls), 3)
 
     def test_aborts_without_activation_if_main_advances_before_final_authorization(self):
         puller = load_puller()
@@ -329,6 +448,16 @@ class StorageReleasePullerTest(unittest.TestCase):
         self.assertTrue(any(f"git -C {checkout} checkout --detach {SHA1}" in r for r in rendered))
         self.assertTrue(any(f"git -C {checkout} clean -xffd" in r for r in rendered))
         self.assertFalse(any(" reset " in f" {r} " for r in rendered))
+
+    def test_managed_rollback_retains_validated_runtime_identity(self):
+        puller = load_puller()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self.config(tmp)
+            self.write_activation_state(cfg.activation_state_path, sha=SHA1, digest=DIGEST, runtime_digest=DIGEST)
+            payload = json.loads(cfg.activation_state_path.read_text(encoding="utf-8"))
+            payload["status"] = "rolled_back"
+            cfg.activation_state_path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertEqual(puller.read_activation_state(cfg), {"current": SHA1, "runtime_digest": DIGEST})
 
     def test_manifest_validation_rejects_metadata_mismatch(self):
         puller = load_puller()

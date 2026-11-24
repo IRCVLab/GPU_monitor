@@ -2,10 +2,8 @@
 import asyncio
 import json
 import logging
-import socket
 from datetime import datetime, timedelta, timezone
 
-import paramiko
 from sqlalchemy import delete, select
 
 try:
@@ -13,9 +11,11 @@ try:
     from ..database import AsyncSessionLocal
     from ..event_logger import get_event_log_health, log_event
     from ..models import GpuMetric, Server, NetworkMetric
+    from ..telemetry_time import now_utc as _utcnow
     from .gpu import parse_gpustat, parse_nvidia_smi, NVIDIA_SMI_CMD
     from .gpu_health import GpuInventoryTracker
     from .ssh_client import SSHClient
+    from .status_reason import StatusReason, collection_failure, connection_failure, inventory_failure
     from .storage import StorageCollector
     from .system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, calculate_disk_io_rate, calculate_network_io_rate, parse_system
 except ImportError:  # pragma: no cover - direct execution fallback
@@ -23,9 +23,11 @@ except ImportError:  # pragma: no cover - direct execution fallback
     from database import AsyncSessionLocal
     from event_logger import get_event_log_health, log_event
     from models import GpuMetric, Server, NetworkMetric
+    from telemetry_time import now_utc as _utcnow
     from collectors.gpu import parse_gpustat, parse_nvidia_smi, NVIDIA_SMI_CMD
     from collectors.gpu_health import GpuInventoryTracker
     from collectors.ssh_client import SSHClient
+    from collectors.status_reason import StatusReason, collection_failure, connection_failure, inventory_failure
     from collectors.storage import StorageCollector
     from collectors.system import SYSTEM_CMD_PROC, SYSTEM_CMD_PSUTIL, calculate_disk_io_rate, calculate_network_io_rate, parse_system
 
@@ -35,10 +37,6 @@ _RECONNECT_CYCLE = 360   # 360 × 10s = 1h forced reconnect
 _OFFLINE_THRESHOLD = 3   # consecutive failures before → offline
 _RETRY_SLEEP = 15        # seconds between retries on error
 _WARN_MINUTES = 3        # minutes before connection_warning → connection_alert
-
-
-def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
 
 
 class ServerCollector:
@@ -55,7 +53,7 @@ class ServerCollector:
         self._reconnect_count: int = 0
         self._offline_since: datetime | None = None
         self._failure_started_at: datetime | None = None
-        self._status_reason: dict | None = None
+        self._status_reason: StatusReason | None = None
         # connection warning/alert flags — reset on recovery
         self._warn_sent: bool = False
         self._alert_sent: bool = False
@@ -71,7 +69,7 @@ class ServerCollector:
         return self._offline_since
 
     @property
-    def status_reason(self) -> dict | None:
+    def status_reason(self) -> StatusReason | None:
         return self._status_reason
 
     # ------------------------------------------------------------------
@@ -152,7 +150,7 @@ class ServerCollector:
                 prev_status = self.status
                 should_broadcast = False
                 self._fail_count += 1
-                self._status_reason = self._normalize_status_reason(exc)
+                self._status_reason = connection_failure(exc)
                 if self._failure_started_at is None:
                     self._failure_started_at = now
                 elapsed = int((now - self._failure_started_at).total_seconds())
@@ -234,95 +232,14 @@ class ServerCollector:
         self._ssh.close()
         self._ssh.connect()
 
-    def _status_reason_payload(
-        self,
-        code: str,
-        source: str,
-        message: str,
-        retryable: bool,
-    ) -> dict:
-        return {
-            "code": code,
-            "source": source,
-            "message": message,
-            "retryable": retryable,
-            "updated_at": _utcnow().isoformat(),
-        }
-
-    def _build_gpu_inventory_degraded_reason(self, inventory: dict) -> dict:
-        missing = inventory.get("missing_indices") or []
-        if missing:
-            detail = f"missing GPU indices: {missing}"
-        else:
-            detail = (
-                f"visible GPU count {inventory.get('visible_count')} is less than "
-                f"expected {inventory.get('expected_count')}"
-            )
-        return self._status_reason_payload(
-            "gpu_device_missing",
-            "gpu",
-            f"GPU inventory mismatch detected ({detail})",
-            True,
-        )
-
-    def _build_degraded_reason(self, gpu_failed: bool, system_failed: bool) -> dict | None:
-        if gpu_failed and system_failed:
-            return self._status_reason_payload(
-                "collector_error",
-                "collector",
-                "GPU 및 시스템 메트릭 수집 실패",
-                True,
-            )
-        if gpu_failed:
-            return self._status_reason_payload(
-                "gpu_collect_failed",
-                "gpu",
-                "GPU 메트릭 수집 실패",
-                True,
-            )
-        if system_failed:
-            return self._status_reason_payload(
-                "system_collect_failed",
-                "system",
-                "시스템 메트릭 수집 실패",
-                True,
-            )
-        return None
-
-    def _normalize_status_reason(self, exc: Exception) -> dict:
-        if isinstance(exc, paramiko.AuthenticationException):
-            return self._status_reason_payload("auth_failed", "connect", "SSH 인증 실패", False)
-
-        if isinstance(exc, paramiko.ssh_exception.NoValidConnectionsError):
-            return self._status_reason_payload("connection_refused", "connect", "SSH 연결 거부", True)
-
-        if isinstance(exc, (socket.timeout, TimeoutError)):
-            return self._status_reason_payload("timeout", "connect", "SSH 연결 시간 초과", True)
-
-        if isinstance(exc, paramiko.SSHException):
-            return self._status_reason_payload("ssh_error", "connect", "SSH 연결 오류", True)
-
-        if isinstance(exc, ConnectionRefusedError):
-            return self._status_reason_payload("connection_refused", "connect", "SSH 연결 거부", True)
-
-        message = str(exc)
-        if "no ssh credentials configured" in message.lower():
-            return self._status_reason_payload("missing_credentials", "connect", "SSH 인증 정보 없음", False)
-        if "timed out" in message.lower():
-            return self._status_reason_payload("timeout", "connect", "SSH 연결 시간 초과", True)
-        if "authentication failed" in message.lower():
-            return self._status_reason_payload("auth_failed", "connect", "SSH 인증 실패", False)
-        if "refused" in message.lower():
-            return self._status_reason_payload("connection_refused", "connect", "SSH 연결 거부", True)
-
-        return self._status_reason_payload("ssh_error", "collector", "서버 연결 오류", True)
-
     def _sync_collect_gpu(self) -> "ServerGpuData":
         """Collect GPU data — tries gpustat first, falls back to nvidia-smi."""
         try:
             raw = self._ssh.run("gpustat --json --no-header 2>/dev/null")
             return parse_gpustat(raw)
         except Exception:
+            if not self._ssh.is_connected:
+                raise
             raw = self._ssh.run(NVIDIA_SMI_CMD)
             return parse_nvidia_smi(raw)
 
@@ -367,11 +284,11 @@ class ServerCollector:
             cached = self._storage.get_cached()
             return cached.to_dict() if cached is not None else None
 
-    async def _collect_once(self) -> tuple[dict, bool, dict | None]:
+    async def _collect_once(self) -> tuple[dict, bool, StatusReason | None]:
         """Collect GPU + system metrics.
 
         Returns (data_dict, degraded, degraded_reason).
-        degraded=True means SSH is alive but GPU or system metrics failed.
+        degraded=True covers partial metrics and confirmed GPU inventory mismatch.
         Raises on SSH-level failure (triggers offline logic in run()).
         """
         loop = asyncio.get_event_loop()
@@ -398,8 +315,7 @@ class ServerCollector:
             system_info.network_tx_bytes_per_second = network_rate.tx_bytes_per_second
         storage_info = await loop.run_in_executor(None, self._sync_collect_storage)
 
-        degraded = gpu_failed or system_raw is None
-        degraded_reason = self._build_degraded_reason(gpu_failed, system_raw is None)
+        degraded_reason = collection_failure(gpu_failed, system_raw is None)
         gpu_inventory = None
 
         if gpu_data is not None:
@@ -410,8 +326,7 @@ class ServerCollector:
             )
             gpu_inventory = inventory_health.to_dict()
             if inventory_health.state == "missing":
-                degraded = True
-                degraded_reason = self._build_gpu_inventory_degraded_reason(gpu_inventory)
+                degraded_reason = inventory_failure(gpu_inventory)
 
         disk_rate = calculate_disk_io_rate(self._last_system_info, system_info)
         disk_sample_seconds = None
@@ -532,7 +447,7 @@ class ServerCollector:
             "storage": storage_info,
             "gpu_inventory": gpu_inventory,
         }
-        return data, degraded, degraded_reason
+        return data, degraded_reason is not None, degraded_reason
 
     # ------------------------------------------------------------------
     # Archive & history cleanup

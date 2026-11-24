@@ -184,10 +184,11 @@ grep -Fq 'remote_cleanup=failed' "$ROOT/output/verification/linux-verification.t
 ! grep -Fq 'overall_exit_code=0' "$ROOT/output/verification/linux-verification.txt" || fail "cleanup failure produced zero overall result"
 pass "verify-linux fails when remote cleanup fails"
 
-assert_contains "$TIMER" "OnUnitActiveSec=6h"
+assert_contains "$TIMER" "OnCalendar=*-*-* *:00:00 UTC"
+assert_contains "$TIMER" "Unit=storage-viz-scheduled-scan.service"
 assert_contains "$TIMER" "Persistent=true"
-assert_contains "$TIMER" "RandomizedDelaySec=30m"
-pass "timer has six-hour persistent randomized cadence"
+assert_contains "$TIMER" "RandomizedDelaySec=5m"
+pass "timer checks due groups once per UTC hour with persistent scheduling"
 
 assert_contains "$SERVICE" "User=root"
 assert_contains "$SERVICE" "Group=storage-viz-collector"
@@ -209,6 +210,7 @@ assert_not_grep "$SERVICE" 'CAP_SYS_ADMIN|CAP_DAC_OVERRIDE|CAP_SYS_PTRACE|CAP_NE
 assert_contains "$SERVICE" "ExecStart=/usr/bin/python3 -m agent.scan_runner --config /etc/storage-viz/scanner.yaml"
 assert_contains "$SERVICE" "RuntimeDirectory=storage-viz"
 assert_contains "$SERVICE" "RuntimeDirectoryMode=0750"
+assert_contains "$SERVICE" "RuntimeDirectoryPreserve=yes"
 assert_not_grep "$SERVICE" 'flock|scan\.lock' "outer systemd/flock lock; agent.scan_runner owns nonblocking lock"
 grep -Fq "lock_path = run_dir / \"scan.lock\"" "$ROOT/agent/scan_runner.py" || fail "agent.scan_runner lock contract not found"
 grep -Fq "if not try_lock_fd(lock_fd):" "$ROOT/agent/scan_runner.py" || fail "agent.scan_runner nonblocking lock not found"
@@ -271,6 +273,12 @@ FAKE_LOG="$TMP/install.log" PATH="$FAKEBIN:$PATH" "$INSTALL" --dry-run --prefix 
 [[ -f "$DRY_PREFIX/etc/storage-viz/scanner.yaml" ]] || fail "dry-run did not render scanner config under temp prefix"
 [[ -f "$DRY_PREFIX/etc/systemd/system/storage-viz-scan.service" ]] || fail "dry-run did not render service under temp prefix"
 [[ -f "$DRY_PREFIX/etc/systemd/system/storage-viz-scan.timer" ]] || fail "dry-run did not render timer under temp prefix"
+SCHEDULED="$DRY_PREFIX/etc/systemd/system/storage-viz-scheduled-scan.service"
+assert_contains "$SCHEDULED" "ExecStart=/usr/bin/python3 -m agent.scan_runner --config /etc/storage-viz/scanner.yaml --scheduled"
+assert_contains "$SCHEDULED" "RuntimeDirectoryPreserve=yes"
+assert_contains "$SCHEDULED" "SuccessExitStatus=75"
+assert_not_grep "$DRY_PREFIX/etc/systemd/system/storage-viz-scan.service" "[[:space:]]--scheduled" "cadence flag in the manual service"
+
 [[ -f "$DRY_PREFIX/etc/sudoers.d/storage-viz-monitoring" ]] || fail "dry-run did not render sudoers under temp prefix"
 python3 -m json.tool "$DRY_PREFIX/etc/storage-viz/scanner.yaml" >/dev/null || fail "scanner config is not strict JSON-compatible"
 [[ "$(file_mode "$DRY_PREFIX/etc/storage-viz/scanner.yaml")" == "644" ]] || fail "scanner config mode is not 0644"
@@ -337,11 +345,46 @@ FAKE_LOG="$TMP/real-install.log" PATH="$FAKEBIN:$PATH" SYSTEMCTL="$FAKEBIN/syste
 grep -q 'make .* clean hstscan' "$TMP/real-install.log" || fail "real install did not rebuild scanner with clean hstscan"
 grep -q 'fresh scanner' "$REAL_PREFIX/opt/storage-viz/scanner/hstscan" || fail "real install copied stale scanner instead of rebuilt target binary"
 grep -q '^systemctl enable --now storage-viz-scan.timer$' "$TMP/real-install.log" || fail "real install did not enable and start scan timer"
+grep -q '^systemctl restart storage-viz-scan.timer$' "$TMP/real-install.log" || fail "real install did not reload the active timer schedule"
 grep -q 'timer enabled and started' "$TMP/real-install.out" || fail "real install reported stale initial-scan status"
 id_line="$(grep -n '^id monitoring' "$TMP/real-install.log" | head -1 | cut -d: -f1)"
 group_line="$(grep -n '^groupadd' "$TMP/real-install.log" | head -1 | cut -d: -f1)"
 [[ -n "$id_line" && -n "$group_line" && "$id_line" -lt "$group_line" ]] || fail "installer did not verify monitoring user before creating group"
 pass "real install test mode rebuilds scanner and checks monitoring before group creation"
+
+UPGRADE_CONFIG="$REAL_PREFIX/etc/storage-viz/scanner.yaml"
+UPGRADE_SERVICE="$REAL_PREFIX/etc/systemd/system/storage-viz-scan.service"
+cat > "$UPGRADE_CONFIG" <<'JSON'
+{
+  "server_id": "host-a",
+  "scanner_path": "/opt/storage-viz/scanner/hstscan",
+  "threads": 7,
+  "top": 42
+}
+JSON
+cp "$UPGRADE_CONFIG" "$TMP/scanner-before.json"
+FAKE_LOG="$TMP/upgrade.log" PATH="$FAKEBIN:$PATH" SYSTEMCTL="$FAKEBIN/systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 "$INSTALL" --prefix "$REAL_PREFIX" >"$TMP/upgrade.out"
+cmp -s "$UPGRADE_CONFIG" "$TMP/scanner-before.json" || fail "upgrade changed a valid scanner configuration"
+grep -q 'server_id: host-a' "$TMP/upgrade.out" || fail "upgrade did not inherit the installed server id"
+grep -q '^systemctl restart storage-viz-scan.timer$' "$TMP/upgrade.log" || fail "upgrade did not restart the timer"
+
+printf '# untouched on rejected upgrade\n' >> "$UPGRADE_SERVICE"
+cp "$UPGRADE_SERVICE" "$TMP/service-before"
+if FAKE_LOG="$TMP/rejected-upgrade.log" PATH="$FAKEBIN:$PATH" SYSTEMCTL="$FAKEBIN/systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 "$INSTALL" --prefix "$REAL_PREFIX" --server-id host-b >"$TMP/rejected-upgrade.out" 2>&1; then
+  fail "upgrade accepted a server id different from the installed config"
+fi
+grep -q 'server_id' "$TMP/rejected-upgrade.out" || fail "mismatched id rejection did not identify the config field"
+cmp -s "$UPGRADE_CONFIG" "$TMP/scanner-before.json" || fail "rejected upgrade changed the config"
+cmp -s "$UPGRADE_SERVICE" "$TMP/service-before" || fail "rejected upgrade changed a service file"
+[[ ! -e "$TMP/rejected-upgrade.log" ]] || fail "rejected upgrade reached account, build or service commands"
+
+printf '%s\n' '{"server_id":"host-a","scanner_path":"/opt/storage-viz/scanner/hstscan","threads":0}' > "$UPGRADE_CONFIG"
+if FAKE_LOG="$TMP/invalid-upgrade.log" PATH="$FAKEBIN:$PATH" SYSTEMCTL="$FAKEBIN/systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 "$INSTALL" --prefix "$REAL_PREFIX" >"$TMP/invalid-upgrade.out" 2>&1; then
+  fail "upgrade accepted an invalid existing scanner config"
+fi
+cmp -s "$UPGRADE_SERVICE" "$TMP/service-before" || fail "upgrade with invalid config changed a service file"
+[[ ! -e "$TMP/invalid-upgrade.log" ]] || fail "invalid config reached account, build or service commands"
+pass "agent upgrade preserves scanner settings and rejects invalid or mismatched config before mutation"
 
 cat > "$FAKEBIN/ssh" <<'FAKE'
 #!/usr/bin/env bash
@@ -633,7 +676,11 @@ grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/builder owner=storage-viz-b
 grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/data owner=storage-viz:storage-viz mode=0750' "$DASH_LOG" || fail "dashboard deployer does not preserve dashboard data ownership"
 grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/state owner=storage-viz:storage-viz mode=0750' "$DASH_LOG" || fail "dashboard deployer does not preserve dashboard state ownership"
 [[ "$(file_mode "$DASH_DRY_PREFIX/etc/storage-viz")" == "750" ]] || fail "dashboard dry-run config dir mode is not 0750"
+[[ "$(file_mode "$DASH_DRY_PREFIX/usr/local/libexec/storage_dashboard_release.py")" == "644" ]] || fail "archive validation module mode is not 0644"
 [[ "$(file_mode "$DASH_DRY_PREFIX/usr/local/libexec/storage-dashboard-activate.py")" == "755" ]] || fail "activator mode is not 0755"
+for entrypoint in storage-dashboard-build-release.py storage-dashboard-activate.py storage-monitor-release-puller.py; do
+  PYTHONDONTWRITEBYTECODE=1 python3 "$DASH_DRY_PREFIX/usr/local/libexec/$entrypoint" --help >/dev/null
+done
 [[ "$(file_mode "$DASH_DRY_PREFIX/usr/local/libexec/storage-release-authorizer.py")" == "755" ]] || fail "authorizer mode is not 0755"
 ! grep -q 'must not run in dashboard dry-run' "$DASH_LOG" || fail "dashboard dry-run invoked a forbidden service/user action"
 for src in "$STORAGE_BUILDER" "$STORAGE_ACTIVATOR" "$STORAGE_HEALTH" "$STORAGE_PROXY_LAUNCHER" "$STORAGE_PULLER" "$STORAGE_AUTHORIZER"; do
@@ -665,7 +712,7 @@ pass "dashboard dry-run renders assets/paths/modes/hashes without mutation"
 
 SECOND_PREFIX="$TMP/dashboard-second-prefix"
 PATH="$FAKEBIN:$PATH" "$DASHBOARD_DEPLOYER" --dry-run --prefix "$SECOND_PREFIX" >"$TMP/dashboard-second.log"
-for asset in storage-dashboard-build-release.py storage-dashboard-activate.py storage-dashboard-health-check.py storage-viz-proxy-launcher.py storage-monitor-release-puller.py storage-release-authorizer.py; do
+for asset in storage_dashboard_release.py storage-dashboard-build-release.py storage-dashboard-activate.py storage-dashboard-health-check.py storage-viz-proxy-launcher.py storage-monitor-release-puller.py storage-release-authorizer.py; do
   cmp -s "$DASH_DRY_PREFIX/usr/local/libexec/$asset" "$SECOND_PREFIX/usr/local/libexec/$asset" || fail "dashboard dry-run is not idempotent for $asset"
 done
 pass "dashboard deployer dry-run is idempotent"
@@ -816,9 +863,25 @@ exit 0
 FAKE
 cat > "$DASH_CUTOVER_TMP/bin/health-check.py" <<'FAKE'
 #!/usr/bin/env python3.12
-import os, sys
-with open(os.environ["DASH_CUTOVER_LOG"], "a", encoding="utf-8") as out:
-    mode = "candidate-health" if "--skip-service-check" in sys.argv else "production-health"
+import os
+from pathlib import Path
+import sys
+import time
+
+log = Path(os.environ["DASH_CUTOVER_LOG"])
+mode = "candidate-health" if "--skip-service-check" in sys.argv else "production-health"
+if mode == "candidate-health":
+    deadline = time.monotonic() + 5
+    while True:
+        lines = log.read_text(encoding="utf-8").splitlines()
+        dashboard_ready = any(line.startswith("candidate-dashboard ") for line in lines)
+        proxy_ready = any(line.startswith("candidate-proxy ") for line in lines)
+        if dashboard_ready and proxy_ready:
+            break
+        if time.monotonic() >= deadline:
+            raise SystemExit("candidate dashboard and proxy did not both start")
+        time.sleep(0.02)
+with log.open("a", encoding="utf-8") as out:
     out.write(mode + " " + " ".join(sys.argv[1:]) + "\n")
 FAKE
 cat > "$DASH_CUTOVER_TMP/bin/kill" <<'FAKE'
@@ -1129,7 +1192,7 @@ assert_grep "$ROOT/docs/operations.md" '127\.0\.0\.1' "loopback dashboard defaul
 assert_grep "$ROOT/docs/operations.md" '8088' "dashboard port"
 assert_grep "$ROOT/docs/operations.md" 'storage-viz-dashboard\.service' "central service name"
 assert_grep "$ROOT/docs/operations.md" 'storage-viz-scan\.service' "agent scan service name"
-assert_grep "$ROOT/docs/operations.md" 'OnUnitActiveSec=6h|six-hour|6-hour' "six-hour collection cadence"
+assert_grep "$ROOT/docs/operations.md" 'SSD roots every hour' "media-aware collection cadence"
 assert_grep "$ROOT/docs/operations.md" 'reverse proxy|trusted proxy' "reverse-proxy auth documentation"
 assert_grep "$ROOT/docs/operations.md" 'STORAGE_VIZ_ALLOWED_ORIGINS' "exact-origin allowlist"
 assert_grep "$ROOT/docs/operations.md" 'CSRF|X-CSRF-Token' "CSRF protection"
@@ -1171,6 +1234,31 @@ assert_contains "$RENDERED_UNIT" "ReadWritePaths=/srv/storage-viz-data /srv/stor
 [[ "$(file_mode "$RENDER_PREFIX/srv/storage-viz-etc/dashboard.env")" == "640" ]] || fail "dashboard env mode is not 0640"
 [[ "$(file_mode "$RENDER_PREFIX/srv/storage-viz-etc/known_hosts")" == "644" ]] || fail "known_hosts mode is not 0644"
 ! grep -q "^systemctl" "$RENDER_LOG" 2>/dev/null || fail "dry-run override rendering called systemctl"
+
+MANAGED_RELEASE="$TMP/managed-release"
+mkdir -p "$MANAGED_RELEASE/viewer"
+printf 'managed viewer sentinel\n' > "$MANAGED_RELEASE/viewer/sentinel"
+for LINK_LAYOUT in app ancestor; do
+  LINK_PREFIX="$TMP/link-prefix-$LINK_LAYOUT"
+  mkdir -p "$LINK_PREFIX"
+  if [[ "$LINK_LAYOUT" == app ]]; then
+    mkdir "$LINK_PREFIX/opt"
+    ln -s "$MANAGED_RELEASE" "$LINK_PREFIX/opt/storage-viz-dashboard"
+  else
+    ln -s "$MANAGED_RELEASE" "$LINK_PREFIX/opt"
+  fi
+  for INSTALL_MODE in --dry-run --no-enable; do
+    if FAKE_LOG="$RENDER_LOG" PATH="$FAKEBIN:$PATH" "$ROOT/install.sh" \
+        "$INSTALL_MODE" --prefix "$LINK_PREFIX" >"$TMP/linked-install.out" 2>"$TMP/linked-install.err"; then
+      fail "central installer accepted $LINK_LAYOUT symlink in $INSTALL_MODE"
+    fi
+    grep -Fq "symbolic link" "$TMP/linked-install.err" || fail "installer did not identify the symbolic link"
+    assert_contains "$MANAGED_RELEASE/viewer/sentinel" "managed viewer sentinel"
+    [[ ! -e "$LINK_PREFIX/etc" && ! -e "$MANAGED_RELEASE/storage-viz-dashboard" ]] || \
+      fail "central installer wrote files before rejecting the linked app path"
+  done
+done
+pass "central installer rejects managed links before writing any files"
 
 BAD_RENDER_PREFIX="$TMP/bad-render-prefix"
 if STORAGE_VIZ_DASHBOARD_ROOT="/srv/storage viz" "$ROOT/install.sh" --dry-run --prefix "$BAD_RENDER_PREFIX" >"$TMP/bad-render.out" 2>"$TMP/bad-render.err"; then

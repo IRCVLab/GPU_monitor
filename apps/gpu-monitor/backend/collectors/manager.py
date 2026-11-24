@@ -120,6 +120,9 @@ async def start_all(servers: list[Server]) -> None:
 
 async def add_server(server: Server) -> None:
     """Add and start a collector for a newly registered server."""
+    if get_settings().monitoring_disable_collectors:
+        return
+
     if server.id in _collectors:
         logger.warning("Collector for server %d already running.", server.id)
         return

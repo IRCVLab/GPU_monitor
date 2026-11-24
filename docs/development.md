@@ -36,58 +36,62 @@ Run the full supported foundation check from the repository root:
 make verify
 ```
 
-`make verify` runs:
+`make verify` runs the repository and release contract checks, the GPU type
+check, production build, and frontend and backend tests, and the Storage suite
+in a disposable clone. The Storage suite includes scanner verification on
+Linux. The final command checks the Git diff.
 
-1. repository layout tests;
-2. history inventory tests;
-3. GPU frontend `npm run check`;
-4. GPU frontend production build;
-5. GPU production runtime proxy tests against that build;
-6. GPU backend unit tests;
-7. Storage tests in a disposable no-hardlinks clone under `/tmp`;
-8. JavaScript syntax checks for Storage viewer files;
-9. Storage deploy-script contract tests;
-10. Linux-only scanner checks when running on Linux, otherwise an explicit macOS skip covered by prior Linux verification;
-11. `git diff --check`.
-
-On a fresh host, install application dependencies first:
+Install Node.js 22 and Python 3.12. Run these commands from the repository root:
 
 ```bash
-cd apps/gpu-monitor/frontend
-npm ci
-
-cd ../..
+npm --prefix apps/gpu-monitor/frontend ci
 python3.12 -m venv apps/gpu-monitor/.venv
 . apps/gpu-monitor/.venv/bin/activate
-python -m pip install -r apps/gpu-monitor/backend/requirements.txt pytest
-cd ../..
-PATH="$PWD/apps/gpu-monitor/.venv/bin:$PATH" make verify
+python -m pip install -r apps/gpu-monitor/backend/requirements.txt
+python -m pip install pytest==8.4.1
+make verify
 ```
 
 The app-local virtual environment is ignored by Git.
 
+## Browser regression checks
+
+Install the GPU frontend dependencies and run the browser tests from the
+repository root with Node.js 22 and Python 3.12.
+
+```bash
+npm --prefix apps/gpu-monitor/frontend ci
+npm --prefix tests/browser ci
+npm --prefix tests/browser exec -- playwright install chromium
+npm --prefix tests/browser test
+```
+
+Playwright starts two loopback servers and uses fixture HTTP and WebSocket
+responses. It checks GPU telemetry ordering, System server removal, Power Flow
+drafts, and Storage server switching and rescan. Use
+`MONITORING_BROWSER_GPU_PORT` and `MONITORING_BROWSER_STORAGE_PORT`
+if the default ports 18773 and 18775 are in use.
+
 ## GPU Monitor development
 
-Frontend checks:
+Install Node.js 22 and Python 3.12, then run these commands from the repository root.
 
 ```bash
-cd apps/gpu-monitor/frontend
-npm ci
-npm run check
-npm run test:unit
-npm run build
+python3.12 -m venv apps/gpu-monitor/.venv
+. apps/gpu-monitor/.venv/bin/activate
+python -m pip install -r apps/gpu-monitor/backend/requirements.txt
+npm --prefix apps/gpu-monitor/frontend ci
+make test-gpu
 ```
 
-Backend tests:
+`make test-gpu` runs frontend type checks, the build, source and proxy tests, and
+backend tests. The GPU CI job uses this same command.
 
-```bash
-cd apps/gpu-monitor
-python3.12 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r backend/requirements.txt
-SECRET_KEY=baseline-test-key ADMIN_PASSWORD=baseline-test-password \
-  python -m unittest discover -s backend/tests -v
-```
+The backend requirements lock includes direct and transitive dependencies with
+SHA-256 wheel hashes. CI tests the same lock on Python 3.12 and on the
+Python 3.10 interpreter used by the deployment host. When updating
+dependencies, install the lock in fresh environments on both versions and
+run `python -m pip check`. Run `make test-gpu` with Python 3.12.
 
 Runtime scripts are app-local:
 
@@ -120,6 +124,13 @@ Live hardware collection is enabled with `HARDWARE_COLLECT_ENABLED=true`.
 `HARDWARE_COLLECT_INTERVAL` sets the collection target in seconds (30–3600).
 The collector connects over SSH and runs read-only IPMI sensor and DCMI power
 queries. The deployment environment supplies the server credentials.
+
+Configure `HARDWARE_PSU_RATED_OUTPUT_WATTS` with verified output ratings by
+server ID and PSU slot. For example, `{"7":{"PSU1":1600}}` sets the rated output
+of PSU1 on server 7 to 1,600 W. The System card divides measured PSU output by
+that rating. Slots without a rating show their measured output when available.
+The NIC rates sum the physical interfaces on each host, including a dedicated
+NAS NIC when Linux exposes it as a physical interface.
 
 The System chart uses DCMI power. Dashed segments show the sum of the servers
 measured in that round, with the current coverage shown beside the live value.

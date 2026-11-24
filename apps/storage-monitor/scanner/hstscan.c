@@ -445,24 +445,20 @@ static void heap_sift_down(struct minheap *h, size_t i) {
     }
 }
 
-/* Offer a file to the bounded min-heap. Keeps the cap largest by bytes.
- * Takes ownership of `path` only if retained; otherwise frees it. */
-static void heap_offer(struct minheap *h, char *path, uint64_t bytes,
-                       uid_t uid, int64_t mtime, int age_days) {
-    if (h->cap == 0) { free(path); return; }
+static void heap_offer(struct minheap *h, const char *directory, const char *name,
+                       uint64_t bytes, uid_t uid, int64_t mtime, int age_days) {
+    if (h->cap == 0 || (h->n == h->cap && bytes <= h->a[0].bytes)) return;
+    struct file_rec record = {
+        .path = path_join(directory, name), .bytes = bytes, .uid = uid,
+        .mtime = mtime, .age_days = age_days,
+    };
     if (h->n < h->cap) {
-        struct file_rec *r = &h->a[h->n];
-        r->path = path; r->bytes = bytes; r->uid = uid;
-        r->mtime = mtime; r->age_days = age_days;
-        h->n++;
+        h->a[h->n++] = record;
         heap_sift_up(h, h->n - 1);
-    } else if (bytes > h->a[0].bytes) {
-        free(h->a[0].path);
-        h->a[0].path = path; h->a[0].bytes = bytes; h->a[0].uid = uid;
-        h->a[0].mtime = mtime; h->a[0].age_days = age_days;
-        heap_sift_down(h, 0);
     } else {
-        free(path);
+        free(h->a[0].path);
+        h->a[0] = record;
+        heap_sift_down(h, 0);
     }
 }
 
@@ -630,7 +626,25 @@ struct worker_arg {
     struct inode_set  local_links;   /* per-thread hardlink set */
     /* per-thread stat deltas to reduce lock contention */
     uint64_t bytes, files, dirs, errs;
+    uid_t owner_uid;
+    uint64_t owner_bytes, owner_files;
+    bool owner_pending;
 };
+
+static void flush_owner(struct worker_arg *w) {
+    if (!w->owner_pending) return;
+    user_add(w->owner_uid, w->ctx->scan_root, w->owner_bytes, w->owner_files);
+    w->owner_pending = false;
+    w->owner_bytes = w->owner_files = 0;
+}
+
+static void count_owner(struct worker_arg *w, uid_t uid, uint64_t bytes, uint64_t files) {
+    if (w->owner_pending && w->owner_uid != uid) flush_owner(w);
+    w->owner_uid = uid;
+    w->owner_pending = true;
+    w->owner_bytes += bytes;
+    w->owner_files += files;
+}
 
 /* Entries can legitimately disappear between directory enumeration and the
  * later stat/open while the scanned tree remains in active use. */
@@ -733,7 +747,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
 
                 w->dirs++;
                 w->bytes += dbytes;
-                user_add(st.st_uid, c->scan_root, dbytes, 0);
+                count_owner(w, st.st_uid, dbytes, 0);
 
                 struct work_item *ni = xmalloc(sizeof *ni);
                 ni->path = path_join(it->path, name);
@@ -761,12 +775,11 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                     node_add_file(it->node, fbytes);
                     w->files++;
                     w->bytes += fbytes;
-                    user_add(st.st_uid, c->scan_root, fbytes, 1);
+                    count_owner(w, st.st_uid, fbytes, 1);
 
                     /* top-N */
-                    char *fpath = path_join(it->path, name);
                     pthread_mutex_lock(&g_top_lock);
-                    heap_offer(&g_top, xstrdup(fpath), fbytes,
+                    heap_offer(&g_top, it->path, name, fbytes,
                                st.st_uid, (int64_t)st.st_mtime, 0);
                     pthread_mutex_unlock(&g_top_lock);
 
@@ -776,12 +789,11 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                         int age = (int)((nowt - st.st_mtime) / 86400);
                         if (age >= c->stale_days) {
                             pthread_mutex_lock(&g_stale_lock);
-                            heap_offer(&g_stale, xstrdup(fpath), fbytes,
+                            heap_offer(&g_stale, it->path, name, fbytes,
                                        st.st_uid, (int64_t)st.st_mtime, age);
                             pthread_mutex_unlock(&g_stale_lock);
                         }
                     }
-                    free(fpath);
                 } else {
                     /* hardlink already counted; still counts as a file seen?
                      * We count distinct inodes only, so do not increment. */
@@ -812,7 +824,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                     if (sbytes) {
                         node_add_self_bytes(it->node, sbytes);
                         w->bytes += sbytes;
-                        user_add(st.st_uid, c->scan_root, sbytes, 0);
+                        count_owner(w, st.st_uid, sbytes, 0);
                     }
                 }
             }
@@ -836,6 +848,7 @@ static void *worker_main(void *argp) {
         free(it);
         queue_complete_one(&c->queue);
     }
+    flush_owner(w);
     ctx_flush_stats(c, w);
     return NULL;
 }
@@ -1041,6 +1054,30 @@ static const char *mount_for_path(const char *path, const char **out_fstype) {
  *  JSON output
  * ----------------------------------------------------------------------- */
 
+static size_t utf8_sequence_length(const unsigned char *p) {
+    size_t length;
+    if (p[0] >= 0xc2 && p[0] <= 0xdf) {
+        length = 2;
+    } else if (p[0] >= 0xe0 && p[0] <= 0xef) {
+        length = 3;
+    } else if (p[0] >= 0xf0 && p[0] <= 0xf4) {
+        length = 4;
+    } else {
+        return 0;
+    }
+
+    for (size_t i = 1; i < length; i++) {
+        if ((p[i] & 0xc0) != 0x80) return 0;
+    }
+    if ((p[0] == 0xe0 && p[1] < 0xa0) ||
+        (p[0] == 0xed && p[1] >= 0xa0) ||
+        (p[0] == 0xf0 && p[1] < 0x90) ||
+        (p[0] == 0xf4 && p[1] >= 0x90)) {
+        return 0;
+    }
+    return length;
+}
+
 static void json_escape(FILE *f, const char *s) {
     fputc('"', f);
     for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
@@ -1057,11 +1094,13 @@ static void json_escape(FILE *f, const char *s) {
                 if (c < 0x20) {
                     fprintf(f, "\\u%04x", c);
                 } else if (c >= 0x80) {
-                    /* Keep generated JSON strictly UTF-8 parseable even when
-                     * filesystem names contain arbitrary non-UTF8 bytes.
-                     * Escaping every high byte as U+00XX preserves byte-level
-                     * observability without emitting invalid JSON text. */
-                    fprintf(f, "\\u%04x", c);
+                    size_t length = utf8_sequence_length(p);
+                    if (length) {
+                        fwrite(p, 1, length, f);
+                        p += length - 1;
+                    } else {
+                        fputs("\\ufffd", f);
+                    }
                 } else {
                     fputc(c, f);
                 }

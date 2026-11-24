@@ -15,39 +15,19 @@ import tarfile
 from pathlib import Path
 
 
+if (Path(__file__).resolve().parent / "server" / "storage_dashboard_release.py").is_file():
+    from server.storage_dashboard_release import (
+        APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, REQUIRED_RELEASE_FILES, SCHEMA_VERSION,
+    )
+else:
+    from storage_dashboard_release import (
+        APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, REQUIRED_RELEASE_FILES, SCHEMA_VERSION,
+    )
+
+
 APP_ROOT = "apps/storage-monitor"
 ARCHIVE_ROOT = "storage-monitor"
-APPLICATION_NAME = "storage-monitor"
-FORMAT_VERSION = 1
-SCHEMA_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-
-INCLUDED_PATHS = tuple(sorted({
-    "collector/__init__.py",
-    "collector/inventory.py",
-    "collector/jobs.py",
-    "collector/service.py",
-    "collector/scan_telemetry.py",
-    "collector/snapshot.py",
-    "collector/store.py",
-    "collector/transport.py",
-    "config/servers.example.yaml",
-    "deploy/direct_proxy.py",
-    "docs/schema-v1.md",
-    "viewer/app.js",
-    "viewer/data-client.js",
-    "viewer/debug.html",
-    "viewer/echarts.min.js",
-    "viewer/index.html",
-    "viewer/overview.js",
-    "viewer/scan-status.js",
-    "viewer/selection.js",
-    "viewer/serve.py",
-    "viewer/styles.css",
-    "viewer/tables.js",
-    "viewer/treemap.js",
-    "viewer/users-chart.js",
-}))
 
 
 class ReleaseError(Exception):
@@ -112,7 +92,7 @@ def _manifest(source_sha: str, archive_name: str, files: dict[str, bytes]) -> by
     payload = {
         "application_name": APPLICATION_NAME,
         "archive": archive_name,
-        "artifact_format_version": FORMAT_VERSION,
+        "artifact_format_version": ARTIFACT_FORMAT_VERSION,
         "schema_version": SCHEMA_VERSION,
         "source_sha": source_sha,
         "included_paths": sorted(files),
@@ -153,7 +133,7 @@ def build(repo: Path, source_sha: str, output_dir: Path) -> tuple[Path, Path]:
     _ensure_clean_head(repo, source_sha)
     files: dict[str, bytes] = {}
     modes: dict[str, int] = {}
-    for rel_path in INCLUDED_PATHS:
+    for rel_path in sorted(REQUIRED_RELEASE_FILES):
         data, mode = _load_tracked_file(repo, source_sha, rel_path)
         files[rel_path] = data
         modes[rel_path] = mode
@@ -168,7 +148,7 @@ def build(repo: Path, source_sha: str, output_dir: Path) -> tuple[Path, Path]:
     # a circular self-reference. Together, both manifests bind source and artifact.
     metadata = {
         "application_name": APPLICATION_NAME,
-        "artifact_format_version": FORMAT_VERSION,
+        "artifact_format_version": ARTIFACT_FORMAT_VERSION,
         "archive": archive_name,
         "schema_version": SCHEMA_VERSION,
         "sha256": hashlib.sha256(archive_data).hexdigest(),

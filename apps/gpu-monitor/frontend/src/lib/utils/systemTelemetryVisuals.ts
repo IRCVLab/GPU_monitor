@@ -10,9 +10,14 @@ export function fanDuration(rpm:number|null|undefined,fresh:boolean):number|null
 export function temperatureTone(value:number|null|undefined,warning=75,critical=90):'normal'|'warning'|'critical'|'unknown'{
  return !finite(value)?'unknown':value>=critical?'critical':value>=warning?'warning':'normal';
 }
-export function psuLoad(value:number|null,total:number,capacity?:number|null):{ratio:number|null;kind:'capacity'|'share'}{
- const known=finite(capacity)&&capacity>0;const denominator=known?capacity:total;
- return {ratio:finite(value)&&value>=0&&denominator>0?Math.max(0,Math.min(1,value/denominator)):null,kind:known?'capacity':'share'};
+export function psuLoad(outputWatts:number|null,ratedOutputWatts:number|null):number|null {
+ if (!finite(outputWatts) || outputWatts<0 || !finite(ratedOutputWatts) || ratedOutputWatts<=0) return null;
+ return outputWatts/ratedOutputWatts;
+}
+export function psuInputDistribution(rows:ReadonlyArray<{name:string;inputWatts:number|null}>):Array<{name:string;ratio:number}> {
+ const measured=rows.flatMap(({name,inputWatts})=>finite(inputWatts)&&inputWatts>=0?[{name,watts:inputWatts}]:[]);
+ const total=measured.reduce((sum,row)=>sum+row.watts,0);
+ return measured.length>1&&total>0?measured.map(({name,watts})=>({name,ratio:watts/total})):[];
 }
 export function telemetrySegments(points:TelemetryPoint[],start:number,end:number,width:number,height:number,min=0,max?:number):Array<Array<{x:number;y:number}>>{
  const unique=new Map<number,TelemetryPoint>();for(const point of points){const time=Date.parse(point.collected_at);if(Number.isFinite(time)&&time>=start&&time<=end)unique.set(time,point);}

@@ -27,7 +27,11 @@ export function applyHardwareUpdate(data: unknown): void {
     if (!/^\d+$/.test(id) || !record(raw) || !['ssh-ipmi','ssh-ipmi-snapshot'].includes(raw.source as string) || typeof raw.collected_at!=='string' || !Number.isFinite(Date.parse(raw.collected_at)) || !Array.isArray(raw.sensors)) continue;
     if (next[id] && Date.parse(next[id].collected_at)>Date.parse(raw.collected_at)) continue;
     const sensors=raw.sensors.filter(record).filter(sensor=>typeof sensor.name==='string' && ['temperature','fan','power','voltage'].includes(sensor.kind as string)).map(sensor=>({name:sensor.name as string,kind:sensor.kind as HardwareSensor['kind'],value:nullable(sensor.value),unit:typeof sensor.unit==='string'?sensor.unit:'',status:typeof sensor.status==='string'?sensor.status:'na',upper_warning:nullable(sensor.upper_warning),upper_critical:nullable(sensor.upper_critical)}));
-    next[id]={source:raw.source as HardwareSnapshot['source'],collected_at:raw.collected_at,bmc_ip:typeof raw.bmc_ip==='string'?raw.bmc_ip:null,power_watts:finite(raw.power_watts) && raw.power_watts>=0?raw.power_watts:null,sensors};
+    const ratings=record(raw.psu_rated_output_watts)?raw.psu_rated_output_watts:{};
+    const psu_rated_output_watts=Object.fromEntries(Object.entries(ratings).filter(
+     (entry):entry is [string,number]=>/^PSU[1-9]\d*$/.test(entry[0])&&finite(entry[1])&&entry[1]>0
+    ));
+    next[id]={source:raw.source as HardwareSnapshot['source'],collected_at:raw.collected_at,bmc_ip:typeof raw.bmc_ip==='string'?raw.bmc_ip:null,power_watts:finite(raw.power_watts) && raw.power_watts>=0?raw.power_watts:null,sensors,...(Object.keys(psu_rated_output_watts).length?{psu_rated_output_watts}:{})};
    }
    return next;
   });

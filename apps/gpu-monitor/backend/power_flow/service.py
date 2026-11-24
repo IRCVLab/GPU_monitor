@@ -1,4 +1,4 @@
-"""Persistence and retained-raw history for Power Flow.
+"""Live and retained-raw measurements for Power Flow.
 
 V1 deliberately clips actual peaks to the selected revision's effective period
 and labels clipped windows partial. Scenario/draft previews replay raw observations
@@ -6,76 +6,26 @@ as projections. Raw rounds are paged, never reconstructed from PSU rollup maxima
 """
 from collections import defaultdict
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 import math
-from uuid import uuid4
-from fastapi import HTTPException
-from sqlalchemy import select, update, exists, and_, or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, exists, and_, or_
 try:
-    from ..models import (PowerFlowDiagram, PowerFlowRevision, HardwareRound,
+    from .. import telemetry_time
+    from ..telemetry_time import iso, utc, utc_naive
+    from ..models import (HardwareRound,
                           PowerPsuReading, PowerPsuIdentity, PowerRawSample, Server)
 except ImportError:  # pragma: no cover - direct execution fallback
-    from models import (PowerFlowDiagram, PowerFlowRevision, HardwareRound,
+    import telemetry_time
+    from telemetry_time import iso, utc, utc_naive
+    from models import (HardwareRound,
                         PowerPsuReading, PowerPsuIdentity, PowerRawSample, Server)
 from .schema import FlowGraph
-from .evaluator import evaluate, normalize_slot, input_readings, utc, iso
+from .evaluator import evaluate, normalize_slot, input_readings
+from .diagrams import get_diagram, find_revision
 from .peaks import CompiledPeaks
 
 RETENTION = timedelta(days=30)
 PAGE_SIZE = 128
-
-
-def now_utc():
-    return datetime.now(timezone.utc)
-
-
-def naive(value):
-    return utc(value).replace(tzinfo=None)
-
-
-def summary(diagram):
-    return dict(id=diagram.id,name=diagram.name,version=diagram.version,is_scenario=bool(diagram.is_scenario),created_at=iso(diagram.created_at),updated_at=iso(diagram.updated_at))
-
-
-def document(diagram,revision):
-    value=summary(diagram)
-    value.update(name=revision.name,version=revision.version,graph=revision.graph,effective_from=iso(revision.effective_from))
-    return value
-
-
-async def get_diagram(db,diagram_id):
-    diagram=await db.get(PowerFlowDiagram,diagram_id)
-    if diagram is None:raise HTTPException(404,'Diagram not found')
-    return diagram
-
-
-async def current_document(db,diagram_id):
-    diagram=await get_diagram(db,diagram_id)
-    revision=await db.scalar(select(PowerFlowRevision).where(PowerFlowRevision.diagram_id==diagram.id,PowerFlowRevision.version==diagram.version))
-    return document(diagram,revision)
-
-
-async def create_diagram(db,name,graph,is_scenario=False):
-    at=naive(now_utc())
-    diagram=PowerFlowDiagram(id=str(uuid4()),name=name,version=1,is_scenario=int(is_scenario),created_at=at,updated_at=at)
-    revision=PowerFlowRevision(diagram_id=diagram.id,version=1,name=name,graph=graph.model_dump(),effective_from=at)
-    db.add(diagram);await db.flush();db.add(revision);await db.commit()
-    return document(diagram,revision)
-
-
-async def save_diagram(db,diagram_id,base_version,name,graph):
-    await get_diagram(db,diagram_id)
-    at=naive(now_utc())
-    try:
-        result=await db.execute(update(PowerFlowDiagram).where(PowerFlowDiagram.id==diagram_id,PowerFlowDiagram.version==base_version).values(version=base_version+1,name=name,updated_at=at))
-        if result.rowcount!=1:
-            await db.rollback();raise HTTPException(409,'Diagram changed; reload before saving')
-        db.add(PowerFlowRevision(diagram_id=diagram_id,version=base_version+1,name=name,graph=graph.model_dump(),effective_from=at))
-        await db.commit()
-    except IntegrityError:
-        await db.rollback();raise HTTPException(409,'Diagram changed; reload before saving')
-    return await current_document(db,diagram_id)
 
 
 def completed_rounds():
@@ -85,7 +35,7 @@ def completed_rounds():
 
 
 async def latest_round(db,at,retention_start):
-    return (await db.execute(select(HardwareRound.id,HardwareRound.collected_at).where(HardwareRound.collected_at<=naive(at),HardwareRound.collected_at>=naive(retention_start),completed_rounds()).order_by(HardwareRound.collected_at.desc(),HardwareRound.id.desc()).limit(1))).first()
+    return (await db.execute(select(HardwareRound.id,HardwareRound.collected_at).where(HardwareRound.collected_at<=utc_naive(at),HardwareRound.collected_at>=utc_naive(retention_start),completed_rounds()).order_by(HardwareRound.collected_at.desc(),HardwareRound.id.desc()).limit(1))).first()
 
 
 async def readings_for(db,round_ids,server_ids=None):
@@ -111,7 +61,7 @@ async def _peak_readings_for(db,round_ids,server_ids):
 
 async def catalog(db,at,interval_seconds,readings=None,max_age_seconds=75):
     if readings is None:
-        latest=await latest_round(db,at,now_utc()-RETENTION)
+        latest=await latest_round(db,at,telemetry_time.now_utc()-RETENTION)
         readings=await readings_for(db,[latest.id]) if latest else []
     values=input_readings(readings)
     identities=(await db.execute(select(PowerPsuIdentity).where(PowerPsuIdentity.direction=='input'))).scalars().all()
@@ -154,7 +104,7 @@ def _merge_peaks(target,sample,at):
 
 
 async def evaluate_state(db,graph,at,hours,*,diagram=None,revision=None,interval_seconds=60,include_peaks=True):
-    at=utc(at);retention_start=now_utc()-RETENTION
+    at=utc(at);retention_start=telemetry_time.now_utc()-RETENTION
     projection=diagram is None or bool(diagram.is_scenario)
     base=dict(diagram_id=diagram.id if diagram else None,version=revision.version if revision else None,at=iso(at),graph=graph.model_dump() if graph else None,
               effective_from=iso(revision.effective_from) if revision else None,nodes={},edges={},ports={},unmapped_psus=[],history_status='projection' if projection else 'available',is_scenario=bool(diagram.is_scenario) if diagram else True,peaks_included=include_peaks)
@@ -195,7 +145,7 @@ async def _scan_peaks(db,graph,lower,at,target):
     cursor=None;count=0
     server_ids={node.server_id for node in graph.nodes if node.kind=='psu'}
     while True:
-        query=select(HardwareRound.id,HardwareRound.collected_at).where(HardwareRound.collected_at>=naive(lower),HardwareRound.collected_at<=naive(at),completed_rounds())
+        query=select(HardwareRound.id,HardwareRound.collected_at).where(HardwareRound.collected_at>=utc_naive(lower),HardwareRound.collected_at<=utc_naive(at),completed_rounds())
         if cursor is not None:
             timestamp,round_id=cursor
             query=query.where(or_(HardwareRound.collected_at>timestamp,and_(HardwareRound.collected_at==timestamp,HardwareRound.id>round_id)))
@@ -215,10 +165,6 @@ async def _scan_peaks(db,graph,lower,at,target):
 
 async def diagram_state(db,diagram_id,at,hours,interval_seconds,include_peaks=True):
     diagram=await get_diagram(db,diagram_id)
-    if diagram.is_scenario:
-        query=select(PowerFlowRevision).where(PowerFlowRevision.diagram_id==diagram_id,PowerFlowRevision.version==diagram.version)
-    else:
-        query=select(PowerFlowRevision).where(PowerFlowRevision.diagram_id==diagram_id,PowerFlowRevision.effective_from<=naive(at)).order_by(PowerFlowRevision.effective_from.desc(),PowerFlowRevision.version.desc()).limit(1)
-    revision=await db.scalar(query)
+    revision = await find_revision(db, diagram, at=at)
     graph=FlowGraph.model_validate(revision.graph) if revision else None
     return await evaluate_state(db,graph,at,hours,diagram=diagram,revision=revision,interval_seconds=interval_seconds,include_peaks=include_peaks)

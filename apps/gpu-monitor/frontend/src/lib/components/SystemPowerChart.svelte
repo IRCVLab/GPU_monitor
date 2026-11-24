@@ -1,5 +1,5 @@
 <script lang="ts">
- import { powerHistorySegments, powerStatistics, observedChartDomain, powerLabel, timeLabel, metric, type PowerPoint, type PowerPeriodSummary } from '$lib/utils/systemDashboard';
+ import { powerHistorySegments, powerStatistics, observedPowerPeak, observedChartDomain, powerLabel, timeLabel, metric, type PowerPoint, type PowerPeriodSummary } from '$lib/utils/systemDashboard';
  export let points:PowerPoint[]=[];
  export let periodSummary:PowerPeriodSummary|null=null;
  export let currentPower:number|null=null;
@@ -18,9 +18,8 @@
  $: observed=visible.map(point=>({...point,power_watts:point.observed_watts??null,complete:point.observed_watts!==undefined}));
  $: observedStats=powerStatistics(observed);
  $: observedSegments=powerHistorySegments(observed,Math.max(60000,hours*3600000/400));
- $: periodPeak=periodSummary?.max_watts??actual.max;
- $: peakAt=periodSummary?.peak_at??visible.find(point=>point.complete && point.power_watts===periodPeak)?.collected_at;
- $: domain=observedChartDomain([actual.min,actual.max,observedStats.min,observedStats.max,periodSummary?.min_watts,periodPeak],100,100);
+ $: peak=observedPowerPeak(visible,periodSummary);
+ $: domain=observedChartDomain([actual.min,actual.max,observedStats.min,observedStats.max,periodSummary?.min_watts,peak?.watts],100,100);
  $: viewWidth=Math.max(280,plotWidth);
  $: right=viewWidth-20;
  const left=78,top=18;
@@ -33,7 +32,7 @@
 </script>
 <section class="sys-power-chart" aria-label="내부 서버 전력">
  <header class="sys-power-chart-heading"><h1>전력 <span>DCMI</span></h1><div class="sys-timeframes" role="group" aria-label="그래프 기간">{#each [[1,'1시간'],[6,'6시간'],[24,'24시간'],[168,'7일']] as period}<button class:active={hours===period[0]} aria-pressed={hours===period[0]} onclick={()=>onhours(Number(period[0]))}>{period[1]}</button>{/each}</div></header>
- <div class="sys-power-chart-body"><div class="sys-power-current"><div class="sys-current-reading"><span>현재 전력</span><strong>{powerLabel(currentPower)}</strong>{#if expectedServers>0&&measuredServers<expectedServers}<small>{measuredServers}/{expectedServers}대 측정</small>{/if}</div><div class="sys-power-peak"><span>{observedStats.count ? "전체 합계 최대" : "기간 최대"}</span><strong>{powerLabel(periodPeak)}</strong>{#if peakAt}<small>{timeLabel(peakAt)}</small>{/if}</div></div>
+ <div class="sys-power-chart-body"><div class="sys-power-current"><div class="sys-current-reading"><span>현재 전력</span><strong>{powerLabel(currentPower)}</strong>{#if expectedServers>0&&measuredServers<expectedServers}<small>{measuredServers}/{expectedServers}대 측정</small>{/if}</div><div class="sys-power-peak"><span>전체 합계 최대</span><strong>{powerLabel(peak?.watts??null)}</strong>{#if peak?.at || peak?.coverage}<small>{peak.at?timeLabel(peak.at):""}{peak.at&&peak.coverage?" · ":""}{peak.coverage?`${peak.coverage}대 측정`:""}</small>{/if}</div></div>
  <div class="sys-power-plot" bind:clientWidth={plotWidth}><svg viewBox={`0 0 ${viewWidth} ${plotHeight}`} style:height={`${plotHeight}px`} role="img" aria-label="전력 그래프 · kW">
  {#each [0,.5,1] as fraction}<line x1={left} x2={right} y1={bottom-fraction*(bottom-top)} y2={bottom-fraction*(bottom-top)} class="sys-chart-grid"/><text x="67" y={bottom-fraction*(bottom-top)+4} text-anchor="end" class="sys-chart-label">{metric((domain.min+fraction*(domain.max-domain.min))/1000,2)} kW</text>{/each}
  {#each ticks as fraction}<text x={left+fraction*(right-left)} y={plotHeight-10} text-anchor="middle" class="sys-chart-label">{axisTime(start+fraction*(now-start))}</text>{/each}

@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import re
 import threading
 import time
 from typing import Any, Mapping, Protocol
+
+from collector.store import AtomicWriteDurabilityUncertain, StoreLockedError
+
+_LOG = logging.getLogger(__name__)
+_TERMINAL_WRITE_RETRY_SECONDS = 2.0
+_TERMINAL_WRITE_RETRY_INTERVAL_SECONDS = 0.025
 
 SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 SAFE_FIELD_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
@@ -47,7 +54,7 @@ class RescanJobManager:
         self.max_concurrent = _bounded_int(max_concurrent, "max_concurrent", 1, 16)
         self._servers = {s.id: _ServerRef(s.id) for s in service.servers if getattr(s, "enabled", True)}
         self._lock = threading.RLock()
-        self._active_global = 0
+        self._active_jobs: dict[str, dict[str, Any]] = {}
         self._last_requested: dict[str, int] = {}
         self._threads: list[threading.Thread] = []
         self._audit: list[dict[str, Any]] = []
@@ -63,7 +70,7 @@ class RescanJobManager:
             return 404, {"error": "UNKNOWN_SERVER", "audit": event}
         with self._lock:
             self._prune_threads_locked()
-            current = self.store.load_state(sid).get("active_job")
+            current = self._active_jobs.get(sid) or self.store.load_state(sid).get("active_job")
             if isinstance(current, Mapping) and current.get("state") in {"requested", "running"}:
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", _safe_field(current.get("id", "job")))
                 return 409, {"error": "ACTIVE_JOB", "job": dict(current), "audit": event}
@@ -80,7 +87,7 @@ class RescanJobManager:
             if last is not None and now - last < self.cooldown_seconds:
                 event = self._record(now, actor_id, sid, "COOLDOWN", None)
                 return 429, {"error": "COOLDOWN", "retry_after_seconds": self.cooldown_seconds - (now - last), "audit": event}
-            if self._active_global >= self.max_concurrent:
+            if len(self._active_jobs) >= self.max_concurrent:
                 event = self._record(now, actor_id, sid, "GLOBAL_CONCURRENCY", None)
                 return 429, {"error": "GLOBAL_CONCURRENCY", "audit": event}
             self._counter += 1
@@ -88,7 +95,7 @@ class RescanJobManager:
             job = {"id": job_id, "server_id": sid, "kind": "rescan", "state": "running", "actor": actor_id, "requested_unix": now, "started_unix": now, "finished_unix": None, "result_code": None}
             self.store.update_state(sid, active_job=job)
             self._last_requested[sid] = now
-            self._active_global += 1
+            self._active_jobs[sid] = job
             event = self._record(now, actor_id, sid, "ACCEPTED", job_id)
             thread = threading.Thread(target=self._run, args=(sid, job), daemon=True)
             self._threads.append(thread)
@@ -144,7 +151,7 @@ class RescanJobManager:
                 "finished_unix": max(now, started),
                 "result_code": "INTERRUPTED",
             }
-            self.store.update_state(sid, active_job=terminal)
+            self._persist_terminal(sid, terminal)
 
     def _prune_threads_locked(self) -> None:
         self._threads = [thread for thread in self._threads if thread.is_alive()]
@@ -160,14 +167,36 @@ class RescanJobManager:
         except Exception:
             state = "failed"
             result_code = "RESCAN_FAILED"
-        finished = int(self.clock.time())
+        finished = max(int(self.clock.time()), job["started_unix"])
         terminal = dict(job, state=state, finished_unix=finished, result_code=result_code)
         try:
-            self.store.update_state(sid, active_job=terminal)
+            self._persist_terminal(sid, terminal)
         finally:
             with self._lock:
-                self._active_global = max(0, self._active_global - 1)
+                self._active_jobs.pop(sid, None)
                 self._prune_threads_locked()
+
+    def _persist_terminal(self, sid: str, terminal: dict[str, Any]) -> None:
+        deadline = time.monotonic() + _TERMINAL_WRITE_RETRY_SECONDS
+        while True:
+            try:
+                self.store.update_state(sid, active_job=terminal)
+                return
+            except StoreLockedError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    failure = exc
+                    break
+                time.sleep(min(remaining, _TERMINAL_WRITE_RETRY_INTERVAL_SECONDS))
+            except (OSError, ValueError, AtomicWriteDurabilityUncertain) as exc:
+                failure = exc
+                break
+        # The persisted running state keeps this server reserved until reconciliation.
+        self._record(int(self.clock.time()), terminal["actor"], sid, "JOB_STATE_WRITE_FAILED", terminal["id"])
+        _LOG.error(
+            "Failed to persist terminal rescan state for server %s, job %s, result %s (%s, errno=%s)",
+            sid, terminal["id"], terminal["result_code"], type(failure).__name__, getattr(failure, "errno", None),
+        )
 
     def _record(self, ts: int, actor: str, server_id: str, result_code: str, job_id: str | None) -> dict[str, Any]:
         event = {"timestamp_unix": ts, "actor": _safe_field(actor), "server_id": _safe_field(server_id), "result_code": _safe_field(result_code), "job_id": _safe_field(job_id or "none")}

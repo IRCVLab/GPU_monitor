@@ -36,3 +36,36 @@ export function mergeServerRecordState(
 		display_order: record.display_order
 	};
 }
+
+export function selectPolledServerState(
+	atRequestStart: ServerState | undefined,
+	current: ServerState | undefined,
+	incoming: ServerState | null
+): ServerState | null {
+	if (current !== atRequestStart) return current ?? null;
+	if (
+		current?.last_seen &&
+		incoming?.last_seen &&
+		Date.parse(current.last_seen) > Date.parse(incoming.last_seen)
+	) return current;
+	return incoming;
+}
+
+export function mergePolledServerStates(
+	atRequestStart: ReadonlyMap<number, ServerState>,
+	current: ReadonlyMap<number, ServerState>,
+	incoming: ReadonlyMap<number, ServerState>,
+	complete: boolean
+): Map<number, ServerState> {
+	const next = new Map(current);
+	if (complete) {
+		for (const [id, state] of current) {
+			if (state === atRequestStart.get(id) && !incoming.has(id)) next.delete(id);
+		}
+	}
+	for (const [id, state] of incoming) {
+		const selected = selectPolledServerState(atRequestStart.get(id), current.get(id), state);
+		if (selected) next.set(id, selected);
+	}
+	return next;
+}

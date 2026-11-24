@@ -54,16 +54,28 @@ Storage keeps independent runtime ownership even though the approval condition m
 
 The server-side puller uses the same outbound-only hardening pattern as GPU Live: the server polls GitHub over outbound HTTPS on a five-minute timer, checks exact-SHA CI evidence, builds as the unprivileged `storage-viz-builder` user, activates locally, and backs off failed SHAs. Expected convergence is roughly CI/build time plus one five-minute puller cadence.
 
+The puller verifies each candidate archive against the approved SHA and its
+checksum. When the validated runtime paths, file modes, and contents match the
+active release, it records the new SHA and skips activation. An active release
+with older state records the runtime digest on the next successful activation.
+
 Central Storage deployment changes only the central dashboard/proxy release. It never changes the GPU application and never installs, restarts, enables, disables, or rewrites remote `storage-viz-scan.service` or `storage-viz-scan.timer` agents.
 
-## Central install
+## Standalone central install
+
+Storage Live uses the managed deployer at `deploy/server/install-dashboard-deployer.sh`
+and the puller described above. For a separate standalone dashboard on a host
+without the managed installation, run the following from the Storage source directory.
 
 ```bash
 ./install.sh --dry-run
 sudo ./install.sh
 ```
 
-Dry-run renders central assets and does not call `systemctl`, connect to remote hosts, change unrelated services, or start scans.
+Dry-run renders central assets in a temporary directory. Pass `--prefix PATH`
+to choose the output directory. Dry-run skips service control, remote connections,
+and scans. The standalone installer rejects symbolic links in the application
+destination and its parents before writing files, including in dry-run mode.
 
 Central defaults:
 

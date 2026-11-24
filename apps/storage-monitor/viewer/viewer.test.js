@@ -8,6 +8,8 @@ const path = require("path");
 const here = __dirname;
 const GiB = 1024 ** 3;
 
+assert.equal(require("./app.js").shouldFallbackToStatic({ status: 404 }), true);
+
 function testCleanShellThemeBootstrapContract() {
   const html = fs.readFileSync(path.join(here, "index.html"), "utf8");
   const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
@@ -844,6 +846,7 @@ function makeCleanupSnapshot() {
 function testCleanupCommandSafetyContracts() {
   const {
     shellQuote,
+    isCanonicalCleanupPath,
     cleanupPathWithinRoot,
     cleanupLongestMatchingRoot,
     validateCleanupSelection,
@@ -851,6 +854,9 @@ function testCleanupCommandSafetyContracts() {
   } = require("./selection.js");
 
   assert.strictEqual(shellQuote("/data/a b/it's.txt"), "'/data/a b/it'\"'\"'s.txt'");
+  assert.equal(isCanonicalCleanupPath("/data/보고서.txt"), true);
+  assert.equal(isCanonicalCleanupPath("/data/bad-\uFFFD.txt"), false,
+    "replacement text cannot safely identify the original filename");
   assert.strictEqual(typeof cleanupPathWithinRoot, "function", "root containment helper must be exposed for boundary tests");
   assert.strictEqual(typeof cleanupLongestMatchingRoot, "function", "longest-root matching helper must be exposed for boundary tests");
   assert.strictEqual(typeof validateCleanupSelection, "function", "selection validation must be centralized as a pure function");
