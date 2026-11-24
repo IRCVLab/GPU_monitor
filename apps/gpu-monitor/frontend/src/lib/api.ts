@@ -97,8 +97,8 @@ export async function getServersWithOptions(options?: RequestOptions): Promise<S
 	return handleResponse<ServerRecord[]>(res);
 }
 
-export async function getServerStatus(): Promise<Record<number, ServerState>> {
-	const res = await fetchWithTimeout(`${BASE}/servers/status`, undefined, DASHBOARD_TIMEOUT_MS);
+export async function getServerStatus(options?: RequestOptions): Promise<Record<number, ServerState>> {
+	const res = await fetchWithTimeout(`${BASE}/servers/status`, undefined, DASHBOARD_TIMEOUT_MS, options);
 	return handleResponse<Record<number, ServerState>>(res);
 }
 

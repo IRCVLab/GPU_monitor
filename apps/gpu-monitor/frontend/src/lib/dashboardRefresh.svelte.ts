@@ -1,8 +1,8 @@
 import { get } from 'svelte/store';
-import { getServers, getServerStatus } from '$lib/api';
+import { getServersWithOptions, getServerStatus } from '$lib/api';
 import { isServerStateEqual, normalizeServerState, serverStates } from '$lib/stores/servers';
 import type { ServerRecord, ServerState } from '$lib/types';
-import { mergeServerRecordState } from '$lib/utils/serverStateMerge';
+import { mergeServerRecordState, selectPolledServerState } from '$lib/utils/serverStateMerge';
 
 const POLL_REFRESH_MS = 10_000;
 const POLL_REQUEST_LEAD_MS = 1_000;
@@ -24,21 +24,24 @@ export function createDashboardRefresh() {
 	let loadingGuard: ReturnType<typeof setTimeout> | null = null;
 	let serverCatalog = new Map<number, ServerRecord>();
 	let refreshInFlight = false;
+	let lifetime: AbortController | null = null;
 	let queuedFullRefresh = false;
 
 	function mergeStatusSnapshot(
-		current: Map<number, ServerState>,
+		atRequestStart: Map<number, ServerState>,
 		statusMap: Record<number, ServerState>
-	): boolean {
+	): void {
+		const current = get(serverStates);
 		const next = new Map(current);
 		let changed = false;
 
 		for (const [idStr, state] of Object.entries(statusMap)) {
 			const id = Number(idStr);
-			const normalized = normalizeServerState(state, id);
-			if (!normalized) continue;
-
-			const existing = next.get(id);
+			const existing = current.get(id);
+			const normalized = selectPolledServerState(
+				atRequestStart.get(id), existing, normalizeServerState(state, id)
+			);
+			if (!normalized || normalized === existing) continue;
 			const candidate = existing
 				? {
 						...existing,
@@ -57,13 +60,15 @@ export function createDashboardRefresh() {
 		if (changed) {
 			serverStates.set(next);
 		}
-
-		return changed;
 	}
 
-	async function refreshDashboardFull(): Promise<void> {
+	async function refreshDashboardFull(signal: AbortSignal): Promise<void> {
+		const atRequestStart = get(serverStates);
+		const [serversResult, statusResult] = await Promise.allSettled([
+			getServersWithOptions({ signal }), getServerStatus({ signal })
+		]);
+		if (signal.aborted) return;
 		const current = get(serverStates);
-		const [serversResult, statusResult] = await Promise.allSettled([getServers(), getServerStatus()]);
 		const servers = serversResult.status === 'fulfilled' ? serversResult.value : [];
 		const statusMap = statusResult.status === 'fulfilled' ? statusResult.value : {};
 		const hasServerCatalog = serversResult.status === 'fulfilled';
@@ -82,8 +87,10 @@ export function createDashboardRefresh() {
 		let changed = false;
 
 		for (const record of servers) {
-			const normalized = normalizeServerState(statusMap[record.id], record.id);
 			const existing = current.get(record.id);
+			const normalized = selectPolledServerState(
+				atRequestStart.get(record.id), existing, normalizeServerState(statusMap[record.id], record.id)
+			);
 			const candidate = mergeServerRecordState(record, normalized, existing);
 			const resolved = existing && isServerStateEqual(existing, candidate) ? existing : candidate;
 			next.set(record.id, resolved);
@@ -93,12 +100,17 @@ export function createDashboardRefresh() {
 		}
 
 		if (!hasServerCatalog) {
+			for (const [id, state] of current) {
+				if (state !== atRequestStart.get(id)) next.set(id, state);
+			}
 			for (const [idStr, state] of Object.entries(statusMap)) {
 				const id = Number(idStr);
 				if (next.has(id)) continue;
-				const normalized = normalizeServerState(state, id);
-				if (!normalized) continue;
 				const existing = current.get(id);
+				const normalized = selectPolledServerState(
+					atRequestStart.get(id), existing, normalizeServerState(state, id)
+				);
+				if (!normalized) continue;
 				const resolved = existing && isServerStateEqual(existing, normalized) ? existing : normalized;
 				next.set(id, resolved);
 				if (resolved !== existing) {
@@ -116,15 +128,10 @@ export function createDashboardRefresh() {
 		}
 	}
 
-	async function refreshDashboardStatusOnly(): Promise<void> {
-		const current = get(serverStates);
-		if (current.size === 0) {
-			await refreshDashboardFull();
-			return;
-		}
-
-		const statusMap = await getServerStatus();
-		mergeStatusSnapshot(current, statusMap);
+	async function refreshDashboardStatusOnly(signal: AbortSignal): Promise<void> {
+		const atRequestStart = get(serverStates);
+		const statusMap = await getServerStatus({ signal });
+		if (!signal.aborted) mergeStatusSnapshot(atRequestStart, statusMap);
 	}
 
 	function finishLoading() {
@@ -136,6 +143,8 @@ export function createDashboardRefresh() {
 	}
 
 	async function reloadDashboard(fullRefresh = false): Promise<void> {
+		const signal = lifetime?.signal;
+		if (!signal || signal.aborted) return;
 		if (refreshInFlight) {
 			queuedFullRefresh ||= fullRefresh;
 			return;
@@ -145,25 +154,35 @@ export function createDashboardRefresh() {
 		state.loadError = '';
 		try {
 			if (fullRefresh || get(serverStates).size === 0) {
-				await refreshDashboardFull();
+				await refreshDashboardFull(signal);
 			} else {
-				await refreshDashboardStatusOnly();
+				await refreshDashboardStatusOnly(signal);
 			}
-			state.lastRefreshAtMs = Date.now();
-			state.refreshFailureCount = 0;
+			if (!signal.aborted) {
+				state.lastRefreshAtMs = Date.now();
+				state.refreshFailureCount = 0;
+			}
 		} catch (error) {
-			state.loadError = error instanceof Error ? error.message : '대시보드 데이터를 불러오지 못했습니다.';
-			state.refreshFailureCount += 1;
+			if (!signal.aborted) {
+				state.loadError = error instanceof Error ? error.message : '대시보드 데이터를 불러오지 못했습니다.';
+				state.refreshFailureCount += 1;
+			}
 		} finally {
-			const runQueuedFullRefresh = queuedFullRefresh;
-			queuedFullRefresh = false;
-			refreshInFlight = false;
-			finishLoading();
-			if (runQueuedFullRefresh) void reloadDashboard(true);
+			if (!signal.aborted) {
+				const runQueuedFullRefresh = queuedFullRefresh;
+				queuedFullRefresh = false;
+				refreshInFlight = false;
+				finishLoading();
+				if (runQueuedFullRefresh) void reloadDashboard(true);
+			}
 		}
 	}
 
 	function stop() {
+		lifetime?.abort();
+		lifetime = null;
+		refreshInFlight = false;
+		state.retryingInitialLoad = false;
 		document.removeEventListener('visibilitychange', startTicker);
 		if (ticker !== null) {
 			clearInterval(ticker);
@@ -217,16 +236,18 @@ export function createDashboardRefresh() {
 	}
 
 	async function retryInitialLoad() {
-		if (state.retryingInitialLoad) return;
+		const signal = lifetime?.signal;
+		if (!signal || state.retryingInitialLoad) return;
 		state.retryingInitialLoad = true;
 		try {
 			await reloadDashboard(true);
 		} finally {
-			state.retryingInitialLoad = false;
+			if (!signal.aborted) state.retryingInitialLoad = false;
 		}
 	}
 
 	function start() {
+		lifetime = new AbortController();
 		startTicker();
 		loadingGuard = setTimeout(() => {
 			state.loadError = '대시보드 응답이 지연되고 있습니다. 잠시 후 다시 시도하세요.';

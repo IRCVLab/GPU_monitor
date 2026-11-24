@@ -36,3 +36,17 @@ export function mergeServerRecordState(
 		display_order: record.display_order
 	};
 }
+
+export function selectPolledServerState(
+	atRequestStart: ServerState | undefined,
+	current: ServerState | undefined,
+	incoming: ServerState | null
+): ServerState | null {
+	if (current !== atRequestStart) return current ?? null;
+	if (
+		current?.last_seen &&
+		incoming?.last_seen &&
+		Date.parse(current.last_seen) > Date.parse(incoming.last_seen)
+	) return current;
+	return incoming;
+}
