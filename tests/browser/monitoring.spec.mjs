@@ -204,6 +204,7 @@ test('Storage switches servers and shows rescan progress and failure', async ({ 
     { ...sample.top_files[1], path: undecodablePath },
   ];
   const now = 1795507200;
+  sample.selected_roots = sample.selected_roots.map(root => ({ ...root, scan_finished_unix: now - 30 }));
   const generation = 'fixture-1';
   const scanStatus = { state: 'complete', generation, observed_unix: now, updated_unix: now, last_finished_unix: now - 30 };
   const servers = ['atlas', 'borealis'].map(id => ({
@@ -231,8 +232,14 @@ test('Storage switches servers and shows rescan progress and failure', async ({ 
     return route.fulfill({ status: 404 });
   });
   await page.goto(storageOrigin + '/viewer/');
-  await page.locator('[data-server-id="atlas"]').click();
+  const atlas = page.locator('[data-server-id="atlas"]');
+  const mount = atlas.locator('.overview-mount').first();
+  await expect(mount).not.toContainText(/스캔 /);
+  await expect(mount.locator('.overview-mount-path')).toHaveAttribute('title', '/srv/atlas/vol1');
+  await expect(atlas).not.toContainText(/화면 데이터|다음 (?:스캔|확인)|예약 정보/);
+  await atlas.click();
   await expect(page).toHaveURL(/atlas/);
+  await expect(page.locator('#scanLastCompleted')).toHaveText(/^화면 데이터 /);
   await expect(page.locator('#rescanBtn')).toBeEnabled();
   await page.getByRole('tab', { name: 'Top files' }).click();
   const copy = page.getByRole('button', { name: 'Copy', exact: true });
