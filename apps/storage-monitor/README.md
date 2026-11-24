@@ -54,6 +54,11 @@ Storage keeps independent runtime ownership even though the approval condition m
 
 The server-side puller uses the same outbound-only hardening pattern as GPU Live: the server polls GitHub over outbound HTTPS on a five-minute timer, checks exact-SHA CI evidence, builds as the unprivileged `storage-viz-builder` user, activates locally, and backs off failed SHAs. Expected convergence is roughly CI/build time plus one five-minute puller cadence.
 
+The puller verifies each candidate archive against the approved SHA and its
+checksum. When the validated runtime paths, file modes, and contents match the
+active release, it records the new SHA and skips activation. An active release
+with older state records the runtime digest on the next successful activation.
+
 Central Storage deployment changes only the central dashboard/proxy release. It never changes the GPU application and never installs, restarts, enables, disables, or rewrites remote `storage-viz-scan.service` or `storage-viz-scan.timer` agents.
 
 ## Standalone central install

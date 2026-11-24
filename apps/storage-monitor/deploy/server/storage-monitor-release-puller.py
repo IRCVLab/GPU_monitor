@@ -6,11 +6,13 @@ import argparse
 from dataclasses import dataclass
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -19,12 +21,21 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from storage_dashboard_release import (
+    APPLICATION_NAME,
+    ARTIFACT_FORMAT_VERSION,
+    SCHEMA_VERSION,
+    ActivationError,
+    inspect_archive,
+)
+
+
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 API_BASE = "https://api.github.com"
-APPLICATION_NAME = "storage-monitor"
 ARTIFACT_PREFIX = "storage-monitor-dashboard"
+MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 
 
 class PullError(RuntimeError):
@@ -390,28 +401,39 @@ def build_release(config: Config, checkout: Path, sha: str, run_command=default_
     return outdir
 
 
-def validate_artifact(outdir: Path, sha: str) -> tuple[Path, str]:
+def validate_artifact(outdir: Path, sha: str) -> tuple[Path, str, str]:
     archive = outdir / f"{ARTIFACT_PREFIX}-{sha}.tar.gz"
     metadata = outdir / f"{ARTIFACT_PREFIX}-{sha}.sha256.json"
     if not archive.is_file() or not metadata.is_file():
         raise PullError("release output is incomplete")
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as source:
+        archive_stat = os.fstat(source.fileno())
+        if not stat.S_ISREG(archive_stat.st_mode) or archive_stat.st_size > MAX_ARCHIVE_BYTES:
+            raise PullError("release artifact must be a regular archive within the configured size bound")
+        archive_bytes = source.read(MAX_ARCHIVE_BYTES + 1)
+    if len(archive_bytes) > MAX_ARCHIVE_BYTES:
+        raise PullError("release artifact exceeds configured size bound")
+    digest = hashlib.sha256(archive_bytes).hexdigest()
     try:
         payload = json.loads(metadata.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise PullError("release metadata is malformed") from error
     expected = {
         "application_name": APPLICATION_NAME,
         "archive": archive.name,
-        "artifact_format_version": 1,
-        "schema_version": 1,
+        "artifact_format_version": ARTIFACT_FORMAT_VERSION,
+        "schema_version": SCHEMA_VERSION,
         "sha256": digest,
         "source_sha": sha,
     }
     if payload != expected:
         raise PullError("release metadata does not match artifact")
-    validate_digest(digest, "artifact digest")
-    return archive, digest
+    try:
+        inspected = inspect_archive(io.BytesIO(archive_bytes), sha=sha, archive_name=archive.name)
+    except ActivationError as error:
+        raise PullError(f"invalid Storage release archive: {error}") from error
+    return archive, digest, inspected.runtime_digest
 
 
 def activation_command(config: Config, *args: str) -> list[str]:
@@ -422,19 +444,23 @@ def read_activation_state(config: Config) -> dict[str, str]:
     try:
         payload = json.loads(config.activation_state_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {"current": "", "current_sha256": ""}
+        return {"current": "", "runtime_digest": ""}
     except (json.JSONDecodeError, OSError) as error:
         raise PullError("activation state is unreadable") from error
     if not isinstance(payload, dict):
         raise PullError("activation state is malformed")
     status = payload.get("status", "")
-    if status not in {"", "active"}:
-        return {"current": "", "current_sha256": ""}
+    if status not in {"", "active", "rolled_back"}:
+        return {"current": "", "runtime_digest": ""}
     source_sha = payload.get("source_sha", "")
     archive_digest = payload.get("archive_digest", "")
     current = "" if source_sha == "" else validate_sha(source_sha, "activation state source_sha")
-    digest = "" if archive_digest == "" else validate_digest(archive_digest, "activation state archive_digest")
-    return {"current": current, "current_sha256": digest}
+    if archive_digest != "":
+        validate_digest(archive_digest, "activation state archive_digest")
+    runtime_digest = payload.get("runtime_digest", "")
+    if runtime_digest != "":
+        validate_digest(runtime_digest, "activation state runtime_digest")
+    return {"current": current, "runtime_digest": runtime_digest}
 
 
 def _metadata_path_for_artifact(artifact: Path) -> Path:
@@ -445,7 +471,7 @@ def _metadata_path_for_artifact(artifact: Path) -> Path:
     return artifact.with_name(name[: -len(suffix)] + ".sha256.json")
 
 
-def _parse_activation_stdout(stdout: str, *, sha: str, digest: str) -> dict[str, object]:
+def _parse_activation_stdout(stdout: str, *, sha: str, digest: str, runtime_digest: str | None) -> dict[str, object]:
     if len(stdout.encode("utf-8")) > 8192:
         raise PullError("activation status JSON exceeds output bound")
     try:
@@ -460,6 +486,8 @@ def _parse_activation_stdout(stdout: str, *, sha: str, digest: str) -> dict[str,
         raise PullError("activation source_sha does not match requested SHA")
     if payload.get("archive_digest") != digest:
         raise PullError("activation archive_digest does not match artifact digest")
+    if runtime_digest is not None and payload.get("runtime_digest") != runtime_digest:
+        raise PullError("activation runtime_digest does not match validated runtime digest")
     release = payload.get("release", "")
     if not isinstance(release, str) or sha not in release:
         raise PullError("activation release path does not identify requested SHA")
@@ -483,7 +511,15 @@ def _bounded_activation_error(stderr: str) -> str | None:
     return message
 
 
-def activate_release(config: Config, sha: str, digest: str, artifact: Path, run_command=default_run_command) -> dict[str, object]:
+def activate_release(
+    config: Config,
+    sha: str,
+    digest: str,
+    artifact: Path,
+    run_command=default_run_command,
+    *,
+    runtime_digest: str | None = None,
+) -> dict[str, object]:
     validate_sha(sha)
     validate_digest(digest)
     metadata = _metadata_path_for_artifact(artifact)
@@ -502,7 +538,7 @@ def activate_release(config: Config, sha: str, digest: str, artifact: Path, run_
         detail = _bounded_activation_error(result.stderr)
         suffix = f": {detail}" if detail else ""
         raise PullError(f"activation command failed{suffix}")
-    return _parse_activation_stdout(result.stdout, sha=sha, digest=digest)
+    return _parse_activation_stdout(result.stdout, sha=sha, digest=digest, runtime_digest=runtime_digest)
 
 
 def run_once(config: Config, *, get_json=default_get_json, run_command=default_run_command, now_fn=time.time) -> str:
@@ -536,16 +572,16 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
         try:
             checkout = clean_checkout(config, sha, run_command)
             outdir = build_release(config, checkout, sha, run_command)
-            artifact, digest = validate_artifact(outdir, sha)
+            artifact, digest, runtime_digest = validate_artifact(outdir, sha)
             workflow_run, check_runs, _ = fetch_evidence(config, sha, get_json)
             authorize(config, sha, workflow_run, check_runs, run_command)
             activation_state = read_activation_state(config)
-            if activation_state["current_sha256"] == digest:
+            if activation_state["runtime_digest"] == runtime_digest:
                 write_state_sha(config, sha)
                 clear_failed_release(config)
                 shutil.rmtree(config.work_dir / "out", ignore_errors=True)
-                return "unchanged-artifact"
-            activate_release(config, sha, digest, artifact, run_command)
+                return "unchanged-runtime"
+            activate_release(config, sha, digest, artifact, run_command, runtime_digest=runtime_digest)
         except (PullError, OSError, subprocess.SubprocessError, shutil.Error) as error:
             failures = int(failure["failures"]) + 1 if failure is not None else 1
             write_failed_release(config, sha, failures, float(now_fn()))

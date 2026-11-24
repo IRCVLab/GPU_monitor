@@ -633,7 +633,11 @@ grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/builder owner=storage-viz-b
 grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/data owner=storage-viz:storage-viz mode=0750' "$DASH_LOG" || fail "dashboard deployer does not preserve dashboard data ownership"
 grep -Fq 'ensure dir: /var/lib/storage-viz-dashboard/state owner=storage-viz:storage-viz mode=0750' "$DASH_LOG" || fail "dashboard deployer does not preserve dashboard state ownership"
 [[ "$(file_mode "$DASH_DRY_PREFIX/etc/storage-viz")" == "750" ]] || fail "dashboard dry-run config dir mode is not 0750"
+[[ "$(file_mode "$DASH_DRY_PREFIX/usr/local/libexec/storage_dashboard_release.py")" == "644" ]] || fail "archive validation module mode is not 0644"
 [[ "$(file_mode "$DASH_DRY_PREFIX/usr/local/libexec/storage-dashboard-activate.py")" == "755" ]] || fail "activator mode is not 0755"
+for entrypoint in storage-dashboard-build-release.py storage-dashboard-activate.py storage-monitor-release-puller.py; do
+  PYTHONDONTWRITEBYTECODE=1 python3 "$DASH_DRY_PREFIX/usr/local/libexec/$entrypoint" --help >/dev/null
+done
 [[ "$(file_mode "$DASH_DRY_PREFIX/usr/local/libexec/storage-release-authorizer.py")" == "755" ]] || fail "authorizer mode is not 0755"
 ! grep -q 'must not run in dashboard dry-run' "$DASH_LOG" || fail "dashboard dry-run invoked a forbidden service/user action"
 for src in "$STORAGE_BUILDER" "$STORAGE_ACTIVATOR" "$STORAGE_HEALTH" "$STORAGE_PROXY_LAUNCHER" "$STORAGE_PULLER" "$STORAGE_AUTHORIZER"; do
@@ -665,7 +669,7 @@ pass "dashboard dry-run renders assets/paths/modes/hashes without mutation"
 
 SECOND_PREFIX="$TMP/dashboard-second-prefix"
 PATH="$FAKEBIN:$PATH" "$DASHBOARD_DEPLOYER" --dry-run --prefix "$SECOND_PREFIX" >"$TMP/dashboard-second.log"
-for asset in storage-dashboard-build-release.py storage-dashboard-activate.py storage-dashboard-health-check.py storage-viz-proxy-launcher.py storage-monitor-release-puller.py storage-release-authorizer.py; do
+for asset in storage_dashboard_release.py storage-dashboard-build-release.py storage-dashboard-activate.py storage-dashboard-health-check.py storage-viz-proxy-launcher.py storage-monitor-release-puller.py storage-release-authorizer.py; do
   cmp -s "$DASH_DRY_PREFIX/usr/local/libexec/$asset" "$SECOND_PREFIX/usr/local/libexec/$asset" || fail "dashboard dry-run is not idempotent for $asset"
 done
 pass "dashboard deployer dry-run is idempotent"

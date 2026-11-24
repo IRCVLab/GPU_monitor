@@ -19,43 +19,17 @@ import tempfile
 import time
 from typing import BinaryIO, Callable, Iterable, Mapping, Sequence
 
-
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
-APPLICATION_NAME = "storage-monitor"
-SCHEMA_VERSION = 1
-ARTIFACT_FORMAT_VERSION = 1
-MANIFEST_PATH = "storage-monitor/RELEASE-MANIFEST.json"
-REQUIRED_RUNTIME_FILES = frozenset(
-    {
-        "viewer/serve.py",
-        "viewer/app.js",
-        "viewer/data-client.js",
-        "viewer/debug.html",
-        "viewer/echarts.min.js",
-        "viewer/index.html",
-        "viewer/overview.js",
-        "viewer/selection.js",
-        "viewer/styles.css",
-        "viewer/tables.js",
-        "viewer/treemap.js",
-        "viewer/users-chart.js",
-        "collector/__init__.py",
-        "collector/inventory.py",
-        "collector/jobs.py",
-        "collector/service.py",
-        "collector/snapshot.py",
-        "collector/store.py",
-        "collector/transport.py",
-        "config/servers.example.yaml",
-        "docs/schema-v1.md",
-        "deploy/direct_proxy.py",
-    }
+from storage_dashboard_release import (
+    APPLICATION_NAME,
+    SCHEMA_VERSION,
+    ActivationError,
+    InspectedArchive,
+    inspect_archive,
+    validate_digest,
 )
 
 
-class ActivationError(RuntimeError):
-    """Raised for fail-closed activation errors."""
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
@@ -86,10 +60,7 @@ class PreparedArchive:
     staged_file: BinaryIO
     staged_path: Path
     archive_name: str
-    metadata: dict[str, object]
-    manifest: dict[str, object]
-    members: tuple[tarfile.TarInfo, ...]
-    files: dict[str, str]
+    inspected: InspectedArchive
     digest: str
 
 
@@ -114,11 +85,6 @@ def _activation_lock(path: Path):
 def _validate_sha(value: str, label: str = "sha") -> None:
     if not SHA_RE.fullmatch(value):
         raise ActivationError(f"invalid {label}: expected 40 lowercase hex characters")
-
-
-def _validate_digest(value: str, label: str = "digest") -> None:
-    if not DIGEST_RE.fullmatch(value):
-        raise ActivationError(f"invalid {label}: expected 64 lowercase hex characters")
 
 
 def _read_json_file(path: Path, max_bytes: int) -> dict[str, object]:
@@ -222,118 +188,6 @@ def _fsync_dir(path: Path) -> None:
             os.close(fd)
 
 
-def _is_relative_safe_storage_path(name: str) -> bool:
-    path = Path(name)
-    if path.is_absolute() or name.startswith("/") or name == "storage-monitor":
-        return False
-    parts = path.parts
-    if not parts or parts[0] != "storage-monitor" or any(part in ("", ".", "..") for part in parts):
-        return False
-    return True
-
-
-def _safe_mode(mode: int) -> bool:
-    permissions = stat.S_IMODE(mode)
-    return permissions in {0o444, 0o555, 0o644, 0o755}
-
-
-def _inspect_archive(config: ActivationConfig, archive_file: BinaryIO) -> tuple[dict[str, object], tuple[tarfile.TarInfo, ...], dict[str, str]]:
-    if os.fstat(archive_file.fileno()).st_size > min(config.max_archive_bytes, config.max_input_bytes):
-        raise ActivationError("artifact exceeds configured compressed size bound")
-
-    seen: set[str] = set()
-    total_size = 0
-    files: dict[str, str] = {}
-    members: list[tarfile.TarInfo] = []
-    manifest: dict[str, object] | None = None
-    try:
-        archive_file.seek(0)
-        with tarfile.open(fileobj=archive_file, mode="r:gz") as tar:
-            while True:
-                member = tar.next()
-                if member is None:
-                    break
-                if len(members) >= config.max_members:
-                    raise ActivationError("archive exceeds configured member-count bound")
-                if member.name in seen:
-                    raise ActivationError(f"duplicate archive member: {member.name}")
-                seen.add(member.name)
-                if not _is_relative_safe_storage_path(member.name):
-                    raise ActivationError(f"unsafe archive member path: {member.name}")
-                if not member.isfile() and not member.isdir():
-                    raise ActivationError(f"unsupported archive member type: {member.name}")
-                if member.isdir():
-                    if not _safe_mode(member.mode):
-                        raise ActivationError(f"unsafe archive member mode: {member.name}")
-                    members.append(member)
-                    continue
-                if not _safe_mode(member.mode):
-                    raise ActivationError(f"unsafe archive member mode: {member.name}")
-                if member.size < 0 or member.size > config.max_file_bytes:
-                    raise ActivationError(f"archive member exceeds per-file bound: {member.name}")
-                total_size += member.size
-                if total_size > config.max_total_bytes:
-                    raise ActivationError("archive exceeds configured expanded-size bound")
-                extracted = tar.extractfile(member)
-                if extracted is None:
-                    raise ActivationError(f"cannot read archive member: {member.name}")
-                data = extracted.read(config.max_file_bytes + 1)
-                if len(data) != member.size:
-                    raise ActivationError(f"archive member size changed while reading: {member.name}")
-                if member.name == MANIFEST_PATH:
-                    try:
-                        loaded = json.loads(data.decode("utf-8"))
-                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                        raise ActivationError(f"invalid release manifest: {exc}") from exc
-                    if not isinstance(loaded, dict):
-                        raise ActivationError("release manifest must be a JSON object")
-                    manifest = loaded
-                else:
-                    rel = member.name.removeprefix("storage-monitor/")
-                    files[rel] = hashlib.sha256(data).hexdigest()
-                members.append(member)
-    except tarfile.TarError as exc:
-        raise ActivationError(f"invalid gzip tar artifact: {exc}") from exc
-
-    if manifest is None:
-        raise ActivationError("release manifest is required")
-    return manifest, tuple(members), files
-
-
-def _validate_manifest(manifest: dict[str, object], *, sha: str, archive_name: str, files: dict[str, str]) -> None:
-    expected_scalars = {
-        "artifact_format_version": ARTIFACT_FORMAT_VERSION,
-        "application_name": APPLICATION_NAME,
-        "schema_version": SCHEMA_VERSION,
-        "archive": archive_name,
-        "source_sha": sha,
-    }
-    for key, value in expected_scalars.items():
-        if manifest.get(key) != value:
-            raise ActivationError(f"manifest {key} mismatch")
-    included = manifest.get("included_paths")
-    manifest_files = manifest.get("files")
-    if not isinstance(included, list) or not all(isinstance(item, str) for item in included):
-        raise ActivationError("manifest included_paths must be a list of paths")
-    if included != sorted(included):
-        raise ActivationError("manifest included_paths must be sorted")
-    if not isinstance(manifest_files, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in manifest_files.items()):
-        raise ActivationError("manifest files must map path to sha256")
-    included_set = set(included)
-    if not REQUIRED_RUNTIME_FILES.issubset(included_set):
-        missing = sorted(REQUIRED_RUNTIME_FILES - included_set)
-        raise ActivationError(f"manifest missing required runtime files: {', '.join(missing)}")
-    if included_set != set(files):
-        raise ActivationError("manifest included path set does not match archive regular files")
-    if set(manifest_files) != set(files):
-        raise ActivationError("manifest file hash path set does not match archive regular files")
-    for rel, actual_digest in files.items():
-        expected = manifest_files[rel]
-        _validate_digest(expected, f"manifest digest for {rel}")
-        if expected != actual_digest:
-            raise ActivationError(f"manifest hash mismatch for {rel}")
-
-
 def _prepare_archive(
     config: ActivationConfig,
     *,
@@ -344,7 +198,7 @@ def _prepare_archive(
     artifact_stdin: BinaryIO | None,
 ) -> PreparedArchive:
     _validate_sha(sha, "source sha")
-    _validate_digest(expected_digest, "expected digest")
+    validate_digest(expected_digest, "expected digest")
     staged_file: BinaryIO | None = None
     staged_path: Path | None = None
     metadata_path = Path(metadata_path)
@@ -383,9 +237,15 @@ def _prepare_archive(
             raise ActivationError("artifact digest mismatch")
         metadata = _read_json_file(metadata_path, config.max_input_bytes)
         _validate_metadata(metadata, sha=sha, archive_name=archive_name, digest=digest)
-        manifest, members, files = _inspect_archive(config, staged_file)
-        _validate_manifest(manifest, sha=sha, archive_name=archive_name, files=files)
-        return PreparedArchive(staged_file, staged_path, archive_name, metadata, manifest, members, files, digest)
+        inspected = inspect_archive(
+            staged_file,
+            sha=sha,
+            archive_name=archive_name,
+            max_members=config.max_members,
+            max_file_bytes=config.max_file_bytes,
+            max_total_bytes=config.max_total_bytes,
+        )
+        return PreparedArchive(staged_file, staged_path, archive_name, inspected, digest)
     except BaseException:
         if staged_file is not None:
             staged_file.close()
@@ -474,7 +334,7 @@ def _legacy_proxy_recovery_root(config: ActivationConfig) -> Path:
 
 
 def _validated_managed_legacy_proxy(config: ActivationConfig, target: Path, digest: str) -> Path:
-    _validate_digest(digest, "managed legacy proxy digest")
+    validate_digest(digest, "managed legacy proxy digest")
     root = _legacy_proxy_recovery_root(config)
     expected = root / digest / "direct_proxy.py"
     if target.resolve(strict=False) != expected.resolve(strict=False) or target.is_symlink():
@@ -586,7 +446,7 @@ def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: st
         raise ActivationError("existing release path contains a dangling or linked release directory")
     if target.exists():
         _assert_existing_release_location(config, target, sha)
-        _assert_existing_release_matches(target, archive.files)
+        _assert_existing_release_matches(target, archive.inspected)
         _chmod_tree_readonly(target)
         os.chmod(target.parent, 0o555)
         return target
@@ -601,7 +461,7 @@ def _extract_private(config: ActivationConfig, archive: PreparedArchive, sha: st
     try:
         archive.staged_file.seek(0)
         with tarfile.open(fileobj=archive.staged_file, mode="r:gz") as tar:
-            for member in archive.members:
+            for member in archive.inspected.members:
                 relative = Path(member.name).relative_to("storage-monitor")
                 destination = tmp_storage / relative
                 if member.isdir():
@@ -661,7 +521,7 @@ def _chmod_tree_readonly(root: Path) -> None:
     os.chmod(root, 0o555)
 
 
-def _assert_existing_release_matches(target: Path, expected_files: dict[str, str]) -> None:
+def _assert_existing_release_matches(target: Path, archive: InspectedArchive) -> None:
     actual: dict[str, str] = {}
     for current, dirs, files in os.walk(target):
         current_path = Path(current)
@@ -678,7 +538,9 @@ def _assert_existing_release_matches(target: Path, expected_files: dict[str, str
             if path.stat().st_nlink != 1:
                 raise ActivationError("existing release contains a hardlinked file")
             actual[rel] = _sha256_file(path)
-    if actual != expected_files:
+            if rel in archive.modes and (path.stat().st_mode ^ archive.modes[rel]) & 0o111:
+                raise ActivationError(f"existing release mode mismatch for {rel}")
+    if actual != archive.files:
         raise ActivationError("existing release content mismatch")
 
 
@@ -915,9 +777,16 @@ def activate_release(
             "source_sha": sha,
             "archive": archive.archive_name,
             "archive_digest": archive.digest,
+            "runtime_digest": archive.inspected.runtime_digest,
             "previous": original_state.previous,
             "legacy_backup": activated_state.legacy_backup,
         }
+        if original_state.previous and previous_state and previous_state.get("release") == original_state.previous:
+            status["previous_release_metadata"] = {
+                key: previous_state[key]
+                for key in ("archive", "archive_digest", "runtime_digest")
+                if key in previous_state
+            }
         if recovery is not None:
             status.update(recovery)
         try:
@@ -947,6 +816,7 @@ def activate_release(
                         "failed_release": str(target),
                         "failed_source_sha": sha,
                         "failed_archive_digest": archive.digest,
+                        "failed_runtime_digest": archive.inspected.runtime_digest,
                         "restored": True,
                     }
                 )
@@ -1036,6 +906,7 @@ def _clear_failed_candidate_fields(status: dict[str, object]) -> None:
         "failed_release",
         "failed_source_sha",
         "failed_archive_digest",
+        "failed_runtime_digest",
         "activation_error",
         "rollback_restart_error",
     ):
@@ -1099,7 +970,11 @@ def rollback_to_state(
                     "restored": restored,
                 }
             )
-            status.pop("archive_digest", None)
+            previous_metadata = status.pop("previous_release_metadata", None)
+            for key in ("archive", "archive_digest", "runtime_digest"):
+                status.pop(key, None)
+                if isinstance(previous_metadata, dict) and key in previous_metadata:
+                    status[key] = previous_metadata[key]
         elif isinstance(legacy_backup, str) and legacy_backup:
             backup = Path(legacy_backup)
             if not backup.is_dir():
@@ -1135,7 +1010,8 @@ def rollback_to_state(
                 }
             )
             status.pop("source_sha", None)
-            status.pop("archive_digest", None)
+            for key in ("archive", "archive_digest", "runtime_digest", "previous_release_metadata"):
+                status.pop(key, None)
         else:
             raise ActivationError("activation state has no previous release or legacy backup")
         _clear_failed_candidate_fields(status)

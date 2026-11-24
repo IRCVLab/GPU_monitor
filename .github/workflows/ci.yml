@@ -176,6 +176,13 @@ jobs:
           node-version: '22.14.0'
       - name: Install pytest
         run: python3.12 -m pip install pytest==8.4.1
+      - name: Build and smoke-test the Storage dashboard release
+        if: needs.impact.outputs.storage_dashboard == 'true'
+        run: |
+          release_dir="$(mktemp -d)"
+          release_sha="$(git rev-parse HEAD)"
+          python3.12 apps/storage-monitor/deploy/build-dashboard-release.py --sha "$release_sha" --output-dir "$release_dir"
+          python3.12 apps/storage-monitor/deploy/server/smoke-dashboard-release.py --sha "$release_sha" --output-dir "$release_dir"
       - name: Run Linux storage verification
         run: make test-storage
 

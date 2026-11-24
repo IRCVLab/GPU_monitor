@@ -88,6 +88,13 @@ class CiImpactTest(unittest.TestCase):
             documentation=True,
         )
 
+    def test_packaged_storage_schema_requires_dashboard_ci(self):
+        self.assert_decisions(
+            ("apps/storage-monitor/docs/schema-v1.md",),
+            storage_dashboard=True,
+            apps_required=True,
+        )
+
     def test_storage_feature_readme_without_extension_is_documentation_only(self):
         self.assert_decisions(
             ("apps/storage-monitor/feature/README",),

@@ -44,6 +44,7 @@ GPU_RULE = PathRule(
         "deploy/gpu-monitor/",
     ),
 )
+STORAGE_DASHBOARD_PACKAGED_DOCS = ("apps/storage-monitor/docs/schema-v1.md",)
 STORAGE_DASHBOARD_RULE = PathRule(
     "storage_dashboard",
     prefixes=(
@@ -184,6 +185,9 @@ def classify_paths(paths: Sequence[str]) -> dict[str, bool]:
     full_shared_change = False
 
     for path in normalized_paths:
+        if path in STORAGE_DASHBOARD_PACKAGED_DOCS:
+            decisions["storage_dashboard"] = True
+            continue
         documentation_only = matches_rule(path, DOCUMENTATION_RULE)
         path_matched = documentation_only
         if not documentation_only and matches_rule(path, DESIGN_TOKENS_RULE):

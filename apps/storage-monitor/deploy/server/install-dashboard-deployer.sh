@@ -538,6 +538,7 @@ ensure_dir "$CONFIG_DIR" 0750 root:"$RUNTIME_GROUP"
 ensure_dir "$LIBEXEC_DIR" 0755 root:root
 
 # Preserve existing /etc/storage-viz inventory, keys, known_hosts; preserve data/state and real /opt until activation.
+install_file "$SERVER/storage_dashboard_release.py" "$LIBEXEC_DIR/storage_dashboard_release.py" 0644 root:root
 install_file "$DEPLOY/build-dashboard-release.py" "$LIBEXEC_DIR/storage-dashboard-build-release.py" 0755 root:root
 install_file "$SERVER/activate-dashboard-release.py" "$LIBEXEC_DIR/storage-dashboard-activate.py" 0755 root:root
 install_file "$SERVER/health-check-dashboard.py" "$LIBEXEC_DIR/storage-dashboard-health-check.py" 0755 root:root
