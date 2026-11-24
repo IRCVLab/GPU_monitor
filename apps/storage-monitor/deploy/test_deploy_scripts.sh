@@ -816,9 +816,25 @@ exit 0
 FAKE
 cat > "$DASH_CUTOVER_TMP/bin/health-check.py" <<'FAKE'
 #!/usr/bin/env python3.12
-import os, sys
-with open(os.environ["DASH_CUTOVER_LOG"], "a", encoding="utf-8") as out:
-    mode = "candidate-health" if "--skip-service-check" in sys.argv else "production-health"
+import os
+from pathlib import Path
+import sys
+import time
+
+log = Path(os.environ["DASH_CUTOVER_LOG"])
+mode = "candidate-health" if "--skip-service-check" in sys.argv else "production-health"
+if mode == "candidate-health":
+    deadline = time.monotonic() + 5
+    while True:
+        lines = log.read_text(encoding="utf-8").splitlines()
+        dashboard_ready = any(line.startswith("candidate-dashboard ") for line in lines)
+        proxy_ready = any(line.startswith("candidate-proxy ") for line in lines)
+        if dashboard_ready and proxy_ready:
+            break
+        if time.monotonic() >= deadline:
+            raise SystemExit("candidate dashboard and proxy did not both start")
+        time.sleep(0.02)
+with log.open("a", encoding="utf-8") as out:
     out.write(mode + " " + " ".join(sys.argv[1:]) + "\n")
 FAKE
 cat > "$DASH_CUTOVER_TMP/bin/kill" <<'FAKE'
