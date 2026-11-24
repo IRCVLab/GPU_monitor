@@ -846,6 +846,7 @@ function makeCleanupSnapshot() {
 function testCleanupCommandSafetyContracts() {
   const {
     shellQuote,
+    isCanonicalCleanupPath,
     cleanupPathWithinRoot,
     cleanupLongestMatchingRoot,
     validateCleanupSelection,
@@ -853,6 +854,9 @@ function testCleanupCommandSafetyContracts() {
   } = require("./selection.js");
 
   assert.strictEqual(shellQuote("/data/a b/it's.txt"), "'/data/a b/it'\"'\"'s.txt'");
+  assert.equal(isCanonicalCleanupPath("/data/보고서.txt"), true);
+  assert.equal(isCanonicalCleanupPath("/data/bad-\uFFFD.txt"), false,
+    "replacement text cannot safely identify the original filename");
   assert.strictEqual(typeof cleanupPathWithinRoot, "function", "root containment helper must be exposed for boundary tests");
   assert.strictEqual(typeof cleanupLongestMatchingRoot, "function", "longest-root matching helper must be exposed for boundary tests");
   assert.strictEqual(typeof validateCleanupSelection, "function", "selection validation must be centralized as a pure function");

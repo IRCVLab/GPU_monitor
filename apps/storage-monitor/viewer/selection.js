@@ -48,7 +48,7 @@ function isAbsoluteCleanupPath(path) {
 function isCanonicalCleanupPath(path) {
   if (!isAbsoluteCleanupPath(path)) return false;
   if (path === "/") return true;
-  if (hasControlCharacters(path)) return false;
+  if (hasControlCharacters(path) || path.includes("\uFFFD")) return false;
   if (path.endsWith("/")) return false;
   const segments = path.split("/");
   for (let i = 1; i < segments.length; i += 1) {

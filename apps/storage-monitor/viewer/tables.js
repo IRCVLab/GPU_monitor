@@ -147,9 +147,13 @@ function updateArrows(sel, sort) {
 function pathCellHtml(path) {
   const idx = path.lastIndexOf("/");
   const dir = idx >= 0 ? path.slice(0, idx + 1) : "", file = idx >= 0 ? path.slice(idx + 1) : path;
-  return '<div class="pathwrap"><span class="pathtext" title="' + escapeHtml(path) + '"><bdi>' +
+  const escapedPath = escapeHtml(path).replace(/\r/g, "&#13;");
+  const copy = path.includes("\uFFFD")
+    ? '<button class="copybtn" disabled title="Path may contain undecodable bytes">Copy</button>'
+    : '<button class="copybtn" data-copy="' + escapedPath + '" title="Copy full path">Copy</button>';
+  return '<div class="pathwrap"><span class="pathtext" title="' + escapedPath + '"><bdi>' +
     '<span class="dir">' + escapeHtml(dir) + '</span><span class="file">' + escapeHtml(file) + '</span></bdi></span>' +
-    '<button class="copybtn" data-copy="' + escapeHtml(path) + '" title="Copy full path">Copy</button></div>';
+    copy + '</div>';
 }
 function sizeCellHtml(bytes, maxBytes) {
   const w = maxBytes > 0 ? Math.max(2, bytes / maxBytes * 100) : 0;

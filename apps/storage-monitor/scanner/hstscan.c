@@ -1041,6 +1041,30 @@ static const char *mount_for_path(const char *path, const char **out_fstype) {
  *  JSON output
  * ----------------------------------------------------------------------- */
 
+static size_t utf8_sequence_length(const unsigned char *p) {
+    size_t length;
+    if (p[0] >= 0xc2 && p[0] <= 0xdf) {
+        length = 2;
+    } else if (p[0] >= 0xe0 && p[0] <= 0xef) {
+        length = 3;
+    } else if (p[0] >= 0xf0 && p[0] <= 0xf4) {
+        length = 4;
+    } else {
+        return 0;
+    }
+
+    for (size_t i = 1; i < length; i++) {
+        if ((p[i] & 0xc0) != 0x80) return 0;
+    }
+    if ((p[0] == 0xe0 && p[1] < 0xa0) ||
+        (p[0] == 0xed && p[1] >= 0xa0) ||
+        (p[0] == 0xf0 && p[1] < 0x90) ||
+        (p[0] == 0xf4 && p[1] >= 0x90)) {
+        return 0;
+    }
+    return length;
+}
+
 static void json_escape(FILE *f, const char *s) {
     fputc('"', f);
     for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
@@ -1057,11 +1081,13 @@ static void json_escape(FILE *f, const char *s) {
                 if (c < 0x20) {
                     fprintf(f, "\\u%04x", c);
                 } else if (c >= 0x80) {
-                    /* Keep generated JSON strictly UTF-8 parseable even when
-                     * filesystem names contain arbitrary non-UTF8 bytes.
-                     * Escaping every high byte as U+00XX preserves byte-level
-                     * observability without emitting invalid JSON text. */
-                    fprintf(f, "\\u%04x", c);
+                    size_t length = utf8_sequence_length(p);
+                    if (length) {
+                        fwrite(p, 1, length, f);
+                        p += length - 1;
+                    } else {
+                        fputs("\\ufffd", f);
+                    }
                 } else {
                     fputc(c, f);
                 }
