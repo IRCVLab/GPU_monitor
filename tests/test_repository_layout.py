@@ -385,6 +385,15 @@ class RepositoryLayoutTest(unittest.TestCase):
         self.assertNotIn("run: python3.12 -m pip install pytest\n", content)
 
         gpu_job = content.split("\n  gpu:", 1)[1].split("\n  storage:", 1)[0]
+        repository_job = content.split("\n  repository:", 1)[1].split("\n  gpu:", 1)[0]
+        storage_job = content.split("\n  storage:", 1)[1].split("\n  required:", 1)[0]
+        for job, command in (
+            (repository_job, "make test"),
+            (gpu_job, "make test-gpu"),
+            (storage_job, "make test-storage"),
+        ):
+            self.assertIn("node-version: '22.14.0'", job)
+            self.assertLess(job.index("node-version: '22.14.0'"), job.index(command))
         verify_index = gpu_job.index("make test-gpu")
         self.assertLess(gpu_job.index("- name: Install frontend dependencies"), verify_index)
         self.assertLess(gpu_job.index("- name: Install backend dependencies"), verify_index)
