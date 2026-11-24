@@ -8,6 +8,8 @@ const path = require("path");
 const here = __dirname;
 const GiB = 1024 ** 3;
 
+assert.equal(require("./app.js").shouldFallbackToStatic({ status: 404 }), true);
+
 function testCleanShellThemeBootstrapContract() {
   const html = fs.readFileSync(path.join(here, "index.html"), "utf8");
   const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");

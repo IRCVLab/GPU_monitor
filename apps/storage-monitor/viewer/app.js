@@ -9,7 +9,9 @@ let currentOverviewRows = [];
 let currentDataSource = "static";
 let currentDataMode = "inventory";
 let staticHostById = new Map();
-const detailSnapshots = createDetailSnapshots();
+const detailSnapshots = typeof module !== "undefined" && module.exports
+  ? require("./data-client.js").createDetailSnapshots()
+  : createDetailSnapshots();
 let resizeTimer = null;
 let rescanTimer = null;
 let rescanSawActive = false;

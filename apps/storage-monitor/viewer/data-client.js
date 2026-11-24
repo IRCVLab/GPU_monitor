@@ -257,7 +257,7 @@ if (typeof globalThis !== "undefined") {
   Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken });
 }
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken };
+  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken, createDetailSnapshots };
 }
 
 /* =========================================================================
