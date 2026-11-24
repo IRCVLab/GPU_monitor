@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from agent import mount_policy, scan_runner
+from collector.snapshot import DesiredServer, validate_download
 from data.test_fixtures import assert_schema_v1_snapshot_contract
 
 
@@ -610,11 +611,16 @@ class ScanRunnerTests(unittest.TestCase):
             tmp = pathlib.Path(td)
             config_path, _ = self.write_config(tmp)
             mountinfo = mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1")
+            unicode_path = '/home/보고서-été-"😀".txt'
+
             def fake(argv, **kwargs):
                 payload = raw_payload("/home")
                 payload["scan_started_unix"] = 100
                 payload["scan_duration_sec"] = 999.9
-                pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(payload), encoding="utf-8")
+                payload["top_files"][0]["path"] = unicode_path
+                pathlib.Path(argv[argv.index("--out") + 1]).write_text(
+                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+                )
                 return scan_runner.CompletedScan(0, "", "")
 
             result = scan_runner.run_once(config_path, mountinfo_reader=lambda: mountinfo, scanner_runner=fake, clock=Clock(145))
@@ -625,6 +631,13 @@ class ScanRunnerTests(unittest.TestCase):
             self.assertEqual(payload["scan_duration_sec"], 45)
             self.assertIsInstance(payload["scan_duration_sec"], int)
             assert_schema_v1_snapshot_contract(self, payload)
+            status = json.loads(result.status_path.read_text(encoding="utf-8"))
+            validated = validate_download(
+                status,
+                result.snapshot_path.read_bytes(),
+                DesiredServer(status["server_id"], status["config_digest"]),
+            )
+            self.assertEqual(validated.payload["top_files"][0]["path"], unicode_path)
 
     def test_negative_or_inconsistent_timing_is_total_failure(self):
         with tempfile.TemporaryDirectory() as td:
