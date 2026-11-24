@@ -54,6 +54,24 @@ make verify
 
 The app-local virtual environment is ignored by Git.
 
+## Browser regression checks
+
+Install the GPU frontend dependencies and run the browser tests from the
+repository root with Node.js 22 and Python 3.12.
+
+```bash
+npm --prefix apps/gpu-monitor/frontend ci
+npm --prefix tests/browser ci
+npm --prefix tests/browser exec -- playwright install chromium
+npm --prefix tests/browser test
+```
+
+Playwright starts two loopback servers and uses fixture HTTP and WebSocket
+responses. It checks GPU telemetry ordering, System server removal, Power Flow
+drafts, and Storage server switching and rescan. Use
+`MONITORING_BROWSER_GPU_PORT` and `MONITORING_BROWSER_STORAGE_PORT`
+if the default ports 18773 and 18775 are in use.
+
 ## GPU Monitor development
 
 Install Node.js 22 and Python 3.12, then run these commands from the repository root.
@@ -70,10 +88,10 @@ make test-gpu
 backend tests. The GPU CI job uses this same command.
 
 The backend requirements lock includes direct and transitive dependencies with
-SHA-256 wheel hashes. CI and Live install the same lock on Python 3.12.
-When updating dependencies, review the resolved versions and wheel hashes,
-then install the lock in a fresh Python 3.12 virtual environment and run
-`python -m pip check` and `make test-gpu`.
+SHA-256 wheel hashes. CI tests the same lock on Python 3.12 and on the
+Python 3.10 interpreter used by the deployment host. When updating
+dependencies, install the lock in fresh environments on both versions and
+run `python -m pip check`. Run `make test-gpu` with Python 3.12.
 
 Runtime scripts are app-local:
 
