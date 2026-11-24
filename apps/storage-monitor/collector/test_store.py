@@ -1,14 +1,18 @@
 import json
 import pathlib
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from collector import snapshot, store
 from collector.test_snapshot import base_payload, status_for
 
 
-class StoreTests(unittest.TestCase):
+class StoreFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -21,6 +25,8 @@ class StoreTests(unittest.TestCase):
         status, data = status_for(payload)
         return status, data
 
+
+class StoreTests(StoreFixture):
     def test_store_reloads_snapshot_and_state_after_restart(self):
         status, data = self.valid_download()
         result = self.store.apply_download("alpha-1", status, data, self.desired)
@@ -381,3 +387,168 @@ class StoreQualityReviewTests(unittest.TestCase):
             self.store.update_state("alpha-1", last_error_code=None, last_error_message="bad", last_error_unix=1)
         with self.assertRaisesRegex(ValueError, "last_error_unix"):
             self.store.update_state("alpha-1", last_error_code="EIO", last_error_message="bad", last_error_unix=True)
+
+
+class StoreRetentionTests(StoreFixture):
+    def next_download(self, index, **updates):
+        started = 1719200000 + 100 * index
+        payload = base_payload(generation=f"alpha-1-{started}-v1")
+        payload.update(scan_started_unix=started, scan_finished_unix=started + 42, **updates)
+        return self.valid_download(payload)
+
+    def test_unchanged_persisted_state_and_snapshot_do_not_write(self):
+        status, data = self.next_download(0)
+        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.store.update_state("alpha-1", freshness="fresh")
+
+        with mock.patch("collector.store.os.replace", wraps=store.os.replace) as replace:
+            for _ in range(20):
+                self.store.update_state("alpha-1", freshness="fresh")
+                result = self.store.apply_download("alpha-1", status, data, self.desired)
+                self.assertTrue(result.accepted)
+            replace.assert_not_called()
+        self.assertEqual(self.store.load_state("alpha-1")["freshness"], "fresh")
+
+    def test_identical_download_retry_cannot_claim_durability_before_directory_sync(self):
+        status, data = self.next_download(0)
+        original_sync = store._fsync_dir
+        directory = self.root / "alpha-1"
+
+        def fail_current_sync(path):
+            if path == directory and (path / "current.json").exists():
+                raise OSError("manifest directory sync failed")
+            original_sync(path)
+
+        with mock.patch.object(store, "_fsync_dir", side_effect=fail_current_sync):
+            for _ in range(2):
+                result = self.store.apply_download("alpha-1", status, data, self.desired)
+                self.assertTrue(result.accepted)
+                self.assertEqual(result.error_code, "DURABILITY_UNCERTAIN")
+        result = self.store.apply_download("alpha-1", status, data, self.desired)
+        self.assertTrue(result.accepted)
+        self.assertIsNone(result.error_code)
+
+    def test_only_current_and_previous_managed_generations_are_kept(self):
+        server_dir = self.root / "alpha-1"
+        server_dir.mkdir()
+        legacy_snapshot = server_dir / "snapshot-alpha-1-1719199900-v1.json"
+        legacy_state = server_dir / "state-1719199950000000000.json"
+        _, payload = self.next_download(-1)
+        legacy_snapshot.write_bytes(payload)
+        legacy_state.write_text('{"freshness":"fresh","snapshot_availability":"available"}')
+        (server_dir / "current.json").write_text(json.dumps({
+            "snapshot": legacy_snapshot.name, "state": legacy_state.name,
+        }))
+        self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719199900-v1")
+        self.assertEqual(self.store.load_state("alpha-1")["freshness"], "fresh")
+        for index in range(12):
+            status, data = self.next_download(index)
+            self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+            self.assertLessEqual(len(list(server_dir.glob("snapshot-*.json"))), 3)
+            self.assertLessEqual(len(list(server_dir.glob("state-*.json"))), 3)
+        for index in range(10):
+            self.store.update_state("alpha-1", freshness="fresh" if index % 2 else "stale")
+            self.assertLessEqual(len(list(server_dir.glob("state-*.json"))), 3)
+        self.assertEqual(self.store.load_state("alpha-1")["freshness"], "fresh")
+        self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719201100-v1")
+        self.assertEqual(legacy_snapshot.read_bytes(), payload)
+        self.assertEqual(legacy_state.read_text(), '{"freshness":"fresh","snapshot_availability":"available"}')
+
+    def test_interrupted_same_scan_generation_keeps_current_and_bounds_orphans(self):
+        status, data = self.next_download(0, hostname="original")
+        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        crash_before_publication = """
+import json
+import os
+from pathlib import Path
+import sys
+
+from collector import snapshot, store
+
+def exit_before_current_replace(src, dst):
+    if dst.name == "current.json":
+        os._exit(73)
+    original_replace(src, dst)
+
+original_replace = os.replace
+os.replace = exit_before_current_replace
+state_root, status_json = sys.argv[1:]
+desired = snapshot.DesiredServer("alpha-1", "a" * 64)
+store.CentralStore(Path(state_root)).apply_download(
+    "alpha-1", json.loads(status_json), sys.stdin.buffer.read(), desired,
+)
+"""
+        server_dir = self.root / "alpha-1"
+        for index in range(3):
+            status, data = self.next_download(0, hostname=f"changed-{index}")
+            result = subprocess.run(
+                [sys.executable, "-c", crash_before_publication, str(self.root), json.dumps(status)],
+                cwd=pathlib.Path(__file__).resolve().parents[1],
+                input=data, capture_output=True, timeout=5,
+            )
+            self.assertEqual(result.returncode, 73, result.stderr.decode())
+            reloaded = store.CentralStore(self.root)
+            self.assertEqual(reloaded.load_snapshot("alpha-1")["hostname"], "original")
+            self.assertLessEqual(len(list(server_dir.glob("snapshot-*.json"))), 2)
+            self.assertLessEqual(len(list(server_dir.glob("state-*.json"))), 2)
+            self.assertEqual(len(list(server_dir.glob(".*.tmp"))), 1)
+        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertEqual(self.store.load_snapshot("alpha-1")["hostname"], "changed-2")
+        self.assertFalse(list(server_dir.glob(".*.tmp")))
+
+    def test_previous_pair_is_used_when_current_generation_is_missing(self):
+        for index in range(2):
+            status, data = self.next_download(index)
+            self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        server_dir = self.root / "alpha-1"
+        current = json.loads((server_dir / "current.json").read_text())
+        (server_dir / current["snapshot"]).unlink()
+        reloaded = store.CentralStore(self.root)
+        self.assertEqual(reloaded.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200000-v1")
+        self.assertEqual(reloaded.load_state("alpha-1")["latest_pull_status"], "succeeded")
+
+    def test_truncated_manifest_recovers_known_committed_pair_and_next_write(self):
+        server_dir = self.root / "alpha-1"
+        for index in range(3):
+            status, data = self.next_download(index)
+            self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        (server_dir / "current.json").write_text('{"snapshot":')
+        reloaded = store.CentralStore(self.root)
+        self.assertEqual(reloaded.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200100-v1")
+        self.assertEqual(reloaded.load_state("alpha-1")["latest_pull_status"], "succeeded")
+
+        reloaded.update_state("alpha-1", freshness="fresh")
+        self.assertEqual(reloaded.load_state("alpha-1")["freshness"], "fresh")
+        self.assertEqual(reloaded.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200100-v1")
+        current = json.loads((server_dir / "current.json").read_text())
+        self.assertTrue((server_dir / current["state"]).exists())
+
+    def test_reader_of_retired_generation_survives_publication_and_cleanup(self):
+        status, data = self.next_download(0)
+        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        server_dir = self.root / "alpha-1"
+        current = json.loads((server_dir / "current.json").read_text())
+        original_decode = store._decode_json
+        read_waiting = threading.Event()
+        release_read = threading.Event()
+
+        def pause_reader(stream, label):
+            if pathlib.Path(stream.name).name == current["snapshot"]:
+                read_waiting.set()
+                if not release_read.wait(3):
+                    raise TimeoutError("reader was not released")
+            return original_decode(stream, label)
+
+        with mock.patch.object(store, "_decode_json", side_effect=pause_reader):
+            with ThreadPoolExecutor(max_workers=1) as threads:
+                reader = threads.submit(store.CentralStore(self.root).load_snapshot, "alpha-1")
+                try:
+                    self.assertTrue(read_waiting.wait(2))
+                    for index in (1, 2):
+                        status, data = self.next_download(index)
+                        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+                    self.assertFalse((server_dir / current["snapshot"]).exists())
+                finally:
+                    release_read.set()
+                self.assertEqual(reader.result(timeout=2)["scan_generation"], "alpha-1-1719200000-v1")
+        self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200200-v1")
