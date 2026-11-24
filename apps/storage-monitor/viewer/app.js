@@ -9,7 +9,7 @@ let currentOverviewRows = [];
 let currentDataSource = "static";
 let currentDataMode = "inventory";
 let staticHostById = new Map();
-let snapshotCache = new Map();
+const detailSnapshots = createDetailSnapshots();
 let resizeTimer = null;
 let rescanTimer = null;
 let rescanSawActive = false;
@@ -19,7 +19,6 @@ let rescanPollFailures = 0;
 let rescanTrackingGeneration = 0;
 let rescanExpectedJobId = null;
 let detailLoadGeneration = 0;
-let detailRequestVersions = new Map();
 let themeRevealLocked = false;
 let overviewLoadGeneration = 0;
 let echartsLoadPromise = null;
@@ -574,7 +573,6 @@ async function loadBootstrapData() {
 
 function rememberBootstrap(bootstrap, options) {
   const opts = options || {};
-  const previousSnapshotCache = opts.preserveSnapshotCache ? snapshotCache : new Map();
   currentDataSource = bootstrap.mode;
   currentDataMode = bootstrap.dataMode || bootstrap.data_mode || "inventory";
   setSampleDataMarker(currentDataMode);
@@ -582,9 +580,9 @@ function rememberBootstrap(bootstrap, options) {
   currentOverviewSummaries = bootstrap.summaries || [];
   currentOverviewSnapshotEntries = bootstrap.snapshots || [];
   const currentIds = new Set(currentOverviewSummaries.map(item => item && item.id).filter(Boolean));
-  snapshotCache = new Map(Array.from(previousSnapshotCache.entries()).filter(([serverId]) => currentIds.has(serverId)));
+  detailSnapshots.retain(currentIds, opts.preserveSnapshotCache);
   for (const entry of currentOverviewSnapshotEntries) {
-    if (entry && entry.id && entry.snapshot && !entry.overviewOnly) snapshotCache.set(entry.id, entry.snapshot);
+    if (entry && entry.id && entry.snapshot && !entry.overviewOnly) detailSnapshots.set(entry.id, entry.snapshot);
   }
 }
 
@@ -600,11 +598,10 @@ function updateSnapshotEntry(serverId, snapshot, error) {
 
 function startOverviewSnapshotHydration(bootstrap, generation) {
   if (!bootstrap || typeof bootstrap.startSnapshotLoading !== "function") return;
-  const detailVersionsAtStart = new Map(detailRequestVersions);
+  const detailVersionsAtStart = detailSnapshots.checkpoint();
   void bootstrap.startSnapshotLoading((entry) => {
     if (generation !== overviewLoadGeneration || !entry || !entry.id) return;
-    if ((detailRequestVersions.get(entry.id) || 0) !== (detailVersionsAtStart.get(entry.id) || 0)) return;
-    if (entry.snapshot) snapshotCache.set(entry.id, entry.snapshot);
+    if (!detailSnapshots.acceptHydrated(entry, detailVersionsAtStart)) return;
     updateSnapshotEntry(entry.id, entry.snapshot || null, entry.error || null);
     renderOverview();
   }).catch((error) => {
@@ -632,37 +629,27 @@ function isCurrentDetailGeneration(serverId, generation) {
   return currentServerId === serverId && detailLoadGeneration === generation;
 }
 
-function beginDetailRequestVersion(serverId) {
-  const next = (detailRequestVersions.get(serverId) || 0) + 1;
-  detailRequestVersions.set(serverId, next);
-  return next;
-}
-
-function isCurrentDetailRequestVersion(serverId, version) {
-  return detailRequestVersions.get(serverId) === version;
-}
-
-async function ensureDetailLoaded(serverId, forceReload, generationOverride, requestVersionOverride) {
-  const generation = generationOverride == null ? detailLoadGeneration : generationOverride;
-  const requestVersion = requestVersionOverride == null ? beginDetailRequestVersion(serverId) : requestVersionOverride;
+async function ensureDetailLoaded(serverId, forceReload) {
+  const generation = detailLoadGeneration;
+  const requestVersion = detailSnapshots.begin(serverId);
   const summary = currentOverviewSummaries.find(item => item.id === serverId);
   currentServerSummary = summary || null;
   if (!summary) {
     if (isCurrentDetailGeneration(serverId, generation)) showDetailError("Unknown server: " + serverId);
     return;
   }
-  let snapshot = !forceReload ? snapshotCache.get(serverId) : null;
+  let snapshot = !forceReload ? detailSnapshots.get(serverId) : null;
   if (!snapshot) {
     try {
       snapshot = await currentDetailLoader()(serverId);
-      if (!isCurrentDetailRequestVersion(serverId, requestVersion)) return;
-      snapshotCache.set(serverId, snapshot);
+      if (!detailSnapshots.isCurrent(serverId, requestVersion)) return;
+      detailSnapshots.set(serverId, snapshot);
       updateSnapshotEntry(serverId, snapshot, null);
       renderOverview();
     } catch (error) {
-      if (!isCurrentDetailRequestVersion(serverId, requestVersion)) return;
+      if (!detailSnapshots.isCurrent(serverId, requestVersion)) return;
       console.error("[storage-viz] failed to load snapshot", serverId, error);
-      const existingSnapshot = DATA && DATA.server_id === serverId ? DATA : snapshotCache.get(serverId);
+      const existingSnapshot = DATA && DATA.server_id === serverId ? DATA : detailSnapshots.get(serverId);
       updateSnapshotEntry(serverId, existingSnapshot || null, error);
       renderOverview();
       if (isCurrentDetailGeneration(serverId, generation)) {
@@ -699,7 +686,7 @@ function applyRouteState(route, options) {
   detailLoadGeneration += 1;
   currentServerId = safeRoute.serverId;
   currentServerSummary = safeRoute.serverId ? (currentOverviewSummaries.find(item => item.id === safeRoute.serverId) || null) : null;
-  DATA = safeRoute.serverId ? (snapshotCache.get(safeRoute.serverId) || null) : null;
+  DATA = safeRoute.serverId ? (detailSnapshots.get(safeRoute.serverId) || null) : null;
   if (typeof resetCleanupSelectionState === "function") resetCleanupSelectionState();
   clearDetailError();
   setShellMode(!!safeRoute.serverId);
@@ -716,8 +703,7 @@ function applyRouteState(route, options) {
   if (!DATA) showDetailLoading(currentServerSummary);
   showTab(safeRoute.tab, { updateRoute: false });
   if (!opts.skipDataLoad) {
-    const requestVersion = beginDetailRequestVersion(safeRoute.serverId);
-    void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload, detailLoadGeneration, requestVersion);
+    void ensureDetailLoaded(safeRoute.serverId, !!opts.forceReload);
   }
   return safeRoute;
 }
@@ -873,11 +859,11 @@ async function refreshOverviewData(options) {
     rememberBootstrap(bootstrap, { preserveSnapshotCache: true });
     if (selectedServerId) {
       currentServerSummary = currentOverviewSummaries.find(item => item.id === selectedServerId) || null;
-      const refreshedSelectedData = snapshotCache.get(selectedServerId);
+      const refreshedSelectedData = detailSnapshots.get(selectedServerId);
       if (refreshedSelectedData) DATA = refreshedSelectedData;
       else if (selectedData) {
         DATA = selectedData;
-        snapshotCache.set(selectedServerId, selectedData);
+        detailSnapshots.set(selectedServerId, selectedData);
       }
     }
     renderOverview();
@@ -895,8 +881,7 @@ async function refreshOverviewData(options) {
     if (selectedServerId) {
       if (opts.forceReload) {
         applyRouteState({ serverId: selectedServerId, tab: selectedTab }, { skipHistory: true, skipDataLoad: true, forceReload: true });
-        const requestVersion = beginDetailRequestVersion(selectedServerId);
-        await ensureDetailLoaded(selectedServerId, true, detailLoadGeneration, requestVersion);
+        await ensureDetailLoaded(selectedServerId, true);
       } else {
         navigateToServer(selectedServerId, { skipHistory: true, tab: selectedTab });
       }
@@ -1203,7 +1188,7 @@ function getCurrentDetailDebugState() {
     currentServerSummary,
     data: DATA,
     detailLoadGeneration,
-    detailRequestVersions: new Map(detailRequestVersions),
+    detailRequestVersions: detailSnapshots.checkpoint(),
   };
 }
 

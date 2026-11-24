@@ -182,6 +182,37 @@ function safeServerId(serverId) {
   if (!isSafeHostToken(serverId)) throw new Error("invalid server id");
   return serverId;
 }
+function createDetailSnapshots() {
+  const snapshots = new Map();
+  const versions = new Map();
+
+  return {
+    get: serverId => snapshots.get(serverId),
+    set: (serverId, snapshot) => snapshots.set(serverId, snapshot),
+    retain(serverIds, preserve) {
+      if (!preserve) {
+        snapshots.clear();
+        return;
+      }
+      for (const serverId of snapshots.keys()) {
+        if (!serverIds.has(serverId)) snapshots.delete(serverId);
+      }
+    },
+    begin(serverId) {
+      const version = (versions.get(serverId) || 0) + 1;
+      versions.set(serverId, version);
+      return version;
+    },
+    isCurrent: (serverId, version) => versions.get(serverId) === version,
+    checkpoint: () => new Map(versions),
+    acceptHydrated(entry, checkpoint) {
+      if (versions.get(entry.id) !== checkpoint.get(entry.id)) return false;
+      if (entry.snapshot) snapshots.set(entry.id, entry.snapshot);
+      return true;
+    },
+  };
+}
+
 async function loadServerSnapshot(serverId) {
   return fetchJson("/api/servers/" + encodeURIComponent(safeServerId(serverId)) + "/snapshot");
 }

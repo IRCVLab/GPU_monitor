@@ -545,16 +545,27 @@ async function testOverviewOnlySnapshotNeverSatisfiesDetailLoading() {
   assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-full');
 }
 
-function testOverviewHydrationCannotOverwriteANewerDetailRequest() {
-  const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
-  const start = app.indexOf('function startOverviewSnapshotHydration');
-  const end = app.indexOf('\nasync function loadSnapshotForCurrentSource', start);
-  assert(start >= 0 && end > start, 'overview hydration helper must exist');
-  const body = app.slice(start, end);
-  assert(/const detailVersionsAtStart = new Map\(detailRequestVersions\);/.test(body), 'background hydration must capture per-server detail versions before requests start');
-  const guard = body.indexOf('(detailRequestVersions.get(entry.id) || 0) !== (detailVersionsAtStart.get(entry.id) || 0)');
-  const cacheWrite = body.indexOf('snapshotCache.set(entry.id, entry.snapshot)');
-  assert(guard >= 0 && guard < cacheWrite, 'a newer detail request must invalidate stale background snapshot writes');
+async function testOverviewHydrationCannotOverwriteANewerDetailRequest() {
+  const viewer = loadViewer();
+  let publishHydrated;
+  const serverId = 'alpha-1';
+  const summary = { id: serverId, display_name: 'alpha', mount_count: 1 };
+  const snapshot = hostname => ({ server_id: serverId, hostname, selected_roots: [], mounts: [], users: [], top_files: [], stale: [] });
+
+  await viewer.refreshOverviewData({ bootstrapLoader: async () => ({
+    mode: 'api', summaries: [summary], snapshots: [],
+    startSnapshotLoading(onEntry) {
+      publishHydrated = onEntry;
+      return Promise.resolve();
+    },
+  }) });
+  viewer.applyRouteState({ serverId, tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.loadSnapshotForCurrentSource = async () => snapshot('new-detail');
+  await viewer.ensureDetailLoaded(serverId, true);
+  publishHydrated({ id: serverId, snapshot: snapshot('old-overview'), error: null });
+
+  await viewer.ensureDetailLoaded(serverId, false);
+  assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'new-detail');
 }
 
 function testSampleMarkerAndCompactOverviewOmitsAggregateSurface() {
@@ -2951,7 +2962,7 @@ async function main() {
   await testApiBootstrapRendersBeforeSlowSnapshotsAndStreamsCompletedServers();
   await testApiBootstrapUsesEmbeddedOverviewSnapshotsWithoutFullDownloads();
   await testOverviewOnlySnapshotNeverSatisfiesDetailLoading();
-  testOverviewHydrationCannotOverwriteANewerDetailRequest();
+  await testOverviewHydrationCannotOverwriteANewerDetailRequest();
   testSampleMarkerAndCompactOverviewOmitsAggregateSurface();
   testMountCentricOverviewDomFieldsAndStableNavigation();
   testMountStatusTextAppearsOnlyForExceptionalPressure();
