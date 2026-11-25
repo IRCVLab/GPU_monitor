@@ -4,6 +4,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 
 const here = __dirname;
 const GiB = 1024 ** 3;
@@ -982,7 +983,81 @@ function testOverviewMonitorCardCssContract() {
   assert(/@media\s*\(max-width:\s*520px\)[\s\S]*\.overview-card\b[\s\S]*overflow:\s*hidden/.test(css), "mobile overview cards must explicitly guard against horizontal overflow");
 }
 
+function testUsersChartTracksSizeAndFilteredMeasurements() {
+  for (const script of ["tables.js", "users-chart.js"]) {
+    const elements = new Map();
+    const element = () => ({
+      style: {}, children: [], dataset: {}, textContent: "", innerHTML: "",
+      appendChild(child) { this.children.push(child); },
+    });
+    const getElement = id => {
+      if (!elements.has(id)) elements.set(id, element());
+      return elements.get(id);
+    };
+    const chartElement = getElement("usersChart");
+    const chart = {
+      height: 560, width: 1000,
+      setOption(option) { this.option = option; },
+      resize() { this.height = Number.parseFloat(chartElement.style.height); this.width = chartElement.clientWidth; },
+      off() {}, on() {},
+    };
+    const context = {
+      DATA: { users: Array.from({ length: 21 }, (_, i) => ({
+        uid: i + 1000, name: "user" + i, files: i + 1,
+        bytes: 200 - i, by_mount: { "/home": 200 - i - (i === 0 ? 50 : 0), "/data": i === 0 ? 50 : 0 },
+      })) },
+      userMountFilter: "", mountPaths: ["/home", "/data", "/empty"],
+      mountColor: { "/home": "#123456", "/data": "#654321" },
+      capUsedByMount: { "/home": 3940, "/data": 50 }, totalCapacityUsed: 3990,
+      usersChart: null, usersInited: false,
+      isDark: () => false, humanBytes: value => String(value), escapeHtml: value => String(value),
+      colorForUid: () => "#123456",
+      echarts: { init: el => {
+        chart.height = Number.parseFloat(el.style.height || "560");
+        chart.width = el.clientWidth;
+        return chart;
+      } },
+      document: {
+        getElementById: getElement,
+        querySelector: getElement,
+        querySelectorAll: () => [],
+        createElement: element, createDocumentFragment: element,
+      },
+    };
+    chartElement.clientWidth = 1000;
+    vm.createContext(context);
+    vm.runInContext(fs.readFileSync(path.join(here, script), "utf8"), context);
+    if (!context.updateArrows) context.updateArrows = () => {};
+    context.renderUsers();
+    assert.strictEqual(chart.height, 570, script + ": initial canvas must fit the top 20 rows");
+    assert.strictEqual(chart.width, 1000);
+
+    context.userMountFilter = "/data";
+    chartElement.clientWidth = 640;
+    context.renderUsers();
+    assert.strictEqual(chart.height, 320, script + ": filtering must resize the canvas to fit one row");
+    assert.strictEqual(chart.width, 640, script + ": a rerender must recover from earlier layout dimensions");
+    assert.deepStrictEqual(Array.from(chart.option.yAxis.data), ["user0"]);
+    assert.deepStrictEqual(Array.from(chart.option.series[0].data), [50]);
+    const tbody = getElement("#usersTbl tbody");
+    const filteredRow = tbody.children.at(-1).children[0].innerHTML;
+    assert(filteredRow.endsWith('<td class="num">—</td>'), script + ": a storage filter must not show the all-storage file count");
+    const tooltip = chart.option.tooltip.formatter([{ dataIndex: 0, value: 50, color: "#123456", seriesName: "/data" }]);
+    assert(tooltip.includes("100.0% of scanned usage on /data"), script + ": shares must identify the scanned-usage denominator");
+
+    context.userMountFilter = "/empty";
+    context.renderUsers();
+    assert.strictEqual(getElement("usersCount").textContent, "0 users on /empty", script + ": an empty filter must clear the previous user count");
+
+    context.userMountFilter = "";
+    context.renderUsers();
+    const allRow = tbody.children.at(-1).children[0].innerHTML;
+    assert(allRow.endsWith('<td class="num">1</td>'), script + ": all-storage view must retain the exact file count");
+  }
+}
+
 async function main() {
+  testUsersChartTracksSizeAndFilteredMeasurements();
   testCleanShellThemeBootstrapContract();
   testThemeIconTransformSelectorsWinCascade();
   testThemeTransitionFlashFreeStaticContracts();
