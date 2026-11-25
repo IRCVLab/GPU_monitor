@@ -96,20 +96,24 @@
       <ul id="overviewList" class="overview-list"></ul>
     </section>
 
-    <section id="statisticsView" class="overview-view" aria-labelledby="statisticsHeading" hidden>
+    <section id="statisticsView" class="overview-view fleet-statistics" aria-labelledby="statisticsHeading" hidden>
       <h2 id="statisticsHeading">전체 서버 통계</h2>
       <p id="statisticsSampleDataMarker" class="sample-data-marker" hidden>샘플 데이터</p>
       <div id="statisticsError" class="err" hidden></div>
       <section id="fleetUsage" class="fleet-usage" aria-labelledby="fleetUsageHeading">
-        <h3 id="fleetUsageHeading">사용자별 사용량</h3>
-        <p class="fleet-usage__coverage"><span data-fleet-coverage></span> · 계정명 기준 · root 포함 · 기타 시스템 계정과 미확인 UID 제외</p>
-        <p class="fleet-usage__coverage" data-fleet-empty hidden>표시할 사용자 스캔 결과가 없습니다.</p>
-        <div class="fleet-usage__table">
-          <table hidden>
-            <thead><tr><th scope="col" class="num">순위</th><th scope="col">사용자</th><th scope="col" class="num">합계</th><th scope="col">서버별 사용량</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
+        <header class="fleet-usage__heading">
+          <div>
+            <h3 id="fleetUsageHeading">사용자별 사용량</h3>
+            <p data-fleet-coverage></p>
+          </div>
+          <div class="fleet-usage__total" data-fleet-total hidden>
+            <span>집계 사용량</span>
+            <strong data-fleet-bytes></strong>
+          </div>
+        </header>
+        <p class="fleet-usage__empty" data-fleet-empty hidden>표시할 사용자 스캔 결과가 없습니다.</p>
+        <ol class="fleet-usage__list" data-fleet-rows hidden></ol>
+        <p class="fleet-usage__basis">계정명 기준 · root 포함 · 기타 시스템 계정과 미확인 UID 제외</p>
       </section>
     </section>
 

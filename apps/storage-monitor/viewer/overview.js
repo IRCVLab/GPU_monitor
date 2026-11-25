@@ -507,32 +507,60 @@ function buildFleetUserUsage(summaries, snapshotEntries) {
   return { rows, scannedServers, staleServers, configuredServers: summaries.length };
 }
 
+function fleetUsageBar(doc, value, scale) {
+  const bar = makeEl(doc, "span", "fleet-bar");
+  bar.setAttribute("aria-hidden", "true");
+  const fill = makeEl(doc, "span", "fleet-bar__fill");
+  fill.style.width = (value / scale * 100) + "%";
+  bar.appendChild(fill);
+  return bar;
+}
+
 function renderFleetUserUsage(container, usage) {
-  if (!container) return;
-  const table = container.querySelector("table");
-  if (!table) return;
+  const list = container?.querySelector("[data-fleet-rows]");
+  if (!list) return;
   const doc = container.ownerDocument || document;
-  const hasUsage = usage.rows.length > 0;
+  const leader = usage.rows[0];
   const coverage = usage.scannedServers + "/" + usage.configuredServers + "대 스캔 기준";
   container.querySelector("[data-fleet-coverage]").textContent =
     coverage + (usage.staleServers ? " · 오래된 스캔 " + usage.staleServers + "대" : "");
-  table.hidden = !hasUsage;
-  container.querySelector("[data-fleet-empty]").hidden = hasUsage;
-  const tbody = table.querySelector("tbody");
-  tbody.replaceChildren(...usage.rows.map((entry, index) => {
-    const row = makeEl(doc, "tr");
-    row.appendChild(makeEl(doc, "td", "num", String(index + 1)));
-    const name = makeEl(doc, "th", "", entry.name);
-    name.scope = "row";
-    row.appendChild(name);
-    row.appendChild(makeEl(doc, "td", "num", compactBytes(entry.bytes)));
-    const servers = makeEl(doc, "td", "fleet-usage__servers");
+  container.querySelector("[data-fleet-total]").hidden = !leader;
+  container.querySelector("[data-fleet-bytes]").textContent =
+    compactBytes(usage.rows.reduce((total, entry) => total + entry.bytes, 0));
+  container.querySelector("[data-fleet-empty]").hidden = !!leader;
+  list.hidden = !leader;
+
+  const expanded = new Set(Array.from(list.querySelectorAll("details[open]"), item => item.dataset.account));
+  const focused = doc.activeElement?.closest(".fleet-usage__account")?.dataset.account;
+  let nextFocus;
+  list.replaceChildren(...usage.rows.map((entry, index) => {
+    const row = makeEl(doc, "li", "fleet-usage__row");
+    const details = makeEl(doc, "details", "fleet-usage__account");
+    details.dataset.account = entry.name;
+    details.open = expanded.has(entry.name);
+    const summary = makeEl(doc, "summary", "fleet-usage__summary");
+    const rank = makeEl(doc, "span", "fleet-usage__rank", String(index + 1));
+    rank.setAttribute("aria-hidden", "true");
+    const chevron = makeEl(doc, "span", "fleet-usage__chevron");
+    chevron.setAttribute("aria-hidden", "true");
+    summary.append(rank, makeEl(doc, "span", "fleet-usage__name", entry.name),
+      fleetUsageBar(doc, entry.bytes, leader.bytes),
+      makeEl(doc, "span", "fleet-usage__bytes", compactBytes(entry.bytes)), chevron);
+    if (focused === entry.name) nextFocus = summary;
+
+    const breakdown = makeEl(doc, "ul", "fleet-usage__breakdown");
+    breakdown.setAttribute("aria-label", entry.name + " 서버별 사용량");
     for (const server of [...entry.servers.values()].sort((a, b) => b.bytes - a.bytes)) {
-      servers.appendChild(makeEl(doc, "span", "", server.name + " " + compactBytes(server.bytes)));
+      const item = makeEl(doc, "li", "fleet-usage__server");
+      item.append(makeEl(doc, "span", "", server.name), fleetUsageBar(doc, server.bytes, entry.bytes),
+        makeEl(doc, "span", "fleet-usage__bytes", compactBytes(server.bytes)));
+      breakdown.appendChild(item);
     }
-    row.appendChild(servers);
+    details.append(summary, breakdown);
+    row.appendChild(details);
     return row;
   }));
+  nextFocus?.focus({ preventScroll: true });
 }
 
 function parseRoute(locationLike) {
