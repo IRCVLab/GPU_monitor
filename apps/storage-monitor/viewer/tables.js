@@ -25,7 +25,6 @@ function renderUserMountControls() {
 
 function renderUsers() {
   const el = document.getElementById("usersChart");
-  if (!usersChart) { usersChart = echarts.init(el, null, { renderer: "canvas" }); usersInited = true; }
   const dark = isDark();
   const axisText = dark ? "#98989d" : "#6e6e73", labelText = dark ? "#f5f5f7" : "#1d1d1f", split = dark ? "#2c2c2e" : "#e8e8ed";
 
@@ -34,6 +33,8 @@ function renderUsers() {
   const top = ranked.slice(0, 20);
   const names = top.map(x => x.u.name || ("uid " + x.u.uid)).reverse();
   el.style.height = Math.max(320, top.length * 25 + 70) + "px";
+  if (!usersChart) { usersChart = echarts.init(el, null, { renderer: "canvas" }); usersInited = true; }
+  else usersChart.resize();
 
   const mountsShown = userMountFilter ? [userMountFilter] : mountPaths;
   const series = mountsShown.map(mp => ({
@@ -56,7 +57,8 @@ function renderUsers() {
       formatter: (params) => {
         const idx = params[0].dataIndex, x = top[top.length - 1 - idx], cap = scopeCapacity();
         let s = '<b>' + escapeHtml(x.u.name) + '</b>  <span style="opacity:.6">uid ' + x.u.uid + '</span><br>';
-        s += humanBytes(x.scope) + '  ·  ' + (x.scope / cap * 100).toFixed(1) + '% of ' + (userMountFilter || "all") + '<br>';
+        s += humanBytes(x.scope) + '  ·  ' + (x.scope / cap * 100).toFixed(1) + '% of scanned usage' +
+          (userMountFilter ? ' on ' + escapeHtml(userMountFilter) : ' across all storage') + '<br>';
         for (const p of params) if (p.value > 0) s += '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' +
           p.color + ';margin-right:6px"></span>' + p.seriesName + ' ' + humanBytes(p.value) + '<br>';
         return s;
@@ -92,6 +94,8 @@ function renderUsersTable() {
     return (((a.u[k]) ?? 0) - ((b.u[k]) ?? 0)) * dir;
   });
   updateArrows("#usersTbl", usersSort);
+  document.getElementById("usersCount").textContent =
+    users.length + " user" + (users.length === 1 ? "" : "s") + (userMountFilter ? " on " + userMountFilter : " across all storage");
   if (!users.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">No user data.</td></tr>'; return; }
   const frag = document.createDocumentFragment();
   for (const { u, scope } of users) {
@@ -103,14 +107,12 @@ function renderUsersTable() {
         escapeHtml(u.name || ("uid " + u.uid)) + ' <span class="hint">uid ' + u.uid + '</span></span></td>' +
       '<td class="num">' + humanBytes(scope) + '</td>' +
       '<td class="num">' + pct.toFixed(1) + '%</td>' +
-      '<td class="num">' + (u.files != null ? u.files.toLocaleString() : "—") + '</td>';
+      '<td class="num">' + (!userMountFilter && u.files != null ? u.files.toLocaleString() : "—") + '</td>';
     tr.onclick = () => toggleUserRow(u.uid);
     tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleUserRow(u.uid); } };
     frag.appendChild(tr);
   }
   tbody.appendChild(frag);
-  document.getElementById("usersCount").textContent =
-    users.length + " user" + (users.length === 1 ? "" : "s") + (userMountFilter ? " on " + userMountFilter : " across all storage");
 }
 
 function toggleUserRow(uid) {
@@ -122,12 +124,11 @@ function toggleUserRow(uid) {
   const baseRow = tbody.querySelector('tr[data-uid="' + uid + '"]');
   if (!u || !baseRow) return;
   const byMount = u.by_mount || {};
-  const max = Math.max(1, ...Object.values(byMount));
   const entries = mountPaths.map(mp => [mp, byMount[mp] || 0]).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]);
   let inner = '<div class="expand-inner">';
   if (!entries.length) inner += '<span class="hint">No per-storage breakdown.</span>';
   else for (const [mp, b] of entries) inner += '<div class="mini-bar"><span class="mb-label">' + escapeHtml(mp) +
-    '</span><span class="mb-track"><span class="mb-fill" style="width:' + (b / max * 100).toFixed(1) + '%;background:' +
+    '</span><span class="mb-track"><span class="mb-fill" style="width:' + (b / u.bytes * 100).toFixed(2) + '%;background:' +
     mountColor[mp] + '"></span></span><span class="mb-val">' + humanBytes(b) + '</span><span class="mb-pct">' +
     (b / u.bytes * 100).toFixed(0) + '%</span></div>';
   inner += '</div>';

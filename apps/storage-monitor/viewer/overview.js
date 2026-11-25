@@ -478,6 +478,91 @@ function buildOverviewRows(summaries, snapshotEntries, thresholds = DEFAULT_CAPA
   });
 }
 
+function buildFleetUserUsage(summaries, snapshotEntries) {
+  const snapshots = new Map(snapshotEntries.map(entry => [entry.id, entry.snapshot]));
+  const accounts = new Map();
+  let scannedServers = 0;
+  let staleServers = 0;
+  for (const summary of summaries) {
+    const snapshot = Object.hasOwn(summary, "overview_snapshot")
+      ? summary.overview_snapshot : snapshots.get(summary.id);
+    const users = snapshot?.users;
+    if (!Array.isArray(users)) continue;
+    scannedServers++;
+    if (summary.freshness === "stale") staleServers++;
+    for (const { uid, name, bytes } of users) {
+      const account = typeof name === "string" ? name.trim() : "";
+      if (!Number.isSafeInteger(uid) || (uid !== 0 && uid < 1000) || uid === 65534 || !account || /^\d+$/.test(account)
+          || !Number.isSafeInteger(bytes) || bytes <= 0) continue;
+      if (!accounts.has(account)) accounts.set(account, { name: account, bytes: 0, servers: new Map() });
+      const usage = accounts.get(account);
+      usage.bytes += bytes;
+      if (!usage.servers.has(summary.id)) {
+        usage.servers.set(summary.id, { name: summary.display_name || summary.id, bytes: 0 });
+      }
+      usage.servers.get(summary.id).bytes += bytes;
+    }
+  }
+  const rows = [...accounts.values()].sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
+  return { rows, scannedServers, staleServers, configuredServers: summaries.length };
+}
+
+function fleetUsageBar(doc, value, scale) {
+  const bar = makeEl(doc, "span", "fleet-bar");
+  bar.setAttribute("aria-hidden", "true");
+  const fill = makeEl(doc, "span", "fleet-bar__fill");
+  fill.style.width = (value / scale * 100) + "%";
+  bar.appendChild(fill);
+  return bar;
+}
+
+function renderFleetUserUsage(container, usage) {
+  const list = container?.querySelector("[data-fleet-rows]");
+  if (!list) return;
+  const doc = container.ownerDocument || document;
+  const leader = usage.rows[0];
+  const coverage = usage.scannedServers + "/" + usage.configuredServers + "대 스캔 기준";
+  container.querySelector("[data-fleet-coverage]").textContent =
+    coverage + (usage.staleServers ? " · 오래된 스캔 " + usage.staleServers + "대" : "");
+  container.querySelector("[data-fleet-total]").hidden = !leader;
+  container.querySelector("[data-fleet-bytes]").textContent =
+    compactBytes(usage.rows.reduce((total, entry) => total + entry.bytes, 0));
+  container.querySelector("[data-fleet-empty]").hidden = !!leader;
+  list.hidden = !leader;
+
+  const expanded = new Set(Array.from(list.querySelectorAll("details[open]"), item => item.dataset.account));
+  const focused = doc.activeElement?.closest(".fleet-usage__account")?.dataset.account;
+  let nextFocus;
+  list.replaceChildren(...usage.rows.map((entry, index) => {
+    const row = makeEl(doc, "li", "fleet-usage__row");
+    const details = makeEl(doc, "details", "fleet-usage__account");
+    details.dataset.account = entry.name;
+    details.open = expanded.has(entry.name);
+    const summary = makeEl(doc, "summary", "fleet-usage__summary");
+    const rank = makeEl(doc, "span", "fleet-usage__rank", String(index + 1));
+    rank.setAttribute("aria-hidden", "true");
+    const chevron = makeEl(doc, "span", "fleet-usage__chevron");
+    chevron.setAttribute("aria-hidden", "true");
+    summary.append(rank, makeEl(doc, "span", "fleet-usage__name", entry.name),
+      fleetUsageBar(doc, entry.bytes, leader.bytes),
+      makeEl(doc, "span", "fleet-usage__bytes", compactBytes(entry.bytes)), chevron);
+    if (focused === entry.name) nextFocus = summary;
+
+    const breakdown = makeEl(doc, "ul", "fleet-usage__breakdown");
+    breakdown.setAttribute("aria-label", entry.name + " 서버별 사용량");
+    for (const server of [...entry.servers.values()].sort((a, b) => b.bytes - a.bytes)) {
+      const item = makeEl(doc, "li", "fleet-usage__server");
+      item.append(makeEl(doc, "span", "", server.name), fleetUsageBar(doc, server.bytes, entry.bytes),
+        makeEl(doc, "span", "fleet-usage__bytes", compactBytes(server.bytes)));
+      breakdown.appendChild(item);
+    }
+    details.append(summary, breakdown);
+    row.appendChild(details);
+    return row;
+  }));
+  nextFocus?.focus({ preventScroll: true });
+}
+
 function parseRoute(locationLike) {
   const search = String((locationLike && locationLike.search) || "");
   const hash = String((locationLike && locationLike.hash) || "").replace(/^#/, "");
@@ -801,6 +886,8 @@ const overviewExports = {
   derivePrimaryStatus,
   buildOverviewServer,
   buildOverviewRows,
+  buildFleetUserUsage,
+  renderFleetUserUsage,
   parseRoute,
   buildRouteHref,
   renderOverviewAggregate,

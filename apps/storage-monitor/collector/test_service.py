@@ -359,7 +359,7 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in summaries], ["alpha-1", "beta-2"])
         self.assertEqual(summaries[0]["snapshot_availability"], "available")
         overview = summaries[0]["overview_snapshot"]
-        self.assertEqual(set(overview), {"server_id", "selected_roots", "mounts", "scan_generation", "scan_finished_unix", "scan_duration_sec", "estimate_duration_sec"})
+        self.assertEqual(set(overview), {"server_id", "selected_roots", "mounts", "users", "scan_generation", "scan_finished_unix", "scan_duration_sec", "estimate_duration_sec"})
         self.assertEqual(overview["server_id"], "alpha-1")
         self.assertEqual(set(overview["selected_roots"][0]), {
             "mount_id", "capacity_id", "major_minor", "storage_media", "block_media",
@@ -374,6 +374,70 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(svc.load_snapshot_for_api("alpha-1")["server_id"], "alpha-1")
         with self.assertRaises(ValueError):
             svc.load_state_for_api("../alpha-1")
+
+    def test_server_summaries_include_only_lightweight_accepted_user_totals(self):
+        server = make_server()
+        payload = payload_for(server.id)
+        payload["users"] = [
+            {"uid": 1002, "name": "beta", "bytes": 20, "files": 1, "by_mount": {"/home": 20}},
+            {"uid": 1001, "name": "alpha", "bytes": 10, "files": 1, "by_mount": {"/home": 10}},
+        ]
+        status, data = status_data(payload)
+        self.tx.status[server.id] = status
+        self.tx.downloads[server.id] = (status, data)
+        service = self.service([server])
+        service.poll_once()
+
+        for _ in range(2):
+            overview = service.server_summaries()[0]["overview_snapshot"]
+            self.assertEqual(overview.get("users"), [
+                {"uid": 1002, "name": "beta", "bytes": 20},
+                {"uid": 1001, "name": "alpha", "bytes": 10},
+            ])
+        restarted = self.service([server])
+        self.assertEqual(restarted.server_summaries()[0]["overview_snapshot"]["users"], overview["users"])
+        self.assertEqual(self.store.load_snapshot(server.id)["users"], payload["users"])
+        self.assertEqual(len(self.tx.fetch_snapshot_calls), 1)
+
+    def test_server_summaries_keep_missing_snapshot_unavailable(self):
+        summary = self.service([make_server()]).server_summaries()[0]
+
+        self.assertEqual(summary["snapshot_availability"], "absent")
+        self.assertIsNone(summary["overview_snapshot"])
+
+    def test_overview_user_totals_exclude_only_explicit_remote_filesystems(self):
+        from collector.service import _overview_snapshot
+        from collector.snapshot import DesiredServer, validate_download
+
+        payload = payload_for()
+        shared_root = copy.deepcopy(payload["selected_roots"][0])
+        shared_root.update(mount_id="shared", scan_root="/shared", mountpoint="/shared")
+        shared_mount = copy.deepcopy(payload["mounts"][0])
+        shared_mount.update(mount_id="shared", path="/shared", scan_root="/shared")
+        payload["selected_roots"].append(shared_root)
+        payload["mounts"].append(shared_mount)
+        payload["users"] = [
+            {"uid": 1001, "name": "alpha", "bytes": 30, "files": 2, "by_mount": {"/home": 10, "/shared": 20}},
+            {"uid": 1002, "name": "beta", "bytes": 5, "files": 1, "by_mount": {"/shared": 5}},
+        ]
+        remote_types = (
+            "nfs", "nfs4", "cifs", "smb3", "smbfs", "sshfs", "fuse.sshfs", "ceph",
+            "fuse.ceph", "fuse.rclone", "fuse.davfs", "glusterfs", "lustre", "gpfs", "9p",
+        )
+        for fstype in (*remote_types, "NFS4", "ext4", "xfs", "unrecognized"):
+            with self.subTest(fstype=fstype):
+                shared_root["fstype"] = shared_mount["fstype"] = fstype
+                status, data = status_data(payload)
+                accepted = validate_download(status, data, DesiredServer("alpha-1", "a" * 64))
+
+                overview = _overview_snapshot(accepted.payload)
+
+                remote = fstype.lower() in remote_types
+                self.assertEqual(overview.get("users"), [
+                    {"uid": 1001, "name": "alpha", "bytes": 10 if remote else 30},
+                    {"uid": 1002, "name": "beta", "bytes": 0 if remote else 5},
+                ])
+                self.assertEqual(accepted.payload["users"][0]["bytes"], 30)
 
     def test_retained_roots_age_independently_after_faster_scan(self):
         from collector.service import _snapshot_freshness
@@ -429,6 +493,7 @@ class PollServiceTests(unittest.TestCase):
         service = self.service([server])
         updated = payload_for(server.id, started=1719209000, digest=server.scanner_digest)
         updated["mounts"][0]["df_total"] = 200
+        updated["users"] = [{"uid": 1001, "name": "alpha", "bytes": 30, "files": 2, "by_mount": {"/home": 30}}]
         status, data = status_data(updated)
         self.tx.status[server.id] = status
         self.tx.downloads[server.id] = (status, data)
@@ -438,6 +503,7 @@ class PollServiceTests(unittest.TestCase):
 
         overview = service.server_summaries()[0]["overview_snapshot"]
         self.assertEqual(overview["mounts"][0]["df_total"], 200)
+        self.assertEqual(overview["users"], [{"uid": 1001, "name": "alpha", "bytes": 30}])
 
     def test_server_summaries_wait_for_poll_to_publish_snapshot_and_overview_together(self):
         server = make_server()

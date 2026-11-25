@@ -1,6 +1,7 @@
 "use strict";
 
 let currentServerId = null;
+let statisticsPage = false;
 let currentServerSummary = null;
 let currentSession = { authenticated: false, can_rescan: false, csrf_token: "" };
 let currentOverviewSummaries = [];
@@ -180,8 +181,9 @@ function safeThemeRevealCenter() {
 }
 
 function refreshThemeDependentVisuals() {
-  if (typeof DATA !== "undefined" && DATA && typeof renderTreemap === "function" && currentTab === "treemap") renderTreemap();
-  if (typeof usersInited !== "undefined" && usersInited && typeof renderUsers === "function") renderUsers();
+  if (!DATA) return;
+  if (currentTab === "treemap") renderTreemap();
+  if (currentTab === "users" && usersInited) renderUsers();
 }
 
 async function toggleThemeMode(event) {
@@ -290,6 +292,9 @@ function syncHistory(route, replace) {
 
 function setShellMode(isDetail) {
   const overviewView = document.getElementById("overviewView");
+  const statisticsView = document.getElementById("statisticsView");
+  const statisticsBack = document.getElementById("statisticsBack");
+  const statisticsLink = document.getElementById("statisticsLink");
   const detailView = document.getElementById("detailView");
   const back = document.getElementById("overviewBack");
   const detailActions = document.getElementById("detailActions");
@@ -298,8 +303,11 @@ function setShellMode(isDetail) {
   const rescanNotice = document.getElementById("rescanNotice");
   const caps = document.getElementById("caps");
   const detailTabs = document.getElementById("detailTabs");
-  document.body.dataset.shellMode = isDetail ? "detail" : "overview";
-  if (overviewView) overviewView.hidden = !!isDetail;
+  document.body.dataset.shellMode = isDetail ? "detail" : statisticsPage ? "statistics" : "overview";
+  if (overviewView) overviewView.hidden = isDetail || statisticsPage;
+  if (statisticsView) statisticsView.hidden = isDetail || !statisticsPage;
+  if (statisticsBack) statisticsBack.hidden = !statisticsPage;
+  if (statisticsLink) statisticsLink.hidden = statisticsPage;
   if (detailView) detailView.hidden = !isDetail;
   if (back) back.hidden = !isDetail;
   if (detailActions) detailActions.hidden = !isDetail;
@@ -401,8 +409,10 @@ function ensureEchartsLoaded() {
 }
 
 function renderUsersWhenReady() {
+  const snapshot = DATA;
+  const generation = detailLoadGeneration;
   void ensureEchartsLoaded().then(() => {
-    if (DATA && currentTab === "users") renderUsers();
+    if (snapshot && DATA === snapshot && generation === detailLoadGeneration && currentTab === "users") renderUsers();
   }).catch((error) => console.error("[storage-viz] failed to load user chart", error));
 }
 
@@ -412,11 +422,13 @@ function showTab(name, options) {
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === currentTab));
   document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + currentTab));
   if (updateRoute && currentServerId) syncHistory({ serverId: currentServerId, tab: currentTab }, true);
+  const generation = detailLoadGeneration;
+  const selectedTab = currentTab;
   requestAnimationFrame(() => {
-    if (!DATA) return;
-    if (currentTab === "treemap") renderTreemap();
-    if (currentTab === "users") { if (!usersInited) renderUsersWhenReady(); else if (usersChart) usersChart.resize(); }
-    if (currentTab === "stale") renderStaleWindow();
+    if (!DATA || generation !== detailLoadGeneration || currentTab !== selectedTab) return;
+    if (selectedTab === "treemap") renderTreemap();
+    if (selectedTab === "users") renderUsersWhenReady();
+    if (selectedTab === "stale") renderStaleWindow();
   });
 }
 
@@ -434,7 +446,10 @@ function renderAll() {
   else if (typeof renderCleanupPanel === "function") renderCleanupPanel();
   renderHeader();
   populateFilters();
+  const snapshot = DATA;
+  const generation = detailLoadGeneration;
   requestAnimationFrame(() => {
+    if (DATA !== snapshot || generation !== detailLoadGeneration) return;
     renderTreemap();
     if (currentTab === "users") renderUsersWhenReady();
     renderTopFiles();
@@ -444,7 +459,7 @@ function renderAll() {
 }
 
 function showOverviewError(message) {
-  const err = document.getElementById("overviewError");
+  const err = document.getElementById(statisticsPage ? "statisticsError" : "overviewError");
   if (err) {
     err.textContent = message;
     err.hidden = false;
@@ -452,7 +467,7 @@ function showOverviewError(message) {
 }
 
 function clearOverviewError() {
-  const err = document.getElementById("overviewError");
+  const err = document.getElementById(statisticsPage ? "statisticsError" : "overviewError");
   if (err) {
     err.textContent = "";
     err.hidden = true;
@@ -468,16 +483,21 @@ function updateOverviewStatus(message) {
 }
 
 function setSampleDataMarker(dataMode) {
-  const marker = document.getElementById("sampleDataMarker");
+  const marker = document.getElementById(statisticsPage ? "statisticsSampleDataMarker" : "sampleDataMarker");
   if (marker) marker.hidden = dataMode !== "sample";
 }
 
 function renderOverview() {
   clearOverviewError();
+  setSampleDataMarker(currentDataMode);
+  if (statisticsPage) {
+    const fleetUsage = document.getElementById("fleetUsage");
+    renderFleetUserUsage(fleetUsage, buildFleetUserUsage(currentOverviewSummaries, currentOverviewSnapshotEntries));
+    return;
+  }
   currentOverviewRows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries, DEFAULT_CAPACITY_THRESHOLDS);
   const list = document.getElementById("overviewList");
   renderOverviewList(list, currentOverviewRows, { onOpenServer: (serverId) => navigateToServer(serverId) });
-  setSampleDataMarker(currentDataMode);
   updateOverviewStatus();
 }
 
@@ -648,7 +668,6 @@ async function ensureDetailLoaded(serverId, forceReload, pendingGeneration = nul
   const generation = detailLoadGeneration;
   const requestVersion = detailSnapshots.begin(serverId);
   const summary = currentOverviewSummaries.find(item => item.id === serverId);
-  currentServerSummary = summary || null;
   if (!summary) {
     if (isCurrentDetailGeneration(serverId, generation)) showDetailError("Unknown server: " + serverId);
     return;
@@ -658,6 +677,9 @@ async function ensureDetailLoaded(serverId, forceReload, pendingGeneration = nul
     try {
       snapshot = await currentDetailLoader()(serverId);
       if (!detailSnapshots.isCurrent(serverId, requestVersion)) return;
+      if (snapshot && snapshot.server_id && snapshot.server_id !== serverId) {
+        throw new Error("Snapshot server does not match the requested server.");
+      }
       const displayed = detailSnapshots.get(serverId);
       if (pendingGeneration && displayed && (
         snapshot.scan_generation === displayed.scan_generation ||
@@ -704,6 +726,13 @@ function applyRouteState(route, options) {
   if (!opts.skipHistory) syncHistory(safeRoute, !!opts.replaceHistory);
   if (rescanServerId && rescanServerId !== safeRoute.serverId) clearRescanPoll();
   detailLoadGeneration += 1;
+  if (currentServerId !== safeRoute.serverId) {
+    topOwnerFilter = staleOwnerFilter = "";
+    for (const id of ["ownerFilter", "staleOwnerFilter"]) {
+      const filter = document.getElementById(id);
+      if (filter) filter.value = "";
+    }
+  }
   currentServerId = safeRoute.serverId;
   currentServerSummary = safeRoute.serverId ? (currentOverviewSummaries.find(item => item.id === safeRoute.serverId) || null) : null;
   DATA = safeRoute.serverId ? (detailSnapshots.get(safeRoute.serverId) || null) : null;
@@ -1107,6 +1136,8 @@ async function init() {
   const themeButton = document.getElementById("themeModeButton");
   if (themeButton) themeButton.onclick = toggleThemeMode;
   const initialRoute = currentRoute();
+  statisticsPage = !initialRoute.serverId && new URLSearchParams(window.location.search).get("view") === "statistics";
+  if (statisticsPage) setShellMode(false);
   const generation = ++overviewLoadGeneration;
   let bootstrap;
   try {
@@ -1193,8 +1224,8 @@ async function init() {
 
   if (window.matchMedia) {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onScheme = () => { if (DATA) renderTreemap(); if (usersInited) renderUsers(); };
-    if (mq.addEventListener) mq.addEventListener("change", onScheme); else if (mq.addListener) mq.addListener(onScheme);
+    if (mq.addEventListener) mq.addEventListener("change", refreshThemeDependentVisuals);
+    else if (mq.addListener) mq.addListener(refreshThemeDependentVisuals);
   }
 
   const rb = document.getElementById("rescanBtn");

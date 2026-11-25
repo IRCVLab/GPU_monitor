@@ -27,6 +27,11 @@ OVERVIEW_MOUNT_FIELDS = (
     "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
     "storage_media", "block_media", "storage_media_confidence", "block_media_confidence",
 )
+# Central release artifacts do not package agent.mount_policy.
+REMOTE_FSTYPES = frozenset({
+    "nfs", "nfs4", "cifs", "smb3", "smbfs", "sshfs", "fuse.sshfs", "ceph",
+    "fuse.ceph", "fuse.rclone", "fuse.davfs", "glusterfs", "lustre", "gpfs", "9p",
+})
 
 
 def _overview_rows(value: Any, fields: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -54,6 +59,19 @@ def _overview_snapshot(payload: Mapping[str, Any] | None) -> dict[str, Any] | No
         any(root.get("status") == "complete" for root in roots)
         and all(root.get("status") in {"complete", "skipped"} and root.get("scan_finished_unix") is None for root in roots)
     )
+    remote_mount_paths = {
+        mount["path"]
+        for mount in payload.get("mounts", [])
+        if mount.get("fstype", "").lower() in REMOTE_FSTYPES
+    }
+    users = [
+        {
+            "uid": user["uid"],
+            "name": user["name"],
+            "bytes": sum(amount for path, amount in user["by_mount"].items() if path not in remote_mount_paths),
+        }
+        for user in payload.get("users", [])
+    ]
     return {
         "server_id": payload.get("server_id"),
         "scan_generation": payload.get("scan_generation"),
@@ -62,6 +80,7 @@ def _overview_snapshot(payload: Mapping[str, Any] | None) -> dict[str, Any] | No
         "estimate_duration_sec": payload.get("scan_duration_sec") if legacy_success else None,
         "selected_roots": selected_roots,
         "mounts": mounts,
+        "users": users,
     }
 
 
