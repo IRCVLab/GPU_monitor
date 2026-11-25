@@ -2919,7 +2919,7 @@ function testThemeControlAndTileFirstDetailLayoutContract() {
   assert.match(css, /\.theme-mode-button\s*\{[^}]*width:\s*40px[^}]*height:\s*40px[^}]*border-radius:\s*50%/);
   assert.match(css, /\.theme-mode-button\s+\.theme-icon\s*\{[^}]*position:\s*absolute[^}]*transition:[^}]*opacity[^}]*transform/);
   assert.doesNotMatch(css, /html\.dark\s+\.theme-icon-moon\s*,\s*html\.light\s+\.theme-icon-sun\s*\{[^}]*display:\s*none/);
-  assert.match(app, /document\.body\.dataset\.shellMode\s*=\s*isDetail\s*\?\s*"detail"\s*:\s*"overview"/);
+  assert.match(app, /document\.body\.dataset\.shellMode\s*=\s*isDetail\s*\?\s*"detail"\s*:\s*statisticsPage\s*\?\s*"statistics"\s*:\s*"overview"/);
   assert.match(css, /\.caps\.detail-capacity-rail\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /body\[data-shell-mode=['"]detail['"]\]\s+main\s*\{[^}]*padding-top:\s*8px/);
   assert.match(css, /#treemap\s*\{[^}]*height:\s*calc\(100vh\s*-\s*225px\)/);

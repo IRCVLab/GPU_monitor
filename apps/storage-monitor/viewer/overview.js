@@ -484,7 +484,9 @@ function buildFleetUserUsage(summaries, snapshotEntries) {
   let scannedServers = 0;
   let staleServers = 0;
   for (const summary of summaries) {
-    const users = snapshots.get(summary.id)?.users;
+    const snapshot = Object.hasOwn(summary, "overview_snapshot")
+      ? summary.overview_snapshot : snapshots.get(summary.id);
+    const users = snapshot?.users;
     if (!Array.isArray(users)) continue;
     scannedServers++;
     if (summary.freshness === "stale") staleServers++;
@@ -510,14 +512,12 @@ function renderFleetUserUsage(container, usage) {
   const table = container.querySelector("table");
   if (!table) return;
   const doc = container.ownerDocument || document;
-  const leader = usage.rows[0];
-  const preview = container.querySelector("[data-fleet-leader]");
-  preview.textContent = leader ? leader.name + " · " + compactBytes(leader.bytes) : "";
+  const hasUsage = usage.rows.length > 0;
   const coverage = usage.scannedServers + "/" + usage.configuredServers + "대 스캔 기준";
   container.querySelector("[data-fleet-coverage]").textContent =
     coverage + (usage.staleServers ? " · 오래된 스캔 " + usage.staleServers + "대" : "");
-  table.hidden = !leader;
-  container.querySelector("[data-fleet-empty]").hidden = !!leader;
+  table.hidden = !hasUsage;
+  container.querySelector("[data-fleet-empty]").hidden = hasUsage;
   const tbody = table.querySelector("tbody");
   tbody.replaceChildren(...usage.rows.map((entry, index) => {
     const row = makeEl(doc, "tr");

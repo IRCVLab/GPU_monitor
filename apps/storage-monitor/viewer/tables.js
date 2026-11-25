@@ -124,12 +124,11 @@ function toggleUserRow(uid) {
   const baseRow = tbody.querySelector('tr[data-uid="' + uid + '"]');
   if (!u || !baseRow) return;
   const byMount = u.by_mount || {};
-  const max = Math.max(1, ...Object.values(byMount));
   const entries = mountPaths.map(mp => [mp, byMount[mp] || 0]).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]);
   let inner = '<div class="expand-inner">';
   if (!entries.length) inner += '<span class="hint">No per-storage breakdown.</span>';
   else for (const [mp, b] of entries) inner += '<div class="mini-bar"><span class="mb-label">' + escapeHtml(mp) +
-    '</span><span class="mb-track"><span class="mb-fill" style="width:' + (b / max * 100).toFixed(1) + '%;background:' +
+    '</span><span class="mb-track"><span class="mb-fill" style="width:' + (b / u.bytes * 100).toFixed(2) + '%;background:' +
     mountColor[mp] + '"></span></span><span class="mb-val">' + humanBytes(b) + '</span><span class="mb-pct">' +
     (b / u.bytes * 100).toFixed(0) + '%</span></div>';
   inner += '</div>';

@@ -1,6 +1,7 @@
 "use strict";
 
 let currentServerId = null;
+let statisticsPage = false;
 let currentServerSummary = null;
 let currentSession = { authenticated: false, can_rescan: false, csrf_token: "" };
 let currentOverviewSummaries = [];
@@ -291,6 +292,9 @@ function syncHistory(route, replace) {
 
 function setShellMode(isDetail) {
   const overviewView = document.getElementById("overviewView");
+  const statisticsView = document.getElementById("statisticsView");
+  const statisticsBack = document.getElementById("statisticsBack");
+  const statisticsLink = document.getElementById("statisticsLink");
   const detailView = document.getElementById("detailView");
   const back = document.getElementById("overviewBack");
   const detailActions = document.getElementById("detailActions");
@@ -299,8 +303,11 @@ function setShellMode(isDetail) {
   const rescanNotice = document.getElementById("rescanNotice");
   const caps = document.getElementById("caps");
   const detailTabs = document.getElementById("detailTabs");
-  document.body.dataset.shellMode = isDetail ? "detail" : "overview";
-  if (overviewView) overviewView.hidden = !!isDetail;
+  document.body.dataset.shellMode = isDetail ? "detail" : statisticsPage ? "statistics" : "overview";
+  if (overviewView) overviewView.hidden = isDetail || statisticsPage;
+  if (statisticsView) statisticsView.hidden = isDetail || !statisticsPage;
+  if (statisticsBack) statisticsBack.hidden = !statisticsPage;
+  if (statisticsLink) statisticsLink.hidden = statisticsPage;
   if (detailView) detailView.hidden = !isDetail;
   if (back) back.hidden = !isDetail;
   if (detailActions) detailActions.hidden = !isDetail;
@@ -452,7 +459,7 @@ function renderAll() {
 }
 
 function showOverviewError(message) {
-  const err = document.getElementById("overviewError");
+  const err = document.getElementById(statisticsPage ? "statisticsError" : "overviewError");
   if (err) {
     err.textContent = message;
     err.hidden = false;
@@ -460,7 +467,7 @@ function showOverviewError(message) {
 }
 
 function clearOverviewError() {
-  const err = document.getElementById("overviewError");
+  const err = document.getElementById(statisticsPage ? "statisticsError" : "overviewError");
   if (err) {
     err.textContent = "";
     err.hidden = true;
@@ -476,20 +483,21 @@ function updateOverviewStatus(message) {
 }
 
 function setSampleDataMarker(dataMode) {
-  const marker = document.getElementById("sampleDataMarker");
+  const marker = document.getElementById(statisticsPage ? "statisticsSampleDataMarker" : "sampleDataMarker");
   if (marker) marker.hidden = dataMode !== "sample";
 }
 
 function renderOverview() {
   clearOverviewError();
+  setSampleDataMarker(currentDataMode);
+  if (statisticsPage) {
+    const fleetUsage = document.getElementById("fleetUsage");
+    renderFleetUserUsage(fleetUsage, buildFleetUserUsage(currentOverviewSummaries, currentOverviewSnapshotEntries));
+    return;
+  }
   currentOverviewRows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries, DEFAULT_CAPACITY_THRESHOLDS);
   const list = document.getElementById("overviewList");
   renderOverviewList(list, currentOverviewRows, { onOpenServer: (serverId) => navigateToServer(serverId) });
-  const fleetUsage = document.getElementById("fleetUsage");
-  if (fleetUsage && typeof renderFleetUserUsage === "function") {
-    renderFleetUserUsage(fleetUsage, buildFleetUserUsage(currentOverviewSummaries, currentOverviewSnapshotEntries));
-  }
-  setSampleDataMarker(currentDataMode);
   updateOverviewStatus();
 }
 
@@ -1128,6 +1136,8 @@ async function init() {
   const themeButton = document.getElementById("themeModeButton");
   if (themeButton) themeButton.onclick = toggleThemeMode;
   const initialRoute = currentRoute();
+  statisticsPage = !initialRoute.serverId && new URLSearchParams(window.location.search).get("view") === "statistics";
+  if (statisticsPage) setShellMode(false);
   const generation = ++overviewLoadGeneration;
   let bootstrap;
   try {
