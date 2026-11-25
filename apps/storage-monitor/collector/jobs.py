@@ -55,6 +55,7 @@ class RescanJobManager:
         self._servers = {s.id: _ServerRef(s.id) for s in service.servers if getattr(s, "enabled", True)}
         self._lock = threading.RLock()
         self._active_jobs: dict[str, dict[str, Any]] = {}
+        self._preflights: dict[str, object] = {}
         self._last_requested: dict[str, int] = {}
         self._threads: list[threading.Thread] = []
         self._audit: list[dict[str, Any]] = []
@@ -70,10 +71,24 @@ class RescanJobManager:
             return 404, {"error": "UNKNOWN_SERVER", "audit": event}
         with self._lock:
             self._prune_threads_locked()
+            if sid in self._preflights:
+                event = self._record(now, actor_id, sid, "ACTIVE_JOB", None)
+                return 409, {"error": "ACTIVE_JOB", "audit": event}
             current = self._active_jobs.get(sid) or self.store.load_state(sid).get("active_job")
             if isinstance(current, Mapping) and current.get("state") in {"requested", "running"}:
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", _safe_field(current.get("id", "job")))
                 return 409, {"error": "ACTIVE_JOB", "job": dict(current), "audit": event}
+            last = self._last_requested.get(sid)
+            if last is not None and now - last < self.cooldown_seconds:
+                event = self._record(now, actor_id, sid, "COOLDOWN", None)
+                return 429, {"error": "COOLDOWN", "retry_after_seconds": self.cooldown_seconds - (now - last), "audit": event}
+            if len(self._active_jobs) + len(self._preflights) >= self.max_concurrent:
+                event = self._record(now, actor_id, sid, "GLOBAL_CONCURRENCY", None)
+                return 429, {"error": "GLOBAL_CONCURRENCY", "audit": event}
+            reservation = object()
+            self._preflights[sid] = reservation
+
+        try:
             try:
                 remote_state = self.service.scan_active_state(sid)
             except Exception as exc:
@@ -83,24 +98,26 @@ class RescanJobManager:
             if remote_state in ACTIVE_SCAN_STATES:
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", None)
                 return 409, {"error": "ACTIVE_JOB", "remote_active_state": _safe_field(remote_state), "audit": event}
-            last = self._last_requested.get(sid)
-            if last is not None and now - last < self.cooldown_seconds:
-                event = self._record(now, actor_id, sid, "COOLDOWN", None)
-                return 429, {"error": "COOLDOWN", "retry_after_seconds": self.cooldown_seconds - (now - last), "audit": event}
-            if len(self._active_jobs) >= self.max_concurrent:
-                event = self._record(now, actor_id, sid, "GLOBAL_CONCURRENCY", None)
-                return 429, {"error": "GLOBAL_CONCURRENCY", "audit": event}
-            self._counter += 1
-            job_id = _safe_field(f"rescan-{sid}-{now}-{self._counter}")
-            job = {"id": job_id, "server_id": sid, "kind": "rescan", "state": "running", "actor": actor_id, "requested_unix": now, "started_unix": now, "finished_unix": None, "result_code": None}
-            self.store.update_state(sid, active_job=job)
-            self._last_requested[sid] = now
-            self._active_jobs[sid] = job
-            event = self._record(now, actor_id, sid, "ACCEPTED", job_id)
-            thread = threading.Thread(target=self._run, args=(sid, job), daemon=True)
-            self._threads.append(thread)
-            thread.start()
-            return 202, {"status": "started", "job": job, "audit": event}
+            with self._lock:
+                return self._start_rescan_locked(sid, actor_id, now)
+        finally:
+            with self._lock:
+                if self._preflights.get(sid) is reservation:
+                    del self._preflights[sid]
+
+    def _start_rescan_locked(self, sid: str, actor_id: str, now: int) -> tuple[int, dict[str, Any]]:
+        self._counter += 1
+        job_id = _safe_field(f"rescan-{sid}-{now}-{self._counter}")
+        job = {"id": job_id, "server_id": sid, "kind": "rescan", "state": "running", "actor": actor_id, "requested_unix": now, "started_unix": now, "finished_unix": None, "result_code": None}
+        self.store.update_state(sid, active_job=job)
+        self._last_requested[sid] = now
+        self._active_jobs[sid] = job
+        del self._preflights[sid]
+        event = self._record(now, actor_id, sid, "ACCEPTED", job_id)
+        thread = threading.Thread(target=self._run, args=(sid, job), daemon=True)
+        self._threads.append(thread)
+        thread.start()
+        return 202, {"status": "started", "job": job, "audit": event}
 
     def job_for(self, server_id: str) -> tuple[int, dict[str, Any]]:
         sid = _safe_server_id(server_id)

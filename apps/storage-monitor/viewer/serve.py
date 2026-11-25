@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections import OrderedDict
 import contextlib
 import hashlib
 import hmac
@@ -20,15 +21,16 @@ import threading
 import time
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlsplit
 
 from collector.inventory import SERVER_ID_RE, Server as InventoryServer, load_inventory
 
 SAMPLE_FILE_TOKEN_RE = SERVER_ID_RE
 from collector.jobs import RescanJobManager
-from collector.service import PollService
-from collector.store import CentralStore
+from collector.live_capacity import POLL_SECONDS as CAPACITY_POLL_SECONDS, LiveCapacity
+from collector.service import ACTIVE_TELEMETRY_INTERVAL_SECONDS, PollService
+from collector.store import CentralStore, SnapshotRevision
 from collector.transport import OpenSshTransport
 
 VIEWER_DIR = Path(__file__).resolve().parent
@@ -51,6 +53,7 @@ SESSION_COOKIE_SECURE_RAW = os.environ.get("STORAGE_VIZ_SESSION_COOKIE_SECURE")
 DEV_SAMPLE_DIR = os.environ.get("STORAGE_VIZ_DEV_SAMPLE_DIR", "").strip()
 STATE_DIR = Path(os.environ.get("STORAGE_VIZ_STATE_DIR", PROJECT_ROOT / ".storage-viz-state")).resolve()
 INVENTORY_PATH = os.environ.get("STORAGE_VIZ_INVENTORY", "").strip()
+CAPACITY_PORT = os.environ.get("STORAGE_VIZ_CAPACITY_PORT", "").strip()
 CSRF_SECRET = os.environ.get("STORAGE_VIZ_CSRF_SECRET", secrets.token_hex(32))
 SESSION_TTL_SECONDS = int(os.environ.get("STORAGE_VIZ_SESSION_TTL_SECONDS", "3600"))
 COOLDOWN_SECONDS = int(os.environ.get("STORAGE_VIZ_RESCAN_COOLDOWN_SECONDS", "900"))
@@ -287,46 +290,56 @@ else:
 class CentralPoller:
     """Lifecycle-safe background poller for production inventory mode."""
 
-    def __init__(self, poll_service: Any, *, interval_seconds: int | None = None) -> None:
-        self.poll_service = poll_service
-        raw_interval = poll_service.poll_interval_seconds if interval_seconds is None else interval_seconds
-        self.interval_seconds = max(float(raw_interval), 0.001)
+    def __init__(self, poll: Callable[[], Any], interval_seconds: float, *,
+                 scan_status_poll: Callable[[], None] | None = None) -> None:
+        self._poll = poll
+        self._scan_status_poll = scan_status_poll
+        self.interval_seconds = max(float(interval_seconds), 0.001)
         self._stop = threading.Event()
         self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
+        self._threads: tuple[threading.Thread, ...] = ()
 
     @property
     def thread_ident(self) -> int | None:
-        thread = self._thread
-        return thread.ident if thread is not None else None
+        return self._threads[0].ident if self._threads else None
 
     @property
     def is_running(self) -> bool:
-        thread = self._thread
-        return bool(thread and thread.is_alive())
+        return any(thread.is_alive() for thread in self._threads)
 
     def start(self) -> bool:
         with self._lock:
             if self.is_running:
                 return False
             self._stop.clear()
-            self._thread = threading.Thread(target=self._run, name="storage-viz-central-poller", daemon=True)
-            self._thread.start()
+            self._threads = (
+                threading.Thread(
+                    target=self._run, args=(self._poll, self.interval_seconds),
+                    name="storage-viz-central-poller", daemon=True
+                ),
+            )
+            if self._scan_status_poll is not None:
+                self._threads += (threading.Thread(
+                    target=self._run, args=(self._scan_status_poll, ACTIVE_TELEMETRY_INTERVAL_SECONDS),
+                    name="storage-viz-telemetry-poller", daemon=True
+                ),)
+            for thread in self._threads:
+                thread.start()
             return True
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self._stop.set()
-        thread = self._thread
-        if thread is not None:
-            thread.join(timeout=timeout)
+        deadline = time.monotonic() + timeout
+        for thread in self._threads:
+            thread.join(max(0, deadline - time.monotonic()))
 
-    def _run(self) -> None:
+    def _run(self, poll, interval: float) -> None:
         while not self._stop.is_set():
             try:
-                self.poll_service.poll_once()
+                poll()
             except Exception as exc:
                 print(f"storage-viz central poll failed: {exc}", file=sys.stderr, flush=True)
-            if self._stop.wait(self.interval_seconds):
+            if self._stop.wait(interval):
                 break
 
 
@@ -358,11 +371,63 @@ def build_central_poller(active_service: Any) -> CentralPoller | None:
     if PREFLIGHT_BACKEND:
         return None
     if isinstance(active_service, PollService):
-        return CentralPoller(active_service)
+        return CentralPoller(active_service.poll_background_once, active_service.poll_interval_seconds,
+                             scan_status_poll=active_service.poll_scan_status_once)
     return None
 
 
 central_poller = build_central_poller(service)
+live_capacity = (
+    LiveCapacity(service.servers, int(CAPACITY_PORT))
+    if central_poller is not None and CAPACITY_PORT else None
+)
+capacity_poller = CentralPoller(live_capacity.poll_once, CAPACITY_POLL_SECONDS) if live_capacity else None
+
+
+def _encode_json(obj: Any) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+class SnapshotResponseCache:
+    def __init__(self, byte_budget: int = 64 * 1024 * 1024) -> None:
+        self._byte_budget = byte_budget
+        self._size = 0
+        self._entries: OrderedDict[str, tuple[tuple[SnapshotRevision, bytes | None], bytes]] = OrderedDict()
+        self._lock = threading.Lock()
+        self._load_locks = tuple(threading.Lock() for _ in range(32))
+
+    def get(self, service: PollService, capacity: LiveCapacity | None, server_id: str) -> bytes | None:
+        with self._load_locks[hash(server_id) % len(self._load_locks)]:
+            with service.open_snapshot_for_api(server_id) as selected:
+                if selected is None:
+                    return None
+                sample = capacity.sample_for(server_id) if capacity is not None else None
+                key = (selected.revision, sample.revision if sample is not None else None)
+                with self._lock:
+                    cached = self._entries.get(server_id)
+                    if cached is not None and cached[0] == key:
+                        self._entries.move_to_end(server_id)
+                        return cached[1]
+
+                snapshot = selected.read()
+                sample = capacity.sample_for(server_id) if capacity is not None else None
+                body = _encode_json(LiveCapacity.project_sample(snapshot, sample))
+                key = (selected.revision, sample.revision if sample is not None else None)
+
+            with self._lock:
+                previous = self._entries.pop(server_id, None)
+                if previous is not None:
+                    self._size -= len(previous[1])
+                if len(body) <= self._byte_budget:
+                    while self._size + len(body) > self._byte_budget:
+                        _, (_, evicted) = self._entries.popitem(last=False)
+                        self._size -= len(evicted)
+                    self._entries[server_id] = (key, body)
+                    self._size += len(body)
+            return body
+
+
+snapshot_responses = SnapshotResponseCache()
 
 
 def _sign(text: str) -> str:
@@ -439,7 +504,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def _json(self, obj: Any, code: int = 200, *, cookie: str | None = None) -> None:
-        body = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return self._json_bytes(_encode_json(obj), code, cookie=cookie)
+
+    def _json_bytes(self, body: bytes, code: int = 200, *, cookie: str | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -568,21 +635,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if service is None:
             return self._json({"error": "api not configured"}, 503)
         if parts == ["api", "servers"]:
-            return self._json({"data_mode": getattr(service, "data_mode", "inventory"), "servers": service.server_summaries()})
+            summaries = service.server_summaries()
+            if live_capacity is not None:
+                for summary in summaries:
+                    overview = summary.get("overview_snapshot")
+                    if overview is not None:
+                        summary["overview_snapshot"] = live_capacity.project(summary["id"], overview)
+            return self._json({"data_mode": getattr(service, "data_mode", "inventory"), "servers": summaries})
         if len(parts) == 4 and parts[1] == "servers" and parts[3] == "scan-status":
             try:
                 status = service.scan_status_for_api(parts[2])
+                if live_capacity is not None:
+                    overview = service.overview_snapshot_for_api(parts[2])
+                    if overview is not None:
+                        projected = live_capacity.project(parts[2], overview)
+                        status["capacity"] = {
+                            "scan_generation": overview["scan_generation"],
+                            "mounts": projected["mounts"],
+                        }
             except ValueError:
                 return self._json({"error": "UNKNOWN_SERVER"}, 404)
             return self._json(status)
         if len(parts) == 4 and parts[1] == "servers" and parts[3] == "snapshot":
             try:
-                snap = service.load_snapshot_for_api(parts[2])
+                if isinstance(service, PollService):
+                    body = snapshot_responses.get(service, live_capacity, parts[2])
+                else:
+                    snap = service.load_snapshot_for_api(parts[2])
+                    body = _encode_json(snap) if snap is not None else None
             except Exception:
                 return self._json({"error": "UNKNOWN_SERVER"}, 404)
-            if snap is None:
+            if body is None:
                 return self._json({"error": "SNAPSHOT_ABSENT"}, 404)
-            return self._json(snap)
+            return self._json_bytes(body)
         if len(parts) == 4 and parts[1] == "servers" and parts[3] == "job":
             if jobs is not None:
                 code, obj = jobs.job_for(parts[2]); return self._json(obj, code)
@@ -660,11 +745,12 @@ if __name__ == "__main__":
     PORT = _configured_port(include_argv=True)
     with Server((BIND, PORT), Handler) as httpd:
         host, port = httpd.server_address[:2]
-        if central_poller is not None:
-            central_poller.start()
+        pollers = [poller for poller in (central_poller, capacity_poller) if poller is not None]
+        for poller in pollers:
+            poller.start()
         print(f"storage-viz serving {VIEWER_DIR} on {host}:{port}", flush=True)
         try:
             httpd.serve_forever()
         finally:
-            if central_poller is not None:
-                central_poller.stop()
+            for poller in reversed(pollers):
+                poller.stop()

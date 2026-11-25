@@ -10,11 +10,8 @@ import shlex
 import stat
 import signal
 import subprocess
+import sys
 import tempfile
-try:
-    import resource
-except ImportError:  # pragma: no cover - non-POSIX fallback
-    resource = None
 from typing import Any, Mapping, Optional, Protocol, Tuple
 
 from collector.inventory import Server
@@ -36,6 +33,22 @@ MAX_RESCAN_TIMEOUT_SECONDS = 24 * 60 * 60
 GENERATION_RE = re.compile(r"^(?P<server_id>[A-Za-z0-9_.-]+)-(?P<started>[0-9]+)-v1\.json$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
+FILE_LIMIT_EXEC = """
+import os
+import resource
+import signal
+import sys
+
+cap = int(sys.argv[1])
+resource.setrlimit(resource.RLIMIT_FSIZE, (cap, cap))
+for name in ("SIGPIPE", "SIGXFZ", "SIGXFSZ"):
+    signum = getattr(signal, name, None)
+    if signum is not None:
+        signal.signal(signum, signal.SIG_DFL)
+argv = sys.argv[2:]
+os.execvp(argv[0], argv)
+"""
+
 
 class TransportError(Exception):
     """Bounded typed transport failure without sensitive process details."""
@@ -53,6 +66,12 @@ class Runner(Protocol):
 class _SubprocessRunner:
     def run(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(argv, **kwargs)
+
+
+@dataclass(frozen=True)
+class RemoteScanObservation:
+    status: Mapping[str, Any]
+    publication: Mapping[str, Any] | None = None
 
 
 class OpenSshTransport:
@@ -97,7 +116,7 @@ class OpenSshTransport:
         finally:
             _unlink_quiet(tmp_name)
 
-    def fetch_scan_status(self, server: Server) -> dict[str, Any]:
+    def fetch_scan_status(self, server: Server) -> RemoteScanObservation:
         from collector.scan_telemetry import REMOTE_OBSERVATION_SCRIPT, merge_status, parse_timer
         import math
         self._validate_server(server)
@@ -124,11 +143,12 @@ class OpenSshTransport:
                 try:
                     published = validate_status_envelope(published, server)
                 except TransportError:
-                    return result
+                    return RemoteScanObservation(result)
                 if published["status"] in {"complete", "partial"}:
                     result["published_generation"] = published["generation"].removesuffix(".json")
                     result["published_finished_unix"] = published["scan_finished_unix"]
-            return result
+                    return RemoteScanObservation(result, published)
+            return RemoteScanObservation(result)
         except TransportError:
             raise
         except Exception as exc:
@@ -182,9 +202,13 @@ class OpenSshTransport:
         return tmp_name
 
     def _run_sftp(self, server: Server, batch: bytes, *, timeout: int, limit_bytes: int, limit_code: str, local_path: str) -> Any:
-        argv = self._sftp_argv(server)
+        cap = _bounded_positive(limit_bytes, "file size limit", 1, MAX_SNAPSHOT_BYTES)
+        argv = [sys.executable, "-I", "-S", "-c", FILE_LIMIT_EXEC, str(cap), *self._sftp_argv(server)]
         try:
-            result = self._runner.run(argv, input=batch, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False, shell=False, preexec_fn=_fsize_limiter(limit_bytes))
+            result = self._runner.run(
+                argv, input=batch, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=timeout, check=False, shell=False,
+            )
         except (subprocess.TimeoutExpired, TimeoutError) as exc:
             raise TransportError("TIMEOUT", "transport command timed out") from exc
         except Exception as exc:
@@ -229,24 +253,6 @@ class OpenSshTransport:
         for label, value in (("identity", str(server.identity_file)), ("known_hosts", str(server.known_hosts_file))):
             if not value.startswith("/etc/storage-viz/") or _has_control(value):
                 raise TransportError("BAD_INVENTORY", f"{label} path is unsafe")
-
-
-def _fsize_limiter(limit_bytes: int):
-    """Return a POSIX preexec_fn that only applies RLIMIT_FSIZE before exec.
-
-    This bounds bytes the OpenSSH/SFTP child can write to local temp files on
-    supported POSIX central hosts. On hosts without the standard-library
-    resource module, the callback is a no-op and normal pre/post size checks
-    still apply.
-    """
-    cap = _bounded_positive(limit_bytes, "file size limit", 1, MAX_SNAPSHOT_BYTES)
-
-    def apply_limit() -> None:
-        if resource is not None:
-            resource.setrlimit(resource.RLIMIT_FSIZE, (cap, cap))
-
-    apply_limit.limit_bytes = cap  # type: ignore[attr-defined]
-    return apply_limit
 
 
 def _batch_get(remote: str, local: str) -> bytes:

@@ -66,6 +66,7 @@ function normalizeSummary(summary) {
     latest_scan_result: String(state.latest_scan_result || "failed"),
     configuration_sync: String(state.configuration_sync || "unknown"),
     active_job: state.active_job || null,
+    scan_status: summary?.scan_status ?? state.scan_status ?? null,
   };
 }
 
@@ -191,6 +192,7 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       totalBytes,
       availableBytes,
       capacityPct: explicitPct,
+      capacityObservedUnix: mount.capacity_observed_unix ?? mount.df_observed_unix,
       usedPct,
       freeBytes,
       media,
@@ -237,6 +239,7 @@ function summarizeCapacityGroups(mounts) {
         totalBytes: mount.totalBytes,
         availableBytes: mount.availableBytes,
         capacityPct: mount.capacityPct,
+        capacityObservedUnix: mount.capacityObservedUnix,
         usedPct: mount.usedPct,
         freeBytes: mount.freeBytes,
         media: mount.media,
@@ -286,7 +289,8 @@ function aggregateLabels(totalBytes, usedBytes, availableBytes, isPartial, hasKn
       utilizationLabel: "—",
     };
   }
-  const utilization = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) + "%" : "—";
+  const usableBytes = usedBytes + availableBytes;
+  const utilization = totalBytes > 0 ? (usableBytes > 0 ? Math.ceil((usedBytes / usableBytes) * 100) : 0) + "%" : "—";
   if (!isPartial) {
     return {
       totalLabel: compactBytes(totalBytes),
@@ -415,9 +419,9 @@ function strongestPressure(mounts) {
   return worst;
 }
 
-function hasActiveScan(activeJob) {
-  return !!(activeJob && (activeJob.state === "requested" || activeJob.state === "running"));
-}
+const overviewHasActiveScan = typeof module !== "undefined" && module.exports
+  ? require("./scan-status.js").isScanActive
+  : summary => isScanActive(summary);
 
 function derivePrimaryStatus(summaryInput, snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS, error = null) {
   const summary = normalizeSummary(summaryInput);
@@ -432,7 +436,7 @@ function derivePrimaryStatus(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
   if (summary.latest_scan_result === "partial") return statusPresentation("partial_scan");
   if (summary.freshness === "stale") return statusPresentation("stale_snapshot");
   if (error) return statusPresentation("snapshot_load_failed");
-  if (hasActiveScan(summary.active_job)) return statusPresentation("active_scan");
+  if (overviewHasActiveScan(summary)) return statusPresentation("active_scan");
   if (pressure === "critical") return statusPresentation("pressure_critical");
   if (pressure === "warning") return statusPresentation("pressure_warning");
   return statusPresentation("normal");
@@ -440,7 +444,7 @@ function derivePrimaryStatus(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
 
 function deriveSecondaryStatus(summaryInput, primaryCode) {
   const summary = normalizeSummary(summaryInput);
-  if (hasActiveScan(summary.active_job) && primaryCode !== "active_scan") return statusPresentation("active_scan");
+  if (overviewHasActiveScan(summary) && primaryCode !== "active_scan") return statusPresentation("active_scan");
   return null;
 }
 
@@ -474,6 +478,10 @@ function buildOverviewRows(summaries, snapshotEntries, thresholds = DEFAULT_CAPA
   for (const entry of Array.isArray(snapshotEntries) ? snapshotEntries : []) entryMap.set(entry.id, entry);
   return (Array.isArray(summaries) ? summaries : []).map((summary) => {
     const entry = entryMap.get(summary && summary.id) || { snapshot: null, error: null };
+    const embedded = summary?.overview_snapshot;
+    if (embedded && (entry.snapshot?.scan_finished_unix ?? 0) <= (embedded.scan_finished_unix ?? 0)) {
+      return buildOverviewServer(summary, embedded, thresholds);
+    }
     return buildOverviewServer(summary, entry.snapshot, thresholds, entry.error || null);
   });
 }
@@ -708,7 +716,11 @@ function createOverviewRowElement(doc, row, handlers = {}) {
       fill.style.width = Math.max(4, Math.min(100, mount.usedPct == null ? 0 : mount.usedPct)) + "%";
       meter.appendChild(fill);
       metrics.appendChild(meter);
-      metrics.appendChild(makeEl(doc, "div", "overview-mount-free overview-mount-capacity", mount.capacityText));
+      const capacity = makeEl(doc, "div", "overview-mount-free overview-mount-capacity", mount.capacityText);
+      capacity.title = mount.capacityObservedUnix
+        ? "볼륨 측정 " + new Date(mount.capacityObservedUnix * 1000).toLocaleString()
+        : "스캔 당시 볼륨 용량";
+      metrics.appendChild(capacity);
       body.appendChild(metrics);
       if (nested) {
         const folders = makeEl(doc, "ul", "overview-scan-paths");

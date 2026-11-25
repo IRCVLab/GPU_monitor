@@ -143,6 +143,216 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(state["freshness"], "fresh")
         self.assertEqual(state["snapshot_availability"], "available")
 
+    def test_slow_first_host_does_not_delay_healthy_host_background_poll(self):
+        alpha, beta = make_server(), make_server("beta-2")
+        for server in (alpha, beta):
+            status, data = status_data(payload_for(server.id))
+            self.tx.status[server.id] = status
+            self.tx.downloads[server.id] = status, data
+
+        entered_alpha = threading.Event()
+        release_alpha = threading.Event()
+        committed_alpha = threading.Event()
+        committed_beta = threading.Event()
+        fetch_status = self.tx.fetch_status
+        commit_snapshot = self.store.commit_snapshot
+
+        def fetch_slow_status(server):
+            if server == alpha:
+                entered_alpha.set()
+                release_alpha.wait(5)
+            return fetch_status(server)
+
+        def record_commit(valid, **kwargs):
+            result = commit_snapshot(valid, **kwargs)
+            if valid.server_id == alpha.id:
+                committed_alpha.set()
+            else:
+                committed_beta.set()
+            return result
+
+        self.tx.fetch_status = fetch_slow_status
+        self.store.commit_snapshot = record_commit
+        service = self.service([alpha, beta])
+        service.poll_background_once()
+        try:
+            self.assertTrue(entered_alpha.wait(2))
+            self.assertTrue(committed_beta.wait(2), "the healthy host should finish before the slow one is released")
+            self.assertIsNone(self.store.load_snapshot(alpha.id))
+        finally:
+            release_alpha.set()
+        self.assertTrue(committed_alpha.wait(5))
+        self.assertEqual(self.store.load_state(beta.id)["latest_pull_status"], "succeeded")
+
+    def test_unexpected_local_error_does_not_stop_regular_fleet_poll(self):
+        alpha, beta = make_server(), make_server("beta-2")
+        for server in (alpha, beta):
+            status, data = status_data(payload_for(server.id))
+            self.tx.status[server.id] = status
+            self.tx.downloads[server.id] = status, data
+        service = self.service([alpha, beta])
+        load_state = self.store.load_state
+
+        def fail_alpha_state(server_id):
+            if server_id == alpha.id:
+                raise ValueError("cannot read local state")
+            return load_state(server_id)
+
+        self.store.load_state = fail_alpha_state
+        with self.assertLogs("collector.service", level="ERROR") as logs:
+            results = service.poll_once()
+        self.assertIn(alpha.id, logs.output[0])
+        self.assertEqual(list(results), [alpha.id, beta.id])
+        self.assertEqual(results[alpha.id]["last_error_code"], "POLL_FAILED")
+        self.assertEqual(results[beta.id]["latest_pull_status"], "succeeded")
+        self.assertIsNotNone(self.store.load_snapshot(beta.id))
+
+    def test_event_refresh_shares_snapshot_transfer_bound_with_regular_poll(self):
+        alpha, beta, refresh = make_server(), make_server("beta-2"), make_server("refresh-3")
+        for server in (alpha, beta, refresh):
+            status, data = status_data(payload_for(server.id))
+            self.tx.status[server.id] = status
+            self.tx.downloads[server.id] = status, data
+
+        refresh_owns_host = threading.Event()
+        refresh_observed_status = threading.Event()
+        regular_transfers_started = threading.Barrier(3)
+        release_regular_transfers = threading.Event()
+        refresh_transfer_started = threading.Event()
+        fetch_status = self.tx.fetch_status
+        fetch_snapshot = self.tx.fetch_snapshot
+
+        def observe_status(server):
+            if server == refresh:
+                refresh_owns_host.set()
+                regular_transfers_started.wait(5)
+                refresh_observed_status.set()
+            return fetch_status(server)
+
+        def track_transfer(server, **kwargs):
+            if server == refresh:
+                refresh_transfer_started.set()
+            else:
+                regular_transfers_started.wait(5)
+                release_regular_transfers.wait(5)
+            return fetch_snapshot(server, **kwargs)
+
+        self.tx.fetch_status = observe_status
+        self.tx.fetch_snapshot = track_transfer
+        service = self.service([alpha, beta, refresh])
+        event_result = {}
+        event_worker = threading.Thread(target=lambda: event_result.update(service.poll_server(refresh.id)))
+
+        event_worker.start()
+        self.assertTrue(refresh_owns_host.wait(2))
+        service.poll_background_once()
+        try:
+            self.assertTrue(refresh_observed_status.wait(2))
+            self.assertFalse(refresh_transfer_started.wait(0.1))
+        finally:
+            release_regular_transfers.set()
+            event_worker.join(6)
+        self.assertFalse(event_worker.is_alive())
+        self.assertTrue(refresh_transfer_started.is_set())
+        self.assertEqual(event_result["latest_pull_status"], "succeeded")
+        deadline = time.monotonic() + 5
+        while not all(self.store.load_snapshot(server.id) for server in (alpha, beta)) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        for server in (alpha, beta):
+            self.assertEqual(self.store.load_state(server.id)["latest_pull_status"], "succeeded")
+
+    def test_background_status_cycles_continue_while_snapshot_slots_are_busy(self):
+        alpha, beta, gamma = make_server(), make_server("beta-2"), make_server("gamma-3")
+        for server in (alpha, beta, gamma):
+            status, data = status_data(payload_for(server.id))
+            self.tx.status[server.id] = status
+            self.tx.downloads[server.id] = status, data
+        release_transfers = threading.Event()
+        occupied = threading.Barrier(3)
+        first_gamma_status = threading.Event()
+        second_gamma_status = threading.Event()
+        fetch_status = self.tx.fetch_status
+        fetch_snapshot = self.tx.fetch_snapshot
+
+        def record_status(server):
+            result = fetch_status(server)
+            if server == gamma:
+                if first_gamma_status.is_set():
+                    second_gamma_status.set()
+                first_gamma_status.set()
+            return result
+
+        def block_first_transfers(server, **kwargs):
+            if server != gamma:
+                occupied.wait(5)
+                release_transfers.wait(5)
+            return fetch_snapshot(server, **kwargs)
+
+        self.tx.fetch_status = record_status
+        self.tx.fetch_snapshot = block_first_transfers
+        service = self.service([alpha, beta, gamma])
+        service.poll_background_once()
+        try:
+            occupied.wait(5)
+            self.assertTrue(first_gamma_status.wait(2))
+            self.assertEqual(len(self.tx.fetch_snapshot_calls), 0)
+            deadline = time.monotonic() + 2
+            while not second_gamma_status.wait(0.02) and time.monotonic() < deadline:
+                service.poll_background_once()
+            self.assertTrue(second_gamma_status.is_set(), "the next status cycle should not wait for snapshot transfers")
+            self.assertEqual(self.tx.fetch_status_calls.count(alpha.id), 1)
+            self.assertEqual(self.tx.fetch_status_calls.count(beta.id), 1)
+        finally:
+            release_transfers.set()
+
+        deadline = time.monotonic() + 5
+        while self.store.load_snapshot(gamma.id) is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertIsNotNone(self.store.load_snapshot(gamma.id))
+
+    def test_queued_snapshot_is_skipped_after_another_path_observes_newer_scan(self):
+        for scan_result in ("complete", "failed"):
+            with self.subTest(scan_result=scan_result):
+                server = make_server(scan_result)
+                old, old_data = status_data(payload_for(server.id))
+                new, new_data = status_data(payload_for(server.id, started=1719201000), scan_result)
+                self.tx.status[server.id] = old
+                self.tx.downloads[server.id] = old, old_data
+                service = self.service([server])
+                queued = threading.Event()
+                release = threading.Event()
+                finished = threading.Event()
+                finish_deferred_pull = service._finish_deferred_pull
+
+                def pause_queued_pull(target, status):
+                    queued.set()
+                    try:
+                        release.wait(5)
+                        finish_deferred_pull(target, status)
+                    finally:
+                        finished.set()
+
+                service._finish_deferred_pull = pause_queued_pull
+                service.poll_background_once()
+                try:
+                    self.assertTrue(queued.wait(2))
+                    self.tx.status[server.id] = new
+                    self.tx.downloads[server.id] = new, new_data
+                    self.assertEqual(service.poll_server(server.id)["latest_scan_result"], scan_result)
+                finally:
+                    release.set()
+                    self.assertTrue(finished.wait(5))
+
+                transfers = [status for sid, status in self.tx.fetch_snapshot_calls if sid == server.id]
+                result = self.store.load_snapshot(server.id)
+                if scan_result == "complete":
+                    self.assertEqual(transfers, [new])
+                    self.assertEqual(result["scan_generation"], new["generation"].removesuffix(".json"))
+                else:
+                    self.assertEqual(transfers, [])
+                    self.assertIsNone(result)
+                    self.assertEqual(self.store.load_state(server.id)["latest_scan_result"], "failed")
+
     def test_contended_store_write_does_not_skip_other_hosts_in_poll_cycle(self):
         from collector import store
 
@@ -362,11 +572,12 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(set(overview), {"server_id", "selected_roots", "mounts", "users", "scan_generation", "scan_finished_unix", "scan_duration_sec", "estimate_duration_sec"})
         self.assertEqual(overview["server_id"], "alpha-1")
         self.assertEqual(set(overview["selected_roots"][0]), {
-            "mount_id", "capacity_id", "major_minor", "storage_media", "block_media",
-            "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
+            "mount_id", "capacity_id", "major_minor", "mount_source", "fstype",
+            "storage_media", "block_media", "storage_media_confidence", "block_media_confidence",
+            "scan_finished_unix",
         })
         self.assertEqual(set(overview["mounts"][0]), {
-            "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
+            "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct", "df_observed_unix",
             "storage_media", "block_media", "storage_media_confidence", "block_media_confidence",
         })
         self.assertNotIn("tree", overview["mounts"][0], "overview payload must omit the heavyweight directory tree")
@@ -505,6 +716,27 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(overview["mounts"][0]["df_total"], 200)
         self.assertEqual(overview["users"], [{"uid": 1001, "name": "alpha", "bytes": 30}])
 
+    def test_poll_validates_new_payload_once_and_reuses_metadata_for_unchanged_generation(self):
+        from unittest.mock import patch
+        from collector import snapshot
+
+        server = make_server()
+        service = self.service([server])
+        status, data = status_data(payload_for(server.id))
+        self.tx.status[server.id] = status
+        self.tx.downloads[server.id] = (status, data)
+        with (
+            patch.object(snapshot, "validate_download", wraps=snapshot.validate_download) as validate,
+            patch.object(self.store, "load_snapshot", wraps=self.store.load_snapshot) as read_tree,
+        ):
+            self.assertEqual(service.poll_server(server.id)["latest_pull_status"], "succeeded")
+            self.clock.now += 24 * 3600
+            state = service.poll_server(server.id)
+            self.assertEqual(state["freshness"], "stale")
+            self.assertEqual(len(self.tx.fetch_snapshot_calls), 1)
+            self.assertEqual(validate.call_count, 1)
+            self.assertEqual(read_tree.call_count, 0)
+
     def test_server_summaries_wait_for_poll_to_publish_snapshot_and_overview_together(self):
         server = make_server()
         self.seed(server)
@@ -514,17 +746,17 @@ class PollServiceTests(unittest.TestCase):
         status, data = status_data(updated)
         self.tx.status[server.id] = status
         self.tx.downloads[server.id] = (status, data)
-        original_apply_download = self.store.apply_download
+        original_commit_snapshot = self.store.commit_snapshot
         snapshot_committed = threading.Event()
         allow_cache_publish = threading.Event()
 
-        def paused_apply_download(*args, **kwargs):
-            result = original_apply_download(*args, **kwargs)
+        def paused_commit_snapshot(*args, **kwargs):
+            result = original_commit_snapshot(*args, **kwargs)
             snapshot_committed.set()
             allow_cache_publish.wait(2)
             return result
 
-        self.store.apply_download = paused_apply_download
+        self.store.commit_snapshot = paused_commit_snapshot
         poll = threading.Thread(target=service.poll_once)
         poll.start()
         self.assertTrue(snapshot_committed.wait(2))
@@ -587,7 +819,7 @@ class PollServiceTests(unittest.TestCase):
         )
         self.assertEqual(summary_result["overview_snapshot"]["mounts"][0]["df_total"], 100)
 
-    def test_scheduler_runs_sequential_polls_and_waits_remaining_interval(self):
+    def test_scheduler_waits_for_each_cycle_and_then_waits_remaining_interval(self):
         s = make_server(); self.seed(s)
         old_status = status_data(payload_for(s.id, started=1719200000, digest=s.scanner_digest))[0]
         self.tx.status[s.id] = old_status

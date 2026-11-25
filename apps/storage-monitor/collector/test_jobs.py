@@ -78,6 +78,51 @@ class JobsTest(unittest.TestCase):
         jobs.wait_for_idle(timeout=2)
 
 
+    def test_blocked_preflight_leaves_spare_slot_for_another_host(self):
+        alpha, beta, gamma = make_server(), make_server("beta-2"), make_server("gamma-3")
+        svc = BlockingService([alpha, beta, gamma], self.store)
+        jobs = RescanJobManager(svc, clock=self.clock, max_concurrent=2)
+        preflight_entered = threading.Event()
+        release_preflight = threading.Event()
+        beta_admitted = threading.Event()
+        results = {}
+        probe = svc.scan_active_state
+
+        def block_alpha(server_id):
+            active_state = probe(server_id)
+            if server_id == alpha.id:
+                preflight_entered.set()
+                release_preflight.wait(3)
+            return active_state
+
+        def request_alpha():
+            results["alpha"] = jobs.request_rescan(alpha.id, "operator")
+
+        def request_beta():
+            results["beta"] = jobs.request_rescan(beta.id, "operator")
+            beta_admitted.set()
+
+        with mock.patch.object(svc, "scan_active_state", side_effect=block_alpha):
+            slow = threading.Thread(target=request_alpha)
+            independent = threading.Thread(target=request_beta)
+            slow.start()
+            try:
+                self.assertTrue(preflight_entered.wait(1))
+                independent.start()
+                self.assertTrue(beta_admitted.wait(1), "another server must not wait for the blocked probe")
+                self.assertEqual(results["beta"][0], 202)
+                self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 409)
+                self.assertEqual(jobs.request_rescan(gamma.id, "operator")[0], 429)
+                self.assertEqual(svc.active_state_calls, [alpha.id, beta.id])
+            finally:
+                release_preflight.set()
+                svc.release.set()
+                slow.join(3)
+                if independent.ident is not None:
+                    independent.join(3)
+                jobs.wait_for_idle(timeout=3)
+        self.assertEqual(results["alpha"][0], 202)
+
     def test_remote_active_scan_rejects_without_consuming_cooldown_or_starting_job(self):
         a = make_server("alpha-1")
         svc = BlockingService([a], self.store); svc.release.set(); svc.active_state = "active"
@@ -111,6 +156,11 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(failed[0], 503)
         self.assertEqual(failed[1]["error"], "ACTIVE_STATE_FAILED")
         self.assertEqual(svc.calls, ["alpha-1"])
+
+        svc.active_state_error = None
+        recovered = jobs.request_rescan("alpha-1", "operator-1")
+        self.assertEqual(recovered[0], 202)
+        jobs.wait_for_idle(timeout=2)
 
     def test_restart_reconciles_persisted_running_job_to_failed_and_restores_cooldown(self):
         a = make_server("alpha-1")
@@ -247,6 +297,7 @@ class JobsTest(unittest.TestCase):
         cooldown = jobs.request_rescan("alpha-1", "bad actor /tmp/secret" + "x" * 200)
         self.assertEqual(cooldown[0], 429)
         self.assertEqual(cooldown[1]["error"], "COOLDOWN")
+        self.assertEqual(svc.active_state_calls, [a.id])
         event = jobs.audit_events()[-1]
         self.assertLessEqual(len(event["actor"]), 128)
         self.assertNotIn("/", event["actor"])

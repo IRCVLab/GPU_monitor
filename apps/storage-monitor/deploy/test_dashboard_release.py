@@ -69,6 +69,7 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "collector/__init__.py": "",
             "collector/inventory.py": "SERVER_ID_RE = None\ndef load_inventory(): pass\n",
             "collector/jobs.py": "class RescanJobManager: pass\n",
+            "collector/live_capacity.py": "class LiveCapacity: pass\n",
             "collector/service.py": "class PollService: pass\n",
             "collector/scan_telemetry.py": "def empty_status(): return {}\n",
             "collector/snapshot.py": "class Snapshot: pass\n",

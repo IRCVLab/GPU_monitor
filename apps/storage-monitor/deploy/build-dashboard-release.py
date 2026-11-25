@@ -17,11 +17,11 @@ from pathlib import Path
 
 if (Path(__file__).resolve().parent / "server" / "storage_dashboard_release.py").is_file():
     from server.storage_dashboard_release import (
-        APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, REQUIRED_RELEASE_FILES, SCHEMA_VERSION,
+        APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION,
     )
 else:
     from storage_dashboard_release import (
-        APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, REQUIRED_RELEASE_FILES, SCHEMA_VERSION,
+        APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION,
     )
 
 
@@ -133,7 +133,7 @@ def build(repo: Path, source_sha: str, output_dir: Path) -> tuple[Path, Path]:
     _ensure_clean_head(repo, source_sha)
     files: dict[str, bytes] = {}
     modes: dict[str, int] = {}
-    for rel_path in sorted(REQUIRED_RELEASE_FILES):
+    for rel_path in sorted(BUILD_RELEASE_FILES):
         data, mode = _load_tracked_file(repo, source_sha, rel_path)
         files[rel_path] = data
         modes[rel_path] = mode

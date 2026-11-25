@@ -48,6 +48,8 @@ REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | froz
     }
 )
 
+BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {"collector/live_capacity.py"}
+
 
 class ActivationError(RuntimeError):
     """Raised for fail-closed release validation and activation errors."""

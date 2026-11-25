@@ -261,8 +261,24 @@ async function loadHost(host) {
 if (typeof globalThis !== "undefined") {
   Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken });
 }
+const LIVE_CAPACITY_FIELDS = ["df_total", "df_used", "df_avail", "df_use_pct", "capacity_observed_unix"];
+
+function applyObservedCapacity(snapshot, capacity) {
+  if (!Array.isArray(snapshot?.mounts) || !Array.isArray(capacity?.mounts) ||
+      snapshot.scan_generation !== capacity.scan_generation) return snapshot;
+  const readings = new Map(capacity.mounts.map(mount => [mount.mount_id, mount]));
+  let changed = false;
+  const mounts = snapshot.mounts.map(mount => {
+    const reading = readings.get(mount.mount_id);
+    if (!reading || LIVE_CAPACITY_FIELDS.every(key => (mount[key] ?? null) === (reading[key] ?? null))) return mount;
+    changed = true;
+    return Object.assign({}, mount, Object.fromEntries(LIVE_CAPACITY_FIELDS.map(key => [key, reading[key] ?? null])));
+  });
+  return changed ? { ...snapshot, mounts } : snapshot;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken, createDetailSnapshots };
+  module.exports = { DEFAULT_HOSTS, normalizeHosts, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken, createDetailSnapshots, applyObservedCapacity };
 }
 
 /* =========================================================================
@@ -414,6 +430,7 @@ function groupDetailCapacityMounts(mounts) {
       totalBytes,
       availableBytes,
       capacityPct,
+      capacityObservedUnix: mount.capacity_observed_unix ?? mount.df_observed_unix,
       media: String((mount.storage_media || mount.block_media || (root && (root.storage_media || root.block_media)) || "unknown")),
       fstype: String((mount.fstype || (root && root.fstype) || "")),
       scanRoots: [{
@@ -490,6 +507,9 @@ function renderHeader() {
     const div = document.createElement("div");
     div.className = "detail-capacity-row";
     div.setAttribute("data-pressure", pressure);
+    div.title = group.capacityObservedUnix
+      ? "볼륨 측정 " + new Date(group.capacityObservedUnix * 1000).toLocaleString()
+      : "스캔 당시 볼륨 용량";
     div.innerHTML =
       '<div class="cap-main"><span class="cap-path">' + escapeHtml(volumeTitle) + '</span>' + volumeMedia + '</div>' +
       '<div class="cap-sub">볼륨 사용량 <span class="figure">' + humanBytes(usedBytes) + '</span> / <span class="figure">' +

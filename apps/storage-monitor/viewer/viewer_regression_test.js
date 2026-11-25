@@ -513,7 +513,10 @@ async function testApiBootstrapUsesEmbeddedOverviewSnapshotsWithoutFullDownloads
     loadSession: async () => ({ authenticated: false, can_rescan: false, csrf_token: '' }),
     loadServerSummaries: async () => ({
       data_mode: 'inventory',
-      servers: [{ id: 'alpha-1', display_name: 'alpha', order: 1, mount_count: 1, overview_snapshot: overviewSnapshot }],
+      servers: [
+        { id: 'alpha-1', display_name: 'alpha', order: 1, mount_count: 1, overview_snapshot: overviewSnapshot },
+        { id: 'beta-2', display_name: 'beta', order: 2, mount_count: 0, overview_snapshot: null },
+      ],
     }),
     loadOrderedSnapshotsForOverview: async () => { fullSnapshotLoads += 1; return []; },
     loadServerSnapshot: async () => ({})
@@ -2949,7 +2952,7 @@ function testTreemapLegendUsesDedicatedSpaceBelowTileViewport() {
 }
 
 async function testScanStatusContinuesDuringSnapshotDownload() {
-  const viewer = loadViewer({ fetch: async url => ({ ok: true, json: async () => ({state: 'complete', generation: url.includes('alpha-1') ? 'new-alpha' : 'new-beta', observed_unix: Date.now()/1000}) }) });
+  const viewer = loadViewer({ fetch: async url => ({ ok: true, json: async () => ({state: 'complete', snapshot_generation: url.includes('alpha-1') ? 'new-alpha' : 'new-beta', observed_unix: Date.now()/1000}) }) });
   const timers = [], downloads = [];
   viewer.setTimeout = (fn, ms) => { const t = {fn, ms}; timers.push(t); return t; };
   viewer.clearTimeout = t => { t.cancelled = true; };
@@ -2966,8 +2969,72 @@ async function testScanStatusContinuesDuringSnapshotDownload() {
   viewer.navigateToOverview();
 }
 
+async function testScanStatusDoesNotDuplicateInitialSnapshotLoad() {
+  const status = { state: 'idle', snapshot_generation: 'ready', snapshot_finished_unix: 100 };
+  const viewer = loadViewer({ fetch: async () => ({ ok: true, json: async () => status }) });
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  const snapshot = {
+    server_id: 'alpha-1', hostname: 'alpha-1', scan_generation: 'ready', scan_finished_unix: 100,
+    mounts: [], users: [], top_files: [], stale: [], blocked: [],
+  };
+  let resolveDownload;
+  const pending = new Promise(resolve => { resolveDownload = resolve; });
+  let downloads = 0;
+  viewer.loadSnapshotForCurrentSource = () => { downloads += 1; return pending; };
+  viewer.startScanStatusMonitoring();
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true });
+  for (let i = 0; i < 30; i += 1) await Promise.resolve();
+  assert.equal(downloads, 1, 'status must share the initial detail download for the same route');
+  resolveDownload(snapshot);
+  for (let i = 0; i < 30; i += 1) await Promise.resolve();
+  assert.equal(viewer.getCurrentDetailDebugState().data.scan_generation, 'ready');
+  viewer.navigateToOverview();
+}
+
+async function testRemotePublicationWaitsForCentralSnapshot() {
+  let status = {
+    state: 'idle',
+    published_generation: 'new',
+    published_finished_unix: 200,
+    snapshot_generation: 'old',
+    snapshot_finished_unix: 100,
+  };
+  const viewer = loadViewer({ fetch: async () => ({ ok: true, json: async () => status }) });
+  const timers = [];
+  viewer.setTimeout = (fn, ms) => { const timer = { fn, ms }; timers.push(timer); return timer; };
+  viewer.clearTimeout = timer => { timer.cancelled = true; };
+  const snapshot = (generation, finished) => ({
+    server_id: 'alpha-1', hostname: 'alpha-1', scan_generation: generation, scan_finished_unix: finished,
+    mounts: [], users: [], top_files: [], stale: [], blocked: [],
+  });
+  viewer.rememberBootstrap(apiBootstrapForRescan([{ id: 'alpha-1', snapshot: snapshot('old', 100) }]));
+  let downloads = 0;
+  viewer.loadSnapshotForCurrentSource = async () => { downloads += 1; return snapshot('new', 200); };
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  const flush = async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); };
+  viewer.startScanStatusMonitoring();
+  await flush();
+  assert.equal(downloads, 0, 'a remote publication must not fetch a full snapshot before the central copy is ready');
+  assert.equal(viewer.getCurrentDetailDebugState().data.scan_generation, 'old');
+  assert.match(viewer.document.getElementById('scanStatusNote').textContent, /갱신/);
+
+  status = {
+    ...status,
+    published_generation: 'old',
+    published_finished_unix: 100,
+    snapshot_generation: 'new',
+    snapshot_finished_unix: 200,
+  };
+  timers.filter(timer => timer.ms === 30000 && !timer.cancelled).at(-1).fn();
+  await flush();
+  assert.equal(downloads, 1, 'a ready central snapshot must download despite an old remote observation');
+  assert.equal(viewer.getCurrentDetailDebugState().data.scan_generation, 'new');
+  assert.equal(viewer.document.getElementById('scanStatusNote').hidden, true);
+  viewer.navigateToOverview();
+}
+
 async function testScanStatusRetriesUntilNewSnapshotDisplayed() {
-  const viewer = loadViewer({fetch: async () => ({ok:true,json:async()=>({state:'idle',published_generation:'new',observed_unix:Date.now()/1000})})});
+  const viewer = loadViewer({fetch: async () => ({ok:true,json:async()=>({state:'idle',snapshot_generation:'new',observed_unix:Date.now()/1000})})});
   const timers=[];
   viewer.setTimeout=(fn,ms)=>{const timer={fn,ms};timers.push(timer);return timer;};
   viewer.clearTimeout=t=>{t.cancelled=true;};
@@ -3040,6 +3107,8 @@ async function main() {
   await testUsersTabRendersTheSelectedServerAfterAChartAlreadyExists();
   testFleetUsageRanksByAccountNameAndReportsSnapshotCoverage();
   await testScanStatusContinuesDuringSnapshotDownload();
+  await testScanStatusDoesNotDuplicateInitialSnapshotLoad();
+  await testRemotePublicationWaitsForCentralSnapshot();
   await testScanStatusRetriesUntilNewSnapshotDisplayed();
   await testThemeRevealOriginUsesVisibleIconCenterAndButtonFallback();
   await testThemeRevealLifecycleLocksAndCleansUpAfterFinished();

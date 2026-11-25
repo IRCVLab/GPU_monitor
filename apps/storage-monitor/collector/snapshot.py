@@ -43,6 +43,7 @@ class DesiredServer:
 class ValidatedSnapshot:
     server_id: str
     generation: str
+    digest: str
     payload: Dict[str, Any]
     config_sync: str
     snapshot_availability: str = "available"
@@ -93,7 +94,7 @@ def validate_download(status: Mapping[str, Any], downloaded: bytes, desired: Des
         raise ValueError("snapshot payload must be a JSON object") from exc
     _validate_payload(payload, server_id, generation, status_finished, status_value, status_digest)
     config_sync = "in_sync" if status_digest == desired_digest else "drifted"
-    return ValidatedSnapshot(server_id=server_id, generation=generation, payload=payload, config_sync=config_sync)
+    return ValidatedSnapshot(server_id=server_id, generation=generation, digest=sha, payload=payload, config_sync=config_sync)
 
 
 def _validate_payload(payload: Any, server_id: str, generation_filename: str, status_finished: int, status_value: str, status_digest: str) -> None:
@@ -227,6 +228,8 @@ def _validate_mount_shape(mount: Any, budget: _Budget) -> None:
     for key in ("df_total", "df_used", "df_avail", "scanned_bytes", "scanned_files", "scanned_dirs", "errors"):
         _counter(mount.get(key), f"mount.{key}")
     _int(mount.get("df_use_pct"), "mount.df_use_pct", 0, 101)
+    if "df_observed_unix" in mount:
+        _int(mount["df_observed_unix"], "mount.df_observed_unix", 0, MAX_TIME + 1)
     if mount["df_used"] + mount["df_avail"] > mount["df_total"]:
         raise ValueError("mount df values violate total invariant")
     tree = mount.get("tree")

@@ -312,7 +312,7 @@ class StorageReleasePullerTest(unittest.TestCase):
     def test_real_builder_distinguishes_runtime_changes_from_empty_and_documentation_commits(self):
         puller = load_puller()
         with mock.patch.object(sys, "path", [str(PULLER_PATH.parent), *sys.path]):
-            from storage_dashboard_release import REQUIRED_RELEASE_FILES
+            from storage_dashboard_release import BUILD_RELEASE_FILES
 
         app_path = Path("apps/storage-monitor")
         builder = REPO_ROOT / app_path / "deploy/build-dashboard-release.py"
@@ -321,7 +321,7 @@ class StorageReleasePullerTest(unittest.TestCase):
             repo = root / "repo"
             repo.mkdir()
             cfg = self.config(tmp)
-            for relative in REQUIRED_RELEASE_FILES:
+            for relative in BUILD_RELEASE_FILES:
                 destination = repo / app_path / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(REPO_ROOT / app_path / relative, destination)
