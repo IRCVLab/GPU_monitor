@@ -12,6 +12,8 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,19 +46,23 @@ class CentralPollingLifecycleTest(unittest.TestCase):
         def __init__(self):
             self.calls = 0
             self.first = threading.Event()
+            self.observed = threading.Event()
         def poll_once(self):
             self.calls += 1
             self.first.set()
             return {}
+        def poll_scan_status_once(self):
+            self.observed.set()
 
     def test_central_polling_starts_once_and_stops_cleanly(self):
         sys.path.insert(0, str(ROOT))
         sys.path.insert(0, str(ROOT))
         from viewer import serve
         svc = self.FakePollService()
-        poller = serve.CentralPoller(svc, interval_seconds=3600)
+        poller = serve.CentralPoller(svc.poll_once, 3600, scan_status_poll=svc.poll_scan_status_once)
         self.assertTrue(poller.start())
         self.assertTrue(svc.first.wait(2), "production inventory mode must poll immediately after startup")
+        self.assertTrue(svc.observed.wait(2), "scan observations must start without a browser request")
         first_thread = poller.thread_ident
         self.assertFalse(poller.start(), "second start must not create duplicate polling thread")
         self.assertEqual(poller.thread_ident, first_thread)
@@ -91,6 +97,136 @@ class CentralPollingLifecycleTest(unittest.TestCase):
         result = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "8088")
+
+class SnapshotResponseCacheTest(unittest.TestCase):
+    def setUp(self):
+        from collector import store
+        from collector.live_capacity import LiveCapacity
+        from collector.service import PollService
+        from collector.test_service import FakeClock, FakeTransport, make_server
+        from viewer import serve
+
+        self.store_module = store
+        self.serve = serve
+        self.clock = FakeClock()
+        self.host = make_server("hinton")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.state_path = Path(temporary.name)
+        self.store = store.CentralStore(self.state_path)
+        self.service = PollService([self.host], self.store, FakeTransport())
+        self.capacity = LiveCapacity([self.host], 8001, clock=self.clock.time)
+        overrides = patch.multiple(serve, service=self.service, live_capacity=self.capacity, TRUSTED_PROXY=True)
+        overrides.start()
+        self.addCleanup(overrides.stop)
+        self.server = serve.Server(("127.0.0.1", 0), serve.Handler)
+        self.addCleanup(self.server.server_close)
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 3)
+        self.addCleanup(self.server.shutdown)
+
+    def publish(self, started=1719200000):
+        from collector.snapshot import DesiredServer
+        from collector.test_service import payload_for, status_data
+
+        payload = payload_for(self.host.id, started=started)
+        for row in (payload["selected_roots"][0], payload["mounts"][0]):
+            row.update(capacity_id="dev-8-1", storage_media="ssd", storage_media_confidence="resolved")
+        status, data = status_data(payload)
+        self.assertTrue(self.store.apply_download(self.host.id, status, data, DesiredServer(self.host.id, self.host.scanner_digest)).accepted)
+        return payload
+
+    def get(self, server_id="hinton", *, authenticated=True):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=4)
+        try:
+            headers = {self.serve.IDENTITY_HEADER: "test-viewer"} if authenticated else {}
+            connection.request("GET", f"/api/servers/{server_id}/snapshot", headers=headers)
+            with connection.getresponse() as response:
+                return response.status, json.load(response)
+        finally:
+            connection.close()
+
+    def test_parallel_detail_reads_decode_and_encode_each_generation_once(self):
+        expected = self.publish()
+        decoded = []
+        encoded = []
+        decode = self.store_module._decode_json
+        dumps = json.dumps
+
+        def count_decode(stream, label):
+            if label == "snapshot":
+                decoded.append(label)
+            return decode(stream, label)
+
+        def count_encode(obj, *args, **kwargs):
+            if isinstance(obj, dict) and "scan_generation" in obj:
+                encoded.append(obj["scan_generation"])
+            return dumps(obj, *args, **kwargs)
+
+        with patch.object(self.store_module, "_decode_json", side_effect=count_decode):
+            with patch.object(self.serve.json, "dumps", side_effect=count_encode), ThreadPoolExecutor(max_workers=6) as pool:
+                reads = list(pool.map(lambda _: self.get(), range(12)))
+                self.assertEqual(reads, [(200, expected)] * 12)
+                self.assertEqual(len(decoded), 1)
+                self.assertEqual(encoded, [expected["scan_generation"]])
+            newer = self.publish(started=1719200100)
+            self.assertEqual(self.get(), (200, newer))
+            self.assertEqual(self.get(), (200, newer))
+            self.assertEqual(len(decoded), 2)
+
+    def test_detail_updates_when_live_capacity_changes_or_expires(self):
+        from collector.live_capacity import CapacitySample, MAX_AGE_SECONDS, VolumeCapacity
+
+        expected = self.publish()
+        mount = expected["mounts"][0]
+        key = ("dev-8-1", "/dev/storage-viz/home", "ext4")
+        target = (self.host.host, self.host.port)
+        self.assertEqual(self.get(authenticated=False), (401, {"authenticated": False, "error": "AUTH_REQUIRED"}))
+        self.assertEqual(self.get()[1]["mounts"][0], mount)
+
+        at = self.clock.now
+        self.capacity._samples = {target: CapacitySample(at, {key: VolumeCapacity(100, 80, 20, 80)})}
+        self.assertEqual(self.get()[1]["mounts"][0]["df_used"], 80)
+        self.capacity._samples = {target: CapacitySample(at, {key: VolumeCapacity(100, 81, 19, 81)})}
+        self.assertEqual(self.get()[1]["mounts"][0]["df_used"], 81)
+        self.clock.now += MAX_AGE_SECONDS + 1
+        self.assertEqual(self.get()[1]["mounts"][0], mount)
+
+    def test_oversized_response_is_served_without_retaining_it(self):
+        expected = self.publish()
+        cache = self.serve.SnapshotResponseCache(byte_budget=1)
+        decoded = []
+        decode = self.store_module._decode_json
+
+        def count_decode(stream, label):
+            if label == "snapshot":
+                decoded.append(label)
+            return decode(stream, label)
+
+        with patch.object(self.serve, "snapshot_responses", cache), patch.object(self.store_module, "_decode_json", side_effect=count_decode):
+            self.assertEqual(self.get(), (200, expected))
+            self.assertEqual(self.get(), (200, expected))
+        self.assertEqual(len(decoded), 2)
+
+    def test_replaced_snapshot_file_does_not_serve_cached_stale_content(self):
+        expected = self.publish()
+        self.assertEqual(self.get(), (200, expected))
+        directory = self.state_path / self.host.id
+        name = json.loads((directory / "current.json").read_text())["snapshot"]
+        path = directory / name
+        good = path.read_bytes()
+        path.write_text("{")
+        self.assertEqual(self.get(), (404, {"error": "UNKNOWN_SERVER"}))
+        path.write_bytes(good)
+        self.assertEqual(self.get(), (200, expected))
+
+    def test_absent_snapshot_can_be_published_after_a_404(self):
+        self.assertEqual(self.get(), (404, {"error": "SNAPSHOT_ABSENT"}))
+        self.assertEqual(self.get("absent"), (404, {"error": "UNKNOWN_SERVER"}))
+        expected = self.publish()
+        self.assertEqual(self.get(), (200, expected))
+
 
 class ApiServerTest(unittest.TestCase):
     def setUp(self):

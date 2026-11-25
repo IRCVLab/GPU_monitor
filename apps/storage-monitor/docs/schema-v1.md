@@ -62,7 +62,10 @@ metadata.
 
 ## Mount entry
 
-Each `mounts[]` entry contains:
+Each `mounts[]` entry contains an optional `df_observed_unix` integer alongside
+the capacity counters. It records when the scanner read that volume's capacity.
+A reused scan capture keeps its original measurement time. Older scanners omit
+this field. The mount entry also contains:
 
 - `path`: backward-compatible display path, normally equal to `scan_root`
 - `mount_id`: references a `selected_roots[].mount_id` whose status is `complete` or `partial`

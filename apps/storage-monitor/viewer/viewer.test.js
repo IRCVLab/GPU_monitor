@@ -11,6 +11,39 @@ const GiB = 1024 ** 3;
 
 assert.equal(require("./app.js").shouldFallbackToStatic({ status: 404 }), true);
 
+{
+  const { applyObservedCapacity } = require("./data-client.js");
+  const snapshot = {
+    scan_generation: "turing-2",
+    mounts: [{ mount_id: "data", df_used: 400, scanned_bytes: 30 }],
+    users: [{ name: "root", bytes: 30 }],
+  };
+  const reading = { mount_id: "data", df_used: 700, capacity_observed_unix: 123 };
+  assert.strictEqual(applyObservedCapacity(snapshot, { scan_generation: "turing-1", mounts: [reading] }), snapshot);
+  const observation = { scan_generation: "turing-2", mounts: [reading] };
+  const updated = applyObservedCapacity(snapshot, observation);
+  assert.strictEqual(updated.mounts[0].df_used, 700);
+  assert.strictEqual(updated.mounts[0].scanned_bytes, 30);
+  assert.strictEqual(updated.users, snapshot.users);
+  assert.strictEqual(applyObservedCapacity(updated, observation), updated);
+  const fallback = applyObservedCapacity(updated, { scan_generation: "turing-2", mounts: snapshot.mounts });
+  assert.strictEqual(fallback.mounts[0].df_used, 400);
+  assert.strictEqual(fallback.mounts[0].capacity_observed_unix, null);
+}
+
+{
+  const { buildOverviewRows } = require("./overview.js");
+  const capacity = (used, scanTime = 100) => ({
+    scan_finished_unix: scanTime,
+    mounts: [{ mount_id: "data", path: "/data", df_used: used, df_total: 100, df_use_pct: used }],
+  });
+  const cached = [{ id: "turing", snapshot: capacity(10) }];
+  const rows = (snapshot, cache = cached) => buildOverviewRows([{ id: "turing", overview_snapshot: snapshot }], cache);
+  assert.strictEqual(rows(capacity(90))[0].mounts[0].usedPct, 90);
+  assert.strictEqual(rows(capacity(10))[0].mounts[0].usedPct, 10);
+  assert.strictEqual(rows(capacity(10), [{ id: "turing", snapshot: capacity(70, 200) }])[0].mounts[0].usedPct, 70);
+}
+
 function testCleanShellThemeBootstrapContract() {
   const html = fs.readFileSync(path.join(here, "index.html"), "utf8");
   const css = fs.readFileSync(path.join(here, "styles.css"), "utf8");
@@ -280,6 +313,16 @@ function testOverviewCapacityThresholdsAndPrecedence() {
   assert.strictEqual(pressureLevel(1, DEFAULT_CAPACITY_THRESHOLDS.critical_free_bytes), "critical");
   assert.strictEqual(pressureLevel(null, 10 ** 12), "unknown", "missing utilization must not be promoted to a capacity-pressure warning");
   assert.strictEqual(pressureLevel(10, null), "unknown", "missing free bytes must not be promoted to a false critical state");
+
+  const observed = Date.now() / 1000;
+  const scanSnapshot = { mounts: [] };
+  const running = { state: "running", observed_unix: observed };
+  assert.strictEqual(buildOverviewServer(makeSummary({ scan_status: running }), scanSnapshot).primaryStatus.code, "active_scan");
+  assert.strictEqual(buildOverviewServer(makeSummary({ scan_status: { ...running, observed_unix: observed - 91 } }), scanSnapshot).primaryStatus.code, "normal");
+  assert.strictEqual(buildOverviewServer(makeSummary({ scan_status: { ...running, disconnected: true } }), scanSnapshot).primaryStatus.code, "normal");
+  const failedDuringScan = buildOverviewServer(makeSummary({ latest_scan_result: "failed", scan_status: running }), scanSnapshot);
+  assert.strictEqual(failedDuringScan.primaryStatus.code, "scan_failed");
+  assert.strictEqual(failedDuringScan.secondaryStatus.code, "active_scan");
 
   const precedenceCases = [
     [makeSummary({ snapshot_availability: "absent", latest_pull_status: "not_installed" }), null, null, "agent_missing"],

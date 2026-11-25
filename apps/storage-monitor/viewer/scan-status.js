@@ -17,27 +17,40 @@ function classifyRescanJob(job, expectedJobId, sawActive) {
   return sawActive ? "refresh" : "idle";
 }
 
+function newerScanGeneration(generation, time, snapshot) {
+  if (!generation || generation === snapshot?.scan_generation) return null;
+  const finished = scanNumber(time);
+  const displayedTime = scanNumber(snapshot?.scan_finished_unix);
+  return finished === null || displayedTime === null || finished >= displayedTime ? generation : null;
+}
+
+function readyScanGeneration(status, snapshot) {
+  return newerScanGeneration(status.snapshot_generation, status.snapshot_finished_unix, snapshot);
+}
+
 function pendingScanGeneration(status, snapshot) {
-  const displayed = snapshot && snapshot.scan_generation;
-  const displayedTime = scanNumber(snapshot && snapshot.scan_finished_unix);
-  const candidates = [
-    [status.published_generation, status.published_finished_unix],
-    [["complete", "partial"].includes(status.state) ? status.generation : null, status.finished_unix],
-    [status.snapshot_generation, status.snapshot_finished_unix],
-  ];
-  for (const [generation, time] of candidates) {
-    const finished = scanNumber(time);
-    if (!generation) continue;
-    if (generation === displayed) return null;
-    if (finished === null || displayedTime === null || finished >= displayedTime) return generation;
-  }
-  return null;
+  return readyScanGeneration(status, snapshot)
+    || newerScanGeneration(status.published_generation, status.published_finished_unix, snapshot)
+    || (["complete", "partial"].includes(status.state)
+      ? newerScanGeneration(status.generation, status.finished_unix, snapshot)
+      : null);
+}
+
+function scanObservationIsDisconnected(status, now) {
+  const observed = scanNumber(status.observed_unix);
+  return !!status.disconnected || (observed !== null && now - observed > 90);
+}
+
+function isScanActive(summary, now = Date.now() / 1000) {
+  const status = summary.scan_status;
+  return !!(activeRescanState(summary.active_job) || (
+    status?.state === "running" && scanNumber(status.observed_unix) !== null && !scanObservationIsDisconnected(status, now)
+  ));
 }
 
 function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
   const s = status || {}, data = snapshot || {};
-  const observed = scanNumber(s.observed_unix);
-  const disconnected = !!s.disconnected || (observed !== null && now - observed > 90);
+  const disconnected = scanObservationIsDisconnected(s, now);
   const state = disconnected ? "unknown" : (s.state || "unknown");
   const running = state === "running";
   const started = scanNumber(s.started_unix);
@@ -173,4 +186,4 @@ function createScanMonitor({ fetchStatus, onStatus, onError = () => {}, schedule
   return { start, stop };
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { pendingScanGeneration, scanStatusModel, scanDuration, scanDate, renderScanStatus, createScanMonitor };
+if (typeof module !== "undefined" && module.exports) module.exports = { readyScanGeneration, pendingScanGeneration, isScanActive, scanStatusModel, scanDuration, scanDate, renderScanStatus, createScanMonitor };

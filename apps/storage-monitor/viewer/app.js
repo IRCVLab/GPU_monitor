@@ -33,7 +33,7 @@ let automaticFocusHandler = null;
 let automaticUnloadHandler = null;
 let scanStatusMonitor = null;
 let scanStatusByServer = new Map();
-const scanSnapshotRefresh = new Map();
+const detailSnapshotRequests = new Map();
 let scanOverviewRefreshInFlight = false;
 
 async function refreshScanOverview() {
@@ -65,7 +65,8 @@ function renderCurrentScanStatus() {
   const pending = pendingScanGeneration(status, DATA);
   renderScanStatus(displayed, DATA, {
     sample: currentDataMode === "sample",
-    note: pending ? "새 스캔이 완료되었습니다. 화면 데이터를 갱신하고 있습니다." : "",
+    note: readyScanGeneration(status, DATA) ? "새 스캔이 완료되었습니다. 화면 데이터를 갱신하고 있습니다."
+      : pending ? "새 스캔이 완료되었습니다. 결과를 받으면 화면을 갱신합니다." : "",
   });
 }
 
@@ -76,16 +77,20 @@ function startScanStatusMonitoring() {
     onStatus: (id, status, isCurrent) => {
       if (currentServerId !== id) return;
       scanStatusByServer.set(id, status);
+      if (DATA && DATA.server_id === id) {
+        const next = applyObservedCapacity(DATA, status.capacity);
+        if (next !== DATA) {
+          DATA.mounts = next.mounts;
+          renderHeader();
+        }
+      }
       renderCurrentScanStatus();
       syncRescanButton();
-      const needsSnapshot = pendingScanGeneration(status, DATA);
+      const needsSnapshot = readyScanGeneration(status, DATA);
       // Manual job completion owns its refresh. Retry automatically if that refresh failed.
-      const activeRefresh = scanSnapshotRefresh.get(id);
-      if (needsSnapshot && !rescanServerId && (!activeRefresh || activeRefresh.routeGeneration !== detailLoadGeneration)) {
-        const refresh = { routeGeneration: detailLoadGeneration };
-        scanSnapshotRefresh.set(id, refresh);
+      const activeRequest = detailSnapshotRequests.get(id);
+      if (needsSnapshot && !rescanServerId && activeRequest?.routeGeneration !== detailLoadGeneration) {
         void ensureDetailLoaded(id, true, needsSnapshot).catch(() => {}).finally(() => {
-          if (scanSnapshotRefresh.get(id) === refresh) scanSnapshotRefresh.delete(id);
           if (isCurrent() && currentServerId === id) renderCurrentScanStatus();
         });
       }
@@ -568,7 +573,7 @@ async function loadBootstrapDataWith(loaders) {
     const embedded = summary && summary.overview_snapshot;
     if (embedded && typeof embedded === "object") {
       snapshots.push({ id, snapshot: embedded, error: null, overviewOnly: true });
-    } else {
+    } else if (!Object.hasOwn(summary, "overview_snapshot")) {
       summariesMissingOverview.push(summary);
     }
   }
@@ -603,8 +608,8 @@ function replaceOverviewInventory(summaries, preserveSnapshotCache) {
   for (const id of scanStatusByServer.keys()) {
     if (!currentIds.has(id)) scanStatusByServer.delete(id);
   }
-  for (const id of scanSnapshotRefresh.keys()) {
-    if (!currentIds.has(id)) scanSnapshotRefresh.delete(id);
+  for (const id of detailSnapshotRequests.keys()) {
+    if (!currentIds.has(id)) detailSnapshotRequests.delete(id);
   }
 }
 
@@ -674,6 +679,8 @@ async function ensureDetailLoaded(serverId, forceReload, pendingGeneration = nul
   }
   let snapshot = !forceReload ? detailSnapshots.get(serverId) : null;
   if (!snapshot) {
+    const request = { routeGeneration: generation };
+    detailSnapshotRequests.set(serverId, request);
     try {
       snapshot = await currentDetailLoader()(serverId);
       if (!detailSnapshots.isCurrent(serverId, requestVersion)) return;
@@ -704,6 +711,8 @@ async function ensureDetailLoaded(serverId, forceReload, pendingGeneration = nul
         }
       }
       return;
+    } finally {
+      if (detailSnapshotRequests.get(serverId) === request) detailSnapshotRequests.delete(serverId);
     }
   }
   if (!isCurrentDetailGeneration(serverId, generation)) return;

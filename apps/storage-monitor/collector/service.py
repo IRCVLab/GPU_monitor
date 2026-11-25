@@ -1,18 +1,27 @@
 """Polling service for central collection of remote storage-viz snapshots."""
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
-from typing import Any, Mapping, Protocol
+from dataclasses import dataclass
+from functools import partial
+from typing import Any, Callable, Mapping, Protocol
 
 from collector.inventory import Server
 from collector import snapshot
 from collector.scan_telemetry import empty_status
-from collector.store import CentralStore, StoreLockedError
+from collector.store import CentralStore, STATE_DEFAULTS, StoreLockedError
 from collector.transport import ACTIVE_SCAN_STATES, TransportError, status_tuple, validate_status_envelope
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_POLL_INTERVAL_SECONDS = 900
+MAX_PARALLEL_POLLS = 4
+MAX_PARALLEL_SNAPSHOT_PULLS = 2
+ACTIVE_TELEMETRY_INTERVAL_SECONDS = 5
+IDLE_TELEMETRY_INTERVAL_SECONDS = 60
 LOCAL_SCAN_CADENCE_SECONDS = 6 * 60 * 60
 FRESHNESS_GRACE_SECONDS = 60 * 60
 FRESH_SNAPSHOT_SECONDS = LOCAL_SCAN_CADENCE_SECONDS + FRESHNESS_GRACE_SECONDS
@@ -20,11 +29,11 @@ SCHEDULED_TIMER_DELAY_SECONDS = 6 * 60
 ROOT_SCAN_CADENCE_SECONDS = {"ssd": 3600, "hdd": 3 * 3600, "mixed": 3 * 3600, "unknown": 3 * 3600}
 SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 OVERVIEW_ROOT_FIELDS = (
-    "mount_id", "capacity_id", "major_minor", "storage_media", "block_media",
+    "mount_id", "capacity_id", "major_minor", "mount_source", "fstype", "storage_media", "block_media",
     "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
 )
 OVERVIEW_MOUNT_FIELDS = (
-    "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
+    "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct", "df_observed_unix",
     "storage_media", "block_media", "storage_media_confidence", "block_media_confidence",
 )
 # Central release artifacts do not package agent.mount_policy.
@@ -95,6 +104,68 @@ class Transport(Protocol):
     def start_rescan(self, server: Server) -> None: ...
 
 
+@dataclass(frozen=True)
+class ScanObservation:
+    started_at: float
+    status: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class VerifiedPublication:
+    status: tuple[Any, ...]
+    freshness_deadline: int | None
+
+
+@dataclass(frozen=True)
+class _DeferredSnapshotPull:
+    status: Mapping[str, Any]
+
+
+class _DaemonWorkQueue:
+    def __init__(self, name: str, limit: int) -> None:
+        self._name = name
+        self._limit = limit
+        self._lock = threading.Lock()
+        self._pending: dict[str, Callable[[], Any]] = {}
+        self._scheduled: set[str] = set()
+        self._workers = 0
+
+    def submit(self, server_id: str, task: Callable[[], Any]) -> None:
+        with self._lock:
+            if server_id in self._pending:
+                self._pending[server_id] = task
+                return
+            if server_id in self._scheduled:
+                return
+            self._scheduled.add(server_id)
+            self._pending[server_id] = task
+            if self._workers < min(self._limit, len(self._scheduled)):
+                worker = threading.Thread(target=self._drain, name=self._name, daemon=True)
+                try:
+                    worker.start()
+                except Exception:
+                    del self._pending[server_id]
+                    self._scheduled.remove(server_id)
+                    raise
+                self._workers += 1
+
+    def _drain(self) -> None:
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._workers -= 1
+                    return
+                server_id = next(iter(self._pending))
+                task = self._pending.pop(server_id)
+            try:
+                task()
+            except Exception:
+                logger.exception("%s failed for %s", self._name, server_id)
+            finally:
+                with self._lock:
+                    self._scheduled.remove(server_id)
+
+
 class PollService:
     def __init__(self, servers: list[Server] | tuple[Server, ...], central_store: CentralStore, transport: Transport, *, clock: Clock | None = None, poll_interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS) -> None:
         self.servers = tuple(s for s in servers if s.enabled)
@@ -102,13 +173,16 @@ class PollService:
         self.store = central_store
         self.transport = transport
         self.clock = clock or time
-        self._verified_status_tuples: dict[str, tuple[Any, ...]] = {}
+        self._verified_publications: dict[str, VerifiedPublication] = {}
+        self._last_observed_status: dict[str, tuple[Any, ...]] = {}
         self._locks = {s.id: threading.RLock() for s in self.servers}
         self._summary_lock = threading.RLock()
-        self._telemetry_locks = {s.id: threading.Lock() for s in self.servers}
-        self._telemetry_cache = {}
-        self._telemetry_threads = {}
-        self._refresh_threads = {}
+        self._snapshot_pull_slots = threading.BoundedSemaphore(MAX_PARALLEL_SNAPSHOT_PULLS)
+        self._background_polls = _DaemonWorkQueue("storage-viz-status-reader", MAX_PARALLEL_POLLS)
+        self._background_pulls = _DaemonWorkQueue("storage-viz-snapshot-pull", MAX_PARALLEL_SNAPSHOT_PULLS)
+        self._telemetry_cache: dict[str, ScanObservation] = {}
+        self._telemetry_threads: dict[str, threading.Thread] = {}
+        self._refresh_threads: dict[str, threading.Thread] = {}
         self._overview_cache = {
             server.id: _overview_snapshot(self.store.load_snapshot(server.id))
             for server in self.servers
@@ -118,26 +192,55 @@ class PollService:
         self.poll_interval_seconds = poll_interval_seconds
 
     def poll_once(self) -> dict[str, dict[str, Any]]:
-        results: dict[str, dict[str, Any]] = {}
-        for server in self.servers:
-            results[server.id] = self.poll_server(server.id)
-        return results
+        return {server.id: self._poll_fleet_server(server.id) for server in self.servers}
 
-    def poll_server(self, server_id: str) -> dict[str, Any]:
+    def poll_background_once(self) -> None:
+        for server in self.servers:
+            self._background_polls.submit(server.id, partial(self._poll_fleet_server, server.id, defer_snapshot=True))
+
+    def _poll_fleet_server(self, server_id: str, *, defer_snapshot: bool = False) -> dict[str, Any]:
+        try:
+            return self.poll_server(server_id, defer_snapshot=defer_snapshot)
+        except Exception:
+            logger.exception("regular poll failed for %s", server_id)
+            overview = self._overview_cache.get(server_id)
+            now = int(self.clock.time())
+            return {
+                **STATE_DEFAULTS,
+                "snapshot_availability": "available" if overview is not None else "absent",
+                "freshness": _snapshot_freshness(overview, now, self.poll_interval_seconds),
+                "latest_pull_status": "invalid_snapshot",
+                "last_error_code": "POLL_FAILED",
+                "last_error_unix": now,
+            }
+
+    def poll_server(self, server_id: str, *, defer_snapshot: bool = False,
+                    observed_publication: Mapping[str, Any] | None = None) -> dict[str, Any]:
         server = self._require_server(server_id)
         lock = self._locks[server.id]
         if not lock.acquire(blocking=False):
             return self.store.load_state(server.id)
         try:
-            return self._poll_server_locked(server)
+            result = self._poll_server_locked(
+                server, defer_snapshot=defer_snapshot, observed_publication=observed_publication,
+            )
         except StoreLockedError:
             return self.store.load_state(server.id)
         finally:
             lock.release()
+        if isinstance(result, _DeferredSnapshotPull):
+            self._background_pulls.submit(server.id, partial(self._finish_deferred_pull, server, result.status))
+            return self.store.load_state(server.id)
+        return result
 
-    def _poll_server_locked(self, server: Server) -> dict[str, Any]:
+    def _poll_server_locked(self, server: Server, *, defer_snapshot: bool = False,
+                            observed_publication: Mapping[str, Any] | None = None) -> dict[str, Any] | _DeferredSnapshotPull:
         try:
-            status = validate_status_envelope(self.transport.fetch_status(server), server)
+            committed_finished = (self._overview_cache.get(server.id) or {}).get("scan_finished_unix")
+            if observed_publication is not None and committed_finished is not None and observed_publication["scan_finished_unix"] <= committed_finished:
+                observed_publication = None
+            envelope = observed_publication if observed_publication is not None else self.transport.fetch_status(server)
+            status = validate_status_envelope(envelope, server)
         except TransportError as exc:
             if exc.code in {"UNREACHABLE", "TIMEOUT"}:
                 return self._mark_unreachable(server.id, exc)
@@ -145,20 +248,51 @@ class PollService:
         except Exception as exc:
             return self._mark_invalid(server.id, TransportError("BAD_STATUS", "status envelope is invalid"))
 
+        self._last_observed_status[server.id] = status_tuple(status)
         if status["status"] == "failed":
-            self._verified_status_tuples.pop(server.id, None)
+            self._verified_publications.pop(server.id, None)
             return self._mark_failed_status(server, status)
 
-        current = self.store.load_snapshot(server.id)
-        current_generation = f"{current.get('scan_generation')}.json" if current is not None else None
-        current_status_tuple = status_tuple(status)
-        if current is not None and status["generation"] == current_generation and self._verified_status_tuples.get(server.id) == current_status_tuple:
-            return self._mark_unchanged(server, status, current)
+        verified = self._matching_publication(server.id, status)
+        if verified:
+            return self._mark_unchanged(server, status, verified.freshness_deadline)
 
+        if defer_snapshot:
+            return _DeferredSnapshotPull(status)
+        return self._transfer_publication(server, status, recheck_stale=observed_publication is not None)
+
+    def _matching_publication(self, server_id: str, status: Mapping[str, Any]) -> VerifiedPublication | None:
+        verified = self._verified_publications.get(server_id)
+        if verified and verified.status == status_tuple(status) and self.store.has_snapshot_digest(server_id, status["sha256"]):
+            return verified
+        return None
+
+    def _finish_deferred_pull(self, server: Server, status: Mapping[str, Any]) -> None:
+        with self._locks[server.id]:
+            if self._last_observed_status.get(server.id) != status_tuple(status):
+                return
+            overview = self._overview_cache.get(server.id) or {}
+            finished = overview.get("scan_finished_unix")
+            if isinstance(finished, int) and finished > status["scan_finished_unix"]:
+                return
+            if self._matching_publication(server.id, status):
+                return
+            self._transfer_publication(server, status, recheck_stale=True)
+
+    def _transfer_publication(self, server: Server, status: Mapping[str, Any], *, recheck_stale: bool) -> dict[str, Any]:
+        try:
+            with self._snapshot_pull_slots:
+                return self._pull_snapshot(server, status, recheck_stale=recheck_stale)
+        except TransportError:
+            return self._poll_server_locked(server)
+
+    def _pull_snapshot(self, server: Server, status: Mapping[str, Any], *, recheck_stale: bool) -> dict[str, Any]:
         try:
             fetched_status, data = self.transport.fetch_snapshot(server, expected_status=status)
             fetched_status = validate_status_envelope(fetched_status, server)
         except TransportError as exc:
+            if recheck_stale and exc.code in {"RACE", "UNREACHABLE"}:
+                raise
             if exc.code in {"UNREACHABLE", "TIMEOUT"}:
                 return self._mark_unreachable(server.id, exc)
             return self._mark_invalid(server.id, exc)
@@ -171,13 +305,14 @@ class PollService:
         except Exception as exc:
             return self._mark_invalid(server.id, TransportError("INVALID", str(exc)))
 
+        deadline = _snapshot_freshness_deadline(validated.payload, self.poll_interval_seconds)
+        overview = _overview_snapshot(validated.payload)
         with self._summary_lock:
-            result = self.store.apply_download(server.id, fetched_status, data, desired)
+            result = self.store.commit_snapshot(validated, freshness=_freshness_at(deadline, int(self.clock.time())))
             if not result.accepted:
                 return self._mark_invalid(server.id, TransportError(result.error_code or "WRITE_ERROR", result.message or "download apply failed"))
-            self._overview_cache[server.id] = _overview_snapshot(validated.payload)
-            self._verified_status_tuples[server.id] = status_tuple(fetched_status)
-            self.store.update_state(server.id, freshness=self._freshness(server.id))
+            self._overview_cache[server.id] = overview
+            self._verified_publications[server.id] = VerifiedPublication(status_tuple(fetched_status), deadline)
             return self.store.load_state(server.id)
 
     def manual_rescan(self, server_id: str) -> dict[str, Any]:
@@ -211,7 +346,7 @@ class PollService:
         return self._poll_server_locked(server)
 
 
-    def _status_with_history(self, server_id: str, status=None):
+    def _status_with_history(self, server_id: str, status: Mapping[str, Any] | None) -> dict[str, Any]:
         result = empty_status()
         overview = self._overview_cache.get(server_id) or {}
         result.update(last_finished_unix=overview.get("scan_finished_unix"),
@@ -228,52 +363,54 @@ class PollService:
 
     def scan_status_for_api(self, server_id: str) -> dict[str, Any]:
         server = self._require_server(server_id)
-        now = self.clock.time()
-        cached = self._telemetry_cache.get(server.id)
-        if cached and now - cached[0] < 5:
-            return self._status_with_history(server.id, cached[1])
-        lock = self._telemetry_locks[server.id]
-        if not lock.acquire(blocking=False):
-            result = self._status_with_history(server.id, cached[1] if cached else None)
-            if not cached:
-                result["error_code"] = "OBSERVATION_PENDING"
-            return result
-        try:
-            try:
-                if hasattr(self.transport, "fetch_scan_status"):
-                    status = self.transport.fetch_scan_status(server)
-                else:
-                    active = self.transport.scan_active_state(server)
-                    status = {"state": "running" if active in ACTIVE_SCAN_STATES else "idle", "progress_available":False}
-                status = dict(status)
-                status["observed_unix"] = int(self.clock.time())
-            except Exception as exc:
-                status = {"state":"unknown", "error_code":getattr(exc,"code","TELEMETRY_UNAVAILABLE"), "progress_available":False}
-            self._telemetry_cache[server.id] = (self.clock.time(), status)
-            result = self._status_with_history(server.id,status)
-            published = result.get("published_generation")
-            if not published and result["state"] in {"complete", "partial"}:
-                published = result.get("generation")
-            if published and published != result.get("snapshot_generation"):
-                worker = self._refresh_threads.get(server.id)
-                if worker is None or not worker.is_alive():
-                    worker = threading.Thread(target=self.poll_server,args=(server.id,),daemon=True)
-                    self._refresh_threads[server.id] = worker
-                    worker.start()
-            return result
-        finally:
-            lock.release()
+        observation = self._telemetry_cache.get(server.id)
+        return self._status_with_history(server.id, observation.status if observation else None)
 
-    def _cached_scan_status(self, server_id):
-        cached = self._telemetry_cache.get(server_id)
-        if cached and self.clock.time() - cached[0] < 5:
-            return self._status_with_history(server_id,cached[1])
-        worker = self._telemetry_threads.get(server_id)
-        if worker is None or not worker.is_alive():
-            worker = threading.Thread(target=self.scan_status_for_api,args=(server_id,),daemon=True)
-            self._telemetry_threads[server_id] = worker
+    def poll_scan_status_once(self) -> None:
+        now = self.clock.time()
+        for server in self.servers:
+            worker = self._telemetry_threads.get(server.id)
+            if worker is not None and worker.is_alive():
+                continue
+            observation = self._telemetry_cache.get(server.id)
+            if observation is not None:
+                elapsed = now - observation.started_at
+                if 0 <= elapsed < ACTIVE_TELEMETRY_INTERVAL_SECONDS:
+                    continue
+                if 0 <= elapsed < IDLE_TELEMETRY_INTERVAL_SECONDS:
+                    job = self.store.load_state(server.id).get("active_job") or {}
+                    if observation.status.get("state") != "running" and job.get("state") not in {"requested", "running"}:
+                        continue
+            worker = threading.Thread(target=self._collect_scan_status, args=(server, now), daemon=True)
+            self._telemetry_threads[server.id] = worker
             worker.start()
-        return self._status_with_history(server_id, cached[1] if cached else None)
+
+    def _collect_scan_status(self, server: Server, started_at: float) -> None:
+        status: dict[str, Any]
+        publication = None
+        try:
+            if hasattr(self.transport, "fetch_scan_status"):
+                observation = self.transport.fetch_scan_status(server)
+                status = dict(observation.status)
+                publication = observation.publication
+            else:
+                active = self.transport.scan_active_state(server)
+                status = {"state": "running" if active in ACTIVE_SCAN_STATES else "idle", "progress_available": False}
+            status["observed_unix"] = int(self.clock.time())
+        except Exception as exc:
+            status = {"state": "unknown", "error_code": getattr(exc, "code", "TELEMETRY_UNAVAILABLE"), "progress_available": False}
+        self._telemetry_cache[server.id] = ScanObservation(started_at, status)
+        published = status.get("published_generation")
+        if not published and status.get("state") in {"complete", "partial"}:
+            published = status.get("generation")
+        overview = self._overview_cache.get(server.id) or {}
+        worker = self._refresh_threads.get(server.id)
+        if published and published != overview.get("scan_generation") and (worker is None or not worker.is_alive()):
+            worker = threading.Thread(
+                target=self.poll_server, args=(server.id,), kwargs={"observed_publication": publication}, daemon=True
+            )
+            self._refresh_threads[server.id] = worker
+            worker.start()
 
     def server_summaries(self) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
@@ -293,9 +430,16 @@ class PollService:
                     "mount_count": len(overview.get("mounts", [])) if isinstance(overview, Mapping) else 0,
                     "overview_snapshot": overview,
                     "active_job": state.get("active_job"),
-                    "scan_status": self._cached_scan_status(server.id),
+                    "scan_status": self.scan_status_for_api(server.id),
                 })
         return summaries
+
+    def overview_snapshot_for_api(self, server_id: str) -> Mapping[str, Any] | None:
+        return self._overview_cache.get(self._require_server(server_id).id)
+
+    def open_snapshot_for_api(self, server_id: str):
+        server = self._require_server(server_id)
+        return self.store.open_snapshot(server.id)
 
     def load_snapshot_for_api(self, server_id: str) -> Mapping[str, Any] | None:
         server = self._require_server(server_id)
@@ -320,21 +464,17 @@ class PollService:
         except KeyError as exc:
             raise ValueError("server id is not in enabled inventory") from exc
 
-    def _snapshot(self, server_id: str) -> Mapping[str, Any] | None:
-        return self.store.load_snapshot(server_id)
-
-    def _availability(self, server_id: str) -> str:
-        return "available" if self._snapshot(server_id) is not None else "absent"
-
-    def _freshness(self, server_id: str) -> str:
-        current = self._snapshot(server_id)
-        return _snapshot_freshness(current, int(self.clock.time()), self.poll_interval_seconds)
+    def _snapshot_state(self, server_id: str) -> dict[str, str]:
+        current = self.store.load_snapshot(server_id)
+        return {
+            "snapshot_availability": "available" if current is not None else "absent",
+            "freshness": _snapshot_freshness(current, int(self.clock.time()), self.poll_interval_seconds),
+        }
 
     def _mark_unreachable(self, server_id: str, exc: TransportError) -> dict[str, Any]:
         return self.store.update_state(
             server_id,
-            snapshot_availability=self._availability(server_id),
-            freshness=self._freshness(server_id),
+            **self._snapshot_state(server_id),
             latest_pull_status="unreachable",
             last_error_code=exc.code,
             last_error_message=str(exc),
@@ -342,11 +482,10 @@ class PollService:
         )
 
     def _mark_invalid(self, server_id: str, exc: TransportError) -> dict[str, Any]:
-        self._verified_status_tuples.pop(server_id, None)
+        self._verified_publications.pop(server_id, None)
         return self.store.update_state(
             server_id,
-            snapshot_availability=self._availability(server_id),
-            freshness=self._freshness(server_id),
+            **self._snapshot_state(server_id),
             latest_pull_status="invalid_snapshot",
             last_error_code=exc.code,
             last_error_message=str(exc),
@@ -356,8 +495,7 @@ class PollService:
     def _mark_failed_status(self, server: Server, status: Mapping[str, Any]) -> dict[str, Any]:
         return self.store.update_state(
             server.id,
-            snapshot_availability=self._availability(server.id),
-            freshness=self._freshness(server.id),
+            **self._snapshot_state(server.id),
             latest_pull_status="succeeded",
             latest_scan_result="failed",
             configuration_sync=_config_sync(status, server),
@@ -369,19 +507,18 @@ class PollService:
     def _mark_rescan_failed(self, server_id: str, exc: TransportError) -> dict[str, Any]:
         return self.store.update_state(
             server_id,
-            snapshot_availability=self._availability(server_id),
-            freshness=self._freshness(server_id),
+            **self._snapshot_state(server_id),
             latest_scan_result="failed",
             last_error_code=exc.code,
             last_error_message=str(exc),
             last_error_unix=int(self.clock.time()),
         )
 
-    def _mark_unchanged(self, server: Server, status: Mapping[str, Any], current: Mapping[str, Any]) -> dict[str, Any]:
+    def _mark_unchanged(self, server: Server, status: Mapping[str, Any], deadline: int | None) -> dict[str, Any]:
         return self.store.update_state(
             server.id,
             snapshot_availability="available",
-            freshness=self._freshness(server.id),
+            freshness=_freshness_at(deadline, int(self.clock.time())),
             latest_pull_status="succeeded",
             latest_scan_result=status["status"],
             configuration_sync=_config_sync(status, server),
@@ -392,21 +529,26 @@ class PollService:
 
 
 def _snapshot_freshness(payload, now: int, polling_interval: int) -> str:
-    if not payload:
+    return _freshness_at(_snapshot_freshness_deadline(payload, polling_interval), now)
+
+
+def _freshness_at(deadline: int | None, now: int) -> str:
+    if deadline is None:
         return "unknown"
-    finished = payload.get("scan_finished_unix")
+    return "stale" if now > deadline else "fresh"
+
+
+def _snapshot_freshness_deadline(payload, polling_interval: int) -> int | None:
+    finished = payload.get("scan_finished_unix") if payload else None
     if not isinstance(finished, int) or isinstance(finished, bool):
-        return "unknown"
-    if now - finished > FRESH_SNAPSHOT_SECONDS:
-        return "stale"
+        return None
+    deadline = finished + FRESH_SNAPSHOT_SECONDS
     for root in payload.get("selected_roots", ()):
         root_finished = root.get("scan_finished_unix")
         if root_finished is not None:
             cadence = ROOT_SCAN_CADENCE_SECONDS.get(root.get("storage_media"), ROOT_SCAN_CADENCE_SECONDS["unknown"])
-            if now - root_finished > cadence + polling_interval + SCHEDULED_TIMER_DELAY_SECONDS:
-                return "stale"
-    return "fresh"
-
+            deadline = min(deadline, root_finished + cadence + polling_interval + SCHEDULED_TIMER_DELAY_SECONDS)
+    return deadline
 
 
 def _config_sync(status: Mapping[str, Any], server: Server) -> str:

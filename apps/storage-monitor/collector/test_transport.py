@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from collector.inventory import Server
 from collector.test_snapshot import base_payload, status_for
@@ -33,8 +35,8 @@ class FakeRunner:
         self.seen_temp_modes = []
         self.seen_temp_is_regular = []
 
-    def run(self, argv, *, input=None, stdout=None, stderr=None, timeout=None, check=False, shell=False, preexec_fn=None):
-        self.calls.append({"argv": list(argv), "input": input, "timeout": timeout, "shell": shell, "preexec_fn": preexec_fn})
+    def run(self, argv, *, input=None, stdout=None, stderr=None, timeout=None, check=False, shell=False):
+        self.calls.append({"argv": list(argv), "input": input, "timeout": timeout, "shell": shell})
         if shell is not False:
             raise AssertionError("transport must never use shell=True")
         if self.fail_next:
@@ -45,8 +47,10 @@ class FakeRunner:
             code = self.returncode_next if self.returncode_next is not None else 0
             self.returncode_next = None
             return Completed(returncode=code, stdout=self.ssh_stdout_next, stderr=b"ignored /secret/path")
-        if argv[0] != "sftp":
+        if argv[:4] != [sys.executable, "-I", "-S", "-c"] or argv[6] != "sftp":
             raise AssertionError(argv)
+        limit = int(argv[5])
+        self.calls[-1]["limit_bytes"] = limit
         batch = input.decode("utf-8") if isinstance(input, bytes) else input
         lines = [line for line in batch.splitlines() if line]
         if len(lines) != 1:
@@ -61,13 +65,11 @@ class FakeRunner:
         if remote == "/var/lib/storage-viz/scan-status.json":
             content = json.dumps(self.statuses.pop(0)).encode("utf-8")
             code = self.returncode_next if self.returncode_next is not None else 0
-            limit = getattr(preexec_fn, "limit_bytes", len(content))
             pathlib.Path(local).write_bytes(content[:limit] if code and self.truncate_to_cap_on_nonzero else content)
             self.returncode_next = None
             return Completed(returncode=code, stdout=b"", stderr=b"ignored")
         content = self.snapshots[pathlib.PurePosixPath(remote).name]
         code = self.returncode_next if self.returncode_next is not None else 0
-        limit = getattr(preexec_fn, "limit_bytes", len(content))
         pathlib.Path(local).write_bytes(content[:limit] if code and self.truncate_to_cap_on_nonzero else content)
         self.returncode_next = None
         return Completed(returncode=code, stdout=b"", stderr=b"ignored")
@@ -236,7 +238,7 @@ class OpenSshTransportTests(unittest.TestCase):
         fake = FakeRunner(); fake.statuses = [dict(status), dict(status)]; fake.snapshots[status["generation"]] = data
         tx = OpenSshTransport(runner=fake, max_status_bytes=1234, max_snapshot_bytes=4096)
         tx.fetch_snapshot(server())
-        self.assertEqual([getattr(c["preexec_fn"], "limit_bytes", None) for c in fake.calls], [1234, status["byte_size"], 1234])
+        self.assertEqual([c["limit_bytes"] for c in fake.calls], [1234, status["byte_size"], 1234])
 
         fake = FakeRunner(); fake.statuses = [dict(status)]; fake.returncode_next = -signal.SIGXFSZ
         with self.assertRaises(TransportError) as ctx:
@@ -249,15 +251,35 @@ class OpenSshTransportTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SNAPSHOT_TOO_LARGE")
 
     @unittest.skipIf(os.name != "posix", "RLIMIT_FSIZE is POSIX-only")
-    def test_rlimit_preexec_prevents_local_child_from_growing_file_beyond_cap(self):
-        from collector.transport import _fsize_limiter
+    def test_threaded_transfers_enforce_the_file_cap_without_a_fork_callback(self):
+        from collector.transport import OpenSshTransport, TransportError
 
-        with tempfile.TemporaryDirectory() as tmp:
-            target = pathlib.Path(tmp) / "limited.bin"
-            script = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'x' * 4096)"
-            result = subprocess.run([sys.executable, "-c", script, str(target)], shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=_fsize_limiter(1024))
-            self.assertNotEqual(result.returncode, 0)
-            self.assertLessEqual(target.stat().st_size, 1024)
+        script = """import os, shlex, signal, sys
+signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
+destination = shlex.split(sys.stdin.read())[2]
+with open(destination, "wb", buffering=0) as output:
+    os.write(output.fileno(), b"x" * 4096)
+    os.write(output.fileno(), b"x")
+"""
+        tx = OpenSshTransport(max_status_bytes=1024)
+        def fetch():
+            with self.assertRaises(TransportError) as ctx:
+                tx.fetch_status(server())
+            return ctx.exception.code
+
+        actual_run = subprocess.run
+        def run_without_a_fork_callback(argv, **kwargs):
+            self.assertNotIn("preexec_fn", kwargs)
+            result = actual_run(argv, **kwargs)
+            _, _, destination = shlex.split(kwargs["input"].decode())
+            self.assertEqual(pathlib.Path(destination).stat().st_size, 1024)
+            self.assertEqual(result.returncode, -signal.SIGXFSZ)
+            return result
+
+        with patch.object(tx, "_sftp_argv", return_value=[sys.executable, "-I", "-S", "-c", script]):
+            with patch("collector.transport.subprocess.run", side_effect=run_without_a_fork_callback):
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    self.assertEqual(list(pool.map(lambda _: fetch(), range(8))), ["STATUS_TOO_LARGE"] * 8)
 
     def test_nonzero_sftp_at_cap_maps_to_limit_but_below_cap_stays_unreachable(self):
         from collector.transport import OpenSshTransport, TransportError

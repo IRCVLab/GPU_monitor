@@ -7,6 +7,22 @@ from collector.service import PollService
 from collector import transport
 
 class TelemetryTests(unittest.TestCase):
+    def poll_status(self, service):
+        service.poll_scan_status_once()
+        for worker in service._telemetry_threads.values():
+            worker.join(3)
+            self.assertFalse(worker.is_alive())
+
+    def test_overview_and_detail_reads_never_start_a_remote_observation(self):
+        with tempfile.TemporaryDirectory() as td:
+            tx = FakeTransport()
+            svc = PollService([make_server()], CentralStore(td), tx)
+            for _ in range(10):
+                self.assertEqual(svc.server_summaries()[0]["scan_status"]["state"], "unknown")
+                self.assertEqual(svc.scan_status_for_api("alpha-1")["state"], "unknown")
+            self.assertEqual(tx.active_state_calls, [])
+            self.assertEqual(tx.fetch_status_calls, [])
+
     def test_active_service_overrides_stale_terminal_and_progress(self):
         from collector.scan_telemetry import merge_status
         result = merge_status({'state':'complete', 'started_unix':100, 'finished_unix':120}, {'updated_unix':119,'scanned_files':900}, 'activating', {}, 200)
@@ -31,19 +47,22 @@ class TelemetryTests(unittest.TestCase):
     def test_status_available_while_snapshot_lock_held_and_ttl_bounded(self):
         with tempfile.TemporaryDirectory() as td:
             t = FakeTransport(); clock = FakeClock(200)
-            t.fetch_scan_status = lambda server: {'state':'running','phase':'scanning','started_unix':100,'progress_available':True,'scanned_files':9}
+            t.fetch_scan_status = lambda server: transport.RemoteScanObservation({'state':'running','phase':'scanning','started_unix':100,'progress_available':True,'scanned_files':9})
             svc = PollService([make_server()], CentralStore(td), t, clock=clock)
             ready = threading.Event(); release = threading.Event()
             def hold():
                 with svc._locks['alpha-1']: ready.set(); release.wait(3)
             th = threading.Thread(target=hold); th.start(); ready.wait(1)
             try:
+                self.poll_status(svc)
                 result = svc.scan_status_for_api('alpha-1')
                 self.assertEqual(result['state'],'running')
                 self.assertEqual(result['scanned_files'],9)
                 t.fetch_scan_status = lambda server: (_ for _ in ()).throw(transport.TransportError('TIMEOUT','timeout'))
+                self.poll_status(svc)
                 self.assertEqual(svc.scan_status_for_api('alpha-1')['state'],'running')
                 clock.now += 6
+                self.poll_status(svc)
                 failed = svc.scan_status_for_api('alpha-1')
                 self.assertEqual(failed['state'],'unknown')
                 self.assertEqual(failed['error_code'],'TIMEOUT')
@@ -52,6 +71,7 @@ class TelemetryTests(unittest.TestCase):
     def test_legacy_agent_explicit_unavailable(self):
         with tempfile.TemporaryDirectory() as td:
             svc = PollService([make_server()],CentralStore(td),FakeTransport())
+            self.poll_status(svc)
             result = svc.scan_status_for_api('alpha-1')
             self.assertEqual(result['state'],'idle')
             self.assertFalse(result['progress_available'])
@@ -60,27 +80,87 @@ class TelemetryTests(unittest.TestCase):
     def test_overview_retains_observation_while_refresh_runs(self):
         with tempfile.TemporaryDirectory() as td:
             t = FakeTransport(); clock = FakeClock(200)
-            t.fetch_scan_status = lambda server: {'state':'running','scanned_files':9}
+            t.fetch_scan_status = lambda server: transport.RemoteScanObservation({'state':'running','scanned_files':9})
             svc = PollService([make_server()],CentralStore(td),t,clock=clock)
-            svc.scan_status_for_api('alpha-1')
+            self.poll_status(svc)
             clock.now += 30
             entered = threading.Event(); release = threading.Event()
             def slow(server):
                 entered.set(); release.wait(3)
-                return {'state':'running','scanned_files':10}
+                return transport.RemoteScanObservation({'state':'running','scanned_files':10})
             t.fetch_scan_status = slow
             try:
+                svc.poll_scan_status_once()
+                self.assertTrue(entered.wait(1))
                 result = svc.server_summaries()[0]['scan_status']
                 self.assertEqual(result['state'],'running')
                 self.assertEqual(result['observed_unix'],200)
                 self.assertEqual(result['scanned_files'],9)
-                self.assertTrue(entered.wait(1))
                 busy = svc.scan_status_for_api('alpha-1')
                 self.assertEqual(busy['state'], 'running')
                 self.assertEqual(busy['observed_unix'], 200)
             finally:
                 release.set()
                 for worker in svc._telemetry_threads.values(): worker.join(3)
+
+    def test_idle_and_manual_scan_use_different_observation_intervals(self):
+        with tempfile.TemporaryDirectory() as td:
+            tx = FakeTransport()
+            clock = FakeClock(200)
+            store = CentralStore(td)
+            svc = PollService([make_server()], store, tx, clock=clock)
+            self.poll_status(svc)
+            clock.now += 59
+            self.poll_status(svc)
+            self.assertEqual(tx.active_state_calls, ["alpha-1"])
+            clock.now += 1
+            self.poll_status(svc)
+            self.assertEqual(tx.active_state_calls, ["alpha-1"] * 2)
+
+            store.update_state("alpha-1", active_job={
+                "id": "job-1", "server_id": "alpha-1", "kind": "rescan",
+                "state": "running", "actor": "operator", "requested_unix": clock.now,
+                "started_unix": clock.now, "finished_unix": None, "result_code": None,
+            })
+            tx.active_state = "active"
+            clock.now += 5
+            self.poll_status(svc)
+            self.assertEqual(svc.scan_status_for_api("alpha-1")["state"], "running")
+            self.assertEqual(tx.active_state_calls, ["alpha-1"] * 3)
+            clock.now += 5
+            self.poll_status(svc)
+            self.assertEqual(tx.active_state_calls, ["alpha-1"] * 4)
+
+    def test_slow_host_does_not_delay_other_hosts_or_spawn_duplicate_worker(self):
+        with tempfile.TemporaryDirectory() as td:
+            tx = FakeTransport()
+            calls = []
+            entered = threading.Event()
+            complete = threading.Event()
+            release = threading.Event()
+
+            def observe(server):
+                calls.append(server.id)
+                if server.id == "alpha-1":
+                    entered.set()
+                    release.wait(3)
+                else:
+                    complete.set()
+                return transport.RemoteScanObservation({"state": "idle"})
+
+            tx.fetch_scan_status = observe
+            svc = PollService([make_server(), make_server("beta-2")], CentralStore(td), tx)
+            try:
+                svc.poll_scan_status_once()
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(complete.wait(1))
+                svc.poll_scan_status_once()
+            finally:
+                release.set()
+                for worker in svc._telemetry_threads.values():
+                    worker.join(3)
+            self.assertCountEqual(calls, ["alpha-1", "beta-2"])
+            self.assertEqual(svc.scan_status_for_api("beta-2")["state"], "idle")
 
     def test_stale_heartbeat_and_mismatched_run_are_not_live_progress(self):
         from collector.scan_telemetry import merge_status
@@ -109,7 +189,7 @@ class TelemetryTests(unittest.TestCase):
         obs = {'lifecycle':{'server_id':'alpha-1','state':'running','started_unix':100,'run_id':'x'},'progress':{'run_id':'x','updated_unix':110,'scanned_files':5},'service':'ActiveState=active\n','timer':'ActiveState=active\nNextElapseUSecMonotonic=3min\n','remote_unix':120,'remote_monotonic':100}
         runner.ssh_stdout_next = json.dumps(obs).encode()
         tx = transport.OpenSshTransport(runner=runner)
-        result = tx.fetch_scan_status(server())
+        result = tx.fetch_scan_status(server()).status
         self.assertEqual(result['state'],'running')
         self.assertEqual(result['next_run_unix'],200)
         self.assertEqual(result['scanned_files'],5)
@@ -125,12 +205,82 @@ class TelemetryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tx = FakeTransport(); payload = payload_for(); status, data = status_data(payload)
             tx.status['alpha-1'] = status; tx.downloads['alpha-1'] = (status,data)
-            tx.fetch_scan_status = lambda server: {'state':'complete','generation':payload['scan_generation']}
+            tx.fetch_scan_status = lambda server: transport.RemoteScanObservation({'state':'complete','generation':payload['scan_generation']})
             svc = PollService([make_server()],CentralStore(td),tx)
-            svc.scan_status_for_api('alpha-1')
+            self.poll_status(svc)
             svc._refresh_threads['alpha-1'].join(3)
             self.assertEqual(svc.load_snapshot_for_api('alpha-1')['scan_generation'],payload['scan_generation'])
             self.assertEqual(svc.scan_status_for_api('alpha-1')['snapshot_generation'],payload['scan_generation'])
+            self.assertEqual(tx.fetch_status_calls, ['alpha-1'])
+
+    def test_refresh_reuses_probe_publication_and_still_checks_after_transfer(self):
+        import json
+        from collector.test_service import payload_for, status_data
+        from collector.test_transport import FakeRunner
+
+        payload = payload_for()
+        published, data = status_data(payload)
+        for changed in (False, True):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as td:
+                runner = FakeRunner()
+                newer, _ = status_data(payload_for(started=1719201000))
+                post_transfer = dict(newer, status="failed") if changed else published
+                runner.statuses = [post_transfer, post_transfer]
+                runner.snapshots[published["generation"]] = data
+                runner.ssh_stdout_next = json.dumps({
+                    "lifecycle": {}, "progress": {}, "published": published,
+                    "service": "ActiveState=inactive", "timer": "",
+                    "remote_unix": 1719200120, "remote_monotonic": 100,
+                }).encode()
+                svc = PollService([make_server()], CentralStore(td), transport.OpenSshTransport(runner=runner))
+                self.poll_status(svc)
+                svc._refresh_threads["alpha-1"].join(3)
+                self.assertFalse(svc._refresh_threads["alpha-1"].is_alive())
+                transfers = [call["input"].split()[1] for call in runner.calls if call["input"] is not None]
+                expected_transfers = [
+                    (transport.SNAPSHOT_DIR + "/" + published["generation"]).encode(),
+                    transport.STATUS_PATH.encode(),
+                ]
+                if changed:
+                    expected_transfers.append(transport.STATUS_PATH.encode())
+                self.assertEqual(transfers, expected_transfers)
+                public_status = svc.scan_status_for_api("alpha-1")
+                self.assertNotIn("publication", public_status)
+                for key in ("sha256", "byte_size", "config_digest"):
+                    self.assertNotIn(key, public_status)
+                if changed:
+                    self.assertIsNone(svc.load_snapshot_for_api("alpha-1"))
+                    self.assertEqual(svc.load_state_for_api("alpha-1")["last_error_code"], "REMOTE_SCAN_FAILED")
+                else:
+                    self.assertEqual(public_status["snapshot_generation"], payload["scan_generation"])
+
+    def test_probe_cannot_reuse_publication_older_than_another_committed_pull(self):
+        import json
+        from collector.test_service import payload_for, status_data
+        from collector.test_transport import FakeRunner
+
+        worker_server = make_server()
+        older, _ = status_data(payload_for())
+        newer_payload = payload_for(started=1719201000)
+        newer, data = status_data(newer_payload)
+        runner = FakeRunner()
+        runner.statuses = [newer, newer, newer]
+        runner.snapshots[newer["generation"]] = data
+        runner.ssh_stdout_next = json.dumps({
+            "lifecycle": {}, "progress": {}, "published": older,
+            "service": "ActiveState=inactive", "timer": "",
+            "remote_unix": 1719201120, "remote_monotonic": 100,
+        }).encode()
+        with tempfile.TemporaryDirectory() as td:
+            svc = PollService([worker_server], CentralStore(td), transport.OpenSshTransport(runner=runner))
+            self.assertEqual(svc.poll_server(worker_server.id)["latest_pull_status"], "succeeded")
+            runner.calls.clear()
+            self.poll_status(svc)
+            svc._refresh_threads[worker_server.id].join(3)
+            transfers = [call["input"].split()[1] for call in runner.calls if call["input"] is not None]
+            self.assertEqual(transfers, [transport.STATUS_PATH.encode()])
+            self.assertEqual(svc.load_state_for_api(worker_server.id)["latest_pull_status"], "succeeded")
+            self.assertEqual(svc.scan_status_for_api(worker_server.id)["snapshot_generation"], newer_payload["scan_generation"])
 
     def test_legacy_scan_start_and_published_generation_are_independent(self):
         import json
@@ -144,7 +294,7 @@ class TelemetryTests(unittest.TestCase):
             "services": ["ActiveState=inactive\n", "ActiveState=activating\nExecMainStartTimestampMonotonic=90000000\nInactiveExitTimestampMonotonic=89000000\n"],
             "timer": "", "remote_unix": 1719200120, "remote_monotonic": 100,
         }).encode()
-        result = transport.OpenSshTransport(runner=runner).fetch_scan_status(server())
+        result = transport.OpenSshTransport(runner=runner).fetch_scan_status(server()).status
         self.assertEqual(result["state"], "running")
         self.assertEqual(result["started_unix"], 1719200110)
         self.assertFalse(result["progress_available"])
@@ -158,12 +308,12 @@ class TelemetryTests(unittest.TestCase):
             tx = FakeTransport()
             tx.status["alpha-1"], data = status_data(payload)
             tx.downloads["alpha-1"] = (tx.status["alpha-1"], data)
-            tx.fetch_scan_status = lambda _: {
+            tx.fetch_scan_status = lambda _: transport.RemoteScanObservation({
                 "state": "idle", "published_generation": payload["scan_generation"],
                 "published_finished_unix": payload["scan_finished_unix"],
-            }
+            })
             svc = PollService([make_server()], CentralStore(td), tx)
-            svc.scan_status_for_api("alpha-1")
+            self.poll_status(svc)
             svc._refresh_threads["alpha-1"].join(3)
             status = svc.scan_status_for_api("alpha-1")
             self.assertEqual(status["snapshot_generation"], payload["scan_generation"])

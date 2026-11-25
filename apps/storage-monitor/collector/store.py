@@ -68,6 +68,18 @@ class ApplyResult:
     message: Optional[str] = None
 
 
+SnapshotRevision = tuple[str, int, int, int, int, int]
+
+
+@dataclass(frozen=True)
+class OpenSnapshot:
+    revision: SnapshotRevision
+    stream: TextIO
+
+    def read(self) -> Dict[str, Any]:
+        return _decode_json(self.stream, "snapshot")
+
+
 class CentralStore:
     def __init__(self, state_root: str | pathlib.Path):
         self.root = pathlib.Path(state_root)
@@ -81,12 +93,12 @@ class CentralStore:
     def apply_download(self, server_id: str, status: Mapping[str, Any], downloaded: bytes, desired: snapshot.DesiredServer) -> ApplyResult:
         sid = self._server_id(server_id)
         try:
-            with self._locked(sid):
-                try:
-                    valid = snapshot.validate_download(status, downloaded, desired)
-                    if valid.server_id != sid:
-                        raise ValueError("validated server_id mismatch")
-                except Exception as exc:
+            valid = snapshot.validate_download(status, downloaded, desired)
+            if valid.server_id != sid:
+                raise ValueError("validated server_id mismatch")
+        except Exception as exc:
+            try:
+                with self._locked(sid):
                     self._merge_state_best_effort(sid, {
                         "snapshot_availability": "available" if self._load_committed(sid)[0].get("snapshot") else "absent",
                         "latest_pull_status": "invalid_snapshot",
@@ -94,31 +106,49 @@ class CentralStore:
                         "configuration_sync": "unknown",
                         **_safe_error("INVALID", str(exc)),
                     })
-                    return ApplyResult(False, "INVALID", _safe_message(str(exc)))
-                state_patch = {
-                    "snapshot_availability": "available",
-                    "latest_pull_status": "succeeded",
-                    "latest_scan_result": _scan_result(valid.payload),
-                    "configuration_sync": valid.config_sync,
-                    "last_error_code": None,
-                    "last_error_message": None,
-                    "last_error_unix": None,
-                }
-                try:
-                    _, durability_uncertain = self._commit_pair(
-                        sid, state_updates=state_patch,
-                        snapshot_name=f"snapshot-v2-{status['sha256']}.json",
-                        snapshot_payload=valid.payload,
-                    )
-                    if durability_uncertain:
-                        return ApplyResult(True, "DURABILITY_UNCERTAIN", "current manifest visible but directory fsync failed")
-                    return ApplyResult(True)
-                except Exception as exc:
-                    return ApplyResult(False, "WRITE_ERROR", _safe_message(str(exc)))
+            except BlockingIOError:
+                raise
+            except Exception as store_error:
+                return ApplyResult(False, "WRITE_ERROR", _safe_message(str(store_error)))
+            return ApplyResult(False, "INVALID", _safe_message(str(exc)))
+        return self.commit_snapshot(valid)
+
+    def commit_snapshot(self, valid: snapshot.ValidatedSnapshot, *, freshness: str | None = None) -> ApplyResult:
+        sid = self._server_id(valid.server_id)
+        state_patch = {
+            "snapshot_availability": "available",
+            "latest_pull_status": "succeeded",
+            "latest_scan_result": _scan_result(valid.payload),
+            "configuration_sync": valid.config_sync,
+            "last_error_code": None,
+            "last_error_message": None,
+            "last_error_unix": None,
+        }
+        if freshness is not None:
+            state_patch["freshness"] = freshness
+        try:
+            with self._locked(sid):
+                _, durability_uncertain = self._commit_pair(
+                    sid, state_updates=state_patch,
+                    snapshot_name=f"snapshot-v2-{valid.digest}.json",
+                    snapshot_payload=valid.payload,
+                )
+            if durability_uncertain:
+                return ApplyResult(True, "DURABILITY_UNCERTAIN", "current manifest visible but directory fsync failed")
+            return ApplyResult(True)
         except BlockingIOError:
             raise
         except Exception as exc:
             return ApplyResult(False, "WRITE_ERROR", _safe_message(str(exc)))
+
+    def has_snapshot_digest(self, server_id: str, digest: str) -> bool:
+        sid = self._server_id(server_id)
+        directory = self._server_dir(sid)
+        if not directory.exists():
+            return False
+        with _generation_lock(directory, fcntl.LOCK_SH):
+            manifest, _, _ = self._load_committed(sid)
+            return manifest["snapshot"] == f"snapshot-v2-{digest}.json"
 
     def update_state(self, server_id: str, **updates: Any) -> Dict[str, Any]:
         sid = self._server_id(server_id)
@@ -127,24 +157,32 @@ class CentralStore:
             return state
 
     def load_snapshot(self, server_id: str) -> Optional[Dict[str, Any]]:
+        with self.open_snapshot(server_id) as selected:
+            return selected.read() if selected is not None else None
+
+    @contextmanager
+    def open_snapshot(self, server_id: str) -> Iterator[OpenSnapshot | None]:
         sid = self._server_id(server_id)
-        d = self._server_dir(sid)
-        legacy = d / "snapshot.json"
-        if legacy.is_symlink():
+        directory = self._server_dir(sid)
+        if (directory / "snapshot.json").is_symlink():
             raise ValueError("snapshot file must not be a symlink")
-        if not d.exists():
-            return None
-        with _generation_lock(d, fcntl.LOCK_SH):
-            manifest, _, _ = self._load_committed(sid)
-            name = manifest["snapshot"]
-            if name is None:
-                return None
-            path = d / name
-            _reject_symlink(path, "snapshot")
-            stream = path.open(encoding="utf-8")
-        # An open descriptor keeps the snapshot readable after its name is pruned.
+        stream = None
+        if directory.exists():
+            with _generation_lock(directory, fcntl.LOCK_SH):
+                manifest, _, _ = self._load_committed(sid)
+                name = manifest["snapshot"]
+                if name is not None:
+                    path = directory / name
+                    _reject_symlink(path, "snapshot")
+                    stream = path.open(encoding="utf-8")
+        if stream is None:
+            yield None
+            return
+        # The open descriptor pins the selected snapshot while its name may be pruned.
         with stream:
-            return _decode_json(stream, "snapshot")
+            info = os.fstat(stream.fileno())
+            revision = (name, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            yield OpenSnapshot(revision, stream)
 
     def load_state(self, server_id: str) -> Dict[str, Any]:
         sid = self._server_id(server_id)

@@ -400,6 +400,17 @@ The agent writes `/var/lib/storage-viz/scan-lifecycle.json` independently of the
 
 Central observations use one fixed SSH Python probe that reads only these fixed telemetry files and queries `storage-viz-scan.service`, `storage-viz-scheduled-scan.service`, and `storage-viz-scan.timer`. Reads are size bounded, reject symlinks/nonregular files, and validate types and counters. The probe does not accept paths or commands from browser input. The existing privileged bounded rescan command and authorization requirements are unchanged. Next-run time comes from the active timer's realtime trigger or its monotonic deadline converted with the remote host's own clocks. For long uptimes rendered with month/year units, a fixed `busctl get-property` query reads the timer's exact unsigned microsecond deadline instead of approximating months or years. Missing `busctl`, infinity, inactive, absent, elapsed, or otherwise unparseable timer values leave the next check time unavailable.
 
-Service activity overrides stale terminal telemetry. An inactive service with a leftover running record reports `unknown`/`SCAN_INTERRUPTED`; failed service state reports failure. A heartbeat older than 30 seconds is marked `STALE_PROGRESS`, retaining counts only as an old observation. SSH/probe failures return an unknown state with a bounded error code. Detail observations have a five-second cache; overview responses reuse the prior observation and refresh in the background, preserving its original `observed_unix` so clients can show staleness. Status requests do not acquire the blocking rescan/snapshot lock.
+Service activity overrides stale terminal telemetry. An inactive service with a leftover running record reports `unknown`/`SCAN_INTERRUPTED`; failed service state reports failure. A heartbeat older than 30 seconds is marked `STALE_PROGRESS`, retaining counts only as an old observation. SSH/probe failures return an unknown state with a bounded error code. The central collector refreshes each idle host about once a minute and each running scan about every five seconds. Overview and detail requests reuse the latest observation and its original `observed_unix`. Status requests do not contact the scan host or acquire the rescan/snapshot lock. The independent snapshot poll still checks remote publication and verifies transferred snapshots.
+
+The scheduled snapshot poll checks up to four hosts in parallel. It queues transfers
+separately so a slow transfer cannot hold up the next status cycle. At most two
+snapshot transfers run across the collector, including manual and telemetry-triggered
+pulls. A new observation replaces a queued transfer for an older publication.
+A pull can reuse a validated publication from telemetry. It still checks the current
+publication after transferring the file and validates the transferred bytes.
+
+The detail API reuses serialized responses while the committed snapshot and current
+capacity observation match. It retains up to 64 MiB of response bodies and evicts
+least recently used entries. Larger responses are served without being retained.
 
 Deploying the central dashboard alone does not upgrade remote agents or scanner binaries. Update the agent and scanner together using the installer on each storage host. Older agents still expose service activity and actual timer timing when readable, but progress is explicitly unavailable. Sample mode has unknown live state and no timer prediction. This change introduces no HTTP endpoint that can execute an arbitrary remote command.
