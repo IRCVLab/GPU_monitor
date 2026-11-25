@@ -179,6 +179,20 @@
     border: 1px solid color-mix(in srgb, var(--warn) 38%, var(--separator)); border-radius: 999px;
     background: color-mix(in srgb, var(--warn) 11%, transparent); color: var(--text); font: 700 11px var(--font); letter-spacing: .02em; }
   .overview-status { margin: 0 0 10px; color: var(--text2); font: 12px var(--mono); }
+  .fleet-usage {
+    margin: 0 0 var(--overview-card-gap);
+    border: 1px solid var(--ops-border);
+    border-radius: var(--r);
+    background: var(--ops-card);
+  }
+  .fleet-usage summary { padding: 12px 16px; cursor: pointer; font-weight: 650; }
+  .fleet-usage summary:focus-visible { outline-offset: -3px; }
+  .fleet-usage [data-fleet-leader] { margin-inline-start: 8px; color: var(--text2); font: 12px var(--mono); }
+  .fleet-usage__coverage { margin: 0; padding: 0 16px 10px; color: var(--text2); font-size: 12px; }
+  .fleet-usage__table { max-height: 26rem; overflow: auto; }
+  .fleet-usage__table th[scope="row"] { color: var(--text); background: none; text-transform: none; position: static; }
+  .fleet-usage__servers { white-space: normal; }
+  .fleet-usage__servers span { display: inline-block; margin-inline-end: 12px; white-space: nowrap; }
   .overview-list {
     display: grid;
     grid-template-columns: repeat(3, minmax(var(--overview-card-min), 1fr));

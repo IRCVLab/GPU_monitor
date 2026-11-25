@@ -478,6 +478,63 @@ function buildOverviewRows(summaries, snapshotEntries, thresholds = DEFAULT_CAPA
   });
 }
 
+function buildFleetUserUsage(summaries, snapshotEntries) {
+  const snapshots = new Map(snapshotEntries.map(entry => [entry.id, entry.snapshot]));
+  const accounts = new Map();
+  let scannedServers = 0;
+  let staleServers = 0;
+  for (const summary of summaries) {
+    const users = snapshots.get(summary.id)?.users;
+    if (!Array.isArray(users)) continue;
+    scannedServers++;
+    if (summary.freshness === "stale") staleServers++;
+    for (const { uid, name, bytes } of users) {
+      const account = typeof name === "string" ? name.trim() : "";
+      if (!Number.isSafeInteger(uid) || uid < 1000 || uid === 65534 || !account || /^\d+$/.test(account)
+          || !Number.isSafeInteger(bytes) || bytes <= 0) continue;
+      if (!accounts.has(account)) accounts.set(account, { name: account, bytes: 0, servers: new Map() });
+      const usage = accounts.get(account);
+      usage.bytes += bytes;
+      if (!usage.servers.has(summary.id)) {
+        usage.servers.set(summary.id, { name: summary.display_name || summary.id, bytes: 0 });
+      }
+      usage.servers.get(summary.id).bytes += bytes;
+    }
+  }
+  const rows = [...accounts.values()].sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
+  return { rows, scannedServers, staleServers, configuredServers: summaries.length };
+}
+
+function renderFleetUserUsage(container, usage) {
+  if (!container) return;
+  const table = container.querySelector("table");
+  if (!table) return;
+  const doc = container.ownerDocument || document;
+  const leader = usage.rows[0];
+  const preview = container.querySelector("[data-fleet-leader]");
+  preview.textContent = leader ? leader.name + " · " + compactBytes(leader.bytes) : "";
+  const coverage = usage.scannedServers + "/" + usage.configuredServers + "대 스캔 기준";
+  container.querySelector("[data-fleet-coverage]").textContent =
+    coverage + (usage.staleServers ? " · 오래된 스캔 " + usage.staleServers + "대" : "");
+  table.hidden = !leader;
+  container.querySelector("[data-fleet-empty]").hidden = !!leader;
+  const tbody = table.querySelector("tbody");
+  tbody.replaceChildren(...usage.rows.map((entry, index) => {
+    const row = makeEl(doc, "tr");
+    row.appendChild(makeEl(doc, "td", "num", String(index + 1)));
+    const name = makeEl(doc, "th", "", entry.name);
+    name.scope = "row";
+    row.appendChild(name);
+    row.appendChild(makeEl(doc, "td", "num", compactBytes(entry.bytes)));
+    const servers = makeEl(doc, "td", "fleet-usage__servers");
+    for (const server of [...entry.servers.values()].sort((a, b) => b.bytes - a.bytes)) {
+      servers.appendChild(makeEl(doc, "span", "", server.name + " " + compactBytes(server.bytes)));
+    }
+    row.appendChild(servers);
+    return row;
+  }));
+}
+
 function parseRoute(locationLike) {
   const search = String((locationLike && locationLike.search) || "");
   const hash = String((locationLike && locationLike.hash) || "").replace(/^#/, "");
@@ -801,6 +858,8 @@ const overviewExports = {
   derivePrimaryStatus,
   buildOverviewServer,
   buildOverviewRows,
+  buildFleetUserUsage,
+  renderFleetUserUsage,
   parseRoute,
   buildRouteHref,
   renderOverviewAggregate,

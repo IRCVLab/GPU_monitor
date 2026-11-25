@@ -2993,7 +2993,51 @@ async function testScanStatusRetriesUntilNewSnapshotDisplayed() {
   } finally {viewer.console.error=log;}
 }
 
+async function testUsersTabRendersTheSelectedServerAfterAChartAlreadyExists() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan());
+  viewer.loadSnapshotForCurrentSource = async id => ({
+    server_id: id, hostname: id, mounts: [], users: [], top_files: [], stale: [], blocked: [],
+  });
+  const renders = [];
+  viewer.renderUsers = () => renders.push(viewer.getCurrentDetailDebugState().data.server_id);
+  viewer.navigateToServer('alpha-1', { skipHistory: true, tab: 'users', skipDataLoad: true });
+  await viewer.ensureDetailLoaded('alpha-1');
+  vm.runInContext('usersInited = true; usersChart = { resize() {} }', viewer);
+  viewer.navigateToServer('beta-2', { skipHistory: true, tab: 'treemap', skipDataLoad: true });
+  await viewer.ensureDetailLoaded('beta-2');
+  viewer.showTab('users');
+  await Promise.resolve();
+  assert.deepStrictEqual(renders, ['alpha-1', 'beta-2']);
+}
+
+function testFleetUsageRanksByAccountNameAndReportsSnapshotCoverage() {
+  const { buildFleetUserUsage } = require('./overview.js');
+  const usage = buildFleetUserUsage([
+    { id: 'alpha', display_name: 'Alpha', freshness: 'fresh' },
+    { id: 'beta', display_name: 'Beta', freshness: 'stale' },
+    { id: 'missing', display_name: 'Missing' },
+  ], [
+    { id: 'alpha', snapshot: { users: [
+      { uid: 1001, name: 'kim', bytes: 39 },
+      { uid: 1002, name: 'lee', bytes: 33 },
+      { uid: 1030, name: '1030', bytes: 90 },
+      { uid: 0, name: 'root', bytes: 90 },
+    ] } },
+    { id: 'beta', snapshot: { users: [
+      { uid: 1002, name: 'kim', bytes: 12 },
+      { uid: 1001, name: 'lee', bytes: 7 },
+    ] } },
+    { id: 'missing', snapshot: null },
+  ]);
+  assert.deepStrictEqual(usage.rows.map(row => [row.name, row.bytes]), [['kim', 51], ['lee', 40]]);
+  assert.deepStrictEqual([...usage.rows[0].servers.values()].map(row => [row.name, row.bytes]), [['Alpha', 39], ['Beta', 12]]);
+  assert.deepStrictEqual([usage.scannedServers, usage.configuredServers, usage.staleServers], [2, 3, 1]);
+}
+
 async function main() {
+  await testUsersTabRendersTheSelectedServerAfterAChartAlreadyExists();
+  testFleetUsageRanksByAccountNameAndReportsSnapshotCoverage();
   await testScanStatusContinuesDuringSnapshotDownload();
   await testScanStatusRetriesUntilNewSnapshotDisplayed();
   await testThemeRevealOriginUsesVisibleIconCenterAndButtonFallback();

@@ -91,6 +91,17 @@
       <p id="sampleDataMarker" class="sample-data-marker" hidden>샘플 데이터</p>
       <div id="overviewError" class="err" hidden></div>
       <p id="overviewStatus" class="overview-status" aria-live="polite"></p>
+      <details id="fleetUsage" class="fleet-usage">
+        <summary>전체 서버 사용자별 사용량 <span data-fleet-leader></span></summary>
+        <p class="fleet-usage__coverage"><span data-fleet-coverage></span> · 계정명 기준 · 시스템 및 미확인 UID 제외</p>
+        <p class="fleet-usage__coverage" data-fleet-empty hidden>표시할 사용자 스캔 결과가 없습니다.</p>
+        <div class="fleet-usage__table">
+          <table hidden>
+            <thead><tr><th scope="col" class="num">순위</th><th scope="col">사용자</th><th scope="col" class="num">합계</th><th scope="col">서버별 사용량</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </details>
       <ul id="overviewList" class="overview-list"></ul>
     </section>
 
