@@ -24,3 +24,14 @@ test('refresh ring exposes no standalone text or interactive control', () => {
 	assert.doesNotMatch(source, /<button|tabindex=|onclick=/);
 	assert.match(source, /aria-hidden="true"/);
 });
+
+test('refresh ring animations stay compositor-only', () => {
+	const css = readFileSync(new URL('../styles/monitor-dashboard.css', import.meta.url), 'utf8');
+	assert.match(source, /<svg class="ops-refresh-ring__satellite"/, 'the satellite rotates as its own HTML-level layer');
+	for (const name of ['ops-refresh-satellite-orbit', 'ops-indicator-breathe', 'ops-indicator-halo']) {
+		const body = css.match(new RegExp(`@keyframes\\s+${name}\\s*\\{([\\s\\S]*?)\\n\\}`))?.[1] ?? '';
+		assert.ok(body, `${name} keyframes exist`);
+		const props = [...body.matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1]);
+		assert.deepEqual([...new Set(props)].filter((p) => p !== 'transform' && p !== 'opacity'), [], `${name} animates only transform and opacity`);
+	}
+});

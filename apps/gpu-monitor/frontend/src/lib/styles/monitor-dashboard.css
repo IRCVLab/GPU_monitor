@@ -113,7 +113,8 @@
 	height: 1.25rem;
 }
 
-.ops-refresh-ring__svg {
+.ops-refresh-ring__svg,
+.ops-refresh-ring__satellite {
 	position: absolute;
 	inset: 0;
 	width: 100%;
@@ -134,20 +135,31 @@
 
 .ops-refresh-ring__satellite {
 	fill: currentColor;
-	filter: drop-shadow(0 0 2px color-mix(in srgb, var(--indicator-color) 42%, transparent));
-	transform-box: view-box;
-	transform-origin: center;
 	animation: ops-refresh-satellite-orbit 10s linear infinite;
 	will-change: transform;
 }
 
+.ops-refresh-ring__satellite circle {
+	filter: drop-shadow(0 0 2px color-mix(in srgb, var(--indicator-color) 42%, transparent));
+}
+
 .ops-refresh-ring__dot {
+	position: relative;
 	width: 0.55rem;
 	height: 0.55rem;
 	border-radius: 999px;
 	background: var(--indicator-color);
-	box-shadow: 0 0 0 0.12rem color-mix(in srgb, var(--indicator-color) 12%, transparent);
 	animation: ops-indicator-breathe 6s ease-in-out infinite;
+}
+
+.ops-refresh-ring__dot::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	background: color-mix(in srgb, var(--indicator-color) 34%, transparent);
+	animation: ops-indicator-halo 6s ease-in-out infinite;
+	will-change: transform, opacity;
 }
 
 .ops-refresh-ring.attention {
@@ -835,12 +847,21 @@
 
 @keyframes ops-indicator-breathe {
 	0%, 100% {
-		box-shadow: 0 0 0 0 color-mix(in srgb, var(--indicator-color) 34%, transparent);
 		opacity: 0.78;
 	}
 	50% {
-		box-shadow: 0 0 0 0.34rem color-mix(in srgb, var(--indicator-color) 0%, transparent);
 		opacity: 1;
+	}
+}
+
+@keyframes ops-indicator-halo {
+	0%, 100% {
+		transform: scale(1);
+		opacity: 1;
+	}
+	50% {
+		transform: scale(2.236);
+		opacity: 0;
 	}
 }
 
@@ -865,6 +886,14 @@
 
 	.ops-refresh-ring__satellite {
 		transform: rotate(225deg);
+	}
+
+	.ops-refresh-ring__dot::after {
+		display: none;
+	}
+
+	.ops-refresh-ring__dot {
+		box-shadow: 0 0 0 0.12rem color-mix(in srgb, var(--indicator-color) 12%, transparent);
 	}
 
 	.monitor-dashboard-spinner {
