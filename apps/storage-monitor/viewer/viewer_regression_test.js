@@ -3023,6 +3023,7 @@ function testFleetUsageRanksByAccountNameAndReportsSnapshotCoverage() {
       { uid: 1002, name: 'lee', bytes: 33 },
       { uid: 1030, name: '1030', bytes: 90 },
       { uid: 0, name: 'root', bytes: 90 },
+      { uid: 33, name: 'www-data', bytes: 100 },
     ] } },
     { id: 'beta', snapshot: { users: [
       { uid: 1002, name: 'kim', bytes: 12 },
@@ -3030,8 +3031,8 @@ function testFleetUsageRanksByAccountNameAndReportsSnapshotCoverage() {
     ] } },
     { id: 'missing', snapshot: null },
   ]);
-  assert.deepStrictEqual(usage.rows.map(row => [row.name, row.bytes]), [['kim', 51], ['lee', 40]]);
-  assert.deepStrictEqual([...usage.rows[0].servers.values()].map(row => [row.name, row.bytes]), [['Alpha', 39], ['Beta', 12]]);
+  assert.deepStrictEqual(usage.rows.map(row => [row.name, row.bytes]), [['root', 90], ['kim', 51], ['lee', 40]]);
+  assert.deepStrictEqual([...usage.rows[1].servers.values()].map(row => [row.name, row.bytes]), [['Alpha', 39], ['Beta', 12]]);
   assert.deepStrictEqual([usage.scannedServers, usage.configuredServers, usage.staleServers], [2, 3, 1]);
 }
 

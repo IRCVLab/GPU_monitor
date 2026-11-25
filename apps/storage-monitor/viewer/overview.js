@@ -492,7 +492,7 @@ function buildFleetUserUsage(summaries, snapshotEntries) {
     if (summary.freshness === "stale") staleServers++;
     for (const { uid, name, bytes } of users) {
       const account = typeof name === "string" ? name.trim() : "";
-      if (!Number.isSafeInteger(uid) || uid < 1000 || uid === 65534 || !account || /^\d+$/.test(account)
+      if (!Number.isSafeInteger(uid) || (uid !== 0 && uid < 1000) || uid === 65534 || !account || /^\d+$/.test(account)
           || !Number.isSafeInteger(bytes) || bytes <= 0) continue;
       if (!accounts.has(account)) accounts.set(account, { name: account, bytes: 0, servers: new Map() });
       const usage = accounts.get(account);
