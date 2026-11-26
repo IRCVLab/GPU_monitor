@@ -9,7 +9,7 @@ STATES = {'idle','running','complete','partial','failed','unknown'}
 PHASES = {'preparing','scanning','publishing'}
 
 def empty_status():
-    return dict.fromkeys((*NUMBERS,'phase','current_root','observed_unix','next_run_unix','error_code','generation','snapshot_generation','published_generation','scan_plan','schedule_mode'), None) | {'state':'unknown','timer_state':'unknown','progress_available':False}
+    return dict.fromkeys((*NUMBERS,'phase','current_root','observed_unix','next_run_unix','error_code','generation','snapshot_generation','published_generation','scan_plan','schedule_mode','estimate_max_duration_sec'), None) | {'state':'unknown','timer_state':'unknown','progress_available':False}
 
 def validate_lifecycle(value):
     if not isinstance(value, dict):

@@ -115,11 +115,15 @@ def record_completed_duration(history: Mapping[str, Any], status: Mapping[str, A
     return {**history, plan: [list(entry) for entry in updated]}
 
 
-def conservative_estimate(history: Mapping[str, Any], plan: str, agent_estimate: Any) -> int | None:
+def estimate_range(history: Mapping[str, Any], plan: str, agent_estimate: Any) -> tuple[int | None, int | None]:
+    """Typical (lower median) and longest duration among recent completions of one plan."""
     candidates = [duration for _, duration in history.get(plan, [])]
     if _count(agent_estimate) is not None:
         candidates.append(agent_estimate)
-    return max(candidates, default=None)
+    if not candidates:
+        return None, None
+    ordered = sorted(candidates)
+    return ordered[(len(ordered) - 1) // 2], ordered[-1]
 
 
 class Clock(Protocol):
@@ -407,7 +411,7 @@ class PollService:
                 result["estimate_duration_sec"] = status["estimate_duration_sec"]
         plan = result["scan_plan"]
         if plan in duration_history.PLANS:
-            result["estimate_duration_sec"] = conservative_estimate(
+            result["estimate_duration_sec"], result["estimate_max_duration_sec"] = estimate_range(
                 self._duration_history.get(server_id, {}), plan, result["estimate_duration_sec"],
             )
         result["snapshot_generation"] = overview.get("scan_generation")
