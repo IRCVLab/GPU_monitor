@@ -26,9 +26,11 @@ from collector.update import Update
 
 _LOG = logging.getLogger(__name__)
 
-RECORD_SCHEMA = "storage-viz.server-record/2"
+RECORD_SCHEMA = "storage-viz.server-record/3"
 RECORD_KEYS = frozenset({"schema", "server_id", "manifest", "manifest_sha256", "accepted", "rejected", "link", "job",
                          "last_job", "update", "durations"})
+RECORD_V2_SCHEMA = "storage-viz.server-record/2"
+"""M2b's record. Read and upgraded, never written (design §2.3)."""
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 DURATION_PLANS = ("full", "ssd")
 DURATION_LIMIT = 5
@@ -181,7 +183,17 @@ def _encode_record(record: Record, server_id: str) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
+def _upgrade_v2(raw: Any) -> Any:
+    """A /2 record has no manifest_sha256 and its jobs no protocol: it only ever held v1 hosts."""
+    if not isinstance(raw, dict) or raw.get("schema") != RECORD_V2_SCHEMA or "manifest_sha256" in raw:
+        return raw
+    jobs_v3 = {key: {**raw[key], "protocol": "invocation"} if isinstance(raw.get(key), dict) else raw.get(key)
+               for key in ("job", "last_job") if key in raw}
+    return {**raw, **jobs_v3, "schema": RECORD_SCHEMA, "manifest_sha256": None}
+
+
 def _parse_record(raw: Any, server_id: str) -> Record:
+    raw = _upgrade_v2(raw)
     if not isinstance(raw, dict) or set(raw) != RECORD_KEYS:
         raise ValueError("record keys differ from the schema")
     if raw["schema"] != RECORD_SCHEMA or raw["server_id"] != server_id:
