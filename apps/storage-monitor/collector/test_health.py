@@ -1,7 +1,7 @@
 from collector import health
 from collector.contract import parse_manifest
 from collector.health import (
-    LEGACY_VOLUME as LEGACY, CaptureAccepted, CaptureMismatch, CaptureRejected, Data, ExchangeFailed, ExchangeOk,
+    LEGACY_VOLUME as LEGACY, CaptureAccepted, CaptureGone, CaptureMismatch, CaptureRejected, Data, ExchangeFailed, ExchangeOk,
     Fetch, LegacyPublication, Link, PublicationObserved, TransferFailed, data_state, reduce_data, reduce_link,
     volume_state,
 )
@@ -159,12 +159,14 @@ def test_data_random_events():
         volume = rng.choice(volumes)
         if data.fetching and rng.random() < 0.7:
             sha = rng.choice(sorted(data.fetching))
-        kind = rng.randrange(5)
+        kind = rng.randrange(6)
+        if kind == 5:
+            return CaptureGone(volume, sha, at=index * 30)
         if kind == 0:
             if rng.random() < 0.5:
                 pick = rng.choice(shas)
-                return PublicationObserved(envelope(pick, rng.choice(("complete", "partial", "failed"))) if pick else LegacyPublication())
-            return PublicationObserved(manifests[(rng.choice(shas), rng.choice(shas))])
+                return PublicationObserved(envelope(pick, rng.choice(("complete", "partial", "failed"))) if pick else LegacyPublication(), index * 30)
+            return PublicationObserved(manifests[(rng.choice(shas), rng.choice(shas))], index * 30)
         if kind == 1:
             return CaptureAccepted(volume, sha)
         if kind == 2:
@@ -181,6 +183,7 @@ def test_data_random_events():
             assert fetch.sha != before.accepted.get(fetch.volume_id), "fetched a held capture"
             assert fetch.sha not in before.fetching, "two transfers of one capture"
             assert fetch.sha in after.fetching
+            assert before.gone.get(fetch.sha, (0, 0))[1] <= event.at, "fetched a lost capture before its back-off ended"
         if isinstance(event, CaptureAccepted) and after.accepted != before.accepted:
             assert event.sha in before.fetching and health.targets(after)[event.volume_id] == event.sha
         if after.manifest is not None:

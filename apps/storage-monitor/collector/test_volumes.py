@@ -536,3 +536,35 @@ def test_a_request_with_no_trace_is_resent_at_most_once_per_idle_interval(tmp_pa
     assert len(collector.host.rescan_requests) == 1
     collector.tick(31)
     assert len(collector.host.rescan_requests) == 2
+
+
+# ------------------------------------------------------------------ M5a review F5: a capture that stays missing
+
+
+def test_a_capture_that_stays_gone_backs_off_and_is_shown_but_never_rejected(tmp_path):
+    collector = Collector(tmp_path, SID, publish=False)
+    host = V2Host(collector)
+    finished = collector.clock.now - 600
+    data = host.volume(VA, BA, "/a", capture(VA, BA, "/a", finished))
+    host.volume(VB, BB, "/b", capture(VB, BB, "/b", finished))
+    del collector.host.volume_captures[(VA, sha(data))]  # the manifest names a capture the host does not have
+    host.publish()
+    collector.clock.now += 61
+    actor = collector.actor()
+    for _ in range(50):  # the clock never moves
+        actor.step()
+    # One fetch, one manifest reread that names the same sha, one more fetch: then back-off.
+    assert (collector.host.captures_of(sha(data)), len(collector.host.manifest_calls)) == (2, 2), "SSH loop with no back-off"
+    assert sha(data) not in record(collector).data.rejected
+    roots = {root["mount_id"]: root for root in snapshot(collector)["selected_roots"]}
+    assert (roots[VA]["status"], roots[VA]["data_error"], roots[VB]["data_error"]) == ("skipped", "CAPTURE_GONE", None)
+    fetches = []
+    for _ in range(12):
+        collector.tick(60)
+        fetches.append(collector.host.captures_of(sha(data)))
+    # Retries 60 s, then 120 s, then 240 s after each failure.
+    assert fetches == [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5], fetches
+    collector.host.volume_captures[(VA, sha(data))] = data
+    collector.tick(600)
+    assert record(collector).data.accepted[VA] == sha(data)
+    assert {root["mount_id"]: root for root in snapshot(collector)["selected_roots"]}[VA]["data_error"] is None

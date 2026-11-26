@@ -23,7 +23,7 @@ ETA_PLANS = ("full", "ssd")
 OVERVIEW_ROOT_FIELDS = (
     "mount_id", "capacity_id", "major_minor", "mount_source", "fstype", "storage_media", "block_media",
     "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
-    "cadence_sec", "identity", "diagnostic", "data_state", "volume_id",
+    "cadence_sec", "identity", "diagnostic", "data_state", "data_error", "volume_id",
 )
 OVERVIEW_MOUNT_FIELDS = (
     "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
@@ -91,7 +91,7 @@ def render_snapshot(payload: Mapping[str, Any]) -> Snapshot:
 
 
 def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[str, VolumeCapture],
-                    states: Mapping[str, str]) -> dict:
+                    states: Mapping[str, str], problems: Mapping[str, str] = {}) -> dict:
     """SHIM(M5a..M8) S5: a v2 host as one v1 snapshot, so today's viewer reads it as a v1 host.
 
     One v1 selected root and mount per scan root, at its real path, as the v1 agent wrote
@@ -99,7 +99,8 @@ def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[st
     manifest in place of scan-time df (A9) and the ``volume_id``, which groups a volume's
     roots into one capacity entry. An ambiguous volume keeps its own id, so it is never
     merged with another. A volume without an accepted capture shows its roots as skipped,
-    with ``data_state`` and ``diagnostic``.
+    with ``data_state`` and ``diagnostic``. ``data_error`` names a fetch problem, such as a
+    capture the host keeps reporting missing.
     """
     held = [captures[volume.volume_id] for volume in manifest.volumes if volume.volume_id in captures]
     started = min(capture.scan_started_unix for capture in held)
@@ -111,14 +112,14 @@ def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[st
         state = states.get(volume.volume_id, "none")
         if capture is None:
             for ref in volume.roots:
-                selected_roots.append({**_v1_root(volume, state, _mount_id(volume, ref.binding), ref.scan_root),
+                selected_roots.append({**_v1_root(volume, state, problems, _mount_id(volume, ref.binding), ref.scan_root),
                                        "status": "skipped"})
             continue
         names = {row["uid"]: row["name"] for root in capture.roots for row in root.users}
         for root in capture.roots:
             mount_id, path, counts = _mount_id(volume, root.binding), root.scan_root, root.counts
             selected_roots.append({
-                **_v1_root(volume, state, mount_id, path), "status": root.outcome,
+                **_v1_root(volume, state, problems, mount_id, path), "status": root.outcome,
                 "scanned_bytes": counts["bytes"], "scanned_files": counts["files"], "scanned_dirs": counts["dirs"],
                 "error_count": counts["errors"], "scan_finished_unix": capture.scan_finished_unix,
             })
@@ -153,14 +154,14 @@ def _mount_id(volume: Volume, binding: str) -> str:
     return volume.volume_id if len(volume.roots) == 1 else f"{volume.volume_id}:{binding}"
 
 
-def _v1_root(volume: Volume, state: str, mount_id: str, path: str) -> dict:
+def _v1_root(volume: Volume, state: str, problems: Mapping[str, str], mount_id: str, path: str) -> dict:
     return {
         "mount_id": mount_id, "volume_id": volume.volume_id, "major_minor": None, "mount_source": None,
         "mount_root": None, "mountpoint": volume.mountpoint, "scan_root": path, "fstype": volume.fstype,
         "scanned_bytes": 0, "scanned_files": 0, "scanned_dirs": 0, "blocked_count": 0, "error_count": 0,
         "error_code": None, "storage_media": volume.media, "storage_media_confidence": volume.media_confidence,
         "cadence_sec": volume.cadence_sec, "identity": volume.identity, "diagnostic": volume.diagnostic,
-        "data_state": state,
+        "data_state": state, "data_error": problems.get(volume.volume_id),
     }
 
 

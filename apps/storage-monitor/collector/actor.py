@@ -21,7 +21,7 @@ from collector import contract, health, jobs, judge, snapshot
 from collector.contract import ContractError, HostManifest, HostRun, LastRun, ManifestPointer
 from collector.errors import StoreUnavailable
 from collector.health import (
-    LEGACY_VOLUME, CaptureAccepted, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
+    LEGACY_VOLUME, CaptureAccepted, CaptureGone, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
     LegacyPublication, PublicationObserved, TransferFailed,
 )
 from collector.inventory import Server
@@ -160,13 +160,15 @@ def _capture_event(message: Fetched, at: int) -> health.DataEvent:
         return CaptureRejected(message.volume_id, message.sha, message.generation, message.code, at)
     if message.outcome == "mismatch":
         return CaptureMismatch(message.volume_id, message.sha, message.generation, at)
+    if message.outcome == "gone":
+        return CaptureGone(message.volume_id, message.sha, at)
     return TransferFailed(message.volume_id, message.sha)
 
 
 def _durable(record: Record) -> Record:
     """The record less what changes on every exchange or lives only in memory; a change here needs a write."""
     return replace(record, link=replace(record.link, seq=0, last_ok_unix=None),
-                   data=replace(record.data, fetching=frozenset(), retried=frozenset()))
+                   data=replace(record.data, fetching=frozenset(), retried=frozenset(), gone={}))
 
 
 def record_duration(durations: Mapping[str, Any], status: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -325,7 +327,7 @@ class ServerActor:
             key = ("v1", captures[LEGACY_VOLUME][0])
         elif isinstance(data.manifest, HostManifest) and captures:
             key = ("v2", data.manifest.sha256, tuple(sorted(data.accepted.items())),
-                   tuple(sorted(health.volume_states(data).items())))
+                   tuple(sorted(health.volume_states(data).items())), tuple(sorted(health.volume_problems(data).items())))
         else:
             key = None
         if key == self._rendered:
@@ -335,7 +337,8 @@ class ServerActor:
         if key[0] == "v1":
             return captures, key, render_snapshot(captures[LEGACY_VOLUME][1])
         parsed = {volume_id: capture for volume_id, (_, capture) in captures.items()}
-        return captures, key, render_snapshot(volumes_payload(self.server.id, data.manifest, parsed, health.volume_states(data)))
+        return captures, key, render_snapshot(volumes_payload(self.server.id, data.manifest, parsed, health.volume_states(data),
+                                                              health.volume_problems(data)))
 
     def _swap(self, held: tuple) -> None:
         self._captures, self._rendered, self._snapshot = held
@@ -452,7 +455,7 @@ class ServerActor:
             record, fetches = self._manifest_observed(record, observation.manifest, seq, at)
         elif observation.publication_error is None:
             # SHIM(M2b..M5c) S3: a host without manifest.json, or one rolled back to the v1 agent.
-            data, fetches = health.reduce_data(record.data, PublicationObserved(LegacyPublication(observation.publication)))
+            data, fetches = health.reduce_data(record.data, PublicationObserved(LegacyPublication(observation.publication), at))
             record = replace(record, link=health.reduce_link(record.link, ExchangeOk(seq, at)), data=data,
                              durations=record_duration(record.durations, observation.status))
         else:
@@ -508,7 +511,7 @@ class ServerActor:
             self._bad_manifest = None
             link = health.reduce_link(link, ExchangeOk(read_seq, at))
         # Every observe republishes the held manifest, so a failed transfer is retried (design §4.2 step 3).
-        data, fetches = health.reduce_data(record.data, PublicationObserved(manifest))
+        data, fetches = health.reduce_data(record.data, PublicationObserved(manifest, at))
         return replace(record, link=link, data=data, durations=last_run_duration(record.durations, manifest.last_run)), fetches
 
     def _schedule(self, busy: bool) -> None:
@@ -643,7 +646,8 @@ class ServerActor:
             self._drop_fetch(message.volume_id, message.sha)
             return
         self._swap(held)
-        if message.outcome == "gone":
+        if message.outcome == "gone" and record.data.gone.get(message.sha, (0, 0))[0] == 1:
+            # Probably pruned after a newer manifest: read it again now. A repeat waits out its back-off.
             self._reread_manifest = True
             self._next_contact = 0.0
 
