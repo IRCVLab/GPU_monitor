@@ -163,3 +163,18 @@ def test_v2_host_keeps_the_v1_route_shapes_with_one_mount_per_volume(collector_a
     assert snapshot["hostname"] == "alpha-1" and snapshot["mount_table"]["status"] == "ok"
     code, status, _ = request("GET", "/api/servers/alpha-1/scan-status")
     assert code == 200 and status["snapshot_generation"] == snapshot["scan_generation"] and status["published_generation"] is None
+
+
+def test_v2_rescan_without_request_id_delivery_answers_503(collector_api):
+    from collector.test_volumes import BA, VA, V2Host, capture
+
+    host, request, origin = collector_api
+    auth = rescan_headers(request, origin)
+    v2 = V2Host(host, "alpha-1")
+    v2.volume(VA, BA, "/a", capture(VA, BA, "/a", host.clock.now - 600))
+    v2.publish()
+    host.tick()
+    host.host.delivers_request_ids = False
+    host.fleet.start()
+    code, body, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
+    assert (code, body["error"]) == (503, "RESCAN_UNAVAILABLE")

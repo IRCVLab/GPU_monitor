@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol
 
 from collector import contract, health, jobs, judge, snapshot
 from collector.contract import ContractError, HostManifest, HostRun, LastRun, ManifestPointer
-from collector.errors import StoreUnavailable
+from collector.errors import RescanUnavailable, StoreUnavailable
 from collector.health import (
     LEGACY_VOLUME, CaptureAccepted, CaptureGone, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
     LegacyPublication, PublicationObserved, TransferFailed,
@@ -57,6 +57,8 @@ class Host(Protocol):
     def get_manifest(self, server: Server) -> bytes: ...
     def get_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes: ...
     def rescan(self, server: Server, request_id: str) -> jobs.RescanReply: ...
+    delivers_request_ids: bool
+    """Whether ``rescan`` can hand the host a request id. False for the legacy adapter (S2)."""
     def fetch_capture(self, server: Server, publication: Mapping[str, Any]) -> bytes:
         """SHIM(M2b..M5c) S3: the v1 snapshot named by a scan-status envelope."""
     def start_rescan(self, server: Server) -> None:
@@ -537,6 +539,9 @@ class ServerActor:
         if last is not None and message.at - last < message.cooldown_seconds:
             return Admitted(error="COOLDOWN", retry_after=message.cooldown_seconds - (message.at - last))
         protocol = "receipt" if isinstance(record.data.manifest, HostManifest) else "invocation"
+        if protocol == "receipt" and not self.host.delivers_request_ids:
+            # Refused before any job or cooldown exists: a 202 here could only end failed (M3b lifts it).
+            return Admitted(error=RescanUnavailable.code)
         job = jobs.admit(message.request_id, message.actor, message.at, protocol)
         if not self._commit(replace(record, job=job)):
             return Admitted(error=StoreUnavailable.code)

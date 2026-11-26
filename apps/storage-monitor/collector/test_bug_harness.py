@@ -121,6 +121,7 @@ class FakeHost:
         self.capture_calls = []
         self.manifest_errors = {}
         self.rescan_requests = []
+        self.delivers_request_ids = True
         self.rescan_replies = {}
 
     def publish(self, server_id, started=1719200000, **kwargs):

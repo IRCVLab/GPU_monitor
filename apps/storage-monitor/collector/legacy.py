@@ -380,8 +380,11 @@ class LegacyHost:
     def get_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes:
         return self.transport.fetch_volume_capture(server, volume_id, sha256, cap)
 
+    delivers_request_ids = False
+    """A request id needs a write into requests/, which only the gate makes for this account (M3b).
+    The actor refuses a v2 rescan at admission, so ``rescan`` is never reached through it."""
+
     def rescan(self, server: Server, request_id: str) -> RescanReply:
-        """A request id needs a write into requests/, which only the gate makes for this account (M3b)."""
         return RescanReply("rejected", "REQUEST_UNSUPPORTED")
 
     def start_rescan(self, server: Server) -> None:

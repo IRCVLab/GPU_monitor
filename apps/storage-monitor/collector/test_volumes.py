@@ -623,3 +623,23 @@ def test_a_volume_naming_another_volumes_capture_is_rejected_once_without_a_fetc
     assert held.rejected[sha(shared)] == {"volume_id": VA, "reason": "VOLUME_MISMATCH", "at": held.rejected[sha(shared)]["at"]}
     assert held.accepted[VB] == sha(shared) and mounts(collector)[VB]["data_state"] == "current"
     assert mounts(collector)[VA]["data_state"] == "stale_rejected"
+
+
+# ------------------------------------------------------------------ deviation 2: refuse a rescan the transport cannot deliver
+
+
+def test_a_v2_rescan_the_transport_cannot_deliver_is_refused_at_admission_without_a_cooldown(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    collector.host.delivers_request_ids = False
+    reply = admit(collector)
+    assert (reply.error, reply.job) == ("RESCAN_UNAVAILABLE", None)
+    assert record(collector).job is None and record(collector).last_job is None
+    assert collector.host.rescan_requests == []
+    collector.host.delivers_request_ids = True
+    assert admit(collector).error is None, "the refusal started a cooldown"
+
+
+def test_a_v1_rescan_is_admitted_whatever_the_transport_says_of_request_ids(tmp_path):
+    collector = Collector(tmp_path, SID)
+    collector.host.delivers_request_ids = False
+    assert admit(collector).job.protocol == "invocation"

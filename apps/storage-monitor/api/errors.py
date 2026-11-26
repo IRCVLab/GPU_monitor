@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple
 
 from collector.errors import (
-    ActiveJob, Cooldown, DomainError, GlobalConcurrency, RescanDisabled, ServerBusy, SnapshotAbsent,
+    ActiveJob, Cooldown, DomainError, GlobalConcurrency, RescanDisabled, RescanUnavailable, ServerBusy, SnapshotAbsent,
     StoreUnavailable, UnknownServer,
 )
 
@@ -28,6 +28,7 @@ STATUS: Dict[type | str, int] = {
     GlobalConcurrency: 429,
     StoreUnavailable: 503,
     ServerBusy: 503,
+    RescanUnavailable: 503,
 }
 
 
