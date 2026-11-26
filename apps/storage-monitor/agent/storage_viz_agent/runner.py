@@ -80,7 +80,7 @@ def prepare_volumes(manifest, roots, now):
             reuse = r.identity != "ambiguous" and descriptors == previous.get("roots")
             volumes[vid] = dict(volume_id=vid, identity=r.identity,
                 diagnostic="VOLUME_IDENTITY_AMBIGUOUS" if r.identity == "ambiguous" else None,
-                mountpoint=r.path, fstype=r.fstype, media=r.media, media_confidence=r.media_confidence,
+                mountpoint=r.mountpoint, fstype=r.fstype, media=r.media, media_confidence=r.media_confidence,
                 group=group, cadence_sec=plan.CADENCE.get(group, plan.CADENCE["slow"]),
                 roots=descriptors, capacity=capacity.sample(r, previous.get("capacity"), now),
                 capture=previous.get("capture") if reuse else None,
@@ -91,8 +91,10 @@ def prepare_volumes(manifest, roots, now):
 
 def run_group(cfg, record, group, volumes, execute, clock):
     start = record["current"]["started_unix"]
-    with tempfile.TemporaryDirectory(dir=cfg.run_dir) as tmp:
-        out = Path(tmp) / "out.json"
+    # Raw scanner output can exceed /run tmpfs capacity. Keep it on the
+    # capture filesystem, where abandoned staging files are collected.
+    with tempfile.NamedTemporaryFile(dir=cfg.data_dir, prefix="scan-", suffix=".tmp") as tmp:
+        out = Path(tmp.name)
         argv = [cfg.scanner_path, "--threads", str(cfg.threads), "--prune-home", str(cfg.prune_home_mb),
                 "--prune-data", str(cfg.prune_data_mb), "--top", str(cfg.top), "--stale-days",
                 str(cfg.stale_days), "--run-id", record["run_id"], "--group", group,

@@ -3,7 +3,7 @@ import os
 
 def sample(root, previous, now):
     try:
-        fd = os.open(root.path, os.O_DIRECTORY | os.O_NOFOLLOW | os.O_RDONLY)
+        fd = os.open(root.mountpoint, os.O_DIRECTORY | os.O_NOFOLLOW | os.O_RDONLY)
         try:
             st_dev = os.fstat(fd).st_dev
             if root.device != "%d:%d" % (os.major(st_dev), os.minor(st_dev)):

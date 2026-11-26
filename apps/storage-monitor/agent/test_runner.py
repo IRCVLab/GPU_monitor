@@ -1,4 +1,3 @@
-import fcntl
 import gzip
 import json
 import os
@@ -55,7 +54,7 @@ class Host:
         return json.loads((self.data / "manifest.json").read_bytes())
 
     def volumes(self):
-        return {v["mountpoint"]: v for v in self.manifest()["volumes"]}
+        return {v["roots"][0]["scan_root"]: v for v in self.manifest()["volumes"]}
 
     def request(self, request="a"*32):
         directory = self.data / "requests"
@@ -66,6 +65,7 @@ class Host:
 def test_a6_home_mount_gets_home_class(tmp_path):
     host = Host(tmp_path)
     assert host.run() == 0
+    assert host.volumes()["/home"]["mountpoint"] == "/"
     assert host.calls == [[("/home", "home")], [("/data", "data")]]
     host.mounts = line("8:1", "/") + "\n" + line("8:2", "/home", 2)
     assert host.run() == 0
@@ -134,7 +134,7 @@ def test_a9_capacity_fresh_on_slow_only_not_due_tick(tmp_path, monkeypatch):
     sample = host.volumes()[str(root)]["capacity"]
     assert len(host.calls) == 1 and host.manifest()["last_run"]["outcome"] == "nothing_due"
     assert sample["observed_unix"] == host.now and sample["used"] == 900 * 4096
-    assert capacity.sample(SimpleNamespace(path=str(root), device="9:99"), sample, host.now+99) == dict(sample,status="failed")
+    assert capacity.sample(SimpleNamespace(mountpoint=str(root), device="9:99"), sample, host.now+99) == dict(sample,status="failed")
 
 
 def test_c4_request_served_after_running_scan(tmp_path):

@@ -13,6 +13,7 @@ def digest(prefix, *parts):
 @dataclass(frozen=True)
 class Root:
     path: str
+    mountpoint: str
     device: str
     volume_id: str
     identity: str
@@ -58,8 +59,9 @@ def resolve(mounts, aliases, config_digest, media_resolver, sysfs=Path("/sys"),
     for device, value in uuids.items():
         owners[value].add(device)
     for mount in mounts:
-        if mount.mountpoint in aliases:
-            labels[mount.entry.major_minor].add(aliases[mount.mountpoint])
+        for path in (mount.mountpoint, mount.entry.mountpoint):
+            if path in aliases:
+                labels[mount.entry.major_minor].add(aliases[path])
     resolved = []
     for m in mounts:
         path, entry = m.mountpoint, m.entry
@@ -79,7 +81,7 @@ def resolve(mounts, aliases, config_digest, media_resolver, sysfs=Path("/sys"),
         prune = "home" if path == "/home" else "data"
         binding = digest("b-", vid, subpath, prune, config_digest, "storage-viz.capture/2")
         media = media_resolver.resolve(dev)
-        resolved.append(Root(path, dev, vid, identity, binding, prune, entry.fstype,
+        resolved.append(Root(path, entry.mountpoint, dev, vid, identity, binding, prune, entry.fstype,
                              media.media, media.confidence))
     if len({r.volume_id for r in resolved}) != len({(r.volume_id, r.device) for r in resolved}):
         raise ValueError("one volume alias refers to different devices")
