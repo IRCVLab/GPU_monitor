@@ -97,7 +97,7 @@ not execute deletion commands.
 
 ## Synthetic fixture stability
 
-`data/gen_sample.py` writes four deterministic, privacy-safe multiserver
+`tools/gen_sample.py` writes four deterministic, privacy-safe multiserver
 fixtures in manifest order: `hinton`, `atlas`, `orion`, and `zeus`.
 
 All generated fixtures use:
@@ -116,8 +116,8 @@ For example, the `hinton` fixture includes:
 - four tree-producing selected roots: `/home`, `/data`, `/data1`, and `/data3`
 - the root filesystem entry has `mountpoint` `/` and `scan_root`/mount `path` `/home`
 
-Do not hand-edit generated sample JSON. Update `data/gen_sample.py`, run it, and
-then run `data/test_fixtures.py` so the tracked fixture and schema invariants stay
+Do not hand-edit generated sample JSON. Update `tools/gen_sample.py`, run it, and
+then run `tests/test_fixtures.py` so the tracked fixture and schema invariants stay
 in sync.
 
 ## Compatibility rules

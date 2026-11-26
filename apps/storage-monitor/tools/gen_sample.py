@@ -372,13 +372,13 @@ def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from collector.contract import snapshot_response
 
-    out_dir = Path(__file__).resolve().parent
+    out_dir = Path(__file__).resolve().parents[1] / "tests/fixtures/fleet"
     docs = []
     for sid, factory in SNAPSHOTS:
         doc = snapshot_response(factory())
         for mount in doc["mounts"]:
             check_tree(mount["tree"])
-        out = out_dir / f"{sid}.sample.json"
+        out = out_dir / f"{sid}.json"
         out.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n", encoding="utf-8")
         docs.append(doc)
         print(f"Wrote {out}")

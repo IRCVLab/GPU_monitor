@@ -106,12 +106,11 @@ async function openBrowser(tmp) {
 
 async function startSampleServer(tmp) {
   const port = await freePort();
-  const server = spawn('python3', [path.join(APP_DIR, 'viewer', 'serve.py')], {
+  const server = spawn('python3', ['-m', 'api.server', '--fixtures', process.argv[2] || 'tests/fixtures/fleet'], {
     cwd: APP_DIR,
     stdio: 'ignore',
     env: {
       ...process.env,
-      STORAGE_VIZ_DEV_SAMPLE_DIR: path.join(APP_DIR, 'data'),
       STORAGE_VIZ_BIND: '127.0.0.1',
       STORAGE_VIZ_PORT: String(port),
       STORAGE_VIZ_STATE_DIR: path.join(tmp, 'state'),
@@ -140,8 +139,14 @@ class CdpTab {
     this.socket = socket;
     this.nextId = 1;
     this.pending = new Map();
+    this.errors = [];
     socket.addEventListener('message', event => {
       const message = JSON.parse(event.data);
+      if (message.method === 'Runtime.exceptionThrown' ||
+          (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') ||
+          (message.method === 'Log.entryAdded' && message.params.entry.level === 'error')) {
+        this.errors.push(message.params);
+      }
       const waiter = message.id && this.pending.get(message.id);
       if (!waiter) return;
       this.pending.delete(message.id);
@@ -319,8 +324,11 @@ async function main() {
     }
     sample = await startSampleServer(tmp);
     tab = await CdpTab.open(browser.cdpUrl);
+    await tab.send('Runtime.enable');
+    await tab.send('Log.enable');
     for (const width of WIDTHS) await checkWidth(tab, sample.origin, width);
     for (const width of [390,1440]) await checkNavigation(tab,sample.origin,width);
+    assert.deepEqual(tab.errors, [], 'browser console errors');
     console.log('stale select hit test passed');
   } finally {
     if (tab) await tab.close();

@@ -9,8 +9,8 @@
 | Scanner | `scanner/hstscan.c`, `scanner/Makefile` | Fast local filesystem walker used only by the agent. | Preserve local-only scan roots and JSON correctness. |
 | Agent runtime | `agent/`, `deploy/install-agent.sh`, `deploy/systemd/storage-viz-scan.*` | Root scan runner, hourly scheduling with per-media intervals, status envelope, atomic snapshots, and exact sudo policy for the `monitoring` account. | Do not accept arbitrary paths or commands from central. |
 | Central collector | `collector/`, `config/servers.example.yaml` | Strict inventory validation, OpenSSH/SFTP transport, state store, polling, and bounded manual rescan. | Inventory references external identity/known-host paths and must not contain secrets. |
-| Central dashboard | `viewer/serve.py`, `deploy/systemd/storage-viz-dashboard.service.in`, `install.sh` | Loopback HTTP API/UI, trusted-proxy auth, exact-origin/CSRF checks, pulled snapshot serving. | Bind loopback by default and publish only through an authenticating reverse proxy. |
-| Data fixtures | `data/hosts.json`, `data/*.sample.json`, `data/gen_sample.py` | Tracked demo metadata and scrubbed fixtures. | Generated production snapshots remain ignored. |
+| Central dashboard | `viewer/serve.py`, `api/`, `deploy/systemd/storage-viz-dashboard.service.in`, `install.sh` | Loopback HTTP API/UI, trusted-proxy auth, exact-origin/CSRF checks, pulled snapshot serving. | Bind loopback by default and publish only through an authenticating reverse proxy. |
+| Data fixtures | `tests/fixtures/fleet/`, `tools/gen_sample.py`, `tools/scrub_fixture.py` | Tracked demo metadata and scrubbed fixtures. | Generated production snapshots remain ignored. |
 | Operations docs | `docs/operations.md`, `docs/host-manifest.md` | Deployment, bootstrap, auth, collection cadence, and cleanup runbooks. | Runtime specifics belong in docs rather than hidden service assumptions. |
 
 ## Data flow

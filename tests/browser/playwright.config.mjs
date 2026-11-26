@@ -21,9 +21,9 @@ export default defineConfig({
       timeout: 60_000,
     },
     {
-      command: 'python3.12 -m http.server --bind 127.0.0.1 ' + Number(storagePort),
+      command: 'python3.12 -m api.server --fixtures tests/fixtures/fleet ' + Number(storagePort),
       cwd: repo + 'apps/storage-monitor',
-      url: storageOrigin + '/viewer/',
+      url: storageOrigin + '/',
     },
   ],
 });

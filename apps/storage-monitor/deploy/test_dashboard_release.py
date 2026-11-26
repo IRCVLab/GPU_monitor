@@ -66,6 +66,10 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
 
     def _write_fixture(self) -> None:
         runtime_files = {
+            "api/auth.py": "",
+            "api/fixtures.py": "",
+            "api/routes.py": "",
+            "api/server.py": "",
             "viewer/serve.py": "from collector.inventory import load_inventory\nfrom collector.fleet import Fleet\nfrom collector.legacy import LegacyHost\nfrom collector.transport import OpenSshTransport\n",
             "viewer/main.js": "console.log('app');\n",
             "viewer/api.js": "export const dataClient = {};\n",
@@ -123,10 +127,10 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "deploy/systemd/storage-viz-scan.timer": "scan\n",
             "deploy/test_direct_proxy.py": "test\n",
             "viewer/viewer.test.js": "test\n",
-            "viewer/test_serve.py": "test\n",
+            "api/test_auth.py": "test\n",
             "collector/test_store.py": "test\n",
-            "data/hosts.json": "[]\n",
-            "data/atlas.sample.json": "{}\n",
+            "tests/fixtures/fleet/hosts.json": "[]\n",
+            "tests/fixtures/fleet/atlas.json": "{}\n",
             "state/dashboard-state.json": "{}\n",
             "secrets/dashboard-token": "secret\n",
             ".env": "SECRET=1\n",
@@ -137,7 +141,6 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         }
         for rel, text in {**runtime_files, **excluded_files}.items():
             self._write(str(APP_ROOT / rel), text)
-        os.symlink("../data", self.repo / APP_ROOT / "viewer/data")
 
     def _run_builder(self, *extra: str) -> subprocess.CompletedProcess[str]:
         self.output_dir.mkdir(exist_ok=True)
@@ -404,6 +407,12 @@ class DashboardReleaseActivationTest(unittest.TestCase):
 
     def _runtime_files(self) -> dict[str, bytes]:
         return {
+            "api/__init__.py": b"",
+            "api/errors.py": b"",
+            "api/auth.py": b"",
+            "api/fixtures.py": b"",
+            "api/routes.py": b"",
+            "api/server.py": b"",
             "viewer/serve.py": b"print('serve')\n",
             "viewer/main.js": b"console.log('ok');\n",
             "viewer/api.js": b"export const dataClient = {};\n",
@@ -1581,7 +1590,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             ("malformed", {"dashboard_extra":"export STORAGE_VIZ_PORT=8088\n"}),
             ("shell", {"proxy_overrides":{"STORAGE_VIZ_PROXY_PUBLIC_ORIGIN":"http://$(hostname):505"}}),
             ("missing", {"proxy_overrides":{"STORAGE_VIZ_PROXY_OPERATOR":None}}),
-            ("sample", {"dashboard_overrides":{"STORAGE_VIZ_DEV_SAMPLE_DIR":"/tmp/samples"}}),
+            ("development", {"dashboard_overrides":{"STORAGE_VIZ_ENV":"development"}}),
             ("direct", {"dashboard_overrides":{"STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN":"1"}}),
             ("bad_origin", {"dashboard_overrides":{"STORAGE_VIZ_ALLOWED_ORIGINS":"http://166.104.167.11:8088"}}),
             ("bad_upstream_host", {"proxy_overrides":{"STORAGE_VIZ_PROXY_UPSTREAM_HOST":"127.0.0.2"}}),

@@ -8,6 +8,7 @@ Type=simple
 User=storage-viz
 Group=storage-viz
 WorkingDirectory=/opt/storage-viz-dashboard
+Environment=STORAGE_VIZ_ENV=production
 Environment=STORAGE_VIZ_BIND=127.0.0.1
 Environment=STORAGE_VIZ_PORT=8088
 Environment=STORAGE_VIZ_INVENTORY=/etc/storage-viz/servers.json

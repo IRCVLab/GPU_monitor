@@ -24,27 +24,13 @@ test('new requests cancel only the same key and superseded successes and failure
   assert.equal(store.getState().resources['detail/a'].data.hostname,'a');
   assert.equal(store.getState().resources['detail/b'].data.hostname,'b');
 });
-test('only session 404 selects static data, preserving manifest order and sample fallbacks',async t => {
-  const requests = [];
-  const responses = [[404,{}],[200,[{id:'beta',sample_data:true},{id:'alpha',sample_data:true}]],
-    [404,{}],[200,{hostname:'beta'}],[503,{}],[404,{}]];
+test('session errors stay visible to the viewer',async t => {
   t.mock.method(globalThis,'fetch',async url => {
-    requests.push(url);
-    const [status,data] = responses.shift();
-    return Response.json(data,{status});
+    assert.equal(url,'/api/session');
+    return Response.json({},{status:404});
   });
-  const {signal} = new AbortController();
-  const {source} = await fetchResource('session',signal);
-  assert.equal(source,'static');
-  const fleet = await fetchResource('fleet',signal,{source});
-  assert.deepEqual(fleet.servers.map(row => row.id),['beta','alpha']);
-  assert.equal(fleet.data_mode,'sample');
-  assert.equal((await fetchResource('detail/beta',signal,{source,file:'beta'})).hostname,'beta');
-  await assert.rejects(fetchResource('session',signal),{status:503});
-  await assert.rejects(fetchResource('fleet',signal),{status:404});
-  assert.deepEqual(requests,['/api/session','data/hosts.json','data/beta.json','data/beta.sample.json','/api/session','/api/servers']);
+  await assert.rejects(fetchResource('session',new AbortController().signal),{status:404});
 });
-
 function runViewer(t,handle) {
   const timers = new Map();
   t.mock.method(globalThis,'setInterval',(fn,ms) => timers.set(ms,fn));

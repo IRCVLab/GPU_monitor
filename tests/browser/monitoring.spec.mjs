@@ -195,7 +195,7 @@ test('Power Flow preserves a conflicting draft and navigates after a successful 
 });
 
 test('Storage switches servers and shows rescan progress and failure', async ({ page, context }) => {
-  const sampleFile = new URL('../../apps/storage-monitor/data/atlas.sample.json', import.meta.url);
+  const sampleFile = new URL('../../apps/storage-monitor/tests/fixtures/fleet/atlas.json', import.meta.url);
   const sample = JSON.parse(await readFile(sampleFile, 'utf8'));
   const unicodePath = '/srv/atlas/vol1/보고서-été-"quote".txt';
   const undecodablePath = '/srv/atlas/vol1/bad-\uFFFD.txt';
@@ -231,7 +231,7 @@ test('Storage switches servers and shows rescan progress and failure', async ({ 
     }
     return route.fulfill({ status: 404 });
   });
-  await page.goto(storageOrigin + '/viewer/');
+  await page.goto(storageOrigin + '/');
   const atlas = page.locator('[data-server-id="atlas"]');
   const mount = atlas.locator('.overview-mount').first();
   await expect(mount).not.toContainText(/스캔 /);

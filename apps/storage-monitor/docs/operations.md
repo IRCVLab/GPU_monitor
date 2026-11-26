@@ -276,13 +276,13 @@ Keep `STORAGE_VIZ_BIND=127.0.0.1`. This mode rejects sample data, non-loopback b
 Run the deterministic sample dashboard from the repository root when you need a browser demo without production inventory:
 
 ```bash
-STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data" \
+cd apps/storage-monitor
 STORAGE_VIZ_BIND=127.0.0.1 \
 STORAGE_VIZ_PORT=8088 \
-python3 viewer/serve.py
+python3 -m api.server --fixtures tests/fixtures/fleet
 ```
 
-Use `http://127.0.0.1:8088`. `STORAGE_VIZ_DEV_SAMPLE_DIR` must point at the repository `data` directory. In this mode `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and `data/hosts.json` keeps the four generated sample servers in this exact order: `hinton`, `atlas`, `orion`, `zeus`. This mode is read-only sample data for local development. Production inventory mode is separate, reports `data_mode: "inventory"`, and does not imply production storage is sample data.
+Use `http://127.0.0.1:8088`. In this mode `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and `tests/fixtures/fleet/hosts.json` keeps the four generated sample servers in this exact order: `hinton`, `atlas`, `orion`, `zeus`. This mode is read-only sample data for local development. Production inventory mode is separate, reports `data_mode: "inventory"`, and does not imply production storage is sample data.
 
 ## Server inventory and SSH material
 

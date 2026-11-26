@@ -8,7 +8,7 @@ import unittest
 
 from agent import mount_policy, scan_runner
 from collector.snapshot import DesiredServer, validate_download
-from data.test_fixtures import assert_schema_v1_snapshot_contract
+from tests.test_fixtures import assert_schema_v1_snapshot_contract
 
 
 def fake_lstat_result(mode, major=8, minor=1):

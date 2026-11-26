@@ -20,27 +20,16 @@ to install dependencies, start a worktree-local instance, and run the same check
 
 ```bash
 cd apps/storage-monitor
-python3.12 -m unittest \
-  agent.test_block_media \
-  agent.test_mount_policy \
-  agent.test_scan_runner \
-  collector.test_inventory \
-  collector.test_jobs \
-  collector.test_service \
-  collector.test_snapshot \
-  collector.test_store \
-  collector.test_transport \
-  viewer.test_serve
+python3.12 -m pytest -q -p no:cacheprovider
 ```
 
 For a local sample dashboard only:
 
 ```bash
 cd apps/storage-monitor
-STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data" \
 STORAGE_VIZ_BIND=127.0.0.1 \
 STORAGE_VIZ_PORT=8088 \
-python3 viewer/serve.py
+python3 -m api.server --fixtures tests/fixtures/fleet
 ```
 
 ## Continuous integration and GPU Live release
@@ -64,7 +53,7 @@ See `docs/operations/github-cicd.md` for the outbound-only deployment contract, 
 ## Repository rules
 
 - Keep generated, collected, runtime, cache, database, browser-output, virtual-environment, and dependency-install data out of Git.
-- Privacy-safe Storage sample fixtures under `apps/storage-monitor/data/` are allowed because they are reviewed sample data, not collected runtime snapshots.
+- Privacy-safe Storage sample fixtures under `apps/storage-monitor/tests/fixtures/fleet/` are allowed because they are reviewed sample data, not collected runtime snapshots.
 - Keep setup, tests, and runtime assumptions application-local unless a root migration or governance file explicitly says otherwise.
 - Direct pushes to `main` and optional merged PRs are supported entry points into the GPU Live contract; the same fail-closed rule applies after either path.
 - Production GPU deployment is server-pulled and outbound-only. The GitHub-hosted SSH workflow has been removed; do not create or maintain a GitHub Environment or deployment secrets for GPU Live.

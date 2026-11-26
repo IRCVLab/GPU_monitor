@@ -73,7 +73,7 @@ test-storage:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \
 	find viewer -name '*.js' -print0 | xargs -0 -n1 node --check; \
 	node --test viewer/test/*.test.js; \
-	node viewer/browser/stale-select-hit.test.js; \
+	node viewer/browser/stale-select-hit.test.js tests/fixtures/fleet; \
 	python3 tools/check_bug_coverage.py; \
 	bash deploy/test_deploy_scripts.sh; \
 	test ! -e scanner/hstscan || { printf '%s\n' 'FAIL: deploy tests left scanner/hstscan behind'; exit 1; }; \

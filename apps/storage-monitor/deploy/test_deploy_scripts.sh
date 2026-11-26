@@ -1204,7 +1204,7 @@ assert_grep "$ROOT/docs/host-manifest.md" 'data/hosts\.json|/api/servers|servers
 assert_grep "$ROOT/docs/operations.md" 'NFS|nfs4|CIFS|SMB|sshfs|FUSE|distributed|virtual|container' "mandatory network/virtual/container mount exclusions"
 assert_grep "$ROOT/docs/architecture.md" 'inventory cannot override mount policy|cannot override mount policy' "inventory cannot override mount policy"
 assert_grep "$ROOT/docs/operations.md" '0600|0640|root:storage-viz|storage-viz.*read' "SSH identity owner/group/mode contract"
-assert_grep "$ROOT/viewer/serve.py" 'CentralPoller|poll_once|serve_forever' "automatic central polling startup source"
+assert_grep "$ROOT/api/server.py" 'CentralPoller|poll_once|serve_forever' "automatic central polling startup source"
 
 RENDER_PREFIX="$TMP/render-prefix"
 RENDER_LOG="$TMP/render-systemctl.log"

@@ -214,7 +214,7 @@ run_commands_in_dir() {
     workdir="$workdir/apps/storage-monitor"
   fi
   run_one "$workdir" 'make -C scanner clean all test' make -C scanner clean all test || rc=1
-  run_one "$workdir" 'python3 data/test_fixtures.py' python3 data/test_fixtures.py || rc=1
+  run_one "$workdir" 'python3 tests/test_fixtures.py' python3 tests/test_fixtures.py || rc=1
   run_one "$workdir" "python3 -m unittest discover -s agent -p 'test_*.py' -v" python3 -m unittest discover -s agent -p 'test_*.py' -v || rc=1
   run_one "$workdir" "python3 -m unittest discover -s collector -p 'test_*.py' -v" python3 -m unittest discover -s collector -p 'test_*.py' -v || rc=1
   run_one "$workdir" 'bash deploy/test_deploy_scripts.sh' bash deploy/test_deploy_scripts.sh || rc=1
@@ -303,7 +303,7 @@ run_one() {
   [ "$code" -eq 0 ] || rc=1
 }
 run_one 'make -C scanner clean all test' make -C scanner clean all test
-run_one 'python3 data/test_fixtures.py' python3 data/test_fixtures.py
+run_one 'python3 tests/test_fixtures.py' python3 tests/test_fixtures.py
 run_one "python3 -m unittest discover -s agent -p 'test_*.py' -v" python3 -m unittest discover -s agent -p 'test_*.py' -v
 run_one "python3 -m unittest discover -s collector -p 'test_*.py' -v" python3 -m unittest discover -s collector -p 'test_*.py' -v
 run_one 'bash deploy/test_deploy_scripts.sh' bash deploy/test_deploy_scripts.sh
