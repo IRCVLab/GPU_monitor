@@ -157,6 +157,8 @@ class ServerActor:
         self.inbox: "queue.Queue[Any]" = queue.Queue()
         self.view = ServerView(server=server)
         self.loaded = False
+        self.started = threading.Event()
+        """Set once the first load attempt has published a view, loaded or not."""
         self._record = Record()
         self._snapshot: Optional[Snapshot] = None
         self._observation: Optional[ObservationView] = None
@@ -173,6 +175,7 @@ class ServerActor:
 
     def run(self, stop: threading.Event) -> None:
         self._guard(self.load)
+        self.started.set()
         while not stop.is_set():
             wait = max(0.0, self._next_contact - self.clock.monotonic())
             try:

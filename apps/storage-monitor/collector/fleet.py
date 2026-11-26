@@ -26,6 +26,7 @@ _LOG = logging.getLogger(__name__)
 
 MAX_PARALLEL_TRANSFERS = 2
 REPLY_TIMEOUT_SECONDS = 5.0
+STARTUP_LOAD_SECONDS = 30.0
 
 
 class Fleet:
@@ -70,6 +71,10 @@ class Fleet:
             thread = threading.Thread(target=actor.run, args=(self._stop,), name=f"storage-viz-actor-{actor.server.id}", daemon=True)
             self._threads.append(thread)
             thread.start()
+        # Serve the stored data from the first request on. A store that stalls only delays startup by the bound.
+        deadline = time.monotonic() + STARTUP_LOAD_SECONDS
+        for actor in self.actors.values():
+            actor.started.wait(max(0.0, deadline - time.monotonic()))
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()

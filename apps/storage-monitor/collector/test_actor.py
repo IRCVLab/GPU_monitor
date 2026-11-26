@@ -1,6 +1,8 @@
 import json
 import threading
 
+import pytest
+
 from collector import judge
 from collector.actor import Admit, Ask, record_duration
 from collector.jobs import Scan
@@ -460,3 +462,19 @@ def test_job_and_cooldown_survive_restart(tmp_path):
     host.restart()
     cooled = admit(host.actor(), now + 899)
     assert (cooled.error, cooled.retry_after) == ("COOLDOWN", 1)
+
+
+def test_fleet_start_serves_stored_data_from_the_first_read(tmp_path):
+    from collector.fleet import Fleet
+    from collector.test_bug_harness import inline
+    from collector.view import summary_v1
+
+    host = Collector(tmp_path, "alpha-1")
+    fleet = Fleet(host.servers, host.state_dir, host.host, clock=host.clock, spawn=inline)
+    fleet.start()
+    try:
+        assert summary_v1(fleet.view("alpha-1"), host.clock.monotonic())["snapshot_availability"] == "available"
+        with pytest.raises(SystemExit):
+            Fleet(host.servers, host.state_dir, host.host, clock=host.clock).start()
+    finally:
+        fleet.stop()
