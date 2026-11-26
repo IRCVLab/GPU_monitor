@@ -97,9 +97,9 @@ EVENT_KINDS = ("Observed", "DispatchReturned", "Tick", "Restarted")
 Result = Tuple[Job, Tuple[Dispatch, ...]]
 
 
-def admit(request_id: str, actor: str, at: int, scan: Optional[Scan]) -> Job:
-    baseline = scan.run_id if scan is not None and scan.run_state != "running" else None
-    return Job(request_id=request_id, actor=actor, requested_unix=at, since_unix=at, baseline_run=baseline)
+def admit(request_id: str, actor: str, at: int) -> Job:
+    """The baseline run comes from the first observation after admission, never from an older one."""
+    return Job(request_id=request_id, actor=actor, requested_unix=at, since_unix=at)
 
 
 def run_deadline_seconds(longest_sec: Optional[int]) -> int:
@@ -129,8 +129,10 @@ def _new_run(job: Job, scan: Scan) -> Optional[str]:
 
 def _correlate(job: Job, event: Observed) -> Job:
     scan = event.scan
-    agent_run = _new_run(job, scan) if scan.run_state == "running" else None
-    return _to(job, "running", event.at, invocation=scan.invocation, agent_run=agent_run)
+    if scan.run_state == "running":
+        return _to(job, "running", event.at, invocation=scan.invocation, agent_run=_new_run(job, scan))
+    # The unit has not written its lifecycle yet, so the run shown finished before it started.
+    return _to(job, "running", event.at, invocation=scan.invocation, agent_run=None, baseline_run=scan.run_id)
 
 
 def _collect(job: Job, event: Observed) -> Result:

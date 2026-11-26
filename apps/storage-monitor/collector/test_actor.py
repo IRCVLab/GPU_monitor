@@ -507,3 +507,22 @@ def test_manual_run_that_fails_before_its_plan_fails_the_job_without_redispatch(
     job = host.summary()["active_job"]
     assert (job["phase"], job["result_code"]) == ("failed", "NO_SAFE_ROOTS")
     assert len(host.host.rescans) == 1, f"the scan was started {len(host.host.rescans)} times"
+
+
+def test_rescan_admitted_before_any_observation_cannot_succeed_from_an_old_run(tmp_path):
+    # M2b review: admission with no observed scan left the job without a baseline, so the host's
+    # old completed run counted as the job's run and the job succeeded though nothing ran.
+    host = Collector(tmp_path, "alpha-1")
+    host.host.scans["alpha-1"] = Scan(run_id="0" * 32, run_state="complete", run_full=True, generation=GENERATION)
+    host.restart()
+    host.host.observe_errors["alpha-1"] = transport_error("TIMEOUT")
+    assert admit(host.actor(), int(host.clock.now)).error is None
+    host.settle()
+    host.host.observe_errors.clear()
+    host.host.rescan_errors["alpha-1"] = transport_error("RESCAN_FAILED")
+    for _ in range(300):
+        host.tick(5)
+        if host.summary()["active_job"]["phase"] in ("succeeded", "failed", "unconfirmed"):
+            break
+    job = host.summary()["active_job"]
+    assert (job["phase"], job["result_code"]) == ("unconfirmed", "NO_TRACE"), "a rescan that never ran ended " + job["phase"]

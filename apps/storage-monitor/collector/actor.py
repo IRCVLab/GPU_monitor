@@ -362,7 +362,7 @@ class ServerActor:
         last = record.last_job.requested_unix if record.last_job is not None else None
         if last is not None and message.at - last < message.cooldown_seconds:
             return Admitted(error="COOLDOWN", retry_after=message.cooldown_seconds - (message.at - last))
-        job = jobs.admit(message.request_id, message.actor, message.at, self._scan)
+        job = jobs.admit(message.request_id, message.actor, message.at)
         if not self._commit(replace(record, job=job)):
             return Admitted(error=StoreUnavailable.code)
         self._publish()
