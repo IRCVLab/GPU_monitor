@@ -5,6 +5,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { expectedFailure } = require('./expected-failure');
 
 class FakeClassList {
   constructor(el) { this.el = el; }
@@ -3231,6 +3232,175 @@ function testFleetUsageRanksByAccountNameAndReportsSnapshotCoverage() {
   assert.deepStrictEqual([usage.scannedServers, usage.configuredServers, usage.staleServers], [2, 3, 1]);
 }
 
+function inViewer(viewer, code) {
+  return JSON.parse(vm.runInContext('JSON.stringify(' + code + ')', viewer));
+}
+
+function stableTbody(viewer, selector) {
+  const tbody = new FakeElement('tbody', viewer.document);
+  const originalQuery = viewer.document.querySelector;
+  viewer.document.querySelector = sel => (sel === selector ? tbody : originalQuery(sel));
+  return () => tbody.children.flatMap(child => child.children.length ? child.children : [child]).map(row => row.innerHTML);
+}
+
+async function testSameServerRefreshKeepsFolderDrillAndExistingRemovalPicks() {
+  const viewer = loadViewer();
+  const snapshot = (generation, id) => ({
+    server_id: id, hostname: id, scan_generation: 'g' + generation, scan_started_unix: 1000 * generation,
+    selected_roots: [
+      { mount_id: 'home', mount_root: '/', mountpoint: '/home', scan_root: '/home', status: 'complete' },
+      { mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' },
+    ],
+    mounts: [
+      { mount_id: 'home', path: '/home', scan_root: '/home', tree: { name: '/home', bytes: 1, uid: 0, children: [] } },
+      { mount_id: 'data', path: '/data', scan_root: '/data', tree: { name: '/data', bytes: 300, uid: 0, children: [
+        { name: 'proj', kind: 'directory', bytes: 200, uid: 1, children: [
+          { name: 'keep.bin', kind: 'file', bytes: 100, uid: 1 },
+          ...(generation === 1 ? [{ name: 'gone.bin', kind: 'file', bytes: 100, uid: 1 }] : []),
+        ] },
+      ] } },
+    ],
+    users: [], top_files: [], stale: [],
+  });
+  let generation = 1;
+  viewer.rememberBootstrap(apiBootstrapForRescan([]));
+  viewer.loadSnapshotForCurrentSource = async id => snapshot(generation, id);
+  viewer.navigateToServer('alpha-1', { skipHistory: true, tab: 'treemap', skipDataLoad: true });
+  await viewer.ensureDetailLoaded('alpha-1');
+  vm.runInContext("currentMountIdx = 1; treemapStack = [{ node: DATA.mounts[1].tree, name: '/data', mount: '/data', snapshot: DATA }, { node: DATA.mounts[1].tree.children[0], name: 'proj' }]", viewer);
+  viewer.setCleanupSelectedItem({ path: '/data/proj/keep.bin', kind: 'file', bytes: 100, source: 'treemap' }, true);
+  viewer.setCleanupSelectedItem({ path: '/data/proj/gone.bin', kind: 'file', bytes: 100, source: 'treemap' }, true);
+  const view = () => ({
+    folder: inViewer(viewer, 'mountPaths[currentMountIdx]'),
+    drill: inViewer(viewer, 'treemapStack.map(s => s.name)'),
+    picks: Array.from(viewer.cleanupItems(), item => item.path),
+  });
+  const refresh = () => viewer.refreshOverviewData({ bootstrapLoader: async () => apiBootstrapForRescan([]), forceReload: true, expectedServerId: 'alpha-1' });
+
+  await refresh();
+  assert.deepStrictEqual(view(), { folder: '/data', drill: ['/data', 'proj'], picks: ['/data/proj/keep.bin', '/data/proj/gone.bin'] },
+    'a focus or timer refresh of the same scan must keep the folder, drill path and removal picks');
+
+  generation = 2;
+  await refresh();
+  assert.deepStrictEqual(view(), { folder: '/data', drill: ['/data', 'proj'], picks: ['/data/proj/keep.bin'] },
+    'a refresh with a new scan must keep the drill path that still exists and drop only picks that are gone');
+
+  viewer.navigateToServer('beta-2', { skipHistory: true, tab: 'treemap', skipDataLoad: true });
+  await viewer.ensureDetailLoaded('beta-2');
+  assert.deepStrictEqual(view(), { folder: '/home', drill: ['/home'], picks: [] }, 'switching servers must still start from a fresh view');
+}
+
+async function testDetailCapacityPressureMatchesOverviewRule() {
+  const viewer = loadViewer();
+  const GB = 1000 ** 3;
+  const snapshot = {
+    server_id: 'alpha-1', hostname: 'alpha', users: [], top_files: [], stale: [],
+    selected_roots: [
+      { mount_id: 'root', capacity_id: 'dev-1', mountpoint: '/', scan_root: '/home', status: 'complete' },
+      { mount_id: 'vol2', capacity_id: 'dev-2', mountpoint: '/vol2', scan_root: '/vol2', status: 'complete' },
+    ],
+    mounts: [
+      { mount_id: 'root', path: '/home', mountpoint: '/', scan_root: '/home', df_total: 78.3 * GB, df_used: 50.1 * GB, df_avail: 28.2 * GB, df_use_pct: 64, scanned_bytes: GB },
+      { mount_id: 'vol2', path: '/vol2', mountpoint: '/vol2', scan_root: '/vol2', df_total: 1400 * GB, df_used: 980 * GB, df_avail: 420 * GB, df_use_pct: 70, scanned_bytes: GB },
+    ],
+  };
+  const overview = viewer.buildOverviewServer({ id: 'alpha-1', display_name: 'alpha', mount_count: 2 }, snapshot, viewer.DEFAULT_CAPACITY_THRESHOLDS);
+  viewer.rememberBootstrap(apiBootstrapForRescan([]));
+  viewer.loadSnapshotForCurrentSource = async () => snapshot;
+  viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true });
+  await viewer.ensureDetailLoaded('alpha-1');
+  const detail = viewer.document.getElementById('caps').children.map(row => row.getAttribute('data-pressure'));
+  assert.deepStrictEqual(Array.from(overview.mounts, mount => mount.pressure), ['critical', 'warning']);
+  assert.deepStrictEqual(detail, ['critical', 'warning'], 'the server page must color each volume exactly as the server list does');
+}
+
+function testStaleSelectButtonFitsAndHeaderScrollsWithRows() {
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  for (const selector of ['.vrow .vc-select', '.vhead .vc-select']) {
+    const block = cssBlock(css, selector);
+    const width = Number(block.match(/width:\s*(\d+)px/)[1]);
+    const padding = Number(block.match(/padding:\s*0\s+(\d+)px/)[1]);
+    assert(width - 2 * padding >= 56, selector + ' must leave room for the whole Select button inside its padding');
+  }
+  assert(/<div id="staleViewport">\s*<div class="vhead" id="staleHead">/.test(html), 'the Stale header must sit inside the sideways scroller so it stays over its columns');
+  const phone = css.match(/@media\s*\(max-width:\s*760px\)\s*\{([\s\S]*?)\n  \}/)[1];
+  assert(/\.vrow \.vc-path, \.vhead \.vc-path\s*\{[^}]*min-width:\s*2\d\dpx/.test(phone), 'Stale Path needs a usable minimum width on phones');
+  assert(/td\.pathcell\s*\{[^}]*min-width:\s*2\d\dpx/.test(phone), 'Top files Path needs a usable minimum width on phones');
+}
+
+async function testTopFilesAgeUsesScanTimeLikeStale() {
+  const viewer = loadViewer();
+  const scan = 1719200000;
+  const file = { path: '/data/a/old.bin', kind: 'file', bytes: 10, uid: 1, owner: 'u', mtime: scan - 400 * 86400 };
+  viewer.rememberBootstrap(apiBootstrapForRescan([]));
+  viewer.loadSnapshotForCurrentSource = async () => ({
+    server_id: 'alpha-1', hostname: 'alpha', scan_started_unix: scan, users: [], mounts: [{ path: '/data' }],
+    top_files: [file], stale: [{ ...file, age_days: 400 }],
+  });
+  const rows = stableTbody(viewer, '#topTbl tbody');
+  viewer.navigateToServer('alpha-1', { skipHistory: true, tab: 'topfiles', skipDataLoad: true });
+  await viewer.ensureDetailLoaded('alpha-1');
+  const staleAge = vm.runInContext('fmtAge(DATA.stale[0].age_days)', viewer);
+  assert.strictEqual(staleAge, '1.1y');
+  assert.match(rows()[0], new RegExp('<td class="num"[^>]*>' + staleAge.replace('.', '\\.') + '</td>'), 'Top files must show the same age as Stale for the same file');
+}
+
+function testOverviewCardClickOpensTreemapLikeItsLink() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan([]));
+  viewer.navigateToServer('beta-2', { skipHistory: true, tab: 'topfiles', skipDataLoad: true });
+  viewer.navigateToOverview({ skipHistory: true });
+  let handlers = null;
+  viewer.renderOverviewList = (_list, _rows, options) => { handlers = options; };
+  vm.runInContext('renderOverview()', viewer);
+  viewer.loadSnapshotForCurrentSource = async id => ({ server_id: id, hostname: id, mounts: [], users: [], top_files: [], stale: [] });
+  handlers.onOpenServer('alpha-1');
+  assert.strictEqual(viewer.window.location.hash, '#treemap', 'a card click must open the tab its link names, not the tab of the last server');
+}
+
+async function testUnknownServerRouteHidesDetailChrome() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan([]));
+  viewer.navigateToServer('nope', { skipHistory: true, tab: 'users', skipDataLoad: true });
+  await viewer.ensureDetailLoaded('nope');
+  assert.strictEqual(viewer.document.getElementById('detailError').textContent, 'Unknown server: nope');
+  assert.strictEqual(viewer.document.getElementById('detailTabs').hidden, true, 'an unknown server must not show detail tabs');
+  assert.strictEqual(viewer.document.getElementById('detailHead').hidden, true, 'an unknown server must not show a placeholder title or Rescan');
+  viewer.navigateToServer('alpha-1', { skipHistory: true, tab: 'users', skipDataLoad: true });
+  assert.strictEqual(viewer.document.getElementById('detailTabs').hidden, false, 'a known server must show its detail chrome again');
+}
+
+function testHistoryReturnKeepsTopFilesOwnerFilter() {
+  const viewer = loadViewer();
+  viewer.rememberBootstrap(apiBootstrapForRescan([]));
+  const select = viewer.document.getElementById('ownerFilter');
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'topfiles' }, { skipHistory: true, skipDataLoad: true });
+  select.value = '1002';
+  vm.runInContext("topOwnerFilter = '1002'", viewer);
+  viewer.applyRouteState({ serverId: null, tab: 'treemap' }, { skipHistory: true, skipDataLoad: true });
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'topfiles' }, { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(inViewer(viewer, 'topOwnerFilter'), '1002', 'back then forward to the same server must keep its owner filter');
+  assert.strictEqual(select.value, '1002');
+  viewer.applyRouteState({ serverId: 'beta-2', tab: 'topfiles' }, { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(inViewer(viewer, 'topOwnerFilter'), '', 'another server starts unfiltered');
+  viewer.applyRouteState({ serverId: 'alpha-1', tab: 'topfiles' }, { skipHistory: true, skipDataLoad: true });
+  assert.strictEqual(inViewer(viewer, 'topOwnerFilter'), '1002');
+}
+
+function testUsersFilesSortFollowsDisplayedValueUnderStorageFilter() {
+  const viewer = loadViewer();
+  const rows = stableTbody(viewer, '#usersTbl tbody');
+  vm.runInContext(`DATA = { users: [
+    { uid: 1, name: 'many-files', bytes: 100, files: 1000, by_mount: { '/data': 10 } },
+    { uid: 2, name: 'big-on-data', bytes: 50, files: 1, by_mount: { '/data': 40 } },
+  ] }; userMountFilter = '/data'; capUsedByMount = { '/data': 50 }; usersSort.key = 'files'; usersSort.dir = -1; renderUsersTable();`, viewer);
+  const names = rows().map(html => html.match(/<\/span>([^<]+) <span class="hint">/)[1]);
+  assert(rows().every(html => html.endsWith('<td class="num">—</td>')), 'Files shows a dash under a storage filter');
+  assert.deepStrictEqual(names, ['big-on-data', 'many-files'], 'sorting by Files must not reorder rows by hidden unfiltered file counts');
+}
+
 async function main() {
   await testUsersTabRendersTheSelectedServerAfterAChartAlreadyExists();
   testFleetUsageRanksByAccountNameAndReportsSnapshotCoverage();
@@ -3323,6 +3493,15 @@ async function main() {
   testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts();
   testCleanupPanelStartsCollapsedWithFullCopy();
   testCleanupCopyFeedbackRestoresLabelAfterRepeatedClicks();
+  // Bug catalog repros (docs/redesign/bug-catalog.md), ported from fix/storage-viewer-sweep 487f873.
+  await expectedFailure(['V1'], 'a focus or timer refresh of the same scan must keep the folder, drill path and removal picks', testSameServerRefreshKeepsFolderDrillAndExistingRemovalPicks);
+  await expectedFailure(['V2'], 'the server page must color each volume exactly as the server list does', testDetailCapacityPressureMatchesOverviewRule);
+  await expectedFailure(['V3', 'V4'], '.vrow .vc-select must leave room for the whole Select button inside its padding', testStaleSelectButtonFitsAndHeaderScrollsWithRows);
+  await expectedFailure(['V5'], 'Top files must show the same age as Stale for the same file', testTopFilesAgeUsesScanTimeLikeStale);
+  await expectedFailure(['V6'], 'a card click must open the tab its link names, not the tab of the last server', testOverviewCardClickOpensTreemapLikeItsLink);
+  await expectedFailure(['V7'], 'an unknown server must not show detail tabs', testUnknownServerRouteHidesDetailChrome);
+  await expectedFailure(['V8'], 'back then forward to the same server must keep its owner filter', testHistoryReturnKeepsTopFilesOwnerFilter);
+  await expectedFailure(['V9'], 'sorting by Files must not reorder rows by hidden unfiltered file counts', testUsersFilesSortFollowsDisplayedValueUnderStorageFilter);
   console.log('viewer regression tests passed');
 }
 
