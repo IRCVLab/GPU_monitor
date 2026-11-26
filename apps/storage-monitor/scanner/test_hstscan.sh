@@ -1078,8 +1078,29 @@ PYEOF
 }
 required_case a7_non_utf8_siblings_distinct a7_non_utf8_siblings_distinct
 
+a10_tree_depth_within_collector_cap() {
+    local root="$TMP/a10" dir out="$TMP/a10.json" i
+    rm -rf "$root"; mkdir -p "$root"; dir="$root"
+    for i in $(seq 1 150); do dir="$dir/d$i"; done
+    mkdir -p "$dir"
+    head -c 2097152 /dev/zero > "$dir/big.bin"
+    "$BIN" --threads 2 --prune-home 1 --prune-data 1 --top 5 --out "$out" --target "$root" "$TREE_DEV" data || return 2
+    $PY - "$out" <<'PYEOF'
+import json, sys
+def depth(node, level=0):
+    kids = node.get("children") or []
+    return max([level] + [depth(child, level + 1) for child in kids])
+data = json.load(open(sys.argv[1]))
+deepest = max(depth(tree) for mount in data["mounts"] for tree in [mount.get("tree") or {}])
+if deepest > 128:
+    print(f"BUG A10: emitted tree depth {deepest} exceeds the collector's 128-level cap, so the whole snapshot would be rejected")
+    sys.exit(1)
+PYEOF
+}
+xfail_case a10_tree_depth_within_collector_cap A10 a10_tree_depth_within_collector_cap
+
 echo "  expected failures = $XFAIL_COUNT"
-[ "$XFAIL_COUNT" -eq 0 ] || fail "expected 0 XFAIL cases, got $XFAIL_COUNT"
+[ "$XFAIL_COUNT" -eq 1 ] || fail "expected 1 XFAIL case (A10, fixed in M5), got $XFAIL_COUNT"
 
 echo
 echo "ALL TESTS PASSED"
