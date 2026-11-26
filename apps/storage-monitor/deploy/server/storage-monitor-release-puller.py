@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import io
@@ -47,6 +48,10 @@ AGENT_NAMESPACE = "storage-viz-agent"
 AGENT_SIGNER = "storage-viz-release"
 MAX_AGENT_ZIP_BYTES = 80 * 1024 * 1024
 MAX_AGENT_FILE_BYTES = {AGENT_BUNDLE: 64 * 1024 * 1024, AGENT_SIGNATURE: 4096, AGENT_METADATA: 4096}
+# After ci passes, agent-bundle.yml may take this long to appear before the
+# puller stops waiting for it and keeps the previous agent bundle.
+AGENT_RUN_GRACE_SECONDS = 1800
+UNCHECKED = object()
 
 
 class PullError(RuntimeError):
@@ -75,6 +80,9 @@ class Config:
     agent_allowed_signers: Path = Path("/etc/storage-viz/agent-allowed-signers")
     # A read-only token (actions: read). GitHub serves artifacts only to an authenticated client.
     github_token_file: Path = Path("/etc/storage-viz/github-token")
+    # Root-owned and outside work_dir, which the unprivileged builder owns.
+    agent_staging_dir: Path = Path("/var/lib/storage-viz-dashboard/agent-staging")
+    release_root: Path = Path("/srv/storage-viz-dashboard/releases")
 
 
 def validate_sha(value: object, name: str = "sha") -> str:
@@ -407,41 +415,82 @@ def authorize(config: Config, sha: str, workflow_run: dict[str, object], check_r
         raise PullError("release authorizer returned unexpected authorization")
 
 
-def find_agent_artifact(config: Config, sha: str, get_json=default_get_json) -> int:
-    """Id of the signed agent bundle artifact that agent-bundle.yml built for sha.
+def log(message: str) -> None:
+    print(f"storage-monitor-release-puller: {message}", file=sys.stderr)
 
-    A missing or unfinished run is the normal state for a few minutes after ci
-    passes, so it raises before the pipeline and does not count as a failure.
-    """
+
+@dataclass(frozen=True)
+class AgentPlan:
+    """Where the agent bundle of the next dashboard release comes from."""
+
+    kind: str  # "none": build without one; "previous": carry the active release's; "fresh": download
+    reason: str
+    artifact_id: int | None = None
+
+
+def agent_channel_disabled(config: Config) -> str | None:
+    """Why the agent channel is off, or None when a key is pinned and a token is present."""
+    try:
+        lines = config.agent_allowed_signers.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    if not any(line.strip() and not line.lstrip().startswith("#") for line in lines):
+        return f"no agent release key is pinned in {config.agent_allowed_signers}"
+    try:
+        token = config.github_token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        token = ""
+    if not token:
+        return f"no GitHub token in {config.github_token_file}"
+    return None
+
+
+def _iso_seconds(value: object) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def plan_agent_bundle(config: Config, sha: str, ci_run: dict[str, object], get_json=default_get_json, now: float = 0.0) -> AgentPlan:
+    """Decide the agent bundle for sha. Raises PullError only to wait for a running signing job."""
     validate_sha(sha)
+    disabled = agent_channel_disabled(config)
+    if disabled:
+        return AgentPlan("none", disabled)
     query = urllib.parse.urlencode({"branch": "main", "event": "workflow_run", "head_sha": sha, "per_page": "10"})
     payload = get_json(f"/repos/{config.repository}/actions/workflows/{config.agent_workflow}/runs?{query}")
     if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
         raise PullError("malformed agent-bundle workflow-runs evidence")
-    runs = [run for run in payload["workflow_runs"] if isinstance(run, dict) and run.get("head_sha") == sha]
-    run = next((r for r in runs if r.get("status") == "completed" and r.get("conclusion") == "success"
-                and r.get("head_branch") == "main" and r.get("event") == "workflow_run"), None)
-    if run is None or not isinstance(run.get("id"), int):
-        raise PullError("missing successful agent-bundle run for current SHA")
+    runs = sorted(
+        (r for r in payload["workflow_runs"] if isinstance(r, dict) and r.get("head_sha") == sha
+         and r.get("head_branch") == "main" and r.get("event") == "workflow_run" and isinstance(r.get("id"), int)),
+        key=lambda r: r["id"], reverse=True,
+    )
+    if not runs:
+        ci_done = _iso_seconds(ci_run.get("updated_at"))
+        if ci_done is not None and now - ci_done < AGENT_RUN_GRACE_SECONDS:
+            raise PullError("agent-bundle run for current SHA has not started yet")
+        return AgentPlan("previous", "no agent-bundle run for current SHA")
+    run = runs[0]
+    if run.get("status") != "completed":
+        raise PullError("agent-bundle run for current SHA is still running")
+    if run.get("conclusion") != "success":
+        return AgentPlan("previous", f"agent-bundle run concluded {run.get('conclusion')}")
     artifacts = get_json(f"/repos/{config.repository}/actions/runs/{run['id']}/artifacts?per_page=100")
     if not isinstance(artifacts, dict) or not isinstance(artifacts.get("artifacts"), list):
         raise PullError("malformed agent-bundle artifacts evidence")
     for artifact in artifacts["artifacts"]:
         if isinstance(artifact, dict) and artifact.get("name") == f"{AGENT_ARTIFACT_PREFIX}-{sha}":
             if artifact.get("expired") is not False or not isinstance(artifact.get("id"), int):
-                raise PullError("agent bundle artifact for current SHA is expired")
-            return artifact["id"]
-    raise PullError("agent-bundle run for current SHA has no signed bundle; is AGENT_SIGNING_KEY set?")
+                return AgentPlan("previous", "the signed agent bundle for current SHA expired")
+            return AgentPlan("fresh", "signed agent bundle for current SHA", artifact["id"])
+    return AgentPlan("previous", "agent-bundle run for current SHA uploaded no bundle (is AGENT_SIGNING_KEY set?)")
 
 
-def fetch_agent_artifact(config: Config, sha: str, artifact_id: int, download, run_command=default_run_command) -> Path:
-    """Download, unpack and verify the signed agent bundle, then stage it for the build.
-
-    The signature is checked with the keys the hosts pin, and the bundle's own
-    RELEASE-MANIFEST must agree with the metadata. Returns the directory that
-    build-dashboard-release.py packs under agent/.
-    """
-    data = download(f"/repos/{config.repository}/actions/artifacts/{artifact_id}/zip")
+def unpack_agent_artifact(data: bytes) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -454,6 +503,15 @@ def fetch_agent_artifact(config: Config, sha: str, artifact_id: int, download, r
                 files[info.filename] = archive.read(info)
     except (zipfile.BadZipFile, OSError) as error:
         raise PullError("agent artifact is not a valid zip") from error
+    return files
+
+
+def verify_agent_files(config: Config, files: dict[str, bytes], run_command=default_run_command) -> dict[str, object]:
+    """Check signature, metadata and manifest of a bundle, in memory. Returns the metadata.
+
+    The signature is checked with the keys the hosts pin, and the bundle's own
+    RELEASE-MANIFEST must agree with the metadata.
+    """
     bundle = files[AGENT_BUNDLE]
     try:
         metadata = json.loads(files[AGENT_METADATA].decode("utf-8"))
@@ -480,15 +538,78 @@ def fetch_agent_artifact(config: Config, sha: str, artifact_id: int, download, r
         ], input=bundle, timeout=60)
     if result.returncode != 0:
         raise PullError("agent bundle signature does not verify against the pinned release key")
-    staged = config.work_dir / "agent-bundle" / sha
-    shutil.rmtree(staged, ignore_errors=True)
-    staged.mkdir(parents=True)
-    staged.chmod(0o755)
-    staged.parent.chmod(0o755)
+    return metadata
+
+
+def fetch_agent_artifact(config: Config, artifact_id: int, download, run_command=default_run_command) -> dict[str, bytes]:
+    """Download and verify the signed bundle. A bundle that fails verification refuses the release."""
+    files = unpack_agent_artifact(download(f"/repos/{config.repository}/actions/artifacts/{artifact_id}/zip"))
+    try:
+        verify_agent_files(config, files, run_command)
+    except PullError as error:
+        log(f"REFUSING the release: the CI agent bundle failed verification, a possible attack: {error}")
+        raise
+    return files
+
+
+def _read_release_file(path: Path, cap: int) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise OSError(f"not a regular file: {path}")
+        data = handle.read(cap + 1)
+    if len(data) > cap:
+        raise OSError(f"too large: {path}")
+    return data
+
+
+def previous_agent_bundle(config: Config, run_command=default_run_command) -> dict[str, bytes] | None:
+    """The bundle in the active dashboard release, verified again; None when there is none."""
+    try:
+        payload = json.loads(config.activation_state_path.read_text(encoding="utf-8"))
+        release = Path(payload["release"])
+        sha = release.parent.name
+        if SHA_RE.fullmatch(sha) is None or release != config.release_root / sha / "storage-monitor":
+            return None
+        files = {name: _read_release_file(release / "agent" / name, cap) for name, cap in MAX_AGENT_FILE_BYTES.items()}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    try:
+        verify_agent_files(config, files, run_command)
+    except PullError as error:
+        log(f"the active release's agent bundle no longer verifies, dropping it: {error}")
+        return None
+    return files
+
+
+def obtain_agent_bundle(config: Config, plan: AgentPlan, download, run_command=default_run_command) -> dict[str, bytes] | None:
+    if plan.kind == "fresh":
+        return fetch_agent_artifact(config, plan.artifact_id, download, run_command)
+    if plan.kind == "previous":
+        files = previous_agent_bundle(config, run_command)
+        log(f"{plan.reason}; {'keeping the previous verified agent bundle' if files else 'no previous agent bundle, releasing without one'}")
+        return files
+    log(f"{plan.reason}; releasing the dashboard without an agent bundle")
+    return None
+
+
+def stage_agent_bundle(config: Config, files: dict[str, bytes]) -> Path:
+    """Write the verified bytes where the builder can read but not change them."""
+    staging = config.agent_staging_dir
+    parent = os.lstat(staging.parent)
+    if parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
+        raise PullError(f"agent staging parent {staging.parent} must be ours and not group or world writable")
+    if os.path.islink(staging) or (staging.exists() and not staging.is_dir()):
+        staging.unlink()
+    shutil.rmtree(staging, ignore_errors=True)
+    os.mkdir(staging, 0o755)
+    os.chmod(staging, 0o755)
     for name, content in files.items():
-        (staged / name).write_bytes(content)
-        (staged / name).chmod(0o644)  # the unprivileged builder reads these
-    return staged
+        fd = os.open(staging / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            os.fchmod(handle.fileno(), 0o644)  # the unit's UMask=0077 would hide them from the builder
+    return staging
 
 
 def builder_command(config: Config, *args: str) -> list[str]:
@@ -544,7 +665,8 @@ def build_release(config: Config, checkout: Path, sha: str, run_command=default_
     return outdir
 
 
-def validate_artifact(outdir: Path, sha: str, agent_dir: Path | None = None) -> tuple[Path, str, str]:
+def validate_artifact(outdir: Path, sha: str, agent_files=UNCHECKED) -> tuple[Path, str, str]:
+    """Check the built archive. agent_files: the verified bundle bytes, None for none, UNCHECKED to skip."""
     archive = outdir / f"{ARTIFACT_PREFIX}-{sha}.tar.gz"
     metadata = outdir / f"{ARTIFACT_PREFIX}-{sha}.sha256.json"
     if not archive.is_file() or not metadata.is_file():
@@ -576,11 +698,12 @@ def validate_artifact(outdir: Path, sha: str, agent_dir: Path | None = None) -> 
         inspected = inspect_archive(io.BytesIO(archive_bytes), sha=sha, archive_name=archive.name)
     except ActivationError as error:
         raise PullError(f"invalid Storage release archive: {error}") from error
-    if agent_dir is not None:
-        for rel in sorted(AGENT_BUNDLE_FILES):
-            expected = hashlib.sha256((agent_dir / PurePosixPath(rel).name).read_bytes()).hexdigest()
-            if inspected.files.get(rel) != expected:
-                raise PullError(f"release does not carry the verified agent bundle: {rel}")
+    if agent_files is not UNCHECKED:
+        expected = {} if agent_files is None else {
+            rel: hashlib.sha256(agent_files[PurePosixPath(rel).name]).hexdigest() for rel in AGENT_BUNDLE_FILES}
+        carried = {rel: digest for rel, digest in inspected.files.items() if rel.startswith("agent/")}
+        if carried != expected:
+            raise PullError("release does not carry exactly the verified agent bundle")
     return archive, digest, inspected.runtime_digest
 
 
@@ -720,12 +843,13 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
             return "backoff"
         workflow_run, check_runs, _ = fetch_evidence(config, sha, get_json)
         authorize(config, sha, workflow_run, check_runs, run_command)
-        agent_artifact = find_agent_artifact(config, sha, get_json)
+        plan = plan_agent_bundle(config, sha, workflow_run, get_json, now)
         try:
-            agent_dir = fetch_agent_artifact(config, sha, agent_artifact, download, run_command)
+            agent_files = obtain_agent_bundle(config, plan, download, run_command)
+            agent_dir = stage_agent_bundle(config, agent_files) if agent_files else None
             checkout = clean_checkout(config, sha, run_command)
             outdir = build_release(config, checkout, sha, run_command, agent_dir)
-            artifact, digest, runtime_digest = validate_artifact(outdir, sha, agent_dir)
+            artifact, digest, runtime_digest = validate_artifact(outdir, sha, agent_files)
             workflow_run, check_runs, _ = fetch_evidence(config, sha, get_json)
             authorize(config, sha, workflow_run, check_runs, run_command)
             activation_state = read_activation_state(config)
@@ -733,7 +857,7 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
                 write_state_sha(config, sha)
                 clear_failed_release(config)
                 shutil.rmtree(config.work_dir / "out", ignore_errors=True)
-                shutil.rmtree(config.work_dir / "agent-bundle", ignore_errors=True)
+                shutil.rmtree(config.agent_staging_dir, ignore_errors=True)
                 return "unchanged-runtime"
             activate_release(config, sha, digest, artifact, run_command, runtime_digest=runtime_digest)
         except (PullError, OSError, subprocess.SubprocessError, shutil.Error) as error:
@@ -745,7 +869,7 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
         write_state_sha(config, sha)
         clear_failed_release(config)
         shutil.rmtree(config.work_dir / "out", ignore_errors=True)
-        shutil.rmtree(config.work_dir / "agent-bundle", ignore_errors=True)
+        shutil.rmtree(config.agent_staging_dir, ignore_errors=True)
         return "activated"
 
 
