@@ -78,9 +78,6 @@ def test_local_http_feed_updates_aliases_and_retains_original_scan(monkeypatch):
             assert feed.project("turing", newer_scan)["mounts"] == result["mounts"]
             newer_scan["selected_roots"][0]["scan_finished_unix"] = now
             assert feed.project("turing", newer_scan) == newer_scan
-            newer_scan["mounts"][0]["df_observed_unix"] = NOW - 1
-            assert feed.project("turing", newer_scan)["mounts"][0]["capacity_observed_unix"] == NOW
-
 
             monkeypatch.setattr(Handler, "payload", {"unrecognized": "response"})
             feed.poll_once()

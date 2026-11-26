@@ -174,20 +174,6 @@ class SnapshotValidationTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-    def test_optional_capacity_measurement_timestamp(self):
-        payload = base_payload()
-        mount = payload["mounts"][0]
-        desired = snapshot.DesiredServer(payload["server_id"], payload["config_digest"])
-        mount["df_observed_unix"] = payload["scan_started_unix"] + 1
-        status, raw = status_for(payload)
-        validated = snapshot.validate_download(status, raw, desired)
-        self.assertEqual(validated.payload["mounts"][0]["df_observed_unix"], mount["df_observed_unix"])
-        for value in (True, "1719200000", -1, snapshot.MAX_TIME + 1):
-            mount["df_observed_unix"] = value
-            status, raw = status_for(payload)
-            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "df_observed_unix"):
-                snapshot.validate_download(status, raw, desired)
-
 
 class SnapshotReviewGapTests(unittest.TestCase):
     GOOD_DIGEST = "a" * 64

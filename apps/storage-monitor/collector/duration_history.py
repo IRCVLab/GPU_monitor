@@ -8,17 +8,17 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import re
 import tempfile
 from typing import Any
 
+from collector.ids import SERVER_ID_RE
+
 PLANS = ("full", "ssd")
 LIMIT = 5
-_SERVER_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def path_for(root: pathlib.Path, server_id: str) -> pathlib.Path:
-    if not _SERVER_ID_RE.fullmatch(server_id):
+    if not SERVER_ID_RE.fullmatch(server_id):
         raise ValueError("unsafe server id")
     return pathlib.Path(root) / "scan-duration-history" / f"{server_id}.json"
 

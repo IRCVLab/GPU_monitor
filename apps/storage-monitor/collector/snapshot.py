@@ -8,7 +8,8 @@ import os
 import re
 from typing import Any, Dict, Mapping, Optional, Set
 
-SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+from collector.ids import SERVER_ID_RE
+
 GENERATION_RE = re.compile(r"^[A-Za-z0-9_.-]+-\d+-v1\.json$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_COUNTER = 10**18
@@ -228,8 +229,6 @@ def _validate_mount_shape(mount: Any, budget: _Budget) -> None:
     for key in ("df_total", "df_used", "df_avail", "scanned_bytes", "scanned_files", "scanned_dirs", "errors"):
         _counter(mount.get(key), f"mount.{key}")
     _int(mount.get("df_use_pct"), "mount.df_use_pct", 0, 101)
-    if "df_observed_unix" in mount:
-        _int(mount["df_observed_unix"], "mount.df_observed_unix", 0, MAX_TIME + 1)
     if mount["df_used"] + mount["df_avail"] > mount["df_total"]:
         raise ValueError("mount df values violate total invariant")
     tree = mount.get("tree")
@@ -417,7 +416,7 @@ def _required_digest(value: Any, label: str) -> str:
 
 
 def _safe_id(value: str, label: str) -> str:
-    if not SAFE_ID_RE.match(value) or value in {".", ".."} or len(value) > 128:
+    if not SERVER_ID_RE.fullmatch(value) or value in {".", ".."} or len(value) > 128:
         raise ValueError(f"{label} must be safe")
     return value
 

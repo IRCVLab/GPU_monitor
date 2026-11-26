@@ -142,9 +142,7 @@ class LiveCapacity:
             key = _volume_key(root.get("capacity_id"), root.get("mount_source"), root.get("fstype"))
             if key not in sample.volumes:
                 continue
-            finished = mount.get("df_observed_unix")
-            if finished is None:
-                finished = root.get("scan_finished_unix")
+            finished = root.get("scan_finished_unix")
             if finished is None:
                 finished = snapshot.get("scan_finished_unix")
             keys_by_mount[root["mount_id"]] = key

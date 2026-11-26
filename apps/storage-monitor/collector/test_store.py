@@ -29,48 +29,26 @@ class StoreFixture(unittest.TestCase):
 class StoreTests(StoreFixture):
     def test_store_reloads_snapshot_and_state_after_restart(self):
         status, data = self.valid_download()
-        result = self.store.apply_download("alpha-1", status, data, self.desired)
+        result = self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired))
         self.assertTrue(result.accepted)
-        self.store.update_state("alpha-1", freshness="fresh", latest_pull_status="succeeded", active_job={"id": "job-1", "server_id": "alpha-1", "kind": "rescan", "state": "running", "actor": "operator-1", "requested_unix": 1719200000, "started_unix": 1719200001, "finished_unix": None, "result_code": None})
+        self.store.update_state("alpha-1", latest_pull_status="succeeded", active_job={"id": "job-1", "server_id": "alpha-1", "kind": "rescan", "state": "running", "actor": "operator-1", "requested_unix": 1719200000, "started_unix": 1719200001, "finished_unix": None, "result_code": None})
         reloaded = store.CentralStore(self.root)
         self.assertEqual(reloaded.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200000-v1")
         state = reloaded.load_state("alpha-1")
         self.assertEqual(state["snapshot_availability"], "available")
-        self.assertEqual(state["freshness"], "fresh")
+        self.assertNotIn("freshness", state)
         self.assertEqual(state["latest_pull_status"], "succeeded")
         self.assertEqual(state["active_job"]["kind"], "rescan")
 
-    def test_total_failure_does_not_replace_previous_good_snapshot(self):
-        status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
-        failed_payload = base_payload(generation="alpha-1-1719200100-v1")
-        failed_payload["scan_started_unix"] = 1719200100
-        failed_payload["scan_finished_unix"] = 1719200142
-        failed_payload["selected_roots"][0]["status"] = "failed"
-        failed_payload["selected_roots"][0]["scanned_bytes"] = 0
-        failed_payload["selected_roots"][0]["scanned_files"] = 0
-        failed_payload["selected_roots"][0]["scanned_dirs"] = 0
-        failed_payload["selected_roots"][0]["error_count"] = 1
-        failed_payload["selected_roots"][0]["error_code"] = "EIO"
-        failed_payload["mounts"] = []
-        bad_status, bad_data = self.valid_download(failed_payload)
-        result = self.store.apply_download("alpha-1", bad_status, bad_data, self.desired)
-        self.assertFalse(result.accepted)
-        self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200000-v1")
-        state = self.store.load_state("alpha-1")
-        self.assertEqual(state["snapshot_availability"], "available")
-        self.assertEqual(state["latest_pull_status"], "invalid_snapshot")
-        self.assertEqual(state["latest_scan_result"], "failed")
-
     def test_write_failure_keeps_previous_good_and_coherent_state(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         next_payload = base_payload(generation="alpha-1-1719200100-v1")
         next_payload["scan_started_unix"] = 1719200100
         next_payload["scan_finished_unix"] = 1719200142
         next_status, next_data = self.valid_download(next_payload)
         with mock.patch("collector.store.os.replace", side_effect=OSError("/very/secret/path traceback details")):
-            result = self.store.apply_download("alpha-1", next_status, next_data, self.desired)
+            result = self.store.commit_snapshot(snapshot.validate_download(next_status, next_data, self.desired))
         self.assertFalse(result.accepted)
         self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200000-v1")
         state = self.store.load_state("alpha-1")
@@ -86,9 +64,9 @@ class StoreTests(StoreFixture):
         symlink = self.root / "evil"
         symlink.symlink_to(self.root)
         with self.assertRaisesRegex(ValueError, "symlink"):
-            self.store.update_state("evil", freshness="fresh")
+            self.store.update_state("evil", configuration_sync="in_sync")
         with self.assertRaisesRegex(ValueError, "freshness"):
-            self.store.update_state("alpha-1", freshness="yesterday")
+            self.store.update_state("alpha-1", freshness="fresh")
         with self.assertRaisesRegex(ValueError, "active_job"):
             self.store.update_state("alpha-1", active_job={"id": "job-1", "server_id": "alpha-1", "kind": "rescan", "state": "running", "actor": "operator-1", "requested_unix": True, "started_unix": 2, "finished_unix": None, "result_code": None})
 
@@ -115,7 +93,7 @@ class StoreReviewGapTests(unittest.TestCase):
 
     def test_exact_state_enums_and_active_job_contract(self):
         self.assertEqual(self.store.load_state("alpha-1")["snapshot_availability"], "absent")
-        self.store.update_state("alpha-1", snapshot_availability="available", freshness="fresh", latest_pull_status="succeeded", latest_scan_result="complete", configuration_sync="in_sync", active_job={"id": "job-1", "server_id": "alpha-1", "kind": "rescan", "state": "running", "actor": "operator-1", "requested_unix": 1719200000, "started_unix": 1719200001, "finished_unix": None, "result_code": None})
+        self.store.update_state("alpha-1", snapshot_availability="available", latest_pull_status="succeeded", latest_scan_result="complete", configuration_sync="in_sync", active_job={"id": "job-1", "server_id": "alpha-1", "kind": "rescan", "state": "running", "actor": "operator-1", "requested_unix": 1719200000, "started_unix": 1719200001, "finished_unix": None, "result_code": None})
         state = self.store.load_state("alpha-1")
         self.assertEqual(state["latest_pull_status"], "succeeded")
         with self.assertRaisesRegex(ValueError, "latest_pull_status"):
@@ -128,7 +106,7 @@ class StoreReviewGapTests(unittest.TestCase):
 
     def test_state_write_failure_keeps_previous_good_pair_current(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         next_status, next_data = self.valid_download("alpha-1-1719200100-v1")
         next_payload = json.loads(next_data.decode())
         next_payload["scan_started_unix"] = 1719200100
@@ -142,7 +120,7 @@ class StoreReviewGapTests(unittest.TestCase):
             return original_write(path, data)
         original_write = store._write_json_atomic
         with mock.patch("collector.store._write_json_atomic", side_effect=fail_state_write):
-            result = self.store.apply_download("alpha-1", next_status, next_data, self.desired)
+            result = self.store.commit_snapshot(snapshot.validate_download(next_status, next_data, self.desired))
         self.assertFalse(result.accepted)
         self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200000-v1")
         self.assertEqual(self.store.load_state("alpha-1")["latest_pull_status"], "succeeded")
@@ -198,12 +176,12 @@ class StoreReviewGapTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "result_code"):
             self.store.update_state("alpha-1", active_job=failed_no_code)
         requested_with_start = dict(base, state="requested", started_unix=1719200001, finished_unix=None, result_code=None)
-        with self.assertRaisesRegex(ValueError, "started"):
+        with self.assertRaisesRegex(ValueError, "state"):
             self.store.update_state("alpha-1", active_job=requested_with_start)
 
     def test_rejects_symlinked_final_snapshot_and_state_files(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         server_dir = self.root / "alpha-1"
         current = json.loads((server_dir / "current.json").read_text())
         (server_dir / current["snapshot"]).unlink()
@@ -217,7 +195,7 @@ class StoreReviewGapTests(unittest.TestCase):
 
     def test_atomic_failures_keep_previous_good_and_no_temp_leakage(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         next_status, next_data = self.valid_download("alpha-1-1719200100-v1")
         next_payload = json.loads(next_data.decode())
         next_payload["scan_started_unix"] = 1719200100
@@ -228,7 +206,7 @@ class StoreReviewGapTests(unittest.TestCase):
             with self.subTest(target=target):
                 patch_target = f"collector.store.tempfile.mkstemp" if target == "mkstemp" else f"collector.store.os.{target}"
                 with mock.patch(patch_target, side_effect=OSError("/secret/path failed")):
-                    result = self.store.apply_download("alpha-1", next_status, next_data, self.desired)
+                    result = self.store.commit_snapshot(snapshot.validate_download(next_status, next_data, self.desired))
                 self.assertFalse(result.accepted)
                 self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200000-v1")
                 state = self.store.load_state("alpha-1")
@@ -254,7 +232,7 @@ class StoreQualityReviewTests(unittest.TestCase):
 
     def test_store_uses_manifest_pointer_and_rejects_corrupt_or_symlink_references(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         server_dir = self.root / "alpha-1"
         self.assertTrue((server_dir / "current.json").exists())
         self.assertEqual(oct(server_dir.stat().st_mode & 0o777), "0o700")
@@ -274,7 +252,7 @@ class StoreQualityReviewTests(unittest.TestCase):
 
     def test_manifest_rejects_swapped_snapshot_state_basenames_and_arbitrary_names(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         server_dir = self.root / "alpha-1"
         current_path = server_dir / "current.json"
         current = json.loads(current_path.read_text())
@@ -302,7 +280,7 @@ class StoreQualityReviewTests(unittest.TestCase):
 
     def test_post_replace_current_manifest_fsync_failure_reports_committed_visible_success(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         next_status, next_data = self.valid_download("alpha-1-1719200100-v1")
         p = json.loads(next_data.decode())
         p["scan_started_unix"] = 1719200100
@@ -316,20 +294,20 @@ class StoreQualityReviewTests(unittest.TestCase):
             if pathlib.Path(path).name == "current.json":
                 raise store.AtomicWriteDurabilityUncertain("post replace current manifest fsync failed")
         with mock.patch("collector.store._write_json_atomic", side_effect=fail_current_after_replace):
-            result = self.store.apply_download("alpha-1", next_status, next_data, self.desired)
+            result = self.store.commit_snapshot(snapshot.validate_download(next_status, next_data, self.desired))
         self.assertTrue(result.accepted)
         self.assertEqual(result.error_code, "DURABILITY_UNCERTAIN")
         self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200100-v1")
         self.assertEqual(self.store.load_state("alpha-1")["latest_pull_status"], "succeeded")
 
         with mock.patch("collector.store._write_json_atomic", side_effect=fail_current_after_replace):
-            state = self.store.update_state("alpha-1", freshness="fresh")
-        self.assertEqual(state["freshness"], "fresh")
-        self.assertEqual(self.store.load_state("alpha-1")["freshness"], "fresh")
+            state = self.store.update_state("alpha-1", configuration_sync="drifted")
+        self.assertEqual(state["configuration_sync"], "drifted")
+        self.assertEqual(self.store.load_state("alpha-1")["configuration_sync"], "drifted")
 
     def test_pre_replace_current_manifest_failure_still_reports_write_error_and_keeps_old_pair(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         next_status, next_data = self.valid_download("alpha-1-1719200100-v1")
         p = json.loads(next_data.decode())
         p["scan_started_unix"] = 1719200100
@@ -342,14 +320,14 @@ class StoreQualityReviewTests(unittest.TestCase):
                 raise OSError("pre replace current manifest failed")
             return original_replace(src, dst)
         with mock.patch("collector.store.os.replace", side_effect=fail_current_replace):
-            result = self.store.apply_download("alpha-1", next_status, next_data, self.desired)
+            result = self.store.commit_snapshot(snapshot.validate_download(next_status, next_data, self.desired))
         self.assertFalse(result.accepted)
         self.assertEqual(result.error_code, "WRITE_ERROR")
         self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200000-v1")
 
     def test_manifest_commit_failure_keeps_previous_pair_current_and_no_temp_leakage(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         next_status, next_data = self.valid_download("alpha-1-1719200100-v1")
         p = json.loads(next_data.decode()); p["scan_started_unix"] = 1719200100; p["scan_finished_unix"] = 1719200142
         next_data = json.dumps(p, sort_keys=True, separators=(",", ":")).encode()
@@ -360,20 +338,20 @@ class StoreQualityReviewTests(unittest.TestCase):
                 raise OSError("manifest replace failed")
             return real_replace(src, dst)
         with mock.patch("collector.store.os.replace", side_effect=fail_current):
-            result = self.store.apply_download("alpha-1", next_status, next_data, self.desired)
+            result = self.store.commit_snapshot(snapshot.validate_download(next_status, next_data, self.desired))
         self.assertFalse(result.accepted)
         self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200000-v1")
         self.assertFalse(list((self.root / "alpha-1").glob("*.tmp")))
 
     def test_store_lock_serializes_writers_and_scan_result_ignores_skipped(self):
         status, data = self.valid_download()
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         lock_path = self.root / "alpha-1" / "store.lock"
         fd = store.os.open(lock_path, store.os.O_RDWR)
         try:
             store.fcntl.flock(fd, store.fcntl.LOCK_EX | store.fcntl.LOCK_NB)
             with self.assertRaisesRegex(BlockingIOError, "locked"):
-                self.store.update_state("alpha-1", freshness="fresh")
+                self.store.update_state("alpha-1", configuration_sync="in_sync")
         finally:
             store.fcntl.flock(fd, store.fcntl.LOCK_UN)
             store.os.close(fd)
@@ -398,16 +376,16 @@ class StoreRetentionTests(StoreFixture):
 
     def test_unchanged_persisted_state_and_snapshot_do_not_write(self):
         status, data = self.next_download(0)
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
-        self.store.update_state("alpha-1", freshness="fresh")
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
+        self.store.update_state("alpha-1", configuration_sync="in_sync")
 
         with mock.patch("collector.store.os.replace", wraps=store.os.replace) as replace:
             for _ in range(20):
-                self.store.update_state("alpha-1", freshness="fresh")
-                result = self.store.apply_download("alpha-1", status, data, self.desired)
+                self.store.update_state("alpha-1", configuration_sync="in_sync")
+                result = self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired))
                 self.assertTrue(result.accepted)
             replace.assert_not_called()
-        self.assertEqual(self.store.load_state("alpha-1")["freshness"], "fresh")
+        self.assertEqual(self.store.load_state("alpha-1")["configuration_sync"], "in_sync")
 
     def test_identical_download_retry_cannot_claim_durability_before_directory_sync(self):
         status, data = self.next_download(0)
@@ -421,10 +399,10 @@ class StoreRetentionTests(StoreFixture):
 
         with mock.patch.object(store, "_fsync_dir", side_effect=fail_current_sync):
             for _ in range(2):
-                result = self.store.apply_download("alpha-1", status, data, self.desired)
+                result = self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired))
                 self.assertTrue(result.accepted)
                 self.assertEqual(result.error_code, "DURABILITY_UNCERTAIN")
-        result = self.store.apply_download("alpha-1", status, data, self.desired)
+        result = self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired))
         self.assertTrue(result.accepted)
         self.assertIsNone(result.error_code)
 
@@ -440,23 +418,23 @@ class StoreRetentionTests(StoreFixture):
             "snapshot": legacy_snapshot.name, "state": legacy_state.name,
         }))
         self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719199900-v1")
-        self.assertEqual(self.store.load_state("alpha-1")["freshness"], "fresh")
+        self.assertNotIn("freshness", self.store.load_state("alpha-1"))
         for index in range(12):
             status, data = self.next_download(index)
-            self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+            self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
             self.assertLessEqual(len(list(server_dir.glob("snapshot-*.json"))), 3)
             self.assertLessEqual(len(list(server_dir.glob("state-*.json"))), 3)
         for index in range(10):
-            self.store.update_state("alpha-1", freshness="fresh" if index % 2 else "stale")
+            self.store.update_state("alpha-1", configuration_sync="in_sync" if index % 2 else "drifted")
             self.assertLessEqual(len(list(server_dir.glob("state-*.json"))), 3)
-        self.assertEqual(self.store.load_state("alpha-1")["freshness"], "fresh")
+        self.assertEqual(self.store.load_state("alpha-1")["configuration_sync"], "in_sync")
         self.assertEqual(self.store.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719201100-v1")
         self.assertEqual(legacy_snapshot.read_bytes(), payload)
         self.assertEqual(legacy_state.read_text(), '{"freshness":"fresh","snapshot_availability":"available"}')
 
     def test_interrupted_same_scan_generation_keeps_current_and_bounds_orphans(self):
         status, data = self.next_download(0, hostname="original")
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         crash_before_publication = """
 import json
 import os
@@ -474,9 +452,8 @@ original_replace = os.replace
 os.replace = exit_before_current_replace
 state_root, status_json = sys.argv[1:]
 desired = snapshot.DesiredServer("alpha-1", "a" * 64)
-store.CentralStore(Path(state_root)).apply_download(
-    "alpha-1", json.loads(status_json), sys.stdin.buffer.read(), desired,
-)
+valid = snapshot.validate_download(json.loads(status_json), sys.stdin.buffer.read(), desired)
+store.CentralStore(Path(state_root)).commit_snapshot(valid)
 """
         server_dir = self.root / "alpha-1"
         for index in range(3):
@@ -492,14 +469,14 @@ store.CentralStore(Path(state_root)).apply_download(
             self.assertLessEqual(len(list(server_dir.glob("snapshot-*.json"))), 2)
             self.assertLessEqual(len(list(server_dir.glob("state-*.json"))), 2)
             self.assertEqual(len(list(server_dir.glob(".*.tmp"))), 1)
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         self.assertEqual(self.store.load_snapshot("alpha-1")["hostname"], "changed-2")
         self.assertFalse(list(server_dir.glob(".*.tmp")))
 
     def test_previous_pair_is_used_when_current_generation_is_missing(self):
         for index in range(2):
             status, data = self.next_download(index)
-            self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+            self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         server_dir = self.root / "alpha-1"
         current = json.loads((server_dir / "current.json").read_text())
         (server_dir / current["snapshot"]).unlink()
@@ -511,21 +488,21 @@ store.CentralStore(Path(state_root)).apply_download(
         server_dir = self.root / "alpha-1"
         for index in range(3):
             status, data = self.next_download(index)
-            self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+            self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         (server_dir / "current.json").write_text('{"snapshot":')
         reloaded = store.CentralStore(self.root)
         self.assertEqual(reloaded.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200100-v1")
         self.assertEqual(reloaded.load_state("alpha-1")["latest_pull_status"], "succeeded")
 
-        reloaded.update_state("alpha-1", freshness="fresh")
-        self.assertEqual(reloaded.load_state("alpha-1")["freshness"], "fresh")
+        reloaded.update_state("alpha-1", configuration_sync="drifted")
+        self.assertEqual(reloaded.load_state("alpha-1")["configuration_sync"], "drifted")
         self.assertEqual(reloaded.load_snapshot("alpha-1")["scan_generation"], "alpha-1-1719200100-v1")
         current = json.loads((server_dir / "current.json").read_text())
         self.assertTrue((server_dir / current["state"]).exists())
 
     def test_reader_of_retired_generation_survives_publication_and_cleanup(self):
         status, data = self.next_download(0)
-        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
         server_dir = self.root / "alpha-1"
         current = json.loads((server_dir / "current.json").read_text())
         original_decode = store._decode_json
@@ -546,7 +523,7 @@ store.CentralStore(Path(state_root)).apply_download(
                     self.assertTrue(read_waiting.wait(2))
                     for index in (1, 2):
                         status, data = self.next_download(index)
-                        self.assertTrue(self.store.apply_download("alpha-1", status, data, self.desired).accepted)
+                        self.assertTrue(self.store.commit_snapshot(snapshot.validate_download(status, data, self.desired)).accepted)
                     self.assertFalse((server_dir / current["snapshot"]).exists())
                 finally:
                     release_read.set()

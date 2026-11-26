@@ -8,13 +8,13 @@ import threading
 import time
 from typing import Any, Mapping, Protocol
 
+from collector.ids import SERVER_ID_RE
 from collector.store import AtomicWriteDurabilityUncertain, StoreLockedError
 
 _LOG = logging.getLogger(__name__)
 _TERMINAL_WRITE_RETRY_SECONDS = 2.0
 _TERMINAL_WRITE_RETRY_INTERVAL_SECONDS = 0.025
 
-SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 SAFE_FIELD_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
 ACTIVE_SCAN_STATES = frozenset({"active", "activating", "reloading"})
 DEFAULT_COOLDOWN_SECONDS = 15 * 60
@@ -75,7 +75,7 @@ class RescanJobManager:
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", None)
                 return 409, {"error": "ACTIVE_JOB", "audit": event}
             current = self._active_jobs.get(sid) or self.store.load_state(sid).get("active_job")
-            if isinstance(current, Mapping) and current.get("state") in {"requested", "running"}:
+            if isinstance(current, Mapping) and current.get("state") == "running":
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", _safe_field(current.get("id", "job")))
                 return 409, {"error": "ACTIVE_JOB", "job": dict(current), "audit": event}
             last = self._last_requested.get(sid)
@@ -152,7 +152,7 @@ class RescanJobManager:
             requested = active.get("requested_unix")
             if isinstance(requested, int) and not isinstance(requested, bool) and now - requested < self.cooldown_seconds:
                 self._last_requested[sid] = requested
-            if active.get("state") not in {"requested", "running"}:
+            if active.get("state") != "running":
                 continue
             started = active.get("started_unix")
             if not isinstance(started, int) or isinstance(started, bool):
@@ -224,7 +224,7 @@ class RescanJobManager:
 
 
 def _safe_server_id(value: Any) -> str | None:
-    if not isinstance(value, str) or not SERVER_ID_RE.fullmatch(value) or value in {".", ".."}:
+    if not isinstance(value, str) or len(value) > 128 or not SERVER_ID_RE.fullmatch(value) or value in {".", ".."}:
         return None
     return value
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 from collections import OrderedDict
-import contextlib
 import hashlib
 import hmac
 import http.server
@@ -13,7 +12,6 @@ import os
 from pathlib import Path
 import posixpath
 import secrets
-import shutil
 import socket
 import socketserver
 import sys
@@ -24,7 +22,8 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
 from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlsplit
 
-from collector.inventory import SERVER_ID_RE, Server as InventoryServer, load_inventory
+from collector.ids import SERVER_ID_RE
+from collector.inventory import Server as InventoryServer, load_inventory
 
 SAMPLE_FILE_TOKEN_RE = SERVER_ID_RE
 from collector.jobs import RescanJobManager
@@ -513,7 +512,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if cookie:
             self.send_header("Set-Cookie", cookie)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _actor(self) -> str | None:
         if not TRUSTED_PROXY:
@@ -594,24 +594,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return None
         return parts
 
-    def do_GET(self) -> None:
-        if self.path.split("?", 1)[0].startswith("/ai"):
-            return self._json({"error": "not found"}, 404)
-        parts = self._api_parts()
-        if parts is not None:
-            return self._handle_api_get(parts)
-        route = self.path.split("?", 1)[0]
-        if route == "/capabilities":
-            return self._json({"rescan": False, "message": "Manual rescan only: use the bounded per-server API behind a trusted proxy."})
-        if route == "/rescan-status":
-            return self._json({"supported": False, "scanning": False, "message": "Legacy local rescan endpoint is disabled."})
-        data_path = self._data_path()
-        if data_path is not None:
-            auth_error = self._require_read_auth()
-            if auth_error is not None:
-                return self._json(auth_error[1], auth_error[0])
-            return self._serve_data_file(data_path)
-        super().do_GET()
+    def send_head(self):
+        # GET and HEAD both call send_head before opening a static file.
+        normalized = "/" + posixpath.normpath(unquote(urlsplit(self.path).path)).lstrip("/")
+        if normalized == "/data" or normalized.startswith("/data/"):
+            return self._data_file(normalized)
+        if self.command == "GET":
+            if self.path.split("?", 1)[0].startswith("/ai"):
+                return self._json({"error": "not found"}, 404)
+            parts = self._api_parts()
+            if parts is not None:
+                return self._handle_api_get(parts)
+            route = self.path.split("?", 1)[0]
+            if route == "/capabilities":
+                return self._json({"rescan": False, "message": "Manual rescan only: use the bounded per-server API behind a trusted proxy."})
+            if route == "/rescan-status":
+                return self._json({"supported": False, "scanning": False, "message": "Legacy local rescan endpoint is disabled."})
+        return super().send_head()
 
     def do_POST(self) -> None:
         if self.path.split("?", 1)[0].startswith("/ai"):
@@ -708,29 +707,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         out_code, out = jobs.request_rescan(server_id, actor or "unknown")
         return self._json(out, out_code)
 
-    def _data_path(self) -> Path | None:
-        parsed = urlsplit(self.path)
-        if not parsed.path.startswith("/data/"):
+    def _data_file(self, normalized: str):
+        auth_error = self._require_read_auth()
+        if auth_error is not None:
+            self._json(auth_error[1], auth_error[0])
             return None
-        rel = posixpath.normpath(unquote(parsed.path[len("/data/") :])).lstrip("/")
-        if rel in ("", ".") or rel.startswith("../"):
+        try:
+            path = (DATA_DIR / normalized.removeprefix("/data").lstrip("/")).resolve()
+            if path.is_relative_to(DATA_DIR) and path.is_file():
+                stream = path.open("rb")
+            else:
+                raise FileNotFoundError
+        except (OSError, ValueError, RuntimeError):
+            self.send_error(404, "data file not found")
             return None
-        path = (DATA_DIR / rel).resolve()
-        with contextlib.suppress(ValueError):
-            path.relative_to(DATA_DIR)
-            return path
-        return None
-
-    def _serve_data_file(self, path: Path) -> None:
-        if not path.is_file():
-            self.send_error(404, "data file not found"); return
-        with path.open("rb") as f:
-            fs = path.stat()
-            self.send_response(200)
-            self.send_header("Content-Type", self.guess_type(str(path)))
-            self.send_header("Content-Length", str(fs.st_size))
-            self.end_headers()
-            shutil.copyfileobj(f, self.wfile)
+        self.send_response(200)
+        self.send_header("Content-Type", self.guess_type(str(path)))
+        self.send_header("Content-Length", str(os.fstat(stream.fileno()).st_size))
+        self.end_headers()
+        return stream
 
     def log_message(self, *args: Any) -> None:
         pass

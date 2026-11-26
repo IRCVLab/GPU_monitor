@@ -103,7 +103,7 @@ let DATA = null;
 let ownerByUid = new Map();
 let nowUnix = Math.floor(Date.now() / 1000);
 let treemapChart = null, usersChart = null;
-let treemapInited = false, usersInited = false;
+let usersInited = false;
 let currentMountIdx = 0;
 let mountPaths = [];
 let capUsedByMount = {};
@@ -340,12 +340,6 @@ function detailExplicitCapacityPercent(mount) {
   if (typeof (mount && mount.df_use_pct) === "number" && Number.isFinite(mount.df_use_pct)) return Math.max(0, Math.min(100, Math.round(mount.df_use_pct)));
   return null;
 }
-function detailCapacityPercent(mount, usedBytes, totalBytes) {
-  const explicitPct = detailExplicitCapacityPercent(mount);
-  if (explicitPct != null) return explicitPct;
-  if (usedBytes != null && totalBytes > 0) return Math.max(0, Math.min(100, Math.round(usedBytes / totalBytes * 100)));
-  return null;
-}
 function detailSelectedRootByMountId() {
   const byMountId = new Map();
   const roots = Array.isArray(DATA && DATA.selected_roots) ? DATA.selected_roots : [];
@@ -430,7 +424,7 @@ function groupDetailCapacityMounts(mounts) {
       totalBytes,
       availableBytes,
       capacityPct,
-      capacityObservedUnix: mount.capacity_observed_unix ?? mount.df_observed_unix,
+      capacityObservedUnix: mount.capacity_observed_unix,
       media: String((mount.storage_media || mount.block_media || (root && (root.storage_media || root.block_media)) || "unknown")),
       fstype: String((mount.fstype || (root && root.fstype) || "")),
       scanRoots: [{

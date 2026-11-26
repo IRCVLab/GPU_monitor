@@ -6,7 +6,7 @@ function scanNumber(value) {
 
 function activeRescanState(job) {
   if (!job) return null;
-  return job.state === "requested" || job.state === "running" ? job.state : null;
+  return job.state === "running" ? job.state : null;
 }
 
 function classifyRescanJob(job, expectedJobId, sawActive) {

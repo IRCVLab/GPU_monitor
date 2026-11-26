@@ -13,11 +13,11 @@ import tempfile
 from typing import Any, Dict, Iterator, Mapping, Optional, TextIO
 from uuid import uuid4
 
+from collector.ids import SERVER_ID_RE
 from collector import snapshot
 
 _LOG = logging.getLogger(__name__)
 
-SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SNAPSHOT_BASENAME_RE = re.compile(r"^snapshot-[A-Za-z0-9_.-]+\.json$")
 STATE_BASENAME_RE = re.compile(r"^state-[A-Za-z0-9_.-]+\.json$")
 # The older release's names are excluded from automatic cleanup.
@@ -28,7 +28,6 @@ Manifest = dict[str, Optional[str]]
 EMPTY_MANIFEST: Manifest = {"snapshot": None, "state": None}
 STATE_DEFAULTS = {
     "snapshot_availability": "absent",
-    "freshness": "unknown",
     "latest_pull_status": "not_installed",
     "latest_scan_result": "failed",
     "configuration_sync": "unknown",
@@ -39,7 +38,6 @@ STATE_DEFAULTS = {
 }
 ENUMS = {
     "snapshot_availability": {"available", "absent"},
-    "freshness": {"fresh", "stale", "unknown"},
     "latest_pull_status": {"succeeded", "unreachable", "invalid_snapshot", "not_installed"},
     "latest_scan_result": {"complete", "partial", "failed"},
     "configuration_sync": {"in_sync", "drifted", "unknown"},
@@ -90,30 +88,7 @@ class CentralStore:
             raise ValueError("state root must not be a symlink")
         _fsync_dir(self.root.parent)
 
-    def apply_download(self, server_id: str, status: Mapping[str, Any], downloaded: bytes, desired: snapshot.DesiredServer) -> ApplyResult:
-        sid = self._server_id(server_id)
-        try:
-            valid = snapshot.validate_download(status, downloaded, desired)
-            if valid.server_id != sid:
-                raise ValueError("validated server_id mismatch")
-        except Exception as exc:
-            try:
-                with self._locked(sid):
-                    self._merge_state_best_effort(sid, {
-                        "snapshot_availability": "available" if self._load_committed(sid)[0].get("snapshot") else "absent",
-                        "latest_pull_status": "invalid_snapshot",
-                        "latest_scan_result": "failed",
-                        "configuration_sync": "unknown",
-                        **_safe_error("INVALID", str(exc)),
-                    })
-            except BlockingIOError:
-                raise
-            except Exception as store_error:
-                return ApplyResult(False, "WRITE_ERROR", _safe_message(str(store_error)))
-            return ApplyResult(False, "INVALID", _safe_message(str(exc)))
-        return self.commit_snapshot(valid)
-
-    def commit_snapshot(self, valid: snapshot.ValidatedSnapshot, *, freshness: str | None = None) -> ApplyResult:
+    def commit_snapshot(self, valid: snapshot.ValidatedSnapshot) -> ApplyResult:
         sid = self._server_id(valid.server_id)
         state_patch = {
             "snapshot_availability": "available",
@@ -124,8 +99,6 @@ class CentralStore:
             "last_error_message": None,
             "last_error_unix": None,
         }
-        if freshness is not None:
-            state_patch["freshness"] = freshness
         try:
             with self._locked(sid):
                 _, durability_uncertain = self._commit_pair(
@@ -197,7 +170,7 @@ class CentralStore:
             return state
 
     def _server_id(self, server_id: str) -> str:
-        if not isinstance(server_id, str) or not SERVER_ID_RE.match(server_id) or server_id in {".", ".."} or len(server_id) > 128:
+        if not isinstance(server_id, str) or not SERVER_ID_RE.fullmatch(server_id) or server_id in {".", ".."} or len(server_id) > 128:
             raise ValueError("server_id must be safe")
         return server_id
 
@@ -271,7 +244,10 @@ class CentralStore:
         name = manifest["state"]
         if name is None:
             return dict(STATE_DEFAULTS)
-        return _validate_state(_read_json_file(self._server_dir(sid) / name, "state"), sid)
+        state = _read_json_file(self._server_dir(sid) / name, "state")
+        if isinstance(state, dict):
+            state.pop("freshness", None)  # Older generations persisted this derived value.
+        return _validate_state(state, sid)
 
     def _commit_pair(
         self, sid: str, *, state_updates: Mapping[str, Any],
@@ -331,12 +307,6 @@ class CentralStore:
             return True
         except Exception:
             return False
-
-    def _merge_state_best_effort(self, sid: str, updates: Mapping[str, Any]) -> None:
-        try:
-            self._commit_pair(sid, state_updates=updates)
-        except Exception:
-            pass
 
 
 @contextmanager
@@ -428,8 +398,8 @@ def _validate_active_job(active: Any, server_id: Optional[str]) -> None:
     if active.get("kind") != "rescan":
         raise ValueError("active_job kind must be rescan")
     state = active.get("state")
-    if state not in {"requested", "running", "succeeded", "failed"}:
-        raise ValueError("active_job state must be requested|running|succeeded|failed")
+    if state not in {"running", "succeeded", "failed"}:
+        raise ValueError("active_job state must be running|succeeded|failed")
     requested = _job_timestamp(active.get("requested_unix"), "requested_unix", required=True)
     started = _job_timestamp(active.get("started_unix"), "started_unix", required=False)
     finished = _job_timestamp(active.get("finished_unix"), "finished_unix", required=False)
@@ -443,12 +413,7 @@ def _validate_active_job(active: Any, server_id: Optional[str]) -> None:
             raise ValueError("active_job finished_unix requires started_unix")
         if finished < started:
             raise ValueError("active_job finished_unix must be >= started_unix")
-    if state == "requested":
-        if started is not None or finished is not None:
-            raise ValueError("active_job requested state must not have started/finished timestamps")
-        if result_code is not None:
-            raise ValueError("active_job requested state must not have result_code")
-    elif state == "running":
+    if state == "running":
         if started is None:
             raise ValueError("active_job running state requires started_unix")
         if finished is not None:
@@ -544,10 +509,6 @@ def _fsync_dir(path: pathlib.Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-
-
-def _safe_error(code: str, message: str) -> Dict[str, Optional[str]]:
-    return {"last_error_code": code, "last_error_message": _safe_message(message), "last_error_unix": None}
 
 
 def _safe_message(message: str) -> str:
