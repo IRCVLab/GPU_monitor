@@ -131,3 +131,20 @@ def capacity_sample_current(observed_unix: int, now: int) -> bool:
 
 def progress_stale(updated_unix: Optional[int], now: int) -> bool:
     return updated_unix is not None and now - updated_unix > 30
+
+
+def volume_freshness(finished, cadence, now):
+    if finished is None or now is None:
+        return "unknown"
+    return "stale" if now > finished + cadence + VOLUME_GRACE_SECONDS else "fresh"
+
+
+def volume_capacity(sample, now, thresholds):
+    if sample is None:
+        return None, "unknown"
+    current = sample.status == "ok" and now is not None and capacity_sample_current(sample.observed_unix, now)
+    usable = sample.used + sample.avail
+    pct = -(-sample.used * 100 // usable) if current and usable else None
+    return {"total": sample.total if current else None, "used": sample.used if current else None,
+            "avail": sample.avail if current else None, "used_pct": pct, "observed_unix": sample.observed_unix,
+            "source": "live", "status": sample.status}, severity(pct, sample.avail, thresholds)

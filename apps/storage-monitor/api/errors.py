@@ -60,7 +60,12 @@ def http_error(exc, request_id, *, v1):
     if v1:
         return status, headers, body
     code = exc.code if isinstance(exc, (RequestError, DomainError)) else "INTERNAL"
+    code = {"BAD_LENGTH": "BAD_REQUEST", "BAD_BODY": "BAD_REQUEST", "BAD_JSON": "BAD_REQUEST",
+            "BAD_SESSION": "BAD_CSRF", "EXECUTION_DISABLED": "FORBIDDEN", "RESCAN_DISABLED": "FORBIDDEN",
+            "UNCONFIGURED": "STORE_UNAVAILABLE"}.get(code, code)
     error = {"code": code, "message": code.replace("_", " ").capitalize(), "request_id": request_id}
+    if isinstance(exc, ActiveJob):
+        error["job"] = exc.detail.get("job")
     if "Retry-After" in headers:
         error["retry_after_sec"] = int(headers["Retry-After"])
     return status, headers, {"error": error}

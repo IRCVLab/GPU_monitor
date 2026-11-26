@@ -1,5 +1,5 @@
 """Exact dashboard URLs and v1 projections (S5, until M8)."""
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 import posixpath
@@ -7,6 +7,8 @@ import re
 import logging
 
 from api.errors import RequestError
+from collector.ids import SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE
+from collector.view import activity_body, server_bytes, encode
 from collector.contract import snapshot_response
 from collector.errors import RescanDisabled, SnapshotAbsent, StoreUnavailable
 from collector.view import error_row_v1, job_v1, scan_status_v1, snapshot_v1_chunks, summary_v1
@@ -147,7 +149,8 @@ def rescan(handler, server_id):
     if not runtime.runs_actors:
         runtime.fleet.lookup(server_id)
         raise RescanDisabled(code="EXECUTION_DISABLED")
-    return json_response(runtime.fleet.request_rescan(server_id, actor), 202)
+    result = runtime.fleet.request_rescan(server_id, actor)
+    return json_response(result if handler.v1_route else {"job": result["job"]}, 202)
 
 
 def capabilities(handler):
@@ -162,7 +165,65 @@ def legacy_rescan(handler):
     raise RequestError("LEGACY_DISABLED", body={"supported": False, "error": "Legacy local rescan endpoint is disabled."})
 
 
+def fleet(handler):
+    runtime = handler.server.runtime
+    source = runtime.fleet
+    now = source.clock.monotonic()
+    rows = []
+    for view in source.views():
+        try:
+            rows.append(server_bytes(view, now, runtime.capacity_thresholds))
+        except Exception:
+            logging.exception("failed to render server %s", view.server.id)
+            rows.append(encode({"server_id": view.server.id, "status": "error", "error": {"code": "INTERNAL"}}))
+    header = encode({"generated_unix": int(source.clock.time()), "rollout": source.rollout_view(),
+                     "policy": {"capacity_thresholds": asdict(runtime.capacity_thresholds)}})
+    return Response([header[:-1], b',"servers":[', b",".join(rows), b"]}"])
+
+
+def checked_view(source, sid):
+    view = source.view(sid)
+    if view.error:
+        raise StoreUnavailable()
+    return view
+
+
+def detail(handler, sid):
+    runtime = handler.server.runtime
+    view = checked_view(runtime.fleet, sid)
+    return Response([server_bytes(view, runtime.fleet.clock.monotonic(), runtime.capacity_thresholds, detail=True)])
+
+
+def activity(handler, sid):
+    source = handler.server.runtime.fleet
+    return json_response(activity_body(checked_view(source, sid), source.clock.monotonic()))
+
+
+def capture(handler, sid, vid, sha):
+    source = handler.server.runtime.fleet
+    view = checked_view(source, sid)
+    manifest = view.data.manifest
+    if not getattr(manifest, "volume", lambda _: None)(vid):
+        raise RequestError("UNKNOWN_VOLUME")
+    if view.data.accepted.get(vid) != sha:
+        raise RequestError("CAPTURE_GONE")
+    try:
+        data = source.read_capture(sid, vid, sha)
+    except StoreUnavailable:
+        if source.view(sid).data.accepted.get(vid) != sha:
+            raise RequestError("CAPTURE_GONE") from None
+        raise
+    return Response([data], headers={"Content-Encoding": "gzip", "ETag": f'"{sha}"',
+                                     "Cache-Control": "private, max-age=31536000, immutable"})
+
+
 ROUTES = (
+    ("GET", r"/api/v2/session", session, "session"),
+    ("GET", r"/api/v2/fleet", fleet, "read"),
+    ("GET", r"/api/v2/servers/([^/]+)", detail, "read"),
+    ("GET", r"/api/v2/servers/([^/]+)/activity", activity, "read"),
+    ("GET", r"/api/v2/servers/([^/]+)/volumes/([^/]+)/captures/([^/]+)", capture, "read"),
+    ("POST", r"/api/v2/servers/([^/]+)/rescan", rescan, "rescan"),
     ("GET", r"/api/session", session, "session"),
     ("GET", r"/api/servers", servers, "read"),
     ("GET", r"/api/servers/([^/]+)/scan-status", scan_status, "read"),
@@ -186,7 +247,11 @@ def dispatch(handler, target):
             continue
         if handler.command != method:
             raise RequestError("METHOD_NOT_ALLOWED", headers={"Allow": method})
-        handler.v1_route = True
+        handler.v1_route = not path.startswith("/api/v2/")
+        if not handler.v1_route:
+            if "?" in target or any(not regex.fullmatch(param) for regex, param in
+                                    zip((SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE), match.groups())):
+                raise RequestError("BAD_REQUEST")
         if auth == "read":
             handler._require_read_auth()
             if handler.server.runtime.fleet is None:

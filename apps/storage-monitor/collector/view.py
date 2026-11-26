@@ -61,6 +61,8 @@ class ObservationView:
 @dataclass(frozen=True)
 class ServerView:
     server: Server
+    publication: Optional[Publication] = None
+    last_job: Optional[Job] = None
     link: Link = Link()
     data: Data = Data()
     snapshot: Optional[Snapshot] = None
@@ -80,12 +82,12 @@ class ServerView:
 
 def build_view(server: Server, record, snapshot: Optional[Snapshot], observation: Optional[ObservationView],
                host_clock: Optional[Tuple[int, float]], error: Optional[str], transport: Optional[str] = None,
-               release_sha: Optional[str] = None) -> ServerView:
+               release_sha: Optional[str] = None, publication=None) -> ServerView:
     manifest = record.data.manifest
     if release_sha is None and isinstance(manifest, HostManifest):
         release_sha = manifest.raw["agent"]["release_sha"]
     return ServerView(
-        server=server, link=record.link, data=record.data, snapshot=snapshot,
+        server=server, publication=publication, last_job=record.last_job, link=record.link, data=record.data, snapshot=snapshot,
         job=record.job or record.last_job, durations=record.durations,
         observation=observation, host_clock=host_clock, error=error, transport=transport,
         update=record.update, release_sha=release_sha,
@@ -365,3 +367,90 @@ def snapshot_v1_chunks(snapshot: Snapshot, sample: Optional[CapacitySample], thr
     mounts = snapshot_response({"mounts": projected["mounts"]}, thresholds)["mounts"]
     rest = snapshot.rest[1:]
     return [b'{"mounts":', encode(mounts), b"," if rest != b"}" else b"", rest]
+
+
+@dataclass(frozen=True)
+class Publication:
+    revision: str
+    users_top: bytes
+    detail: bytes
+    captures: Mapping[str, dict]
+
+
+def publication(manifest, held):
+    """Merge the accepted capture rows once, before publishing the actor's view."""
+    import hashlib
+    users, top, stale, heads = {}, [], [], {}
+    for vid, (sha, capture) in held.items():
+        heads[vid] = {"sha256": sha, "outcome": capture.outcome, "scan_finished_unix": capture.scan_finished_unix}
+        for root in capture.roots:
+            for row in root.users:
+                user = users.setdefault(row["uid"], {"uid": row["uid"], "name": row["name"], "bytes": 0,
+                                                      "files": 0, "by_volume": {}})
+                subtotal = user["by_volume"].setdefault(vid, {"bytes": 0, "files": 0})
+                for key in ("bytes", "files"):
+                    subtotal[key] += row[key]
+                    user[key] += row[key]
+            for rows, dest in ((root.top_files, top), (root.stale, stale)):
+                for row in rows:
+                    dest.append({**row, "volume_id": vid, "binding": root.binding,
+                                 "age_days": judge.age_days(row["mtime"], capture.scan_started_unix)})
+    ordered = sorted(users.values(), key=lambda row: (-row["bytes"], row["uid"]))
+    revision = f"{manifest.seq if manifest else 0}:" + hashlib.sha256(encode(heads)).hexdigest()[:12]
+    host = {"hostname": manifest.hostname if manifest else None, "mount_table": manifest.mount_table if manifest else None}
+    return Publication(revision, encode([{k: r[k] for k in ("uid","name","bytes")} for r in ordered]),
+                       encode({"users": ordered, "top_files": sorted(top, key=lambda r: -r["bytes"]),
+                               "stale": sorted(stale, key=lambda r: -r["bytes"]), "host": host}), heads)
+
+
+EMPTY_PUBLICATION = publication(None, {})
+
+
+def job_body(job):
+    if job is None:
+        return None
+    return {key: getattr(job, key) for key in ("request_id", "state", "actor", "requested_unix", "finished_unix", "result_code")}
+
+
+def activity_body(view, mono):
+    obs = view.observation
+    status = obs.status if obs else {}
+    typical, longest = judge.eta(view.durations, status.get("scan_plan") or "full", status.get("estimate_duration_sec"))
+    return {"activity": {"state": judge.activity(status, obs.received_monotonic if obs else None, mono),
+                         "run_id": status.get("run_id"), "trigger": status.get("trigger"),
+                         "started_unix": status.get("started_unix"), "observed_unix": status.get("observed_unix"),
+                         "host_now_unix": host_now(view, mono),
+                         "progress": {k: status.get(s) for k,s in (("group","group"),("roots_completed","roots_completed"),
+                                      ("roots_total","roots_total"),("bytes","scanned_bytes"),("files","scanned_files"))}},
+            "eta": {"typical_sec": typical, "longest_sec": longest}, "job": job_body(active_job(view)),
+            "last_job": job_body(view.last_job)}
+
+
+def server_bytes(view, mono, thresholds, *, detail=False):
+    from collector.health import volume_states
+    if view.error:
+        return encode({"server_id": view.server.id, "status": "error", "error": {"code": view.error}})
+    pub = view.publication or EMPTY_PUBLICATION
+    manifest = view.data.manifest
+    now = host_now(view, mono)
+    states = volume_states(view.data)
+    rows = []
+    if isinstance(manifest, HostManifest):
+        for vol, raw in zip(manifest.volumes, manifest.raw["volumes"]):
+            head = pub.captures.get(vol.volume_id)
+            capacity, severity = judge.volume_capacity(vol.capacity, now, thresholds)
+            rows.append({"volume_id": vol.volume_id, "identity": vol.identity, "diagnostic": vol.diagnostic,
+                         "media": vol.media, "mountpoint": vol.mountpoint, "capacity": capacity, "severity": severity,
+                         "freshness": judge.volume_freshness(head and head["scan_finished_unix"], vol.cadence_sec, now),
+                         "data_state": states.get(vol.volume_id, "none"), "capture": head,
+                         "roots": raw["roots"], "last_attempt": raw["last_attempt"]})
+    activity = activity_body(view, mono)
+    row = {"server_id": view.server.id, "display_name": view.server.display_name, "order": view.server.order,
+           "status": "ok", "activity": activity["activity"], "eta": activity["eta"], "job": activity["job"],
+           "link": {"state": view.link.state, "last_ok_unix": view.link.last_ok_unix, "error": view.link.error,
+                    "transport": view.transport or view.server.transport},
+           "agent": {"release_sha": view.release_sha, "matches_desired": bool(view.update.desired and view.update.desired == view.release_sha),
+                     "update": view.update.state}, "revision": pub.revision, "volumes": rows,
+           "freshness": judge.worst_freshness(*(r["freshness"] for r in rows)) if rows else "unknown"}
+    body = encode(row)[:-1] + b',"users_top":' + pub.users_top
+    return body + (b"," + pub.detail[1:] if detail else b"}")

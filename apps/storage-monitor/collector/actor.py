@@ -28,7 +28,7 @@ from collector.health import (
 from collector.inventory import Server
 from collector.store import DURATION_LIMIT, DURATION_PLANS, Record, ServerStore
 from collector.transport import TransportError
-from collector.view import ObservationView, ServerView, Snapshot, build_view, render_snapshot, volumes_payload
+from collector.view import ObservationView, ServerView, Snapshot, build_view, publication, render_snapshot, volumes_payload
 
 _LOG = logging.getLogger(__name__)
 
@@ -302,6 +302,7 @@ class ServerActor:
         self.started = threading.Event()
         """Set once the first load attempt has published a view, loaded or not."""
         self._record = Record()
+        self._publication = None
         self._captures: Mapping[str, tuple] = {}
         """volume_id -> (sha, parsed capture) for every accepted capture: a v1 payload (S3) or a VolumeCapture."""
         self._snapshot: Optional[Snapshot] = None
@@ -427,23 +428,23 @@ class ServerActor:
         captures = {volume_id: held for volume_id, held in captures.items() if data.accepted.get(volume_id) == held[0]}
         if LEGACY_VOLUME in captures:
             key = ("v1", captures[LEGACY_VOLUME][0])
-        elif isinstance(data.manifest, HostManifest) and captures:
+        elif isinstance(data.manifest, HostManifest):
             key = ("v2", data.manifest.sha256, tuple(sorted(data.accepted.items())),
                    tuple(sorted(health.volume_states(data).items())), tuple(sorted(health.volume_problems(data).items())))
         else:
             key = None
         if key == self._rendered:
-            return captures, key, self._snapshot
+            return captures, key, self._snapshot, self._publication
         if key is None:
-            return captures, key, None
+            return captures, key, None, None
         if key[0] == "v1":
-            return captures, key, render_snapshot(captures[LEGACY_VOLUME][1])
+            return captures, key, render_snapshot(captures[LEGACY_VOLUME][1]), None
         parsed = {volume_id: capture for volume_id, (_, capture) in captures.items()}
         return captures, key, render_snapshot(volumes_payload(self.server.id, data.manifest, parsed, health.volume_states(data),
-                                                              health.volume_problems(data)))
+                                                              health.volume_problems(data))) if parsed else None, publication(data.manifest, captures)
 
     def _swap(self, held: tuple) -> None:
-        self._captures, self._rendered, self._snapshot = held
+        self._captures, self._rendered, self._snapshot, self._publication = held
 
     def _commit(self, record: Record, capture: Optional[tuple] = None) -> bool:
         """Make ``record`` current, writing it only when its durable part changed or a capture comes with it."""
@@ -469,7 +470,7 @@ class ServerActor:
 
     def _publish(self) -> None:
         self.view = build_view(self.server, self._record, self._snapshot, self._observation, self._host_clock, self._error,
-                               self._transport, self._agent.release_sha)
+                               self._transport, self._agent.release_sha, self._publication)
 
     def _next_seq(self) -> int:
         self._seq += 1

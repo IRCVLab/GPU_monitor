@@ -110,7 +110,8 @@ class Handler(auth.Auth, BaseHTTPRequestHandler):
             response = routes.json_response(body, status, headers)
         self.send_response(response.status)
         self.send_header("X-Request-Id", request_id)
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        if "Cache-Control" not in response.headers:
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
         self.send_header("Content-Type", response.content_type)
