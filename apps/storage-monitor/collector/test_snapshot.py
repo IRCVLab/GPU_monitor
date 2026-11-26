@@ -114,6 +114,17 @@ class SnapshotValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "generation"):
             snapshot.validate_download(bad_status, data, self.desired())
 
+    def test_a_memory_error_while_decoding_is_not_a_contract_violation(self):
+        # M2b review: a MemoryError in json.loads was re-raised as ValueError, which the actor rejects for good.
+        from unittest import mock
+
+        def exhausted(*args, **kwargs):
+            raise MemoryError("transient")
+
+        with mock.patch.object(snapshot, "json", mock.Mock(loads=exhausted)):
+            with self.assertRaises(MemoryError):
+                self.validate()
+
     def test_config_drift_is_independent_state_not_measurement_corruption(self):
         result = self.validate(desired=self.desired("b" * 64))
         self.assertEqual(result.config_sync, "drifted")

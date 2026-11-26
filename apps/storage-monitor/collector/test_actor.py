@@ -157,6 +157,28 @@ def test_oversized_publication_is_rejected_without_retries(tmp_path):
     assert snapshot_generation(host) == GENERATION
 
 
+@pytest.mark.parametrize("failure", [MemoryError("transient"), OSError(5, "EIO")])
+def test_an_environment_failure_while_validating_a_capture_is_retried_not_rejected(tmp_path, monkeypatch, failure):
+    # M2b review: any exception from validation became a permanent INVALID_SNAPSHOT rejection.
+    from collector import snapshot
+
+    host = Collector(tmp_path, "alpha-1")
+    status, _ = host.host.publish("alpha-1", started=1719203000)
+    validate = snapshot.validate_download
+    failures = [failure]
+
+    def flaky(*args):
+        if failures:
+            raise failures.pop()
+        return validate(*args)
+
+    monkeypatch.setattr(snapshot, "validate_download", flaky)
+    host.tick()
+    host.tick()
+    assert snapshot_generation(host) == "alpha-1-1719203000-v1"
+    assert host.host.fetches_of(status["sha256"]) == 2
+
+
 def test_config_drift_is_reported_without_refetching(tmp_path):
     host = Collector(tmp_path, "alpha-1")
     host.servers = [make_server(digest="b" * 64)]

@@ -32,6 +32,8 @@ _LOG = logging.getLogger(__name__)
 _REJECT_CODES = frozenset({"SNAPSHOT_TOO_LARGE", "BAD_STATUS", "BAD_GENERATION"})
 _MISMATCH_CODES = frozenset({"SIZE_MISMATCH"})
 _MISMATCH_MESSAGES = ("byte_size does not match downloaded bytes", "sha256 does not match downloaded bytes")
+# What malformed capture content raises inside validation. Anything else (MemoryError, OSError) is retried.
+_CONTENT_ERRORS = (ValueError, TypeError, KeyError, IndexError, AttributeError, RecursionError)
 TICK_FAILED = "TICK_FAILED"
 MAX_TICK_BACKOFF_SECONDS = 10 * 60
 
@@ -417,10 +419,14 @@ class ServerActor:
             desired = snapshot.DesiredServer(server_id=server.id, config_digest=server.scanner_digest)
             try:
                 valid = snapshot.validate_download(manifest, data, desired)
-            except Exception as exc:
+            except _CONTENT_ERRORS as exc:
                 mismatch = str(exc) in _MISMATCH_MESSAGES
                 self.post(Fetched(seq, sha, generation, "mismatch" if mismatch else "rejected",
                                   "SHA_MISMATCH" if mismatch else "INVALID_SNAPSHOT"))
+                return
+            except Exception:
+                _LOG.exception("capture validation failed for %s", server.id)
+                self.post(Fetched(seq, sha, generation, "retry", "TRANSFER_FAILED"))
                 return
             self.post(Fetched(seq, sha, generation, "accepted", payload=valid.payload, data=data))
 

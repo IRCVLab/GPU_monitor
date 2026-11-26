@@ -131,7 +131,10 @@ class OpenSshTransport:
         remote = f"{SNAPSHOT_DIR}/{generation}"
         tmp_name = self._mk_secure_temp(".snapshot")
         try:
-            self._run_sftp(server, _batch_get(remote, tmp_name), timeout=self._snapshot_timeout, limit_bytes=min(first["byte_size"], self._max_snapshot_bytes), limit_code="SNAPSHOT_TOO_LARGE", local_path=tmp_name)
+            # The cap is the declared byte_size, which validate_snapshot_status already held to the maximum.
+            # Outgrowing it means the file disagrees with its publication; a failed transfer that reached
+            # it is still a transfer error. Neither is the permanent SNAPSHOT_TOO_LARGE.
+            self._run_sftp(server, _batch_get(remote, tmp_name), timeout=self._snapshot_timeout, limit_bytes=min(first["byte_size"], self._max_snapshot_bytes), limit_code="SIZE_MISMATCH", local_path=None)
             data = _read_regular_bounded(tmp_name, self._max_snapshot_bytes, "SNAPSHOT_TOO_LARGE")
             if len(data) != first["byte_size"]:
                 raise TransportError("SIZE_MISMATCH", "snapshot size changed during download")
@@ -156,7 +159,9 @@ class OpenSshTransport:
         _assert_secure_regular(tmp_name)
         return tmp_name
 
-    def _run_sftp(self, server: Server, batch: bytes, *, timeout: int, limit_bytes: int, limit_code: str, local_path: str) -> Any:
+    def _run_sftp(self, server: Server, batch: bytes, *, timeout: int, limit_bytes: int, limit_code: str, local_path: str | None) -> Any:
+        """Run one sftp batch under a file-size cap. SIGXFSZ raises ``limit_code``, and so does a failure
+        that left ``local_path`` at the cap; pass None where reaching the cap proves nothing."""
         cap = _bounded_positive(limit_bytes, "file size limit", 1, MAX_SNAPSHOT_BYTES)
         argv = [sys.executable, "-I", "-S", "-c", FILE_LIMIT_EXEC, str(cap), *self._sftp_argv(server)]
         try:
