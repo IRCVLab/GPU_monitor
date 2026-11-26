@@ -23,7 +23,7 @@ import gzip
 import hashlib
 import io
 import json
-import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -56,7 +56,7 @@ AGENT_INPUTS = (
     f":(exclude){APP}/agent/testdata",
     f":(exclude,glob){APP}/agent/**/test_*.py",
 )
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA_RE = runpy.run_path(str(Path(__file__).resolve().parents[1] / "agent/storage_viz_agent/ids.py"))["RELEASE_SHA_RE"]
 
 
 class BuildError(Exception):

@@ -20,7 +20,7 @@ from typing import Any, Collection, Mapping, Optional, Tuple
 from collector import contract, jobs, update
 from collector.errors import StoreUnavailable
 from collector.health import LEGACY_VOLUME, LINK_STATES, Data, LegacyPublication, Link
-from collector.ids import SERVER_ID_RE, VOLUME_ID_RE
+from collector.ids import SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE
 from collector.jobs import Job
 from collector.update import Update
 
@@ -31,7 +31,6 @@ RECORD_KEYS = frozenset({"schema", "server_id", "manifest", "manifest_sha256", "
                          "last_job", "update", "durations"})
 RECORD_V2_SCHEMA = "storage-viz.server-record/2"
 """M2b's record. Read and upgraded, never written (design §2.3)."""
-SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 DURATION_PLANS = ("full", "ssd")
 DURATION_LIMIT = 5
 
@@ -94,7 +93,7 @@ class ServerStore:
             raise StoreUnavailable(f"record not writable: {type(exc).__name__}") from exc
 
     def _capture_path(self, volume_id: str, sha: str) -> pathlib.Path:
-        if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        if not isinstance(sha, str) or not SHA256_RE.fullmatch(sha):
             raise ValueError("capture name is not a sha256")
         # SHIM(M2b..M5c) S3: a v1 snapshot is plain JSON, so it keeps a .json name.
         return self.captures / (f"{sha}.json" if volume_id == LEGACY_VOLUME else f"{sha}.json.gz")
@@ -200,11 +199,11 @@ def _parse_record(raw: Any, server_id: str) -> Record:
         raise ValueError("record belongs to another schema or server")
     accepted = raw["accepted"]
     if not isinstance(accepted, dict) or not all(
-            (key == LEGACY_VOLUME or VOLUME_ID_RE.fullmatch(key)) and isinstance(sha, str) and SHA_RE.fullmatch(sha)
+            (key == LEGACY_VOLUME or VOLUME_ID_RE.fullmatch(key)) and isinstance(sha, str) and SHA256_RE.fullmatch(sha)
             for key, sha in accepted.items()):
         raise ValueError("record accepted is malformed")
     rejected = raw["rejected"]
-    if not isinstance(rejected, dict) or not all(SHA_RE.fullmatch(key) and isinstance(value, dict) for key, value in rejected.items()):
+    if not isinstance(rejected, dict) or not all(SHA256_RE.fullmatch(key) and isinstance(value, dict) for key, value in rejected.items()):
         raise ValueError("record rejected is malformed")
     if raw["manifest"] is not None and not isinstance(raw["manifest"], dict):
         raise ValueError("record manifest is malformed")
@@ -308,7 +307,7 @@ def _old_capture(path: pathlib.Path, server_id: str) -> Tuple[Tuple[str, str, by
     # The old store kept the payload re-encoded, so its bytes no longer hash to the
     # digest the agent published. The digest is what tells the host's publication apart.
     manifest = {
-        "generation": f"{payload['scan_generation']}.json",
+        "generation": f"{payload['scan_generation']}.json",  # SHIM(M2b..M5c) S3
         "sha256": sha,
         "byte_size": None,
         "server_id": server_id,

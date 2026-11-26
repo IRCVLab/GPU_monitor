@@ -144,7 +144,7 @@ def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[st
         # The last run's own duration; the span of the captures can cover unrelated runs.
         "scan_duration_sec": (manifest.last_run.finished_unix - manifest.last_run.started_unix) if manifest.last_run else None,
         # Changes with every manifest, so the viewer refetches when capacity or a capture changes.
-        "scan_generation": f"{server_id}-{manifest.seq}-v2", "run_as_root": False,
+        "scan_generation": f"{server_id}-{manifest.seq}-v2", "run_as_root": False,  # SHIM(M2b..M8) S5
         "selected_roots": selected_roots, "mounts": mounts,
         "users": sorted(users.values(), key=lambda user: (-user["bytes"], user["uid"])),
         "top_files": sorted(top_files, key=lambda row: -row["bytes"]), "stale": stale, "blocked": [],
@@ -226,7 +226,7 @@ def overview_snapshot(payload: Mapping[str, Any]) -> dict:
     ]
     return {
         "server_id": payload.get("server_id"),
-        "scan_generation": payload.get("scan_generation"),
+        "scan_generation": payload.get("scan_generation"),  # SHIM(M2b..M8) S5
         "scan_finished_unix": payload.get("scan_finished_unix"),
         "scan_duration_sec": payload.get("scan_duration_sec"),
         "estimate_duration_sec": payload.get("scan_duration_sec") if legacy_success else None,
@@ -287,7 +287,7 @@ def scan_status_v1(view: ServerView, now_monotonic: float) -> dict:
     result.update(last_finished_unix=overview.get("scan_finished_unix"),
                   last_duration_sec=overview.get("scan_duration_sec"),
                   estimate_duration_sec=overview.get("estimate_duration_sec"),
-                  snapshot_generation=overview.get("scan_generation"))
+                  snapshot_generation=overview.get("scan_generation"))  # SHIM(M2b..M8) S5
     status = view.observation.status if view.observation is not None else None
     if status:
         result.update({key: value for key, value in status.items() if value is not None})
@@ -296,7 +296,7 @@ def scan_status_v1(view: ServerView, now_monotonic: float) -> dict:
     if result["scan_plan"] in ETA_PLANS:
         result["estimate_duration_sec"], result["estimate_max_duration_sec"] = judge.eta(
             view.durations, result["scan_plan"], result["estimate_duration_sec"])
-    result["snapshot_generation"] = overview.get("scan_generation")
+    result["snapshot_generation"] = overview.get("scan_generation")  # SHIM(M2b..M8) S5
     result["snapshot_finished_unix"] = overview.get("scan_finished_unix")
     result["host_now_unix"] = host_now(view, now_monotonic)
     received = view.observation.received_monotonic if view.observation is not None else None

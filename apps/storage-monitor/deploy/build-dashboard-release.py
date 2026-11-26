@@ -8,7 +8,6 @@ import hashlib
 import io
 import json
 from pathlib import PurePosixPath
-import re
 import subprocess
 import sys
 import tarfile
@@ -17,17 +16,16 @@ from pathlib import Path
 
 if (Path(__file__).resolve().parent / "server" / "storage_dashboard_release.py").is_file():
     from server.storage_dashboard_release import (
-        AGENT_BUNDLE_FILES, APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION,
+        AGENT_BUNDLE_FILES, APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION, SHA_RE,
     )
 else:
     from storage_dashboard_release import (
-        AGENT_BUNDLE_FILES, APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION,
+        AGENT_BUNDLE_FILES, APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION, SHA_RE,
     )
 
 
 APP_ROOT = "apps/storage-monitor"
 ARCHIVE_ROOT = "storage-monitor"
-SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class ReleaseError(Exception):
@@ -180,7 +178,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True, type=Path, help="directory for release artifact outputs")
     parser.add_argument("--agent-bundle-dir", type=Path, help="verified signed agent bundle to include under agent/")
     args = parser.parse_args(argv)
-    if not SHA_RE.fullmatch(args.sha):
+    if not SHA_RE.fullmatch(args.sha.lower()):
         parser.error("--sha must be exactly 40 hexadecimal characters")
     return args
 

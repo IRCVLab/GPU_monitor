@@ -11,19 +11,19 @@ function activeRescanState(job) {
 }
 
 function newerScanGeneration(generation, time, snapshot) {
-  if (!generation || generation === snapshot?.scan_generation) return null;
+  if (!generation || generation === snapshot?.scan_generation) return null;  // SHIM(M2b..M8) S5
   const finished = scanNumber(time);
   const displayedTime = scanNumber(snapshot?.scan_finished_unix);
   return finished === null || displayedTime === null || finished >= displayedTime ? generation : null;
 }
 
 function readyScanGeneration(status, snapshot) {
-  return newerScanGeneration(status.snapshot_generation, status.snapshot_finished_unix, snapshot);
+  return newerScanGeneration(status.snapshot_generation, status.snapshot_finished_unix, snapshot);  // SHIM(M2b..M8) S5
 }
 
 function pendingScanGeneration(status, snapshot) {
   return readyScanGeneration(status, snapshot)
-    || newerScanGeneration(status.published_generation, status.published_finished_unix, snapshot)
+    || newerScanGeneration(status.published_generation, status.published_finished_unix, snapshot)  // SHIM(M2b..M8) S5
     || (["complete", "partial"].includes(status.state)
       ? newerScanGeneration(status.generation, status.finished_unix, snapshot)
       : null);

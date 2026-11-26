@@ -284,17 +284,17 @@ prepare_legacy_proxy_recovery() {
   local status parsed
   status="$("$ACTIVATOR" --prepare-legacy-proxy --legacy-proxy-source "$LEGACY_PROXY_PATH" --state-path "$STATE_ROOT/activation-state.json" --app-path "$APP_PATH" --release-root "$RELEASE_ROOT" --lock-path "$STATE_ROOT/activation.lock" --incoming-dir "$STATE_ROOT/incoming")" || return
   parsed="$(printf '%s' "$status" | "$PYTHON" -c '
-import json, re, sys
+import json, runpy, sys
 payload = json.load(sys.stdin)
 keys = ("managed_legacy_proxy_target", "managed_legacy_proxy_sha256", "legacy_proxy_original_path")
 if payload.get("status") != "legacy_proxy_prepared" or any(not isinstance(payload.get(key), str) or not payload[key] for key in keys):
     raise SystemExit("activator did not report prepared legacy proxy recovery")
-if not re.fullmatch(r"[0-9a-f]{64}", payload["managed_legacy_proxy_sha256"]):
+if not runpy.run_path(sys.argv[1])["SHA256_RE"].fullmatch(payload["managed_legacy_proxy_sha256"]):
     raise SystemExit("prepared legacy proxy digest invalid")
 if any(any(ord(ch) < 32 for ch in payload[key]) for key in keys):
     raise SystemExit("prepared legacy proxy path contains control characters")
 print("\x1f".join(payload[key] for key in keys), end="")
-')" || return
+' "$ROOT/collector/ids.py")" || return
   IFS=$'\x1f' read -r LEGACY_PROXY_RECOVERY_TARGET LEGACY_PROXY_RECOVERY_SHA256 LEGACY_PROXY_ORIGINAL_PATH <<<"$parsed"
   [[ -n "$LEGACY_PROXY_RECOVERY_TARGET" && -n "$LEGACY_PROXY_RECOVERY_SHA256" && -n "$LEGACY_PROXY_ORIGINAL_PATH" ]] || {
     echo "prepared legacy proxy recovery fields are incomplete" >&2
@@ -555,6 +555,7 @@ ensure_dir "$CONFIG_DIR" 0750 root:"$RUNTIME_GROUP"
 ensure_dir "$LIBEXEC_DIR" 0755 root:root
 
 # Preserve existing /etc/storage-viz inventory, keys, known_hosts; preserve data/state and real /opt until activation.
+install_file "$ROOT/collector/ids.py" "$LIBEXEC_DIR/storage_monitor_ids.py" 0644 root:root
 install_file "$SERVER/storage_dashboard_release.py" "$LIBEXEC_DIR/storage_dashboard_release.py" 0644 root:root
 install_file "$DEPLOY/build-dashboard-release.py" "$LIBEXEC_DIR/storage-dashboard-build-release.py" 0755 root:root
 install_file "$SERVER/activate-dashboard-release.py" "$LIBEXEC_DIR/storage-dashboard-activate.py" 0755 root:root

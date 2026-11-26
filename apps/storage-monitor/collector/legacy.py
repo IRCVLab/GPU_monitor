@@ -16,15 +16,13 @@ from typing import Any, Mapping, Optional
 from collector import judge
 from collector.inventory import Server
 from collector.contract import HostRun, ManifestPointer
-from collector.ids import REQUEST_ID_RE, SHA256_RE as HEX64_RE
+from collector.ids import REQUEST_ID_RE, SHA256_RE as HEX64_RE, RUN_ID_RE
 from collector.jobs import RescanReply, Scan
 from collector.transport import KNOWN_ACTIVE_STATES, OpenSshTransport, TransportError, validate_status_envelope
 
 MANUAL_UNIT = "storage-viz-scan.service"
 SCHEDULED_UNIT = "storage-viz-scheduled-scan.service"
 MAX_PROBE_BYTES = 64 * 1024
-INVOCATION_RE = re.compile(r"^[0-9a-f]{32}$")
-RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 GENERATION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,240}-[0-9]{1,12}-v1$")
 
 
@@ -33,7 +31,7 @@ STATES = {'idle','running','complete','partial','failed','unknown'}
 PHASES = {'preparing','scanning','publishing'}
 
 def empty_status():
-    return dict.fromkeys((*NUMBERS,'phase','current_root','observed_unix','next_run_unix','error_code','generation','snapshot_generation','published_generation','scan_plan','schedule_mode','estimate_max_duration_sec'), None) | {'state':'unknown','timer_state':'unknown','progress_available':False}
+    return dict.fromkeys((*NUMBERS,'phase','current_root','observed_unix','next_run_unix','error_code','generation','snapshot_generation','published_generation','scan_plan','schedule_mode','estimate_max_duration_sec'), None) | {'state':'unknown','timer_state':'unknown','progress_available':False}  # SHIM(M2b..M3b) S2
 
 def validate_lifecycle(value):
     if not isinstance(value, dict):
@@ -162,7 +160,7 @@ def pointer(path):
     return {'sha256': hashlib.sha256(data).hexdigest(), 'seq': seq if type(seq) is int else None}
 
 def mailbox(path):
-    try: return sorted(n for n in os.listdir(path) if re.fullmatch('[0-9a-f]{32}', n))[:16]
+    try: return sorted(n for n in os.listdir(path) if re.fullmatch(REQUEST_PATTERN, n))[:16]
     except Exception: return []
 
 manifest = pointer('/var/lib/storage-viz/manifest.json')
@@ -190,7 +188,7 @@ if 'month' in mono or 'y' in mono:
 service_props = 'Id,ActiveState,InvocationID,StateChangeTimestampMonotonic,ExecMainStartTimestampMonotonic,InactiveExitTimestampMonotonic'
 services = show(('storage-viz-scan.service', 'storage-viz-scheduled-scan.service'),service_props).strip().split('\n\n')
 print(json.dumps({'lifecycle':life,'published':published,'progress':progress,'services':services,'timer':timer,'v2':v2,'remote_unix':time.time(),'remote_monotonic':time.clock_gettime(time.CLOCK_MONOTONIC)}))
-'''
+'''.replace('REQUEST_PATTERN', repr(REQUEST_ID_RE.pattern))
 
 
 @dataclass(frozen=True)
@@ -243,7 +241,7 @@ def _units(observation: Mapping[str, Any]) -> list:
             name=props.get("Id", ""),
             active=judge.unit_is_active(state),
             state=state,
-            invocation=invocation if INVOCATION_RE.fullmatch(invocation) else None,
+            invocation=invocation if RUN_ID_RE.fullmatch(invocation) else None,
             recent=_monotonic(props, "StateChangeTimestampMonotonic", observed_monotonic),
             started=max(_monotonic(props, "ExecMainStartTimestampMonotonic", observed_monotonic),
                         _monotonic(props, "InactiveExitTimestampMonotonic", observed_monotonic)),
@@ -301,7 +299,7 @@ def parse_probe(raw: Any, server: Server) -> Observation:
             return Observation(int(obj["remote_unix"]), status, publication, publication_error, Scan(), pointer, run)
         status = merge_status(obj["lifecycle"], obj["progress"], active, timer, int(obj["remote_unix"]), service_started=started)
         if publication is not None and publication["status"] in {"complete", "partial"}:
-            status["published_generation"] = publication["generation"].removesuffix(".json")
+            status["published_generation"] = publication["generation"].removesuffix(".json")  # SHIM(M2b..M3b) S2
             status["published_finished_unix"] = publication["scan_finished_unix"]
         return Observation(int(obj["remote_unix"]), status, publication, publication_error, _scan_facts(units, lifecycle, status))
     except TransportError:

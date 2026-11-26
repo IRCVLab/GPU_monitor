@@ -13,7 +13,9 @@ import http.server
 import json
 import os
 import re
+import runpy
 import socketserver
+from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
 
@@ -27,7 +29,12 @@ UNTRUSTED_LOOPBACK_HOST = "storage-viz-proxy.invalid"
 OPERATOR_ID = os.environ.get("STORAGE_VIZ_PROXY_OPERATOR", "").strip()
 PUBLIC_ORIGIN = os.environ.get("STORAGE_VIZ_PROXY_PUBLIC_ORIGIN", "").strip()
 MAX_POST_BYTES = 4096
-RESCAN_PATH = re.compile(r"^/api/servers/([A-Za-z0-9_.-]{1,128})/rescan$")
+# Rollback may restore this standalone script by digest, outside a release tree.
+ids_path = Path("/usr/local/libexec/storage_monitor_ids.py")
+if not ids_path.exists():
+    ids_path = Path(__file__).resolve().parents[1] / "collector/ids.py"
+SERVER_ID_RE = runpy.run_path(str(ids_path))["SERVER_ID_RE"]
+RESCAN_PATH = re.compile(r"/api/servers/([^/]+)/rescan")
 RESPONSE_CHUNK_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = int(os.environ.get("STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES", str(512 * 1024 * 1024)))
 if not 1 <= MAX_RESPONSE_BYTES <= 512 * 1024 * 1024:
@@ -141,7 +148,7 @@ def is_allowed_rescan_request(
         and not request_path.query
         and not request_path.fragment
         and match is not None
-        and match.group(1) not in {".", ".."}
+        and SERVER_ID_RE.fullmatch(match.group(1)) is not None
         and origin == public_origin
         and host.lower() == configured_origin.netloc.lower()
     )

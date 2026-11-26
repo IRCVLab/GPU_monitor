@@ -25,6 +25,7 @@ import urllib.request
 import zipfile
 
 from storage_dashboard_release import (
+    SHA_RE, DIGEST_RE,
     AGENT_BUNDLE_FILES,
     APPLICATION_NAME,
     ARTIFACT_FORMAT_VERSION,
@@ -34,8 +35,6 @@ from storage_dashboard_release import (
 )
 
 
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 API_BASE = "https://api.github.com"
 ARTIFACT_PREFIX = "storage-monitor-dashboard"

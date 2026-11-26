@@ -58,7 +58,7 @@ def scrub(snapshot):
     if snapshot.get("schema_version") != 1:
         raise ValueError("expected a v1 snapshot")
     fixture = visit(snapshot)
-    fixture["scan_generation"] = f'{fixture["server_id"]}-{fixture["scan_started_unix"]}-v1'
+    fixture["scan_generation"] = f'{fixture["server_id"]}-{fixture["scan_started_unix"]}-v1'  # SHIM(M2b..M8) S5
     return fixture
 
 

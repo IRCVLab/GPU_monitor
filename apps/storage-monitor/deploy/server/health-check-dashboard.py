@@ -8,6 +8,7 @@ import http.client
 import ipaddress
 import json
 from pathlib import Path
+import runpy
 import re
 import secrets
 import subprocess
@@ -16,9 +17,12 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 
+ids_path = Path(__file__).with_name("storage_monitor_ids.py")
+if not ids_path.exists():  # Source checkout.
+    ids_path = Path(__file__).resolve().parents[2] / "collector/ids.py"
+ids = runpy.run_path(str(ids_path))
 ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
-SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SERVER_ID_RE = ids["SERVER_ID_RE"]
 SHELLY_VALUE_RE = re.compile(r"[\s`$'\";&|<>\\]")
 FIXED_PROXY_OPERATOR = "fixed-proxy-operator"
 DASHBOARD_SERVICE = "storage-viz-dashboard.service"

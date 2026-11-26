@@ -18,6 +18,7 @@ import sys
 import tempfile
 from typing import Any, Mapping, Optional, Protocol, Tuple
 
+from collector.ids import SHA256_RE, VOLUME_ID_RE
 from collector.inventory import Server
 
 STATUS_PATH = "/var/lib/storage-viz/scan-status.json"
@@ -25,7 +26,6 @@ SNAPSHOT_DIR = "/var/lib/storage-viz/snapshots"
 MANIFEST_PATH = "/var/lib/storage-viz/manifest.json"
 CAPTURE_DIR = "/var/lib/storage-viz/captures"
 MAX_MANIFEST_BYTES = 64 * 1024
-VOLUME_ID_RE = re.compile(r"^[vx]-[0-9a-f]{16}$")
 MISSING_FILE_MARKERS = ("not found", "No such file")
 RESCAN_COMMAND = ("sudo", "-n", "/usr/bin/systemctl", "start", "storage-viz-scan.service")
 KNOWN_ACTIVE_STATES = frozenset({"active", "reloading", "inactive", "failed", "activating", "deactivating", "maintenance"})
@@ -40,7 +40,6 @@ MAX_RESCAN_TIMEOUT_SECONDS = 24 * 60 * 60
 SSH_ERROR_EXIT = 255
 AUTH_FAILURE_MARKERS = ("Permission denied", "Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED")
 GENERATION_RE = re.compile(r"^(?P<server_id>[A-Za-z0-9_.-]+)-(?P<started>[0-9]+)-v1\.json$")
-HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 FILE_LIMIT_EXEC = """
 import os
@@ -157,7 +156,7 @@ class OpenSshTransport:
 
     def fetch_volume_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes:
         """One immutable v2 capture, at most ``cap`` bytes (SHIM(M2b..M3b) S2: the gate's get-capture)."""
-        if not VOLUME_ID_RE.fullmatch(volume_id) or not HEX64_RE.fullmatch(sha256):
+        if not VOLUME_ID_RE.fullmatch(volume_id) or not SHA256_RE.fullmatch(sha256):
             raise TransportError("BAD_PATH", "capture name is unsafe")
         return self._get_file(server, f"{CAPTURE_DIR}/{volume_id}/{sha256}.json.gz", cap, "CAPTURE_TOO_LARGE",
                               "CAPTURE_GONE", timeout=self._snapshot_timeout)
@@ -277,7 +276,7 @@ def validate_snapshot_status(status: Mapping[str, Any], server: Server, max_snap
         raise TransportError("BAD_STATUS", "status server_id mismatch")
     if status.get("status") not in {"complete", "partial"}:
         raise TransportError("BAD_STATUS", "status is not downloadable")
-    if not isinstance(status.get("config_digest"), str) or not HEX64_RE.fullmatch(status["config_digest"]):
+    if not isinstance(status.get("config_digest"), str) or not SHA256_RE.fullmatch(status["config_digest"]):
         raise TransportError("BAD_STATUS", "status config digest is invalid")
     if not isinstance(status.get("scan_finished_unix"), int) or isinstance(status.get("scan_finished_unix"), bool) or status["scan_finished_unix"] < 0:
         raise TransportError("BAD_STATUS", "status timestamp is invalid")
@@ -287,7 +286,7 @@ def validate_snapshot_status(status: Mapping[str, Any], server: Server, max_snap
     if size > max_snapshot_bytes:
         raise TransportError("SNAPSHOT_TOO_LARGE", "snapshot exceeds maximum size")
     sha = status.get("sha256")
-    if not isinstance(sha, str) or not HEX64_RE.fullmatch(sha):
+    if not isinstance(sha, str) or not SHA256_RE.fullmatch(sha):
         raise TransportError("BAD_STATUS", "status sha256 is invalid")
     return generation
 
@@ -301,14 +300,14 @@ def validate_status_envelope(raw: Mapping[str, Any], server: Server) -> dict[str
         raise TransportError("BAD_STATUS", "status server_id mismatch")
     if status.get("status") not in {"complete", "partial", "failed"}:
         raise TransportError("BAD_STATUS", "status value is invalid")
-    if not isinstance(status.get("config_digest"), str) or not HEX64_RE.fullmatch(status["config_digest"]):
+    if not isinstance(status.get("config_digest"), str) or not SHA256_RE.fullmatch(status["config_digest"]):
         raise TransportError("BAD_STATUS", "status config digest is invalid")
     if not isinstance(status.get("scan_finished_unix"), int) or isinstance(status.get("scan_finished_unix"), bool) or status["scan_finished_unix"] < 0:
         raise TransportError("BAD_STATUS", "status timestamp is invalid")
     if status["status"] in {"complete", "partial"}:
         if not isinstance(status.get("byte_size"), int) or isinstance(status.get("byte_size"), bool) or status["byte_size"] <= 0:
             raise TransportError("BAD_STATUS", "snapshot size is invalid")
-        if not isinstance(status.get("sha256"), str) or not HEX64_RE.fullmatch(status["sha256"]):
+        if not isinstance(status.get("sha256"), str) or not SHA256_RE.fullmatch(status["sha256"]):
             raise TransportError("BAD_STATUS", "status sha256 is invalid")
     return status
 
