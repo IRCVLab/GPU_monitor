@@ -736,6 +736,17 @@ Each step reads state from disk, so a rerun after a crash converges. Unit: `Prot
 
 Host requirements become python3, systemd, sudo and OpenSSH 8.1 or later. `cc`, `make` and `sftp-server` are no longer needed.
 
+**As built in M3a (2026-11-27).** These points differ from the text above:
+
+- The pinned key is `/etc/storage-viz/allowed_signers` (ssh-keygen allowed_signers format, principal `storage-viz-release`), not `release-signing.pub`. Central pins the same file at `/etc/storage-viz/agent-allowed-signers`.
+- Every gate reply starts with `storage-viz-gate/<bootstrap_version> ok <bytes>` or `... err <CODE>`, so central tells refusals from data and detects a short body.
+- A seventh verb, `rollback-update <sha40>`, is the bad-run signal. It re-activates the recorded `previous` release and adds the active one to `bad`. `activate-update <previous>` stays a plain activation, so a dashboard rollback never marks a release bad. The update request file holds `activate <sha>` or `rollback <sha>`.
+- The updater self-tests from `releases/<sha>.tmp` and renames only after a pass, so a crash never leaves an unverified release that looks installed. The floor and bootstrap checks also apply to installed releases.
+- `requests/` and `update/incoming/` are setgid (`2770`). The update unit has no `CAP_DAC_OVERRIDE`, so it can read the gate's files only through the collector group. The update unit has the scan units' `RuntimeDirectory` and group, so an update never takes the gate's read access to `scan.lock` away.
+- Signing runs in `.github/workflows/agent-bundle.yml` (workflow_run after `ci` on main), not in `ci.yml`, because the workflow policy forbids secrets in any workflow that pull requests trigger. `ci.yml` builds the same bundle unsigned. The artifact is `viz-agent-bundle-<sha>`.
+- The bundle's `source_sha` is the newest commit that changed an agent input, so commits without agent changes reuse the bundle. `rollback_floor_seq` trails 20 agent releases and is raised by `agent/RELEASE-FLOOR.json`.
+- The dashboard release carries the bundle at fixed paths, `agent/storage-viz-agent.tar.gz{,.sig}` plus `agent/storage-viz-agent.json` (sha, seq, digest, size). Only the puller requires them, so manual dashboard builds still work. Downloading the artifact needs a read-only GitHub token at `/etc/storage-viz/github-token`.
+
 **Limits found in M4 (accepted 2026-11-27).** Row paths in `top_files`, `stale` and error rows are capped at 4096 bytes, because the agent and collector reject longer strings. Longer rows are skipped from those lists, but their bytes still count in totals. An error row deeper than that is reported at its deepest ancestor that fits. Tree depth is capped at 128 levels by folding deeper levels into `other_bytes` at the cap (A10, fixed in M5). `vanished_dirs` counts VANISHED, REPLACED and FD_BUDGET_REOPEN_FAILED rows, not EACCES.
 
 ## 5. Bug coverage
