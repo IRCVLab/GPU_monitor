@@ -359,7 +359,7 @@ class TelemetryTests(unittest.TestCase):
             complete["selected_roots"][0]["scan_finished_unix"] = complete["scan_finished_unix"]
             self.assertIsNone(_overview_snapshot(complete)["estimate_duration_sec"])
 
-    def test_estimate_is_longest_recent_completion_and_survives_restart(self):
+    def test_estimate_range_survives_restart(self):
         def complete(started, duration):
             finished = started + duration
             return {"state": "complete", "scan_plan": "full", "started_unix": started, "finished_unix": finished,
@@ -376,14 +376,16 @@ class TelemetryTests(unittest.TestCase):
                 tx.fetch_scan_status = lambda server, observed=observed: transport.RemoteScanObservation(dict(observed))
                 clock.now += 60
                 self.poll_status(svc)
-            self.assertEqual(svc.scan_status_for_api("hinton")["estimate_duration_sec"], 900)
+            first = svc.scan_status_for_api("hinton")
+            self.assertEqual((first["estimate_duration_sec"], first["estimate_max_duration_sec"]), (24, 900),
+                             "the typical estimate follows recent runs while the longest recent run stays visible")
 
             restarted = PollService([make_server("hinton")], store, tx, clock=clock)
             clock.now += 60
             self.poll_status(restarted)
             status = restarted.scan_status_for_api("hinton")
             self.assertEqual(status["state"], "running")
-            self.assertEqual(status["estimate_duration_sec"], 900)
+            self.assertEqual((status["estimate_duration_sec"], status["estimate_max_duration_sec"]), (24, 900))
             self.assertNotIn("scan_duration_history", store.load_state("hinton"),
                              "history stays outside the validated state so an older collector can still load it")
 

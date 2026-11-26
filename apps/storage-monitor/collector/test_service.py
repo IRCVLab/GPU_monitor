@@ -955,15 +955,15 @@ class ScanDurationHistoryTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.assertIsNone(record_completed_duration({}, status))
 
-    def test_estimate_is_the_longest_known_duration(self):
-        from collector.service import conservative_estimate
-        history = {"full": [[1000, 900], [2000, 24]], "ssd": [[1500, 18]]}
-        self.assertEqual(conservative_estimate(history, "full", 24), 900)
-        self.assertEqual(conservative_estimate(history, "full", 1200), 1200)
-        self.assertEqual(conservative_estimate(history, "ssd", None), 18)
-        self.assertEqual(conservative_estimate({}, "full", 24), 24)
-        self.assertIsNone(conservative_estimate({}, "full", None))
-        self.assertIsNone(conservative_estimate({}, "full", True))
+    def test_estimate_range_is_typical_and_longest_duration(self):
+        from collector.service import estimate_range
+        history = {"full": [[1000, 1396], [2000, 19], [3000, 21]], "ssd": [[1500, 18]]}
+        self.assertEqual(estimate_range(history, "full", 19), (19, 1396), "one cold run must not become the typical estimate")
+        self.assertEqual(estimate_range(history, "full", 1500), (21, 1500))
+        self.assertEqual(estimate_range(history, "ssd", None), (18, 18))
+        self.assertEqual(estimate_range({}, "full", 24), (24, 24))
+        self.assertEqual(estimate_range({}, "full", None), (None, None))
+        self.assertEqual(estimate_range({}, "full", True), (None, None))
 
 
 if __name__ == "__main__":

@@ -69,6 +69,8 @@ function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
   const measurable = running && s.progress_available && !heartbeatStale;
   const predicted = elapsed !== null && estimateDuration > 0 ? started + estimateDuration : null;
   const eta = predicted > now && !heartbeatStale ? predicted : null;
+  const longest = scanNumber(s.estimate_max_duration_sec);
+  const slowEta = eta === null && !heartbeatStale && predicted !== null && longest > estimateDuration && started + longest > now ? started + longest : null;
   const labels = { running: "스캔 중", complete: "스캔 완료", partial: "일부 항목 확인 필요", failed: "스캔 실패", idle: "대기 중", unknown: "상태 확인 중", starting: "스캔 요청 중", requested: "시작 대기 중", refreshing: "결과 반영 중", reconnecting: "상태 재확인 중" };
   let note = "";
   if (disconnected) note = "상태를 다시 확인하고 있습니다. 마지막으로 받은 데이터가 표시됩니다.";
@@ -80,9 +82,9 @@ function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
   const next = scanNumber(s.next_run_unix);
   return {
     state, running, label: disconnected ? "상태 확인 지연" : s.error_code === "SCAN_INTERRUPTED" ? "스캔 중단" : (labels[state] || labels.unknown),
-    lastFinished, duration, elapsed, eta, snapshotFinished,
+    lastFinished, duration, elapsed, eta, slowEta, snapshotFinished,
     snapshotPending: !!pendingScanGeneration(s, data),
-    etaNote: heartbeatStale ? "진행 정보 확인 후 예상 시간 갱신" : predicted !== null && predicted <= now ? "최근 최장 소요 시간 초과 · 계속 진행 중" : started === null ? "현재 스캔 시작 시각 확인 중" : "같은 범위의 완료 기록이 없어 예상 시간 확인 불가",
+    etaNote: heartbeatStale ? "진행 정보 확인 후 예상 시간 갱신" : predicted !== null && predicted <= now ? (slowEta !== null ? "평소보다 오래 걸리는 중" : "최근 최장 소요 시간 초과 · 계속 진행 중") : started === null ? "현재 스캔 시작 시각 확인 중" : "같은 범위의 완료 기록이 없어 예상 시간 확인 불가",
     nextRunLabel: s.schedule_mode === "due-check" ? "다음 확인" : "다음",
     nextRun: !disconnected && s.timer_state === "active" && next > now ? next : null,
     scheduleNote: s.timer_state === "inactive" || s.timer_state === "disabled" ? "자동 스캔 비활성" : "예약 정보 확인 불가",
@@ -144,8 +146,10 @@ function renderScanStatus(status, snapshot, options = {}) {
   title("scanRoot", model.phase + (model.root ? " · " + model.root : ""));
   set("scanFileCount", model.files !== null ? model.files.toLocaleString("ko-KR") + "개 파일" : "처리량 확인 중");
   set("scanElapsed", scanDuration(model.elapsed) + " 경과");
-  set("scanEta", model.eta !== null ? "예상 " + scanDuration(model.eta - now) + " 남음" : model.etaNote);
-  title("scanEta", model.eta !== null ? "예상 완료: " + scanDate(model.eta) + " · 이전 성공 스캔 소요 시간 기준 추정" : model.etaNote);
+  set("scanEta", model.eta !== null ? "예상 " + scanDuration(model.eta - now) + " 남음"
+    : model.slowEta ? "평소보다 오래 걸리는 중 · 최대 " + scanDuration(model.slowEta - now) + " 남음" : model.etaNote);
+  title("scanEta", model.eta !== null ? "예상 완료: " + scanDate(model.eta) + " · 최근 성공 스캔의 보통 소요 시간 기준"
+    : model.slowEta ? "최대 예상 완료: " + scanDate(model.slowEta) + " · 최근 성공 스캔 중 가장 오래 걸린 시간 기준" : model.etaNote);
   const meter = doc.getElementById("scanRootProgress");
   const hasRoots = model.rootsTotal > 0 && model.rootsDone !== null;
   if (meter) { meter.hidden = !hasRoots; meter.max = model.rootsTotal || 1; meter.value = Math.min(model.rootsDone || 0, meter.max); }

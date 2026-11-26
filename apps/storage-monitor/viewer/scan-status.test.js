@@ -68,4 +68,15 @@ async function testMonitor() {
   monitor.stop();
   assert.equal(scheduled[0].cancelled, true);
 }
+{
+  const slow = scanStatusModel({ state: 'running', started_unix: 1000, observed_unix: 1100, updated_unix: 1100, estimate_duration_sec: 19, estimate_max_duration_sec: 1396 }, null, 1100);
+  assert.equal(slow.eta, null, 'past the typical duration there is no near ETA');
+  assert.equal(slow.slowEta, 2396, 'past the typical duration the longest recent run bounds the ETA');
+  assert.match(slow.etaNote, /^평소보다 오래 걸리는 중/);
+  const fast = scanStatusModel({ state: 'running', started_unix: 1000, observed_unix: 1010, updated_unix: 1010, estimate_duration_sec: 19, estimate_max_duration_sec: 1396 }, null, 1010);
+  assert.equal(fast.eta, 1019, 'within the typical duration the ETA follows the typical run');
+  const over = scanStatusModel({ state: 'running', started_unix: 1000, observed_unix: 2500, updated_unix: 2500, estimate_duration_sec: 19, estimate_max_duration_sec: 1396 }, null, 2500);
+  assert.equal(over.slowEta, null);
+  assert.match(over.etaNote, /^최근 최장 소요 시간 초과/, 'only past the longest recent run is the scan overdue');
+}
 testMonitor().then(() => console.log('scan status tests passed')).catch(error => { console.error(error); process.exitCode = 1; });
