@@ -134,8 +134,11 @@ class Fleet:
             raise ActiveJob(job=job_v1(reply.job, server.id), audit=audit("ACTIVE_JOB", reply.job.request_id))
         if reply.error == "COOLDOWN":
             raise Cooldown(reply.retry_after, retry_after_seconds=reply.retry_after, audit=audit("COOLDOWN", None))
-        if reply.error is not None:
+        if reply.error == StoreUnavailable.code:
             raise StoreUnavailable(audit=audit(reply.error, None))
+        if reply.error is not None:
+            # The edge answers 500 INTERNAL and logs this under the request id (section 4.3).
+            raise RuntimeError(f"rescan admission for {server.id} failed: {reply.error}")
         event = audit("ACCEPTED", reply.job.request_id)
         _LOG.info("rescan accepted %s", event)
         return {"status": "started", "job": job_v1(reply.job, server.id), "audit": event}

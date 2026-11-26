@@ -121,3 +121,20 @@ def test_c9_fleet_responsive_during_large_commit(collector_api, monkeypatch):
             writer.result(timeout=10)
     code, fleet, _ = request("GET", "/api/servers")
     assert next(row for row in fleet["servers"] if row["id"] == "alpha-1")["overview_snapshot"]["scan_generation"] == "alpha-1-1719203000-v1"
+
+
+def test_an_unexpected_admission_failure_is_500_internal(collector_api, monkeypatch):
+    # M2b review: the fleet mapped the actor's INTERNAL reply to 503 STORE_UNAVAILABLE (section 4.3).
+    from collector import jobs
+
+    host, request, origin = collector_api
+    auth = rescan_headers(request, origin)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(jobs, "admit", broken)
+    host.fleet.start()
+    code, body, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
+    assert (code, body["error"]) == (500, "INTERNAL")
+    assert host.summary()["active_job"] is None
