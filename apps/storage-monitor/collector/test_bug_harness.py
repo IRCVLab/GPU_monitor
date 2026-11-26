@@ -15,7 +15,7 @@ import threading
 from collector.contract import HostRun, ManifestPointer
 from collector.fleet import Fleet
 from collector.inventory import Server
-from collector.jobs import Scan
+from collector.jobs import RescanReply, Scan
 from collector.legacy import Observation, empty_status
 from collector.test_snapshot import base_payload, status_for
 from collector.transport import TransportError
@@ -120,6 +120,8 @@ class FakeHost:
         self.manifest_calls = []
         self.capture_calls = []
         self.manifest_errors = {}
+        self.rescan_requests = []
+        self.rescan_replies = {}
 
     def publish(self, server_id, started=1719200000, **kwargs):
         status, data = status_data(payload_for(server_id, started=started, **kwargs))
@@ -169,6 +171,13 @@ class FakeHost:
         finally:
             with self.lock:
                 self.active_fetches -= 1
+
+    def rescan(self, server, request_id):
+        self.rescan_requests.append((server.id, request_id))
+        reply = self.rescan_replies.get(server.id, RescanReply("received"))
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
     def captures_of(self, sha):
         return sum(1 for _, _, fetched in self.capture_calls if fetched == sha)

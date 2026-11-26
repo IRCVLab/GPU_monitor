@@ -204,6 +204,16 @@ def volume_states(data: Data) -> Dict[str, str]:
     return {volume_id: volume_state(data, volume_id) for volume_id in sorted({*targets(data), *data.accepted})}
 
 
+def captures_progress(data: Data) -> str:
+    """Whether every capture the publication names is held: rejected, fetching or current."""
+    named = [(volume_id, sha) for volume_id, sha in targets(data).items() if sha is not None]
+    if any(sha in data.rejected for _, sha in named):
+        return "rejected"
+    if any(data.accepted.get(volume_id) != sha for volume_id, sha in named):
+        return "fetching"
+    return "current"
+
+
 def data_state(data: Data) -> str:
     """The server's worst volume: any stale_rejected, then any fetching, then any current."""
     states = set(volume_states(data).values())

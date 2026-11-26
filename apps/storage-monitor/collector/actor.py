@@ -18,7 +18,7 @@ import time
 from typing import Any, Callable, Mapping, Optional, Protocol
 
 from collector import contract, health, jobs, judge, snapshot
-from collector.contract import ContractError, HostManifest, LastRun, ManifestPointer
+from collector.contract import ContractError, HostManifest, HostRun, LastRun, ManifestPointer
 from collector.errors import StoreUnavailable
 from collector.health import (
     LEGACY_VOLUME, CaptureAccepted, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
@@ -56,6 +56,7 @@ class Host(Protocol):
     def observe(self, server: Server) -> Any: ...
     def get_manifest(self, server: Server) -> bytes: ...
     def get_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes: ...
+    def rescan(self, server: Server, request_id: str) -> jobs.RescanReply: ...
     def fetch_capture(self, server: Server, publication: Mapping[str, Any]) -> bytes:
         """SHIM(M2b..M5c) S3: the v1 snapshot named by a scan-status envelope."""
     def start_rescan(self, server: Server) -> None:
@@ -135,6 +136,14 @@ class Fetched:
 
 
 @dataclass(frozen=True)
+class Replied:
+    """The host's answer to ``rescan <request_id>``; ambiguous when the exchange gave none."""
+    seq: int
+    outcome: str
+    code: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class Dispatched:
     seq: int
     ok: bool
@@ -211,6 +220,7 @@ class ServerActor:
         self._reread_manifest = False
         self._observation: Optional[ObservationView] = None
         self._scan: Optional[jobs.Scan] = None
+        self._run: HostRun = HostRun()
         self._host_clock = None
         self._error: Optional[str] = None
         self._seq = 0
@@ -369,12 +379,23 @@ class ServerActor:
         return replace(record, job=job)
 
     def _job_observed(self, record: Record, held: Optional[Snapshot]) -> tuple:
+        if record.job.protocol == "receipt":
+            return jobs.reduce(record.job, self._trace(record))
         if self._scan is None:
             return record.job, ()
         rejected = frozenset(entry.get("generation") for entry in record.data.rejected.values())
         accepted = held.overview.get("scan_generation") if held is not None else None
         event = jobs.Observed(int(self.clock.time()), self._scan, accepted, rejected)
         return jobs.reduce(record.job, event)
+
+    def _trace(self, record: Record) -> jobs.Traced:
+        request_id = record.job.request_id
+        manifest = record.data.manifest
+        receipts = manifest.requests if isinstance(manifest, HostManifest) else ()
+        return jobs.Traced(
+            int(self.clock.time()), pending=request_id in self._run.pending, running=request_id in self._run.request_ids,
+            scanning=self._run.scanning, receipt=next((r.outcome for r in receipts if r.request_id == request_id), None),
+            captures=health.captures_progress(record.data))
 
     # ------------------------------------------------------------ messages
 
@@ -385,6 +406,8 @@ class ServerActor:
             self._fetched(message)
         elif isinstance(message, Dispatched):
             self._dispatched(message)
+        elif isinstance(message, Replied):
+            self._replied(message)
         else:
             raise TypeError(f"unknown actor message {type(message).__name__}")
 
@@ -423,6 +446,7 @@ class ServerActor:
         self._host_clock = (observation.host_now, received)
         self._observation = ObservationView({**observation.status, "observed_unix": at}, received)
         self._scan = observation.scan
+        self._run = observation.run
         record = self._record
         if observation.manifest is not None:
             record, fetches = self._manifest_observed(record, observation.manifest, seq, at)
@@ -446,7 +470,7 @@ class ServerActor:
         for fetch in fetches:
             self._start_transfer(fetch)
         for _ in dispatches:
-            self._start_rescan()
+            self._dispatch(record.job)
 
     def _manifest_observed(self, record: Record, pointer: ManifestPointer, seq: int, at: int) -> tuple:
         """Read a changed manifest, then publish the held one to the data reducer (design §4.2 steps 2, 3)."""
@@ -505,7 +529,8 @@ class ServerActor:
         last = record.last_job.requested_unix if record.last_job is not None else None
         if last is not None and message.at - last < message.cooldown_seconds:
             return Admitted(error="COOLDOWN", retry_after=message.cooldown_seconds - (message.at - last))
-        job = jobs.admit(message.request_id, message.actor, message.at)
+        protocol = "receipt" if isinstance(record.data.manifest, HostManifest) else "invocation"
+        job = jobs.admit(message.request_id, message.actor, message.at, protocol)
         if not self._commit(replace(record, job=job)):
             return Admitted(error=StoreUnavailable.code)
         self._publish()
@@ -619,6 +644,43 @@ class ServerActor:
         self._record = replace(self._record, data=data)
 
     # ------------------------------------------------------------ rescan
+
+    def _dispatch(self, job: jobs.Job) -> None:
+        if job.protocol == "receipt":
+            self._send_rescan(job.request_id)
+        else:
+            self._start_rescan()
+
+    def _send_rescan(self, request_id: str) -> None:
+        seq = self._next_seq()
+        server, host = self.server, self.host
+
+        def work() -> None:
+            try:
+                reply = host.rescan(server, request_id)
+            except TransportError as exc:
+                self.post(Replied(seq, "ambiguous", exc.code))
+                return
+            except Exception:
+                _LOG.exception("rescan request failed for %s", server.id)
+                self.post(Replied(seq, "ambiguous", "RESCAN_FAILED"))
+                return
+            outcome = reply.outcome if reply.outcome in jobs.REPLY_OUTCOMES else "ambiguous"
+            self.post(Replied(seq, outcome, reply.code))
+
+        self.spawn(work, f"storage-viz-rescan-{server.id}")
+
+    def _replied(self, message: Replied) -> None:
+        at = int(self.clock.time())
+        record = self._record
+        failed_contact = message.outcome == "ambiguous" and message.code in health.TRANSPORT_CODES | health.AUTH_CODES
+        link_event = ExchangeFailed(message.seq, at, message.code) if failed_contact else ExchangeOk(message.seq, at)
+        record = replace(record, link=health.reduce_link(record.link, link_event))
+        if record.job is not None:
+            job, _ = jobs.reduce(record.job, jobs.RescanReplied(at, message.outcome, message.code))
+            record = self._with_job(record, job)
+        if self._commit(record):
+            self._next_contact = 0.0
 
     def _start_rescan(self) -> None:
         seq = self._next_seq()

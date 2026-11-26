@@ -2,6 +2,8 @@
 import json
 import threading
 
+from collector.actor import Admit, Ask
+from collector.contract import HostRun
 from collector.inventory import CapacityThresholds
 from collector.test_bug_harness import Collector, ManualSpawn
 from collector.test_contract import capture_doc, encode, gz, manifest_doc, sha, volume_doc
@@ -308,3 +310,55 @@ def test_volume_transfers_share_the_fleet_limit_of_two(tmp_path):
     while len(record(collector).data.accepted) < 4:
         actor._guard(actor._handle, actor.inbox.get(timeout=5))
     assert collector.host.max_active_fetches == 2
+
+
+# ------------------------------------------------------------------ receipt jobs (C4 central side)
+
+
+def admit(collector):
+    ask = Ask()
+    collector.actor().post(Admit("e" * 32, "operator", collector.clock.now, 900, ask))
+    collector.actor().step()
+    return ask.value
+
+
+def test_v2_rescan_is_confirmed_only_by_the_manifest_receipt(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    reply = admit(collector)
+    assert reply.job.protocol == "receipt"
+    collector.settle()
+    assert collector.host.rescan_requests == [(SID, "e" * 32)]
+    assert collector.summary()["active_job"]["phase"] == "pending"
+    collector.host.runs[SID] = HostRun(present=True, scanning=True, run_id="9" * 32, pending=frozenset({"e" * 32}))
+    for _ in range(5):
+        collector.tick(5)
+    assert collector.summary()["active_job"]["phase"] == "pending", "C4 a scheduled scan moved the waiting request"
+    assert collector.host.rescan_requests == [(SID, "e" * 32)], "the request was resent while a scan held the lock"
+    collector.host.runs[SID] = HostRun(present=True, scanning=True, run_id="8" * 32, request_ids=frozenset({"e" * 32}))
+    collector.tick(5)
+    assert collector.summary()["active_job"]["phase"] == "running"
+    collector.host.runs[SID] = HostRun()
+    binding, root, _, fields = host.volumes[VA]
+    host.volume(VA, binding, root, capture(VA, binding, root, collector.clock.now - 5), **fields)
+    host.publish(requests=[{"request_id": "e" * 32, "run_id": "8" * 32, "received_unix": 0, "outcome": "complete"}])
+    collector.tick(5)
+    job = collector.actor()._record.last_job
+    assert (job.state, job.result_code, job.request_id) == ("succeeded", "OK", "e" * 32)
+    assert collector.actor()._record.data.accepted[VA] == sha(host.volumes[VA][2])
+
+
+def test_v2_interrupted_receipt_fails_the_job(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    admit(collector)
+    collector.settle()
+    host.publish(requests=[{"request_id": "e" * 32, "run_id": "8" * 32, "received_unix": 0, "outcome": "interrupted"}])
+    collector.tick(5)
+    job = collector.actor()._record.last_job
+    assert (job.state, job.result_code) == ("failed", "SCAN_INTERRUPTED")
+
+
+def test_legacy_adapter_refuses_a_request_id_it_cannot_deliver(tmp_path):
+    from collector.legacy import LegacyHost
+    from collector.test_bug_harness import make_server
+    reply = LegacyHost(transport=None).rescan(make_server(), "e" * 32)
+    assert (reply.outcome, reply.code) == ("rejected", "REQUEST_UNSUPPORTED")

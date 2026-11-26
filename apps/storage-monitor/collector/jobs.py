@@ -3,13 +3,17 @@
 A job succeeds only when the publication its scan produced is accepted, never on an
 SSH exit status alone (I24). Anything that cannot be tied to the job ends ``unconfirmed``.
 
-SHIM(M2b..M5c) S4: today's agents write no receipts. The job correlates by the
-scan unit's systemd InvocationID and the agent run id in its lifecycle file.
+A ``receipt`` job (a v2 host) sends ``rescan <request_id>`` and follows that id: in the
+request mailbox, in run.json, then as a receipt in the manifest (design §3.3).
+
+SHIM(M2b..M5c) S4: an ``invocation`` job (a v1 host, which writes no receipts)
+correlates by the scan unit's systemd InvocationID and the agent run id in its
+lifecycle file.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 COOLDOWN_SECONDS = 15 * 60
 MAX_ACTIVE_JOBS = 2
@@ -22,6 +26,10 @@ MAX_DISPATCHES = 3
 STATES = ("dispatching", "pending", "running", "reconciling", "collecting", "succeeded", "failed", "unconfirmed")
 TERMINAL = frozenset({"succeeded", "failed", "unconfirmed"})
 FINISHED_RUN = frozenset({"complete", "partial", "failed"})
+PROTOCOLS = ("invocation", "receipt")
+RECEIPT_SUCCEEDS = frozenset({"complete", "partial"})
+RECEIPT_FAILS = {"failed": "SCAN_FAILED", "interrupted": "SCAN_INTERRUPTED"}
+REPLY_OUTCOMES = frozenset({"received", "already_received", "rejected"})
 
 
 @dataclass(frozen=True)
@@ -42,6 +50,8 @@ class Job:
     """The publication the job waits to see accepted."""
     finished_unix: Optional[int] = None
     result_code: Optional[str] = None
+    protocol: str = "invocation"
+    """``receipt`` for a v2 host; ``invocation`` is SHIM(M2b..M5c) S4."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +79,38 @@ class Observed:
 
 
 @dataclass(frozen=True)
+class Traced:
+    """What one observation of a v2 host shows of the job's request id."""
+    at: int
+    pending: bool = False
+    """The id waits in ``requests/``."""
+    running: bool = False
+    """run.json lists the id: the running scan serves it."""
+    scanning: bool = False
+    """Some scan holds the lock, perhaps a scheduled one that does not list the id (C4)."""
+    receipt: Optional[str] = None
+    """The outcome of the manifest receipt for the id, as written. Unknown outcomes are ignored."""
+    captures: str = "current"
+    """The accepted manifest's captures: current, fetching or rejected."""
+
+
+@dataclass(frozen=True)
+class RescanReply:
+    """The host's answer to ``rescan <request_id>``. A timeout or unparsable answer is a TransportError."""
+    outcome: str
+    """received, already_received or rejected."""
+    code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RescanReplied:
+    at: int
+    outcome: str
+    """received, already_received, rejected, or ambiguous (timeout, exit 255, unparsable reply)."""
+    code: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class DispatchReturned:
     """The blocking ``systemctl start`` returned. Its status proves nothing on its own."""
     at: int
@@ -92,14 +134,14 @@ class Dispatch:
     pass
 
 
-Event = Union[Observed, DispatchReturned, Tick, Restarted]
-EVENT_KINDS = ("Observed", "DispatchReturned", "Tick", "Restarted")
+Event = Union[Observed, DispatchReturned, Traced, RescanReplied, Tick, Restarted]
+EVENT_KINDS = ("Observed", "DispatchReturned", "Traced", "RescanReplied", "Tick", "Restarted")
 Result = Tuple[Job, Tuple[Dispatch, ...]]
 
 
-def admit(request_id: str, actor: str, at: int) -> Job:
+def admit(request_id: str, actor: str, at: int, protocol: str = "invocation") -> Job:
     """The baseline run comes from the first observation after admission, never from an older one."""
-    return Job(request_id=request_id, actor=actor, requested_unix=at, since_unix=at)
+    return Job(request_id=request_id, actor=actor, requested_unix=at, since_unix=at, protocol=protocol)
 
 
 def run_deadline_seconds(longest_sec: Optional[int]) -> int:
@@ -217,27 +259,125 @@ def _restart_dispatching(job: Job, event: Restarted) -> Result:
     return _to_reconciling(job, event) if job.dispatches else (job, ())
 
 
+# ------------------------------------------------------------------ receipt jobs (v2 hosts)
+
+
+def _resend(job: Job, event: Traced) -> Result:
+    """The same request id again: the host answers already_received and never scans twice for it.
+
+    Bounded like the invocation job's starts. A host holding the id that never starts is
+    RESCAN_NOT_STARTED; one that never showed the id is unconfirmed.
+    """
+    if job.dispatches >= MAX_DISPATCHES:
+        if job.state == "reconciling":
+            return _finish(job, "unconfirmed", event.at, "NO_TRACE"), ()
+        return _finish(job, "failed", event.at, "RESCAN_NOT_STARTED"), ()
+    return replace(job, dispatches=job.dispatches + 1), (Dispatch(),)
+
+
+def _receipt(job: Job, event: Traced) -> Optional[Result]:
+    """Decide on the manifest receipt for the id, if there is one the job understands."""
+    if event.receipt in RECEIPT_FAILS:
+        return _finish(job, "failed", event.at, RECEIPT_FAILS[event.receipt]), ()
+    if event.receipt not in RECEIPT_SUCCEEDS:
+        return None
+    collecting = _to(job, "collecting", event.at)
+    if event.captures == "rejected":
+        return _finish(collecting, "failed", event.at, "CAPTURE_REJECTED"), ()
+    if event.captures == "current":
+        return _finish(collecting, "succeeded", event.at, "OK"), ()
+    return collecting, ()
+
+
+def _traced(job: Job, event: Traced, *, unseen: Callable[[Job, Traced], Result]) -> Result:
+    """The receipt, then run.json, then the mailbox decide. ``unseen`` handles no trace of the id."""
+    decided = _receipt(job, event)
+    if decided is not None:
+        return decided
+    if event.running:
+        return _to(job, "running", event.at), ()
+    if event.pending:
+        if job.state == "pending" and not event.scanning:
+            return _resend(job, event)  # idle host with our id still waiting: start the unit again
+        return _to(job, "pending", event.at), ()  # a scheduled scan holds the lock; the id waits (C4)
+    return unseen(job, event)
+
+
+def _dispatching_traced(job: Job, event: Traced) -> Result:
+    if job.dispatches == 0:
+        return _resend(job, event)
+    return _traced(job, event, unseen=_ignore)
+
+
+def _pending_traced(job: Job, event: Traced) -> Result:
+    return _traced(job, event, unseen=_ignore)
+
+
+def _running_traced(job: Job, event: Traced) -> Result:
+    return _receipt(job, event) or (job, ())
+
+
+def _reconciling_traced(job: Job, event: Traced) -> Result:
+    return _traced(job, event, unseen=_resend)
+
+
+def _collecting_traced(job: Job, event: Traced) -> Result:
+    return _receipt(job, event) or (job, ())
+
+
+def _replied(on_received: Callable[[Job, RescanReplied], Result]):
+    def handler(job: Job, event: RescanReplied) -> Result:
+        if event.outcome == "rejected":
+            return _finish(job, "failed", event.at, event.code or "RESCAN_REJECTED"), ()
+        if event.outcome in ("received", "already_received"):
+            return on_received(job, event)
+        # Ambiguous: the request may or may not have reached the host. Observation decides.
+        return (_to(job, "reconciling", event.at), ()) if job.state == "dispatching" else (job, ())
+    return handler
+
+
+def _to_pending(job: Job, event: Event) -> Result:
+    return _to(job, "pending", event.at), ()
+
+
+def _only(protocol: str, handler: Callable[[Job, Any], Result]) -> Callable[[Job, Any], Result]:
+    """An event of one protocol leaves a job of the other unchanged."""
+    def guarded(job: Job, event: Event) -> Result:
+        return handler(job, event) if job.protocol == protocol else (job, ())
+    return guarded
+
+
 _RUN_DEADLINE = lambda job, event: event.run_deadline_seconds  # noqa: E731
 
 TRANSITIONS: Dict[Tuple[str, str], Callable[[Job, Event], Result]] = {
-    ("dispatching", "Observed"): _dispatching_observed,
-    ("dispatching", "DispatchReturned"): _to_reconciling,
+    ("dispatching", "Observed"): _only("invocation", _dispatching_observed),
+    ("dispatching", "DispatchReturned"): _only("invocation", _to_reconciling),
+    ("dispatching", "Traced"): _only("receipt", _dispatching_traced),
+    ("dispatching", "RescanReplied"): _only("receipt", _replied(_to_pending)),
     ("dispatching", "Tick"): _after(lambda job, event: DISPATCH_DEADLINE_SECONDS, "unconfirmed", "NO_TRACE"),
     ("dispatching", "Restarted"): _restart_dispatching,
-    ("pending", "Observed"): _pending_observed,
+    ("pending", "Observed"): _only("invocation", _pending_observed),
     ("pending", "DispatchReturned"): _ignore,
+    ("pending", "Traced"): _only("receipt", _pending_traced),
+    ("pending", "RescanReplied"): _only("receipt", _replied(_ignore)),
     ("pending", "Tick"): _after(_RUN_DEADLINE, "failed", "RESCAN_NOT_STARTED"),
     ("pending", "Restarted"): _ignore,
-    ("running", "Observed"): _running_observed,
+    ("running", "Observed"): _only("invocation", _running_observed),
     ("running", "DispatchReturned"): _ignore,
+    ("running", "Traced"): _only("receipt", _running_traced),
+    ("running", "RescanReplied"): _ignore,
     ("running", "Tick"): _after(_RUN_DEADLINE, "failed", "RESCAN_TIMEOUT"),
     ("running", "Restarted"): _ignore,
-    ("reconciling", "Observed"): _reconciling_observed,
+    ("reconciling", "Observed"): _only("invocation", _reconciling_observed),
     ("reconciling", "DispatchReturned"): _ignore,
+    ("reconciling", "Traced"): _only("receipt", _reconciling_traced),
+    ("reconciling", "RescanReplied"): _only("receipt", _replied(_to_pending)),
     ("reconciling", "Tick"): _after(lambda job, event: RECONCILE_DEADLINE_SECONDS, "unconfirmed", "NO_TRACE"),
     ("reconciling", "Restarted"): _ignore,
-    ("collecting", "Observed"): _collect,
+    ("collecting", "Observed"): _only("invocation", _collect),
     ("collecting", "DispatchReturned"): _ignore,
+    ("collecting", "Traced"): _only("receipt", _collecting_traced),
+    ("collecting", "RescanReplied"): _ignore,
     ("collecting", "Tick"): _after(lambda job, event: COLLECT_DEADLINE_SECONDS, "failed", "PULL_FAILED"),
     ("collecting", "Restarted"): _ignore,
     **{(state, kind): _ignore for state in TERMINAL for kind in EVENT_KINDS},
