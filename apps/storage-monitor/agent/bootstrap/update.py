@@ -184,7 +184,11 @@ class Updater:
                 if exc.errno not in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
                     raise
                 state = self.read_state()
-                state["last_attempt"] = self._attempt(None, None, "busy", "BUSY")
+                try:  # name the waiting request, so central sees what is deferred
+                    action, sha = self._read_request()
+                except (Failed, FileNotFoundError):
+                    action, sha = None, None
+                state["last_attempt"] = self._attempt(action, sha, "busy", "BUSY")
                 self.write_state(state)
                 return EXIT_BUSY
             return self._locked_run()
@@ -219,7 +223,7 @@ class Updater:
         try:
             raw = _read_regular(self.paths.incoming / "activate", 128)
         except FileNotFoundError:
-            raise Failed("REQUEST_INVALID", "not a regular file")
+            raise Failed("REQUEST_INVALID", "the request vanished")
         parts = raw.decode("ascii", "replace").strip().split(" ")
         if len(parts) != 2 or parts[0] not in ("activate", "rollback") or not SHA40.fullmatch(parts[1]):
             raise Failed("REQUEST_INVALID")
@@ -392,11 +396,13 @@ def extract(members: Dict[str, Tuple[bytes, int]], staging: Path) -> None:
 def _read_regular(path: Path, cap: int) -> bytes:
     try:
         fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise
     except OSError as exc:
-        raise FileNotFoundError(str(path)) from exc
+        raise Failed("UNREADABLE", f"{path.name}: {exc.strerror}") from exc
     with os.fdopen(fd, "rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise FileNotFoundError(str(path))
+            raise Failed("UNREADABLE", f"{path.name}: not a regular file")
         data = handle.read(cap + 1)
     if len(data) > cap:
         raise Failed("TOO_LARGE", path.name)

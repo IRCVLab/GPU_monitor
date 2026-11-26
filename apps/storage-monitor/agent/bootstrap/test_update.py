@@ -162,7 +162,8 @@ class UpdaterTest(unittest.TestCase):
             self.assertEqual(self.updater().run(), update.EXIT_BUSY)
         finally:
             os.close(held)
-        self.assertEqual(self.state()["last_attempt"]["outcome"], "busy")
+        self.assertEqual(self.state()["last_attempt"], {
+            "action": "activate", "sha": SHA_B, "outcome": "busy", "code": "BUSY", "finished_unix": 1000})
         self.assertEqual(self.current(), f"releases/{SHA_A}")
         self.assertTrue((self.paths.incoming / "activate").exists(), "the request waits for the next start")
         self.assertEqual(self.updater().run(), 0)
