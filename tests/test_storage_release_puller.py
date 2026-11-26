@@ -236,7 +236,6 @@ class StorageReleasePullerTest(unittest.TestCase):
                 if argv[0] == "python3" and str(cfg.authorizer) in argv:
                     return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}) + "\n", "")
                 if any(str(part).endswith("build-dashboard-release.py") for part in argv):
-                    outdir = Path(argv[argv.index("--output-dir") + 1])
                     self.write_build_output(argv)
                 return CompletedProcess(argv, 0, "", "")
 
