@@ -267,13 +267,21 @@ def test_a_failed_stage_backs_off_and_frees_the_staging_slot(tmp_path):
     assert channel.slots == set() and record(collector).link.state == "unreachable"
 
 
-def test_a_restart_while_staging_keeps_the_staging_slot(tmp_path):
+def test_a_restart_mid_stage_backs_off_and_mid_activation_keeps_the_staging_slot(tmp_path):
     spawn = ManualSpawn()
     collector, host, channel = gate_collector(tmp_path, spawn=spawn)
     spawn.run()
     collector.settle()
     collector.tick()
     assert track(collector).state == "staging"
+    collector.restart()
+    assert (track(collector).state, track(collector).last_error) == ("backoff", "RESTARTED"), \
+        "a stage that died with the process would wait for an answer forever"
+    assert channel.slots == set()
+    collector.tick(updates.FIRST_BACKOFF_SECONDS)
+    spawn.run()
+    collector.settle()
+    assert track(collector).state == "activating"
     channel.slots.clear()
     collector.restart()
-    assert channel.slots == {SID}
+    assert channel.slots == {SID} and track(collector).state == "activating"

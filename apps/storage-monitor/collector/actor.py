@@ -390,11 +390,17 @@ class ServerActor:
         self._swap(self._hold(record.data, captures))
         if record.job is not None:
             record = self._with_job(record, jobs.reduce(record.job, jobs.Restarted(int(self.clock.time())))[0])
+        if record.update.state == "staging":
+            # The stage in flight died with the process and no answer will come: back off and stage again.
+            update, _ = updates.reduce(record.update, updates.StageDone(int(self.clock.time()), 0, False, "RESTARTED"))
+            record = replace(record, update=update)
         if record != stored:
             self.store.commit(record, prune=False)
         self._record = record
         if record.update.state in updates.STAGING_STATES:
             self.channel.hold(self.server.id)
+        else:
+            self.channel.release(self.server.id)
         self._seq = self._ceiling = record.link.seq
         self._error = None
         self.loaded = True
