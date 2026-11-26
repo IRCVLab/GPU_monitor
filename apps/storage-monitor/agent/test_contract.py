@@ -50,6 +50,9 @@ def test_gate_reads_real_runner_files(tmp_path):
         header, body = stream.getvalue().split(b"\n", 1)
         assert header == ("storage-viz-gate/1 ok %d" % len(body)).encode()
         return body
+    from collector import contract
+    if hasattr(contract, "parse_manifest"):
+        assert_central_reads_captures(paths.data)
     raw = serve("get-manifest")
     manifest = json.loads(raw)
     observation = json.loads(serve("observe"))
@@ -59,3 +62,26 @@ def test_gate_reads_real_runner_files(tmp_path):
     for volume in manifest["volumes"]:
         sha = volume["capture"]["sha256"]
         assert hashlib.sha256(serve("get-capture %s %s" % (volume["volume_id"], sha))).hexdigest() == sha
+
+
+def assert_central_reads_captures(data):
+    from collector import contract
+
+    manifest = contract.parse_manifest((data / "manifest.json").read_bytes())
+    assert len(manifest.volumes) == 2
+    for volume in manifest.volumes:
+        sha = volume.capture.sha256
+        path = data / "captures" / volume.volume_id / (sha + ".json.gz")
+        capture = contract.parse_capture(path.read_bytes(), volume.expected(sha))
+        assert capture.volume_id == volume.volume_id
+        assert capture.outcome == "complete"
+
+
+def test_m5a_reads_checked_in_runner_fixture():
+    from collector import contract
+
+    # The standalone host branch starts at M3a. Once M5a lands, its contract
+    # tests are present and removing a parse entry point must fail this test.
+    if not hasattr(contract, "parse_manifest") and not Path(contract.__file__).with_name("test_contract.py").exists():
+        pytest.skip("M5a collector parser is not present on the standalone host branch")
+    assert_central_reads_captures(Path(__file__).parent / "testdata/v2")
