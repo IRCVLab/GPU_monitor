@@ -2761,12 +2761,13 @@ function testRemovalScriptRefusesDirectoriesThatContainMounts() {
   fs.mkdirSync(source);
   fs.writeFileSync(path.join(source, 'keep.bin'), 'x');
   viewer.DATA = { hostname: 'hinton', server_id: 'hinton', selected_roots: [{ mount_id: 'data', mount_root: data, mountpoint: data, scan_root: data, status: 'complete' }], mounts: [{ mount_id: 'data', path: data, scan_root: data }] };
-  const items = [{ path: data + '/proj', kind: 'directory', bytes: 1 }, { path: data + '/plain', kind: 'directory', bytes: 1 }];
+  fs.renameSync(path.join(data, 'proj'), path.join(data, 'my proj\\x'));
+  const items = [{ path: data + '/my proj\\x', kind: 'directory', bytes: 1 }, { path: data + '/plain', kind: 'directory', bytes: 1 }];
   const script = viewer.cleanupRemovalScript(items.map(item => ({ item, plan: viewer.buildCleanupCommandPlan(viewer.DATA, item, {}) })));
   const inNamespace = 'mount --bind "$1" "$2" && ' + script;
   let stderr = '';
   try {
-    execFileSync('unshare', ['-rm', 'bash', '-c', inNamespace, 'bash', source, path.join(data, 'proj', 'bound')], { env: { PATH: bin + ':' + process.env.PATH }, stdio: ['ignore', 'ignore', 'pipe'] });
+    execFileSync('unshare', ['-rm', 'bash', '-c', inNamespace, 'bash', source, path.join(data, 'my proj\\x', 'bound')], { env: { PATH: bin + ':' + process.env.PATH }, stdio: ['ignore', 'ignore', 'pipe'] });
   } catch (error) { stderr = String(error.stderr || ''); }
   assert.ok(fs.existsSync(path.join(source, 'keep.bin')), 'a bind mount inside a selected folder must keep its source data');
   assert.ok(fs.existsSync(path.join(data, 'plain')), 'when any selected folder holds a mount, nothing is removed');

@@ -377,7 +377,10 @@ function cleanupRemovalScript(entries) {
   if (!commands.length) return "";
   let body = commands.join("; ");
   if (quoted("directory")) {
-    body = "sv_ok=1; for sv_p in " + quoted("directory") + "; do while read -r _ _ _ _ sv_m _; do " +
+    const mountinfoQuoted = kept.filter(plan => plan.kind === "directory")
+      .map(plan => shellQuote(plan.path.replace(/[\\ \t\n]/g, c => "\\" + c.charCodeAt(0).toString(8).padStart(3, "0"))))
+      .join(" ");
+    body = "sv_ok=1; for sv_p in " + mountinfoQuoted + "; do while read -r _ _ _ _ sv_m _; do " +
       "case \"$sv_m\" in \"$sv_p\"|\"$sv_p\"/*) echo \"storage-viz: $sv_p has a mount at $sv_m; nothing was removed\" >&2; sv_ok=0;; esac; " +
       "done < /proc/self/mountinfo; done; [ \"$sv_ok\" = 1 ] && { " + body + "; }";
   }
