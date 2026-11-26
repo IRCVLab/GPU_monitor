@@ -57,7 +57,7 @@ class UpdaterTest(unittest.TestCase):
     def test_signed_bundle_activates_and_records_state(self):
         self.assertEqual(self.activate(SHA_A), 0)
         self.assertEqual(self.current(), f"releases/{SHA_A}")
-        self.assertEqual((self.paths.releases / SHA_A / "agent/scan_runner.py").read_text(), "# stand-in\n")
+        self.assertEqual((self.paths.releases / SHA_A / "agent/storage_viz_agent/runner.py").read_text(), "# stand-in\n")
         self.assertEqual(os.stat(self.paths.releases / SHA_A / "bin/hstscan").st_mode & 0o7777, 0o755)
         state = self.state()
         self.assertEqual((state["active"], state["previous"], state["bad"]), (SHA_A, None, []))
@@ -90,7 +90,7 @@ class UpdaterTest(unittest.TestCase):
 
     def test_signed_bundle_with_wrong_digest_is_refused(self):
         def corrupt(manifest):
-            manifest["files"]["agent/scan_runner.py"] = "0" * 64
+            manifest["files"]["agent/storage_viz_agent/runner.py"] = "0" * 64
         self.assertEqual(self.activate(SHA_A, edit_manifest=corrupt), 1)
         self.assertEqual(self.state()["last_attempt"]["code"], "DIGEST")
         self.assertIsNone(self.current())
@@ -331,7 +331,7 @@ class UpdaterTest(unittest.TestCase):
     def test_tampered_installed_release_is_not_reactivated(self):
         self.activate(SHA_A)
         self.activate(SHA_B)
-        (self.paths.releases / SHA_A / "agent/scan_runner.py").write_text("import os; os.system('id')\n")
+        (self.paths.releases / SHA_A / "agent/storage_viz_agent/runner.py").write_text("import os; os.system('id')\n")
         self.stage(SHA_A)
         self.assertEqual(self.updater().run(), 1)
         self.assertEqual(self.state()["last_attempt"]["code"], "INSTALLED_CORRUPT")

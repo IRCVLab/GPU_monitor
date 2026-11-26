@@ -53,6 +53,7 @@ AGENT_INPUTS = (
     f"{APP}/storage_fstypes.py",
     f"{APP}/deploy/build-agent-release.py",
     f":(exclude){APP}/agent/bootstrap",
+    f":(exclude){APP}/agent/testdata",
     f":(exclude,glob){APP}/agent/**/test_*.py",
 )
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -89,13 +90,15 @@ def rollback_floor(repo: Path, commits: List[str], floor_file: dict) -> int:
 def bundle_sources(repo: Path, source_sha: str) -> Dict[str, Tuple[bytes, int]]:
     """Map bundle path to (bytes, mode) from git, without hstscan."""
     listing = git(repo, "ls-tree", "--name-only", source_sha, f"{APP}/agent/").decode().split()
+    listing.extend(git(repo, "ls-tree", "--name-only", source_sha,
+                       f"{APP}/agent/storage_viz_agent/").decode().split())
     modules = sorted(
         path for path in listing
         if path.endswith(".py") and not Path(path).name.startswith("test_")
     )
     files: Dict[str, Tuple[bytes, int]] = {}
     for path in modules:
-        files["agent/" + Path(path).name] = (git(repo, "show", f"{source_sha}:{path}"), 0o644)
+        files[str(Path(path).relative_to(APP))] = (git(repo, "show", f"{source_sha}:{path}"), 0o644)
     files["storage_fstypes.py"] = (git(repo, "show", f"{source_sha}:{APP}/storage_fstypes.py"), 0o644)
     files["bin/storage-viz-agent"] = (git(repo, "show", f"{source_sha}:{APP}/agent/bin/storage-viz-agent"), 0o755)
     return files

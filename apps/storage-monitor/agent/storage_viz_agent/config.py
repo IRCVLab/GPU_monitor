@@ -38,6 +38,8 @@ _FORBIDDEN_KEYS = frozenset({
     "include",
     "exclude",
 })
+
+
 @dataclass(frozen=True)
 class ScannerConfig:
     server_id: str

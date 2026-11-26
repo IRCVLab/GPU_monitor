@@ -47,7 +47,7 @@ def release_files(entry: bytes = b"#!/bin/sh\nexit 0\n") -> Dict[str, Tuple[byte
         "bin/storage-viz-agent": (entry, 0o755),
         "bin/hstscan": (b"\x7fELF-not-really", 0o755),
         "agent/__init__.py": (b"", 0o644),
-        "agent/scan_runner.py": (b"# stand-in\n", 0o644),
+        "agent/storage_viz_agent/runner.py": (b"# stand-in\n", 0o644),
     }
 
 

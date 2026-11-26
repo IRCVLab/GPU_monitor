@@ -16,8 +16,9 @@ sys.path.insert(0, str(APP_ROOT))
 from agent.bootstrap import fixtures, update  # noqa: E402
 
 builder = fixtures.load_builder()
-SOURCES = [
-    "agent/__init__.py", "agent/block_media.py", "agent/mount_policy.py", "agent/scan_runner.py",
+PACKAGE = sorted(str(p.relative_to(APP_ROOT)) for p in (APP_ROOT / "agent/storage_viz_agent").glob("*.py"))
+SOURCES = PACKAGE + [
+    "agent/__init__.py",
     "agent/release_cli.py", "agent/bin/storage-viz-agent", "agent/RELEASE-FLOOR.json",
     "storage_fstypes.py", "scanner/hstscan.c", "deploy/build-agent-release.py",
 ]
@@ -79,8 +80,8 @@ class BuildAgentReleaseTest(unittest.TestCase):
 
     def test_agent_change_cuts_a_new_release(self):
         first, _ = self.build(name="one")
-        sha = self.commit("agent change", "apps/storage-monitor/agent/mount_policy.py",
-                          (APP_ROOT / "agent/mount_policy.py").read_text() + "\n# change\n")
+        sha = self.commit("agent change", "apps/storage-monitor/agent/storage_viz_agent/mount_policy.py",
+                          (APP_ROOT / "agent/storage_viz_agent/mount_policy.py").read_text() + "\n# change\n")
         second, _ = self.build(name="two")
         self.assertEqual(second["source_sha"], sha)
         self.assertEqual(second["release_seq"], first["release_seq"] + 1)
@@ -88,8 +89,8 @@ class BuildAgentReleaseTest(unittest.TestCase):
     def test_rollback_floor_trails_twenty_agent_releases_and_honours_the_floor_file(self):
         shas = [git(self.repo, "rev-parse", "HEAD")]
         for index in range(21):
-            shas.append(self.commit(f"agent {index}", "apps/storage-monitor/agent/scan_runner.py",
-                                    (APP_ROOT / "agent/scan_runner.py").read_text() + f"\n# {index}\n"))
+            shas.append(self.commit(f"agent {index}", "apps/storage-monitor/agent/storage_viz_agent/runner.py",
+                                    (APP_ROOT / "agent/storage_viz_agent/runner.py").read_text() + f"\n# {index}\n"))
             self.commit(f"noise {index}", "README.md", str(index))
         metadata, _ = self.build()
         self.assertEqual(metadata["rollback_floor_seq"], int(git(self.repo, "rev-list", "--count", shas[1])))
@@ -105,10 +106,9 @@ class BuildAgentReleaseTest(unittest.TestCase):
     def test_bundle_layout_is_what_the_updater_accepts(self):
         metadata, data = self.build()
         members, manifest = update.read_bundle(data, metadata["source_sha"])
-        self.assertEqual(sorted(members), [
-            "agent/__init__.py", "agent/block_media.py", "agent/mount_policy.py", "agent/release_cli.py",
-            "agent/scan_runner.py", "bin/hstscan", "bin/storage-viz-agent", "storage_fstypes.py",
-        ])
+        self.assertEqual(sorted(members), sorted(PACKAGE + [
+            "agent/__init__.py", "agent/release_cli.py", "bin/hstscan", "bin/storage-viz-agent", "storage_fstypes.py",
+        ]))
         self.assertEqual(members["bin/storage-viz-agent"][1], 0o755)
         self.assertEqual(
             {key: manifest[key] for key in ("application", "source_sha", "release_seq", "rollback_floor_seq", "bootstrap_version")},
@@ -170,7 +170,7 @@ class ReleaseSelftestTest(unittest.TestCase):
     def install(self, name, hstscan_bytes):
         release = self.tmp / name
         files = {}
-        for rel in ("agent/__init__.py", "agent/block_media.py", "agent/mount_policy.py", "agent/scan_runner.py", "agent/release_cli.py"):
+        for rel in PACKAGE + ["agent/__init__.py", "agent/release_cli.py"]:
             files[rel] = ((APP_ROOT / rel).read_bytes(), 0o644)
         files["storage_fstypes.py"] = ((APP_ROOT / "storage_fstypes.py").read_bytes(), 0o644)
         files["bin/storage-viz-agent"] = ((APP_ROOT / "agent/bin/storage-viz-agent").read_bytes(), 0o755)

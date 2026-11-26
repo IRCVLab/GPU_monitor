@@ -57,7 +57,7 @@ class CiImpactTest(unittest.TestCase):
 
     def test_storage_agent_only_change_requires_only_storage_agent(self):
         self.assert_decisions(
-            ("apps/storage-monitor/agent/scan_runner.py",),
+            ("apps/storage-monitor/agent/storage_viz_agent/runner.py",),
             storage_agent=True,
             apps_required=True,
         )

@@ -1,214 +1,236 @@
-"""Agent bug repros A3, A4, A6, A8 and A9 from docs/redesign/bug-catalog.md.
-
-Each test asserts the behaviour the redesign promises. A3, A4, A8 and A9 are
-strict expected failures until the unit that fixes them (M5) removes the marker.
-"""
+import fcntl
+import gzip
 import json
 import os
-import pathlib
+from pathlib import Path
+import signal
+import subprocess
+from types import SimpleNamespace
 
-import pytest
-
-from agent import scan_runner
-
-HOUR = 3600
-SSD, HDD = "8:1", "8:2"
+from agent.storage_viz_agent import capacity, runner
+from tests.machine_check import assert_table_total, run_random_events
 
 
-class Clock:
-    def __init__(self, now):
-        self.now = now
-
-    def __call__(self):
-        return self.now
+def line(device, path, mount_id=1, subtree="/"):
+    return "%d 0 %s %s %s rw - ext4 /dev/disk rw" % (mount_id, device, subtree, path)
 
 
 class Resolver:
     def resolve(self, device):
-        media = {SSD: "ssd", HDD: "hdd"}[device]
-        return scan_runner.MediaResult("dev-" + device.replace(":", "-"), media, "resolved")
+        return SimpleNamespace(media="ssd" if device == "8:1" else "hdd", confidence="resolved")
 
 
-def mountinfo_line(mount_id, parent_id, device, mountpoint, fstype, source):
-    return "%d %d %s / %s rw - %s %s rw" % (mount_id, parent_id, device, mountpoint, fstype, source)
-
-
-def ssd_root_hdd_data(root_id=1, data_id=2):
-    """`/` on an SSD (scanned as /home) and /data on an HDD."""
-    return "\n".join((
-        mountinfo_line(root_id, 0, SSD, "/", "ext4", "/dev/sda1"),
-        mountinfo_line(data_id, root_id, HDD, "/data", "xfs", "/dev/sdb1"),
-    ))
-
-
-def write_config(tmp):
-    path = tmp / "scanner.yaml"
-    path.write_text(json.dumps({
-        "server_id": "host-a",
-        "scanner_path": "/bin/hstscan",
-        "data_dir": str(tmp / "data"),
-        "run_dir": str(tmp / "run"),
-    }))
-    return path
-
-
-def df_fields(path):
-    """Capacity figures the way hstscan's fill_df computes them."""
-    vfs = os.statvfs(path)
-    total = vfs.f_blocks * vfs.f_frsize
-    used = total - vfs.f_bfree * vfs.f_frsize
-    avail = vfs.f_bavail * vfs.f_frsize
-    return {"df_total": total, "df_used": used, "df_avail": avail,
-            "df_use_pct": -(-used * 100 // (used + avail)) if used + avail else 0}
-
-
-def raw_mount(path, errors=0, capacity=None):
-    mount = {
-        "path": path, "fstype": "ext4",
-        "df_total": 1000, "df_used": 400, "df_avail": 600, "df_use_pct": 40,
-        "scanned_bytes": 123, "scanned_files": 4, "scanned_dirs": 2, "errors": errors,
-        "tree": {"name": path, "kind": "directory", "bytes": 123, "files": 4,
-                 "uid": 0, "mtime": 99, "other_bytes": 0},
-    }
-    mount.update(capacity or {})
-    return mount
-
-
-class FakeScanner:
-    """Stands in for hstscan: records each run's targets and writes its JSON."""
-
-    def __init__(self, errors=None, exit_codes=None, capacity_from_statvfs=False):
+class Host:
+    def __init__(self, tmp):
+        tmp.mkdir(parents=True, exist_ok=True)
+        self.data = tmp / "data"
+        self.runtime = tmp / "run"
+        self.config = tmp / "config"
+        self.config.write_text(json.dumps(dict(server_id="host-a", scanner_path="/bin/hstscan",
+            run_dir=str(self.runtime), data_dir=str(self.data), volume_aliases={"/home":"root", "/data":"disk"})))
+        self.mounts = line("8:1", "/") + "\n" + line("8:2", "/data", 2)
         self.calls = []
-        self.prune_classes = []
-        self.errors = errors or {}
-        self.exit_codes = exit_codes or {}
-        self.capacity_from_statvfs = capacity_from_statvfs
-        self.started_unix = 0
+        self.failed = set()
+        self.errors = 0
+        self.now = 20000
 
-    def __call__(self, argv, **kwargs):
-        paths = argv[argv.index("--out") + 3::4]
-        self.calls.append(tuple(paths))
-        self.prune_classes.append(tuple(argv[argv.index("--out") + 5::4]))
-        for path in paths:
-            if self.exit_codes.get(path):
-                return scan_runner.CompletedScan(self.exit_codes[path], stderr="hstscan: out of memory")
-        mounts = [raw_mount(path, self.errors.get(path, 0),
-                            df_fields(path) if self.capacity_from_statvfs else None)
-                  for path in paths]
-        raw = {
-            "schema_version": 1, "hostname": "host-a", "scanner_version": "0.1.0",
-            "scan_started_unix": self.started_unix, "scan_duration_sec": 1.0,
-            "run_as_root": False, "mounts": mounts, "users": [], "top_files": [],
-            "stale": [], "blocked": [],
-        }
-        pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw))
-        return scan_runner.CompletedScan(0)
+    def scan(self, argv):
+        tail = argv[argv.index("--out")+2:]
+        paths = tail[1::4]
+        self.calls.append(list(zip(paths, tail[3::4])))
+        if self.failed.intersection(paths):
+            return subprocess.CompletedProcess(argv, 1)
+        mounts = [dict(path=p, scanned_bytes=40, scanned_files=2, scanned_dirs=1, errors=self.errors,
+                       vanished_dirs=self.errors, tree=dict(name=p, kind="directory", bytes=40, files=2,
+                                                            uid=0, mtime=1, other_bytes=0)) for p in paths]
+        Path(argv[argv.index("--out")+1]).write_text(json.dumps(dict(mounts=mounts, users=[], blocked=[],
+                                                                    top_files=[], stale=[])))
+        return subprocess.CompletedProcess(argv, 0)
 
+    def run(self, **kwargs):
+        return runner.run_once(self.config, mountinfo_reader=lambda: self.mounts, media_resolver=Resolver(),
+                               clock=lambda: self.now, scanner_runner=self.scan, **kwargs)
 
-def run(config, mountinfo, scanner, now, scheduled=False):
-    scanner.started_unix = now - 30
-    return scan_runner.run_once(
-        config, scheduled=scheduled, mountinfo_reader=lambda: mountinfo,
-        scanner_runner=scanner, media_resolver=Resolver(), clock=Clock(now),
-    )
+    def manifest(self):
+        return json.loads((self.data / "manifest.json").read_bytes())
 
+    def volumes(self):
+        return {v["mountpoint"]: v for v in self.manifest()["volumes"]}
 
-def published_snapshot(tmp):
-    """The snapshot scan-status.json points at, or None if nothing was published."""
-    try:
-        status = json.loads((tmp / "data" / "scan-status.json").read_text())
-        return json.loads((tmp / "data" / "snapshots" / status["generation"]).read_text())
-    except FileNotFoundError:
-        return None
+    def request(self, request="a"*32):
+        directory = self.data / "requests"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / request).write_text(request + "\n")
 
 
 def test_a6_home_mount_gets_home_class(tmp_path):
-    config = write_config(tmp_path)
-    separate_home = "\n".join((
-        mountinfo_line(1, 0, SSD, "/", "ext4", "/dev/sda1"),
-        mountinfo_line(2, 1, HDD, "/home", "xfs", "/dev/sdb1"),
-    ))
-
-    root_backed = FakeScanner()
-    run(config, ssd_root_hdd_data(), root_backed, now=5 * HOUR + 30)
-    mounted = FakeScanner()
-    run(config, separate_home, mounted, now=5 * HOUR + 30)
-
-    assert list(zip(root_backed.calls, root_backed.prune_classes)) == [
-        (("/home",), ("home",)), (("/data",), ("data",))]
-    assert list(zip(mounted.calls, mounted.prune_classes)) == [(("/home",), ("home",))]
+    host = Host(tmp_path)
+    assert host.run() == 0
+    assert host.calls == [[("/home", "home")], [("/data", "data")]]
+    host.mounts = line("8:1", "/") + "\n" + line("8:2", "/home", 2)
+    assert host.run() == 0
+    assert host.calls[-1] == [("/home", "home")]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="A3: a run where no root scans cleanly publishes nothing")
 def test_a3_single_partial_volume_publishes(tmp_path):
-    config = write_config(tmp_path)
-    single_root = mountinfo_line(1, 0, SSD, "/", "ext4", "/dev/sda1")
-
-    result = run(config, single_root, FakeScanner(errors={"/home": 1}), now=5 * HOUR + 30)
-
-    snapshot = published_snapshot(tmp_path)
-    assert snapshot is not None, (
-        "A3: single root with one scan error published nothing (run status %r, error %r)"
-        % (result.status, result.error))
-    assert [mount["path"] for mount in snapshot["mounts"]] == ["/home"]
-    assert result.status == "partial"
+    host = Host(tmp_path)
+    host.mounts = line("8:1", "/")
+    host.errors = 1
+    assert host.run() == 0
+    v = host.volumes()["/home"]
+    assert v["last_attempt"]["outcome"] == v["capture"]["outcome"] == "partial"
+    path = host.data / "captures" / v["volume_id"] / (v["capture"]["sha256"] + ".json.gz")
+    assert json.loads(gzip.decompress(path.read_bytes()))["roots"][0]["counts"]["errors"] == 1
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="A4: a failed HDD group discards the good SSD capture from the same run")
+def test_a3_all_failed_records_attempts(tmp_path):
+    host = Host(tmp_path)
+    host.failed.update(("/home", "/data"))
+    assert host.run() == 1
+    assert all(v["capture"] is None and v["last_attempt"]["outcome"] == "failed" for v in host.volumes().values())
+
+
 def test_a4_hdd_failure_keeps_ssd_capture(tmp_path):
-    config = write_config(tmp_path)
-    scanner = FakeScanner(exit_codes={"/data": 2})
-
-    result = run(config, ssd_root_hdd_data(), scanner, now=5 * HOUR + 30)
-
-    assert scanner.calls == [("/home",), ("/data",)]
-    snapshot = published_snapshot(tmp_path)
-    assert snapshot is not None, (
-        "A4: SSD /home scanned cleanly but the HDD failure published nothing (run status %r, error %r)"
-        % (result.status, result.error))
-    assert "/home" in [mount["path"] for mount in snapshot["mounts"]]
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="A8: the lifecycle keeps phase 'publishing' after the run completed")
-def test_a8_no_publishing_phase_after_completion(tmp_path):
-    config = write_config(tmp_path)
-
-    result = run(config, ssd_root_hdd_data(), FakeScanner(), now=5 * HOUR + 30)
-
-    assert result.status == "complete"
-    lifecycle = json.loads((tmp_path / "data" / "scan-lifecycle.json").read_text())
-    assert lifecycle["state"] == "complete"
-    assert lifecycle.get("phase") not in {"preparing", "scanning", "publishing"}, (
-        "A8: lifecycle state is %r but phase is still %r" % (lifecycle["state"], lifecycle["phase"]))
+    host = Host(tmp_path)
+    host.run()
+    old = host.volumes()
+    host.failed.add("/data")
+    host.now += 100
+    assert host.run() == 0
+    volumes = host.volumes()
+    assert volumes["/home"]["capture"] != old["/home"]["capture"]
+    assert volumes["/data"]["capture"] == old["/data"]["capture"]
+    assert volumes["/data"]["last_attempt"]["outcome"] == "failed"
+    assert host.manifest()["last_run"]["outcome"] == "partial"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="A9: HDD capacity is reused from the cached slow capture, up to 3 h old")
+def test_a8_no_run_json_after_completion(tmp_path):
+    host = Host(tmp_path)
+    host.data.mkdir()
+    for name in ("scan-status.json", "scan-lifecycle.json", "slow-capture.json.gz", "snapshots/old"):
+        p = host.data / name
+        p.parent.mkdir(exist_ok=True)
+        p.write_bytes(b"rollback")
+    assert host.run() == 0
+    assert not (host.data / "run.json").exists()
+    assert '"phase"' not in json.dumps(host.manifest())
+    assert all(p.read_bytes() == b"rollback" for p in (host.data/"snapshots/old", host.data/"scan-status.json",
+               host.data/"scan-lifecycle.json", host.data/"slow-capture.json.gz"))
+
+
 def test_a9_capacity_fresh_on_slow_only_not_due_tick(tmp_path, monkeypatch):
-    real_statvfs = os.statvfs
-    used_blocks = {"/home": 100, "/data": 400}
+    host = Host(tmp_path)
+    root = tmp_path / "slow"
+    root.mkdir()
+    device = root.stat().st_dev
+    host.mounts = line("%d:%d" % (os.major(device), os.minor(device)), str(root))
+    config = json.loads(host.config.read_text())
+    config["volume_aliases"] = {str(root): "disk"}
+    host.config.write_text(json.dumps(config))
+    assert host.run(scheduled=True) == 0
+    host.now += 100
+    monkeypatch.setattr(os, "fstatvfs", lambda fd: os.statvfs_result((4096,4096,1000,100,80,0,0,0,0,255)))
+    assert host.run(scheduled=True) == 0
+    sample = host.volumes()[str(root)]["capacity"]
+    assert len(host.calls) == 1 and host.manifest()["last_run"]["outcome"] == "nothing_due"
+    assert sample["observed_unix"] == host.now and sample["used"] == 900 * 4096
+    assert capacity.sample(SimpleNamespace(path=str(root), device="9:99"), sample, host.now+99) == dict(sample,status="failed")
 
-    def fake_statvfs(path):
-        if path not in used_blocks:
-            return real_statvfs(path)
-        # f_bsize, f_frsize, f_blocks, f_bfree, f_bavail, f_files, f_ffree, f_favail, f_flag, f_namemax
-        return os.statvfs_result((4096, 4096, 1000, 1000 - used_blocks[path],
-                                  1000 - used_blocks[path], 0, 0, 0, 0, 255))
 
-    monkeypatch.setattr(os, "statvfs", fake_statvfs)
-    config = write_config(tmp_path)
-    scanner = FakeScanner(capacity_from_statvfs=True)
-    run(config, ssd_root_hdd_data(), scanner, now=5 * HOUR + 30, scheduled=True)
+def test_c4_request_served_after_running_scan(tmp_path):
+    host = Host(tmp_path)
+    def queued(step):
+        if step == "capture" and len(host.calls) == 1:
+            host.request()
+            assert host.run() == 75
+            assert (host.data / "requests" / ("a"*32)).is_file()
+    assert host.run(scheduled=True, persisted=queued) == 0
+    assert host.calls == [[("/home","home")], [("/data","data")]] * 2
+    receipt, = host.manifest()["requests"]
+    assert receipt["request_id"] == "a"*32 and receipt["outcome"] == "complete"
+    host.request()
+    host.run(scheduled=True)
+    assert len(host.calls) == 4 and host.manifest()["requests"] == [receipt]
 
-    used_blocks["/data"] = 900  # someone fills /data before the next hourly tick
-    result = run(config, ssd_root_hdd_data(), scanner, now=6 * HOUR + 30, scheduled=True)
 
-    assert scanner.calls == [("/home",), ("/data",), ("/home",)], "the HDD tree must be reused on this tick"
-    assert result.status == "complete"
-    data_mount = next(m for m in published_snapshot(tmp_path)["mounts"] if m["path"] == "/data")
-    assert data_mount["df_used"] == 900 * 4096, (
-        "A9: /data df_used is %d bytes from the cached capture; statvfs now reports %d"
-        % (data_mount["df_used"], 900 * 4096))
+def test_run_table_total():
+    assert_table_total(runner.TRANSITIONS, runner.STATES, runner.EVENTS)
+
+
+def test_run_random_events():
+    def check(before, event, after, effects):
+        assert after in runner.STATES
+        if after == "idle" and before != "idle":
+            assert event in ("empty", "finish")
+        if event == "group_done" and before == "scanning":
+            assert after == "scanning"
+        if before == "recovering" and after != before:
+            assert event == "recovered"
+    run_random_events(lambda rng: "idle", lambda rng, state, idx: rng.choice(runner.EVENTS),
+                      lambda state, event: (runner.transition(state, event), ()), check)
+
+
+def test_kill_after_each_persist_step(tmp_path):
+    probe = Host(tmp_path / "probe")
+    probe.request()
+    steps = []
+    probe.run(persisted=steps.append)
+    for index in range(len(steps)):
+        host = Host(tmp_path / str(index))
+        host.request()
+        pid = os.fork()
+        if pid == 0:
+            def kill(step):
+                if len(log) == index:
+                    os.kill(os.getpid(), signal.SIGKILL)
+                log.append(step)
+            log = []
+            host.run(persisted=kill)
+            os._exit(1)
+        assert os.waitpid(pid, 0)[1] == signal.SIGKILL
+        snapshots = []
+        def inspect(step):
+            if step == "manifest":
+                snapshots.append(host.manifest())
+        assert host.run(scheduled=True, persisted=inspect) == 0
+        assert not (host.data / "run.json").exists()
+        receipt, = host.manifest()["requests"]
+        assert receipt["outcome"] in ("complete", "interrupted")
+        assert all(m["seq"] == snapshots[0]["seq"] + n for n, m in enumerate(snapshots))
+        assert all(v["capture"] for v in host.volumes().values())
+
+
+def test_only_valid_request_files_are_consumed(tmp_path):
+    host = Host(tmp_path)
+    host.request()
+    pending = host.data / "requests"
+    (pending / ("b"*32)).symlink_to(pending / ("a"*32))
+    os.mkfifo(pending / ("c"*32))
+    (pending / ("d"*32)).write_bytes(b"d"*65)
+    (pending / ("e"*32)).write_bytes(b"f"*32)
+    assert host.run() == 0
+    assert [r["request_id"] for r in host.manifest()["requests"]] == ["a"*32]
+    assert len(list(pending.iterdir())) == 4
+
+
+def test_retains_two_captures_and_last_sixteen_receipts(tmp_path):
+    host = Host(tmp_path)
+    for n in range(18):
+        host.request("%032x" % n)
+        host.now += 1
+        host.run(scheduled=True)
+    assert [r["request_id"] for r in host.manifest()["requests"]] == ["%032x" % n for n in range(2,18)]
+    for v in host.volumes().values():
+        directory = host.data / "captures" / v["volume_id"]
+        assert len(list(directory.iterdir())) == 2
+        assert (directory / (v["capture"]["sha256"] + ".json.gz")).is_file()
+
+
+def test_request_arrives_as_runner_removes_journal(tmp_path):
+    host = Host(tmp_path)
+    def request_after_clear(step):
+        if step == "clear" and len(host.calls) == 2:
+            host.request()
+    assert host.run(scheduled=True, persisted=request_after_clear) == 0
+    assert len(host.calls) == 4
+    assert host.manifest()["requests"][0]["outcome"] == "complete"

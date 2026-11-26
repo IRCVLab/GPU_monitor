@@ -43,7 +43,10 @@ printf 'storage-viz-release namespaces="storage-viz-agent" %s\n' "$(cut -d' ' -f
 
 repo="$WORK/repo"
 mkdir -p "$repo/apps/storage-monitor"
-for rel in agent/__init__.py agent/block_media.py agent/mount_policy.py agent/scan_runner.py agent/release_cli.py \
+for module in "$APP_ROOT"/agent/storage_viz_agent/*.py; do
+  install -Dm644 "$module" "$repo/apps/storage-monitor/agent/storage_viz_agent/$(basename "$module")"
+done
+for rel in agent/__init__.py agent/release_cli.py \
            agent/bin/storage-viz-agent agent/RELEASE-FLOOR.json storage_fstypes.py scanner/hstscan.c deploy/build-agent-release.py; do
   mkdir -p "$repo/apps/storage-monitor/$(dirname "$rel")"
   cp -p "$APP_ROOT/$rel" "$repo/apps/storage-monitor/$rel"
@@ -162,14 +165,8 @@ for _ in $(seq 1 120); do
   sleep 1
 done
 [[ "$inv" != None ]] || fail "rescan did not start storage-viz-scan.service"
-# The container has no whole local block filesystem, so mount_policy selects no
-# root and the v1 runner exits NO_SAFE_ROOTS. What this proves is that the unit
-# ran the release's entry point; agent/bootstrap/test_gate.py serves real
-# scan_runner output through get-status and get-snapshot.
-docker exec "$CID" journalctl -u storage-viz-scan.service --no-pager -q | grep -q 'storage-viz-agent\[[0-9]*\]: no safe roots selected' \
-  || fail "scan unit did not run the release entry point"
-[[ "$(gate get-status | head -1)" == "storage-viz-gate/1 err STATUS_MISSING" ]] || fail "get-status without a published scan"
-pass "rescan started storage-viz-scan.service with --no-block; it ran the release's scan_runner (NO_SAFE_ROOTS in a container); get-status answers STATUS_MISSING"
+[[ "$(gate get-manifest | tail -n +2 | python3 -c 'import json,sys; print(json.load(sys.stdin)["schema"])')" == storage-viz.manifest/2 ]] || fail "rescan did not publish v2 manifest"
+pass "rescan started the release and published a v2 manifest"
 
 [[ "$(stage "$WORK/B" "$SHA_B")" == staged ]] || fail "stage B"
 gate "activate-update $SHA_B" >/dev/null

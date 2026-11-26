@@ -16,7 +16,9 @@ import sys
 import tempfile
 from typing import Dict, List, Optional, Sequence
 
-from agent import scan_runner
+from agent.storage_viz_agent import runner
+from agent.storage_viz_agent.config import load_config
+from agent.storage_viz_agent.capture import read
 
 DEFAULT_CONFIG = "/etc/storage-viz/agent.yaml"
 SELFTEST_TIMEOUT_SECONDS = 120
@@ -55,7 +57,7 @@ def _make_tree(root: pathlib.Path) -> None:
 def selftest(config_path: str, release_root: pathlib.Path) -> List[str]:
     """Return the list of failures; empty means the release works here."""
     try:
-        scan_runner.load_config(config_path)
+        load_config(config_path)
     except (OSError, ValueError) as exc:
         return [f"config: {exc}"]
     hstscan = release_root / "bin" / "hstscan"
@@ -97,7 +99,7 @@ def selftest(config_path: str, release_root: pathlib.Path) -> List[str]:
 def check_config(config_path: str) -> Optional[str]:
     """Return an error when this release cannot run with the host config."""
     try:
-        cfg = scan_runner.load_config(config_path)
+        cfg = load_config(config_path)
     except (OSError, ValueError) as exc:
         return f"config: {exc}"
     if not os.access(cfg.scanner_path, os.X_OK):
@@ -111,12 +113,14 @@ def main(argv: Sequence[str], release_root: str) -> int:
     run = commands.add_parser("run", help="scan the due groups and publish")
     run.add_argument("--config", default=DEFAULT_CONFIG)
     run.add_argument("--scheduled", action="store_true")
+    run.add_argument("--trigger", choices=("timer", "manual"))
     for name in ("check-config", "selftest"):
         commands.add_parser(name).add_argument("--config", default=DEFAULT_CONFIG)
     args = parser.parse_args(list(argv))
 
     if args.command == "run":
-        return scan_runner.main(["--config", args.config] + (["--scheduled"] if args.scheduled else []))
+        return runner.run_once(args.config, args.scheduled or args.trigger == "timer",
+                               read(pathlib.Path(release_root) / "RELEASE-MANIFEST.json", {}))
     if args.command == "check-config":
         error = check_config(args.config)
         print(error or "ok", file=sys.stderr if error else sys.stdout)

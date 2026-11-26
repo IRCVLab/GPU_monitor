@@ -58,7 +58,6 @@
 #include <sys/sysmacros.h>
 #endif
 
-#define SCANNER_VERSION "0.1.0"
 #define SCHEMA_VERSION  1
 
 #define GETDENTS_BUFSZ  (256 * 1024)
@@ -573,9 +572,9 @@ static const char *errno_reason(int err) {
     case ELOOP:   /* a directory became a symlink (O_NOFOLLOW) */
     case ESTALE:  /* open_verified: (dev, ino) differs from the parent's stat */
         return R_REPLACED;
-    case EACCES:  return "EACCES";
-    case EPERM:   return "EPERM";
-    default:      return strerror(err);
+    case EACCES:
+    case EPERM:   return "EACCES";
+    default:      return "UNREPRESENTABLE";
     }
 }
 
@@ -1082,12 +1081,12 @@ static struct node *scan_target(const char *target, int nthreads, int stale_days
     }
     dev_t opened_root_dev = rootst.st_dev;
     if (expected_dev && opened_root_dev != *expected_dev) {
-        if (opened_root_dev != rst.st_dev) blocked_add(target, strerror(EXDEV));
+        if (opened_root_dev != rst.st_dev) blocked_add(target, R_REPLACED);
         close(rootfd);
         return NULL;
     }
     if (opened_root_dev != rst.st_dev) {
-        blocked_add(target, strerror(EXDEV));
+        blocked_add(target, R_REPLACED);
         close(rootfd);
         return NULL;
     }
@@ -1435,7 +1434,7 @@ struct mount_result {
 static void usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [--threads N] [--prune-home MB] [--prune-data MB]\n"
-        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR] [--progress PATH]\n"
+        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR] [--run-id ID --group GROUP] [--progress PATH]\n"
         "          [--target PATH MAJOR:MINOR CLASS ...] [PATH ...]\n"
         "       --target may be repeated; each consumes PATH, MAJOR:MINOR and a\n"
         "       prune CLASS: home (pruned with --prune-home) or data (--prune-data).\n"
@@ -1677,7 +1676,6 @@ int main(int argc, char **argv) {
     fputs("{\n", f);
     fprintf(f, "\"schema_version\":%d,\n", SCHEMA_VERSION);
     fputs("\"hostname\":", f); json_escape(f, hostname); fputs(",\n", f);
-    fputs("\"scanner_version\":\"" SCANNER_VERSION "\",\n", f);
     fprintf(f, "\"scan_started_unix\":%lld,\n", (long long)scan_started);
     fprintf(f, "\"scan_duration_sec\":%.3f,\n", dur);
     fprintf(f, "\"run_as_root\":%s,\n", run_as_root ? "true" : "false");

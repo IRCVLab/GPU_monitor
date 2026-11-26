@@ -1,8 +1,7 @@
 """Pure sysfs block-device media classification.
 
 This module intentionally uses only bounded filesystem reads under sysfs.  It
-never shells out and never returns device paths; callers get a stable capacity
-identifier plus a coarse media classification.
+never shells out and never returns device paths; callers get a coarse media classification.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from typing import Dict, Optional, Set, Tuple
 _MAJOR_MINOR_RE = re.compile(r"^(\d{1,10}):(\d{1,10})$")
 
 
-def _parse_major_minor(major_minor: str) -> Optional[Tuple[str, str]]:
+def _parse_major_minor(major_minor: str) -> Optional[str]:
     if not isinstance(major_minor, str):
         return None
     match = _MAJOR_MINOR_RE.match(major_minor)
@@ -26,23 +25,13 @@ def _parse_major_minor(major_minor: str) -> Optional[Tuple[str, str]]:
     minor = int(match.group(2))
     if major <= 0:
         return None
-    return f"dev-{major}-{minor}", f"{major}:{minor}"
+    return f"{major}:{minor}"
 
 
 @dataclass(frozen=True)
 class MediaResult:
-    capacity_id: Optional[str]
     media: str
     confidence: str
-
-
-def capacity_id(major_minor: str) -> Optional[str]:
-    """Return canonical ``dev-<major>-<minor>`` for a valid block major:minor."""
-
-    parsed = _parse_major_minor(major_minor)
-    if parsed is None:
-        return None
-    return parsed[0]
 
 
 class BlockMediaResolver:
@@ -61,37 +50,36 @@ class BlockMediaResolver:
         ``unknown/unresolved``.
         """
 
-        parsed = _parse_major_minor(major_minor)
-        if parsed is None:
-            return MediaResult(None, "unknown", "unresolved")
-        cid, canonical_major_minor = parsed
+        canonical_major_minor = _parse_major_minor(major_minor)
+        if canonical_major_minor is None:
+            return MediaResult("unknown", "unresolved")
         if canonical_major_minor in self._cache:
             return self._cache[canonical_major_minor]
 
-        result = self._resolve_uncached(canonical_major_minor, cid)
+        result = self._resolve_uncached(canonical_major_minor)
         self._cache[canonical_major_minor] = result
         return result
 
-    def _resolve_uncached(self, major_minor: str, cid: str) -> MediaResult:
+    def _resolve_uncached(self, major_minor: str) -> MediaResult:
         try:
             root = self.sysfs_root.resolve(strict=True)
             start = (self.sysfs_root / "dev" / "block" / major_minor).resolve(strict=True)
         except (OSError, RuntimeError):
-            return MediaResult(cid, "unknown", "unresolved")
+            return MediaResult("unknown", "unresolved")
 
         if not self._within_block_device(start, root):
-            return MediaResult(cid, "unknown", "unresolved")
+            return MediaResult("unknown", "unresolved")
 
         leaves, failed = self._walk(start, root, depth=0, active=set(), memo={}, node_count=[0])
         if failed or not leaves:
-            return MediaResult(cid, "unknown", "unresolved")
+            return MediaResult("unknown", "unresolved")
         if leaves == {0}:
-            return MediaResult(cid, "ssd", "resolved")
+            return MediaResult("ssd", "resolved")
         if leaves == {1}:
-            return MediaResult(cid, "hdd", "resolved")
+            return MediaResult("hdd", "resolved")
         if leaves == {0, 1}:
-            return MediaResult(cid, "mixed", "resolved")
-        return MediaResult(cid, "unknown", "unresolved")
+            return MediaResult("mixed", "resolved")
+        return MediaResult("unknown", "unresolved")
 
     def _walk(
         self,

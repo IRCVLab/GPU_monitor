@@ -2,6 +2,7 @@
 import errno
 import fcntl
 import os
+from itertools import islice
 from pathlib import Path
 import socket
 import stat
@@ -132,15 +133,23 @@ def run_once(config_path, scheduled=False, release=None, mountinfo_reader=mount_
              media_resolver=None, scanner_runner=subprocess.run, clock=lambda: int(time.time()),
              persisted=lambda step: None):
     cfg = load_config(config_path)
+    if cfg.run_dir.is_symlink() or cfg.data_dir.is_symlink():
+        raise ValueError("managed directory is a symlink")
     cfg.run_dir.mkdir(exist_ok=True, parents=True)
-    with (cfg.run_dir / "scan.lock").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            assert transition("idle", "busy") == "idle"
-            return 75
-        return _locked(cfg, scheduled, release or {}, mountinfo_reader, media_resolver or BlockMediaResolver(),
-                       scanner_runner, clock, persisted)
+    result = 75
+    while True:
+        with (cfg.run_dir / "scan.lock").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return result
+            result = _locked(cfg, scheduled, release or {}, mountinfo_reader,
+                             media_resolver or BlockMediaResolver(), scanner_runner, clock, persisted)
+        # Close the enqueue/unlock race: the gate may have seen our lock
+        # after our final inbox check. An enqueue after unlock starts a unit.
+        if not requests(cfg.data_dir):
+            return result
+        scheduled = True
 
 
 def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted):
@@ -183,7 +192,7 @@ def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted
             for v in manifest["volumes"]:
                 # The group commit can reach disk just before done_volumes.
                 attempt = v.get("last_attempt") or {}
-                if v["volume_id"] in unfinished and attempt.get("run_id") != stale["run_id"]:
+                if v["volume_id"] in unfinished and (final or attempt.get("run_id") != stale["run_id"]):
                     v["last_attempt"] = dict(run_id=stale["run_id"], started_unix=stale["started_unix"],
                         finished_unix=clock(), outcome="interrupted", error_code="INTERRUPTED")
             finish(manifest, stale, "interrupted", clock(), {})
@@ -195,25 +204,31 @@ def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted
     try:
         roots, within = discover(cfg, reader, resolver)
     except (ValueError, OSError):
+        # Preserve captures when discovery cannot establish the current roots.
+        roots = []
         manifest["mount_table"].update(status="unreadable")
-        finish(manifest, record, "failed", clock(), {})
-        commit()
-        clear()
-        return 1
-    manifest["mount_table"] = dict(status="ok", observed_unix=clock(), within_roots=within)
-    previous = {v["volume_id"]: v["capture"]["sha256"] for v in manifest["volumes"] if v["capture"]}
-    volumes = prepare_volumes(manifest, roots, clock())
-    outcomes = []
+        volumes = {v["volume_id"]: v for v in manifest["volumes"]}
+        for volume in volumes.values():
+            volume["capacity"]["status"] = "failed"
+    else:
+        manifest["mount_table"] = dict(status="ok", observed_unix=clock(), within_roots=within)
+        volumes = prepare_volumes(manifest, roots, clock())
+    root_by_vid = {}
+    for root in sorted(roots, key=lambda r: r.path):
+        root_by_vid.setdefault(root.volume_id, root)
+    samples = {vid: v["capacity"] for vid, v in volumes.items()}
     while state == "preparing":
         known = {r["request_id"] for r in manifest["requests"]}
         pending = requests(data)
-        received = {k: pending[k] for k in list(k for k in pending if k not in known)[:16]}
+        received = dict(islice(((k, t) for k, t in pending.items() if k not in known), 16))
+        previous = {vid: v["capture"]["sha256"] for vid, v in volumes.items() if v["capture"]}
         groups = plan.due_groups(manifest, roots, clock(), record["trigger"], received)
         record.update(request_ids=list(received), plan=[dict(group=g, volumes=list(vs)) for g, vs in groups.items()],
                       current=None, done_volumes=[])
         # Commit inventory before journaling a plan so recovery can identify
         # even newly discovered volumes. Every group then owns only its rows.
-        commit()
+        if groups:
+            commit()
         save()
         for key in set(received) | (pending.keys() & known):
             (data / "requests" / key).unlink(missing_ok=True)
@@ -226,7 +241,8 @@ def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted
             record["current"] = dict(group=group, started_unix=clock())
             save()
             captures = run_group(cfg, record, group, members, execute, clock)
-            for vid, rs in members.items():
+            samples = {vid: capacity.sample(root, samples[vid], clock()) for vid, root in root_by_vid.items()}
+            for vid in members:
                 v = volumes[vid]
                 c = captures.get(vid)
                 outcome = c["outcome"] if c else "failed"
@@ -235,13 +251,15 @@ def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted
                     persisted("capture")
                 v["last_attempt"] = dict(run_id=record["run_id"], started_unix=record["current"]["started_unix"],
                     finished_unix=clock(), outcome=outcome, error_code=None if c else "SCANNER_FAILED")
-                v["capacity"] = capacity.sample(rs[0], v["capacity"], clock())
+                v["capacity"] = samples[vid]
                 outcomes.append(outcome)
             commit()
             record["done_volumes"].extend(members)
             save()
             state = transition(state, "group_done")
         outcome = aggregate(outcomes) if groups or not roots else "nothing_due"
+        for vid, v in volumes.items():
+            v["capacity"] = samples[vid]
         finish(manifest, record, outcome, clock(), received)
         commit()
         publish.prune(data, manifest, clock(), previous)
@@ -251,8 +269,8 @@ def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted
         elif new:
             state = transition(state, "start")
         if state == "preparing":
-            # Use a distinct attempt identity for recovery of the next full pass.
-            record.update(run_id=uuid.uuid4().hex, trigger="manual", started_unix=clock(),
+            # All passes in the unit share the systemd invocation identity.
+            record.update(trigger="manual",
                           request_ids=[], plan=[], current=None, done_volumes=[])
             save()
     clear()

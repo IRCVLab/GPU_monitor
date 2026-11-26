@@ -1,4 +1,5 @@
 """Translate scanner rows to per-volume captures at the publication boundary."""
+import base64
 import json
 
 
@@ -16,18 +17,31 @@ def counter(value):
     return value
 
 
+def timestamp(value):
+    if type(value) is not int or not 0 <= value <= 4102444800:
+        raise ValueError("invalid scanner timestamp")
+    return value
+
+
 def tree_node(node, depth=0):
     if depth > 128 or not isinstance(node["name"], str) or node["kind"] != "directory":
         raise ValueError("invalid scanner tree")
     result = {key: counter(node[key]) for key in ("bytes", "files", "uid", "other_bytes")}
-    result.update(name=node["name"], kind="dir", mtime=int(node["mtime"]),
+    result.update(name=node["name"], kind="dir", mtime=timestamp(node["mtime"]),
                   children=[tree_node(n, depth + 1) for n in node.get("children", [])])
+    children = result["children"]
+    if (children or result["other_bytes"]) and result["bytes"] != result["other_bytes"] + sum(c["bytes"] for c in children):
+        raise ValueError("tree byte rollup mismatch")
+    if result["files"] < sum(c["files"] for c in children):
+        raise ValueError("tree file rollup mismatch")
     if "name_b64" in node:
         result["name_b64"] = node["name_b64"]
     return result
 
 
 def split_group_output(raw, volumes, run_id, group, started, finished):
+    if finished < started:
+        raise ValueError("scan finished before it started")
     mounts = {m["path"]: m for m in raw["mounts"]}
     roots = {r.path for members in volumes.values() for r in members}
     if set(mounts) - roots or len(mounts) != len(raw["mounts"]):
@@ -40,17 +54,22 @@ def split_group_output(raw, volumes, run_id, group, started, finished):
     for source, target in (("top_files", "top_files"), ("stale", "stale"), ("blocked", "errors")):
         for item in raw[source]:
             path = item["path"]
-            if len(path.encode()) > 12288 or not path.startswith("/"):
+            raw_path = base64.b64decode(item["path_b64"], validate=True) if "path_b64" in item else path.encode()
+            if len(raw_path) > 4096 or not path.startswith("/") or ".." in path.split("/") or "\0" in path:
                 raise ValueError("invalid scanner path")
             owner = max((r for r in roots if r == path or path.startswith(r + "/")), key=len)
             row = {"path": path}
             if "path_b64" in item:
                 row["path_b64"] = item["path_b64"]
             if target == "errors":
+                if item["reason"] not in {"EACCES", "VANISHED", "REPLACED", "UNREPRESENTABLE", "FD_BUDGET_REOPEN_FAILED"}:
+                    raise ValueError("unknown scanner error reason")
                 row["reason"] = item["reason"]
             else:
-                row.update(bytes=counter(item["bytes"]), uid=counter(item["uid"]), mtime=int(item["mtime"]))
+                row.update(bytes=counter(item["bytes"]), uid=counter(item["uid"]), mtime=timestamp(item["mtime"]))
                 if target == "stale":
+                    if item["kind"] not in {"dir", "file"}:
+                        raise ValueError("invalid stale row kind")
                     row["kind"] = item["kind"]
             lists[owner][target].append(row)
 
