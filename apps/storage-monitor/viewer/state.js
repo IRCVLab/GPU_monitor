@@ -8,7 +8,26 @@ export const serverSelection = (state,id) => Object.hasOwn(state.selection,id) ?
 export const detailKey = id => 'detail/' + id;
 export const mountId = mount => mount.volume_id ?? mount.mount_id ?? mount.path;
 export function selectedMount(detail, route) {
-  return detail?.mounts?.find(m => mountId(m) === route.volumeId) ?? detail?.mounts?.[0];
+  const mounts = detail?.mounts ?? [];
+  const id = route.volumeId ?? mountId(mounts[0] ?? {});
+  const roots = mounts.filter(m => mountId(m) === id);
+  if (roots.length <= 1) return roots[0];
+  const tree = {kind:'directory',name:'/',children:[],bytes:0};
+  for (const root of roots) {
+    if (!root.tree) continue;
+    let parent = tree;
+    const parts = root.path.split('/').filter(Boolean);
+    for (const [index,name] of parts.entries()) {
+      parent.bytes += root.tree.bytes;
+      if (index === parts.length-1) parent.children.push({...root.tree,name});
+      else {
+        let child = parent.children.find(n => n.name === name);
+        if (!child) parent.children.push(child = {kind:'directory',name,bytes:0,children:[]});
+        parent = child;
+      }
+    }
+  }
+  return {volume_id:id, path:'/', tree, scanned_bytes:tree.bytes};
 }
 export function drillStack(detail, route) {
   const mount = selectedMount(detail, route);
@@ -62,18 +81,36 @@ export function reducer(state, event) {
         {status:'error',code:event.code,problem:event.problem,data:event.code === 'UNKNOWN_SERVER' ? undefined : remote.data};
       const next = {...state,resources:{...state.resources,[key]:value}};
       if (type === 'DataLoaded' && key === 'fleet') {
-        const configured = new Set(data.servers.map(row => row.id));
+        const configured = new Set(data.servers.map(row => row.server_id));
         for (const name of Object.keys(next.resources)) {
           const [,server] = name.split('/');
-          if (server && !configured.has(server)) delete next.resources[name];
+          if (server && !name.startsWith("capture/") && !configured.has(server)) delete next.resources[name];
         }
       }
-      if (type === 'DataLoaded' && key.startsWith('detail/')) {
-        const server = key.slice(7);
-        if (Object.hasOwn(state.selection,server)) {
-          const selected = state.selection[server];
-          const updated = selected.map(entry => lookup(data,entry));
-          if (updated.some((entry,i) => entry !== selected[i])) next.selection = {...state.selection,[server]:updated};
+      if (type === 'DataLoaded' && (key.startsWith('capture/') || key.startsWith('detail/'))) {
+        for (const [name,remote] of Object.entries(next.resources)) {
+          if (!name.startsWith('detail/') || !remote.data) continue;
+          const server = name.slice(7);
+          let detail = remote.data;
+          if (detail.volumes) {
+            if (key !== name && !detail.volumes.some(v => 'capture/'+v.capture?.sha256 === key)) continue;
+            const mounts = detail.mounts.map(m => {
+              const volume = detail.volumes.find(v => v.volume_id === m.volume_id);
+              const capture = next.resources['capture/'+volume.capture?.sha256]?.data;
+              const root = capture?.roots.find(r => r.binding === m.binding);
+              return root ? {...m, tree:root.tree, scanned_bytes:root.counts.bytes} : m;
+            });
+            detail = {...detail,mounts};
+            next.resources[name] = {...remote,data:detail};
+          } else if (name !== key) continue;
+          const selected = serverSelection(state,server);
+          const updated = selected.map(entry => {
+            const volume = detail.volumes?.find(v => v.volume_id === entry.volumeId);
+            if (volume?.capture && !next.resources['capture/'+volume.capture.sha256]?.data)
+              return {...entry,flag:'pending'};
+            return lookup(detail,entry.flag === 'pending' ? {...entry,flag:null} : entry);
+          });
+          if (updated.some((entry,i) => entry !== selected[i])) next.selection = {...next.selection,[server]:updated};
         }
       }
       return next;

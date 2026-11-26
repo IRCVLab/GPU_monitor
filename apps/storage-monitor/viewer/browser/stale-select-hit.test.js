@@ -117,7 +117,7 @@ async function startSampleServer(tmp) {
     },
   });
   const origin = `http://127.0.0.1:${port}`;
-  try { await waitFor('sample serve.py', () => getJson(origin + '/api/servers')); }
+  try { await waitFor('sample serve.py', () => getJson(origin + '/api/v2/fleet')); }
   catch (error) { await stop(server); throw error; }
   return { server, origin };
 }
@@ -238,7 +238,7 @@ async function checkWidth(tab, origin, width) {
   const command = await tab.evaluate("document.getElementById('cleanupCopyAll').dataset.copyCommand");
   assert.match(command,/hostname -s/);
   await tab.evaluate("window.dispatchEvent(new Event('focus'))");
-  await waitFor('focus refresh', () => tab.evaluate("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('/hinton/snapshot')).length >= 2"));
+  await waitFor('focus refresh', () => tab.evaluate("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('/api/v2/servers/hinton')).length >= 2"));
   assert.equal(await tab.evaluate("document.getElementById('cleanupCopyAll').dataset.copyCommand"),command,'V1 focus preserves command');
   const geometry = await tab.evaluate(`(() => {
     const vp=document.getElementById('staleViewport'); vp.scrollLeft=vp.scrollWidth;

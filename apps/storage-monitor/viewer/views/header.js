@@ -38,7 +38,6 @@ function detailCanonicalMajorMinor(value) {
   return String(major) + ":" + String(minor);
 }
 function detailCapacityIdentity(root, mount) {
-  // A v2 host names its filesystem by volume id (SHIM(M5a..M8) S5), so its roots share one capacity entry.
   const volumeId = String((root && root.volume_id) || (mount && mount.volume_id) || "");
   if (volumeId) return { key: "volume_id:" + volumeId, value: volumeId };
   const capacityId = detailCanonicalCapacityId(
@@ -189,7 +188,7 @@ export function renderHeader(DATA, selected, navigate) {
       const scanSize = '<span class="figure">' + humanBytes(root.scannedBytes) + '</span>';
       button.innerHTML = pathLabel + scanSize + '<span aria-hidden="true">›</span>';
       button.addEventListener("click", () => {
-        navigate({tab:"treemap", volumeId:mountId(actionableMounts[index]), path:[]});
+        navigate({tab:"treemap", volumeId:mountId(actionableMounts[index]), path:group.scanRoots.length > 1 ? root.path.split("/").filter(Boolean) : []});
         document.getElementById("treemapFolderLabel").scrollIntoView({ block: "nearest" });
       });
       folders.appendChild(button);

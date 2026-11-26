@@ -32,11 +32,10 @@ function render() {
   const fleet = resources.fleet?.data;
   const list = el('overviewList');
   if (!server && fleet) {
-    const entries = fleet.servers.map(({id}) => ({id,snapshot:resources[detailKey(id)]?.data,error:resources[detailKey(id)]?.code}));
-    if (stats) renderFleetUserUsage(el('fleetUsage'),buildFleetUserUsage(fleet.servers,entries));
-    else if (previous?.route !== route || previous?.resources !== resources) renderOverviewList(list,buildOverviewRows(fleet.servers,entries));
+    if (stats) renderFleetUserUsage(el('fleetUsage'),buildFleetUserUsage(fleet.servers));
+    else if (previous?.route !== route || previous?.resources !== resources) renderOverviewList(list,buildOverviewRows(fleet.servers));
     if (redraw && !stats) layoutOverviewMasonry(list);
-    el(stats ? 'statisticsSampleDataMarker' : 'sampleDataMarker').hidden = fleet.data_mode !== 'sample';
+
   }
   const bootError = resources.session?.code || resources.fleet?.code;
   el('bootError').hidden = !bootError;
@@ -53,8 +52,10 @@ function render() {
   redraw = false;
 }
 store.subscribe((state,old,event) => {
-  if (event.type === 'DataLoaded' && event.key === detailKey(state.route.serverId) && state.route.path?.length) {
-    const count = Math.max(0,drillStack(event.data,state.route).length-1);
+  if (event.type === 'DataLoaded' && (event.key.startsWith('capture/') || event.key === detailKey(state.route.serverId)) && state.route.path?.length) {
+    const stack = drillStack(state.resources[detailKey(state.route.serverId)]?.data,state.route);
+    if (!stack.length || !stack[0].node.children?.length) return schedule();
+    const count = stack.length-1;
     if (count < state.route.path.length) navigate({...state.route,path:state.route.path.slice(0,count)},true);
   }
   schedule();

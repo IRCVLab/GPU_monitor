@@ -109,7 +109,6 @@ function canonicalMajorMinor(value) {
 
 function capacityIdentityFromRoot(root) {
   if (!root || typeof root !== "object") return null;
-  // A v2 host names its filesystem by volume id (SHIM(M5a..M8) S5), so its roots share one capacity entry.
   if (typeof root.volume_id === "string" && root.volume_id) {
     return { kind: "volume_id", value: root.volume_id, key: "volume_id:" + root.volume_id };
   }
@@ -453,28 +452,33 @@ function buildOverviewServer(summaryInput, snapshot, error = null) {
   };
 }
 
-function buildOverviewRows(summaries, snapshotEntries) {
-  const entryMap = new Map();
-  for (const entry of Array.isArray(snapshotEntries) ? snapshotEntries : []) entryMap.set(entry.id, entry);
-  return (Array.isArray(summaries) ? summaries : []).map((summary) => {
-    const entry = entryMap.get(summary && summary.id) || { snapshot: null, error: null };
-    const embedded = summary?.overview_snapshot;
-    if (embedded && (entry.snapshot?.scan_finished_unix ?? 0) <= (embedded.scan_finished_unix ?? 0)) {
-      return buildOverviewServer(summary, embedded);
-    }
-    return buildOverviewServer(summary, entry.snapshot, entry.error || null);
+function buildOverviewRows(summaries) {
+  return summaries.map(row => {
+    const mounts = (row.volumes ?? []).map(v => {
+      const c = v.capacity ?? {};
+      return {identity:{key:v.volume_id,value:v.volume_id}, capacityPct:c.used_pct,key:v.volume_id, path:v.mountpoint, volumePath:v.mountpoint, usedBytes:c.used,
+        totalBytes:c.total, availableBytes:c.avail, usedPct:c.used_pct, pressure:v.severity,
+        capacityObservedUnix:c.observed_unix, pressureLabel:pressureText(v.severity), mediaLabel:formatMediaLabel(v.media),
+        capacityText:'볼륨 총 ' + compactBytes(c.total) + ' · 여유 ' + compactBytes(c.avail),
+        usedPctText:c.used_pct == null ? '—' : c.used_pct + '%',
+        scanRoots:v.roots.map(root => ({path:root.scan_root}))};
+    });
+    const aggregate = aggregateMountCapacity(mounts);
+    const pressure = strongestPressure(mounts);
+    const status = row.error ? 'snapshot_load_failed' : row.freshness === 'stale' ? 'stale_snapshot' :
+      row.activity?.state === 'running' ? 'active_scan' : pressure === 'normal' ? 'normal' : 'pressure_'+pressure;
+    return {id:row.server_id, displayName:row.display_name ?? row.server_id, order:row.order, mountCount:mounts.length,
+      totalAvailableLabel:aggregate.availableLabel, totalAvailableBytes:aggregate.availableBytes,
+      mounts, capacityGroups:mounts, aggregate, primaryStatus:statusPresentation(status), secondaryStatus:null};
   });
 }
 
-function buildFleetUserUsage(summaries, snapshotEntries) {
-  const snapshots = new Map(snapshotEntries.map(entry => [entry.id, entry.snapshot]));
+function buildFleetUserUsage(summaries) {
   const accounts = new Map();
   let scannedServers = 0;
   let staleServers = 0;
   for (const summary of summaries) {
-    const snapshot = Object.hasOwn(summary, "overview_snapshot")
-      ? summary.overview_snapshot : snapshots.get(summary.id);
-    const users = snapshot?.users;
+    const users = summary.users_top;
     if (!Array.isArray(users)) continue;
     scannedServers++;
     if (summary.freshness === "stale") staleServers++;
@@ -485,10 +489,10 @@ function buildFleetUserUsage(summaries, snapshotEntries) {
       if (!accounts.has(account)) accounts.set(account, { name: account, bytes: 0, servers: new Map() });
       const usage = accounts.get(account);
       usage.bytes += bytes;
-      if (!usage.servers.has(summary.id)) {
-        usage.servers.set(summary.id, { name: summary.display_name || summary.id, bytes: 0 });
+      if (!usage.servers.has(summary.server_id)) {
+        usage.servers.set(summary.server_id, { name: summary.display_name || summary.server_id, bytes: 0 });
       }
-      usage.servers.get(summary.id).bytes += bytes;
+      usage.servers.get(summary.server_id).bytes += bytes;
     }
   }
   const rows = [...accounts.values()].sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));

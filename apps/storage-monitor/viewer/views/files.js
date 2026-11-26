@@ -40,7 +40,7 @@ export function renderFiles({DATA, route, colorForUid, entries, mountPaths, sort
     button.onclick = () => navigate({mount:path || null});
     return button;
   }));
-  const scoped = list.map(file => ({...file,mount:mountOf(file.path,mountPaths)}))
+  const scoped = list.map(file => ({...file,mount:file.volume_id}))
     .filter(file => (route.owner == null || route.owner === file.uid) && (!route.mount || route.mount === file.mount));
   const rows = sortRows(route.tab,scoped,sort,route);
   const bytes = rows.reduce((sum,row) => sum + row.bytes,0);

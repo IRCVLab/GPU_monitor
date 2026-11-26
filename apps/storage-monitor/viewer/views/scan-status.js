@@ -10,25 +10,6 @@ function activeRescanState(job) {
   return job.state === "running" ? job.state : null;
 }
 
-function newerScanGeneration(generation, time, snapshot) {
-  if (!generation || generation === snapshot?.scan_generation) return null;  // SHIM(M2b..M8) S5
-  const finished = scanNumber(time);
-  const displayedTime = scanNumber(snapshot?.scan_finished_unix);
-  return finished === null || displayedTime === null || finished >= displayedTime ? generation : null;
-}
-
-function readyScanGeneration(status, snapshot) {
-  return newerScanGeneration(status.snapshot_generation, status.snapshot_finished_unix, snapshot);  // SHIM(M2b..M8) S5
-}
-
-function pendingScanGeneration(status, snapshot) {
-  return readyScanGeneration(status, snapshot)
-    || newerScanGeneration(status.published_generation, status.published_finished_unix, snapshot)  // SHIM(M2b..M8) S5
-    || (["complete", "partial"].includes(status.state)
-      ? newerScanGeneration(status.generation, status.finished_unix, snapshot)
-      : null);
-}
-
 function isScanActive(summary) {
   const status = summary.scan_status;
   return !!(activeRescanState(summary.active_job) || (
@@ -70,7 +51,7 @@ function scanStatusModel(status, snapshot, now = scanNumber(status?.host_now_uni
   return {
     state, running, label: disconnected ? "상태 확인 지연" : s.error_code === "SCAN_INTERRUPTED" ? "스캔 중단" : (labels[state] || labels.unknown),
     lastFinished, duration, elapsed, eta, slowEta, snapshotFinished,
-    snapshotPending: !!pendingScanGeneration(s, data),
+    snapshotPending: false,
     etaNote: heartbeatStale ? "진행 정보 확인 후 예상 시간 갱신" : predicted !== null && predicted <= now ? (slowEta !== null ? "평소보다 오래 걸리는 중" : "최근 최장 소요 시간 초과 · 계속 진행 중") : started === null ? "현재 스캔 시작 시각 확인 중" : "같은 범위의 완료 기록이 없어 예상 시간 확인 불가",
     nextRunLabel: s.schedule_mode === "due-check" ? "다음 확인" : "다음",
     nextRun: !disconnected && s.timer_state === "active" && next > now ? next : null,
@@ -147,4 +128,4 @@ function renderScanStatus(status, snapshot, options = {}) {
   return model;
 }
 
-export {readyScanGeneration, pendingScanGeneration, isScanActive, scanStatusModel, renderScanStatus};
+export {isScanActive, scanStatusModel, renderScanStatus};

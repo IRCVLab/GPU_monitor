@@ -1,7 +1,7 @@
 export function columnValue(table, key, row, {mount} = {}) {
   if (table === 'users') {
-    if (key === 'files' && mount) return null;
-    if (key === 'pct' || key === 'bytes') return mount ? row.by_mount?.[mount] || 0 : row.bytes;
+    if (key === 'files' && mount) return row.by_volume?.[mount]?.files ?? null;
+    if (key === 'pct' || key === 'bytes') return mount ? row.by_volume?.[mount]?.bytes ?? null : row.bytes;
     if (key === 'name') return row.name ?? ('uid ' + row.uid);
   }
   if (key === 'age' || key === 'age_days') return row.age_days ?? null;

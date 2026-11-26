@@ -111,8 +111,8 @@ export function drawUsers({DATA,route,mountPaths,mountColor,colorForUid,navigate
   }
 
   function expandedRow(u) {
-    const byMount = u.by_mount || {};
-    const entries = mountPaths.map(mp => [mp, byMount[mp] || 0]).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]);
+    const byMount = u.by_volume || {};
+    const entries = mountPaths.map(mp => [mp, byMount[mp]?.bytes || 0]).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]);
     let inner = '<div class="expand-inner">';
     if (!entries.length) inner += '<span class="hint">No per-storage breakdown.</span>';
     else for (const [mp, b] of entries) inner += '<div class="mini-bar"><span class="mb-label">' + escapeHtml(mp) +
