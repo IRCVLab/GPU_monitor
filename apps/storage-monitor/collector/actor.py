@@ -53,12 +53,17 @@ def spawn_thread(work: Callable[[], None], name: str) -> None:
 
 
 class Ask:
-    """A reply slot with a bound. Once the asker gives up, the actor drops the request unseen."""
+    """A reply slot with a bound. The asker waits at most its timeout.
 
-    def __init__(self) -> None:
+    A request the actor has not claimed by then is dropped unseen. One it has claimed
+    still completes, and ``settled`` runs once either way, when the outcome is final.
+    """
+
+    def __init__(self, settled: Callable[[], None] = lambda: None) -> None:
         self._lock = threading.Lock()
         self._done = threading.Event()
         self._state = "open"
+        self._settled = settled
         self.value: Any = None
 
     def claim(self) -> bool:
@@ -71,17 +76,19 @@ class Ask:
     def reply(self, value: Any) -> None:
         self.value = value
         self._done.set()
+        self._settled()
 
     def wait(self, timeout: float) -> Any:
+        """The reply, or None when none came within ``timeout``."""
         if self._done.wait(timeout):
             return self.value
         with self._lock:
-            if self._state == "open":
+            cancelled = self._state == "open"
+            if cancelled:
                 self._state = "cancelled"
-                return None
-        # The actor already took the request: its answer follows one record write.
-        self._done.wait()
-        return self.value
+        if cancelled:
+            self._settled()
+        return self.value if self._done.is_set() else None
 
 
 @dataclass(frozen=True)

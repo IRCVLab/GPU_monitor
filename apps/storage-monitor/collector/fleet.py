@@ -118,13 +118,16 @@ class Fleet:
             if busy >= self.max_active_jobs:
                 raise GlobalConcurrency(audit=audit("GLOBAL_CONCURRENCY", None))
             self._admitting.add(server.id)
-        try:
-            ask = Ask()
-            self.actors[server.id].post(Admit(uuid.uuid4().hex, actor_name, now, self.cooldown_seconds, ask))
-            reply = ask.wait(self.reply_timeout)
-        finally:
+
+        def release() -> None:
             with self._lock:
                 self._admitting.discard(server.id)
+
+        # The reservation lasts until the admission is final, even when this request stops waiting
+        # first: an admission the actor already took still writes its job (C5).
+        ask = Ask(settled=release)
+        self.actors[server.id].post(Admit(uuid.uuid4().hex, actor_name, now, self.cooldown_seconds, ask))
+        reply = ask.wait(self.reply_timeout)
         if reply is None:
             raise ServerBusy(audit=audit("SERVER_BUSY", None))
         if reply.error == "ACTIVE_JOB":

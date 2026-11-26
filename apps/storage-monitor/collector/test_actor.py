@@ -587,3 +587,46 @@ def test_rescan_admitted_before_any_observation_cannot_succeed_from_an_old_run(t
             break
     job = host.summary()["active_job"]
     assert (job["phase"], job["result_code"]) == ("unconfirmed", "NO_TRACE"), "a rescan that never ran ended " + job["phase"]
+
+
+def test_rescan_request_answers_within_the_reply_bound_while_the_admission_commit_stalls(tmp_path):
+    # M2b review: once the actor claimed the request, the HTTP thread waited for it without a bound (C5).
+    import time
+
+    from collector.errors import ActiveJob, GlobalConcurrency, ServerBusy
+
+    host = Collector(tmp_path, "alpha-1", "beta-2", spawn=ManualSpawn())
+    host.restart(max_active_jobs=1)
+    host.fleet.reply_timeout = 0.5
+    actor = host.actor()
+    stalled, release = threading.Event(), threading.Event()
+    commit = actor.store.commit
+
+    def slow_commit(record, capture=None):
+        if record.job is not None:
+            stalled.set()
+            release.wait(20)
+        return commit(record, capture)
+
+    actor.store.commit = slow_commit
+    post = actor.post
+
+    def post_and_handle(message):
+        post(message)
+        threading.Thread(target=actor.step, daemon=True).start()
+
+    actor.post = post_and_handle
+    started = time.monotonic()
+    with pytest.raises(ServerBusy):
+        host.fleet.request_rescan("alpha-1", "operator")
+    assert time.monotonic() - started < 1.5, "the request waited past the reply bound"
+    assert stalled.is_set(), "the actor never took the request"
+    with pytest.raises(GlobalConcurrency):
+        host.fleet.request_rescan("beta-2", "operator")
+    release.set()
+    deadline = time.monotonic() + 5
+    while host.summary()["active_job"] is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert host.summary()["active_job"]["phase"] == "dispatching", "the admission that finished late was lost"
+    with pytest.raises(ActiveJob):
+        host.fleet.request_rescan("alpha-1", "operator")
