@@ -9,6 +9,8 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
+from api.errors import RequestError
+
 BIND = os.environ.get("STORAGE_VIZ_BIND", os.environ.get("BIND", "127.0.0.1"))
 TRUSTED_PROXY = os.environ.get("STORAGE_VIZ_TRUSTED_PROXY", "").lower() in {"1", "true", "yes", "on"}
 DIRECT_LOOPBACK_RESCAN = os.environ.get("STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN", "").lower() in {"1", "true", "yes", "on"}
@@ -19,6 +21,8 @@ OPERATORS = frozenset(v.strip() for v in os.environ.get("STORAGE_VIZ_OPERATOR_AL
 SESSION_COOKIE_SECURE_RAW = os.environ.get("STORAGE_VIZ_SESSION_COOKIE_SECURE")
 CSRF_SECRET = os.environ.get("STORAGE_VIZ_CSRF_SECRET", secrets.token_hex(32))
 SESSION_TTL_SECONDS = int(os.environ.get("STORAGE_VIZ_SESSION_TTL_SECONDS", "3600"))
+
+
 def _parse_bool_setting(name: str, raw: str | None, *, default: bool) -> bool:
     if raw is None or not raw.strip():
         return default
@@ -199,10 +203,10 @@ class Auth:
             return None
         return origin
 
-    def _session(self) -> tuple[int, dict[str, Any], str | None]:
+    def _session(self) -> tuple[dict[str, Any], str | None]:
         actor = self._actor()
         if actor is None:
-            return 401, {"authenticated": False, "can_rescan": False}, None
+            raise RequestError("AUTH_REQUIRED", body={"authenticated": False, "can_rescan": False})
         cookies = _parse_cookies(self.headers.get("Cookie", ""))
         cookie_value = cookies.get("storage_viz_session")
         if cookie_value and _validate_session_cookie(cookie_value, actor) is not None:
@@ -217,33 +221,33 @@ class Auth:
         direct_origin = self._direct_loopback_origin()
         can_rescan = self.server.runtime.rescan_enabled and actor in OPERATORS and bool(ALLOWED_ORIGINS) and (TRUSTED_PROXY or direct_origin is not None)
         token = _csrf_token(cookie_value)
-        return 200, {"authenticated": TRUSTED_PROXY, "actor": actor, "can_rescan": can_rescan, "csrf_token": token}, new_cookie
+        return {"authenticated": TRUSTED_PROXY, "actor": actor, "can_rescan": can_rescan, "csrf_token": token}, new_cookie
 
-    def _require_read_auth(self) -> tuple[int, dict[str, Any]] | None:
+    def _require_read_auth(self) -> None:
         if not TRUSTED_PROXY:
             return None
         actor = self._actor()
         if actor is None:
-            return 401, {"authenticated": False, "error": "AUTH_REQUIRED"}
+            raise RequestError("AUTH_REQUIRED", body={"authenticated": False, "error": "AUTH_REQUIRED"})
         return None
 
-    def _require_post_auth(self) -> tuple[int, dict[str, Any], str | None]:
+    def _require_post_auth(self) -> str:
         actor = self._actor()
         if actor is None:
-            return 401, {"authenticated": False, "error": "AUTH_REQUIRED"}, None
+            raise RequestError("AUTH_REQUIRED", body={"authenticated": False, "error": "AUTH_REQUIRED"})
         if not (self.server.runtime.rescan_enabled and actor in OPERATORS and ALLOWED_ORIGINS):
-            return 403, {"error": "FORBIDDEN"}, None
+            raise RequestError("FORBIDDEN")
         origin = self.headers.get("Origin", "")
         if not origin or origin not in ALLOWED_ORIGINS:
-            return 403, {"error": "BAD_ORIGIN"}, None
+            raise RequestError("BAD_ORIGIN")
         if DIRECT_LOOPBACK_RESCAN and origin != self._direct_loopback_origin():
-            return 403, {"error": "BAD_ORIGIN"}, None
+            raise RequestError("BAD_ORIGIN")
         cookies = _parse_cookies(self.headers.get("Cookie", ""))
         cookie_value = cookies.get("storage_viz_session", "")
         if _validate_session_cookie(cookie_value, actor) is None:
-            return 403, {"error": "BAD_SESSION"}, None
+            raise RequestError("BAD_SESSION")
         expected = _csrf_token(cookie_value)
         supplied = self.headers.get("X-CSRF-Token", "")
         if not supplied or not hmac.compare_digest(supplied, expected):
-            return 403, {"error": "BAD_CSRF"}, None
-        return 200, {"actor": actor}, actor
+            raise RequestError("BAD_CSRF")
+        return actor

@@ -160,7 +160,7 @@ def load_contract(
     unknown_proxy_keys = set(proxy) - PROXY_ENV_KEYS
     if unknown_proxy_keys:
         raise HealthCheckError(f"unsupported proxy EnvironmentFile keys: {', '.join(sorted(unknown_proxy_keys))}")
-    if dash.get("STORAGE_VIZ_DEV_SAMPLE_DIR") or dash.get("STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN"):
+    if dash.get("STORAGE_VIZ_ENV", "production") != "production" or dash.get("STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN"):
         raise HealthCheckError("production health rejects dev sample/direct modes")
     if dash["STORAGE_VIZ_BIND"] != "127.0.0.1" or dash["STORAGE_VIZ_PORT"] != "8088":
         raise HealthCheckError("dashboard must bind 127.0.0.1:8088")

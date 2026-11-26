@@ -13,7 +13,6 @@ from typing import Any, Callable
 from api import auth, routes
 from api.errors import http_error
 from api.fixtures import FixtureFleet
-from collector.errors import DomainError
 from collector.fleet import Fleet
 from collector.inventory import CapacityThresholds, load_inventory
 from collector.legacy import LegacyHost
@@ -46,8 +45,11 @@ def configure(fixtures=None):
                   max_active_jobs=int(os.environ.get("STORAGE_VIZ_RESCAN_MAX_CONCURRENT", "2")))
     port = os.environ.get("STORAGE_VIZ_CAPACITY_PORT", "").strip()
     live = LiveCapacity(fleet.servers, int(port)) if port and not auth.PREFLIGHT_BACKEND else None
-    return Runtime(fleet, "inventory", inventory.capacity_thresholds, live, not auth.PREFLIGHT_BACKEND,
-                   bool(auth.OPERATORS and (auth.TRUSTED_PROXY or auth.DIRECT_LOOPBACK_RESCAN or auth.PREFLIGHT_BACKEND)))
+    return Runtime(
+        fleet=fleet, data_mode="inventory", capacity_thresholds=inventory.capacity_thresholds,
+        live_capacity=live, runs_actors=not auth.PREFLIGHT_BACKEND,
+        rescan_enabled=bool(auth.OPERATORS and (auth.TRUSTED_PROXY or auth.DIRECT_LOOPBACK_RESCAN or auth.PREFLIGHT_BACKEND)),
+    )
 
 
 class CentralPoller:
@@ -95,12 +97,13 @@ class CentralPoller:
 class Handler(auth.Auth, BaseHTTPRequestHandler):
     def handle_request(self):
         request_id = secrets.token_hex(16)
+        self.v1_route = False
         try:
             # BaseHTTPRequestHandler rewrites leading slashes. Validate the original target.
             target = self.requestline.split()[1]
             response = routes.dispatch(self, target)
         except Exception as exc:
-            status, headers, body = http_error(exc)
+            status, headers, body = http_error(exc, request_id, v1=self.v1_route)
             if status == 500:
                 logging.exception("storage-viz request %s failed", request_id)
             response = routes.json_response(body, status, headers)

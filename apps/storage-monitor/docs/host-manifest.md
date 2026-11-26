@@ -2,20 +2,20 @@
 
 There are two host lists with different jobs:
 
-- `data/hosts.json` is a tracked demo/static-viewer manifest for sample files.
+- `tests/fixtures/fleet/hosts.json` is a tracked fixture fleet manifest for sample files.
 - `/etc/storage-viz/servers.json` is the central production inventory consumed by `storage-viz-dashboard.service`.
 
-## Static/demo host manifest
+## Fixture fleet manifest
 
-`data/hosts.json` maps sample snapshots for local development:
+`tests/fixtures/fleet/hosts.json` maps sample snapshots for local development:
 
 ```json
 [
-  { "id": "hinton", "label": "hinton", "file": "hinton", "default": true }
+  { "id": "hinton", "label": "hinton", "file": "hinton", "default": true, "sample_data": true }
 ]
 ```
 
-Each entry maps to `data/<file>.json`, with `data/<file>.sample.json` as a fallback for demos.
+Each entry maps to `<file>.json` in the fixture directory. The viewer requests these snapshots through the v1 API.
 
 ## Central production inventory
 

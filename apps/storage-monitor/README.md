@@ -26,13 +26,14 @@ Run the local sample dashboard from `apps/storage-monitor`:
 
 ```bash
 cd apps/storage-monitor
-STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data" \
 STORAGE_VIZ_BIND=127.0.0.1 \
 STORAGE_VIZ_PORT=8088 \
-python3 viewer/serve.py
+python3 -m api.server --fixtures tests/fixtures/fleet
 ```
 
 Open `http://127.0.0.1:8088`. Development sample mode is explicit: `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and the four tracked sample servers appear in deterministic order: `hinton`, `atlas`, `orion`, `zeus`. Production inventory mode reads `/etc/storage-viz/servers.json` and is not sample data.
+
+To create a fixture from a v1 capture, run `python3 tools/scrub_fixture.py snapshot.json > demo.json`. Place the result in a fixture directory and add its synthetic server ID and the file token `demo` to that directory’s `hosts.json`.
 
 ## Capacity and media shown in the overview
 

@@ -1,7 +1,6 @@
 """The only mapping from domain errors to HTTP statuses (target design 4.3).
 
-SHIM(M2b..M8) S5: the v1 routes keep their body ``{"error": code, ...}``. M6 moves the
-handler into ``api/`` and M8 switches the routes to the v2 envelope.
+SHIM(M2b..M8) S5: the v1 routes keep their body ``{"error": code, ...}``. M8 retires this shape.
 """
 from __future__ import annotations
 
@@ -13,6 +12,7 @@ from collector.errors import (
 )
 
 STATUS: Dict[type | str, int] = {
+    "INTERNAL": 500,
     "NOT_FOUND": 404,
     "METHOD_NOT_ALLOWED": 405,
     "BAD_LENGTH": 400, "BAD_BODY": 400, "BAD_JSON": 400, "BAD_REQUEST": 400,
@@ -31,14 +31,16 @@ STATUS: Dict[type | str, int] = {
 }
 
 
-def http_error(exc: BaseException) -> Tuple[int, Dict[str, str], Dict[str, Any]]:
+def _v1_error(exc: BaseException) -> Tuple[int, Dict[str, str], Dict[str, Any]]:
     """Status, extra headers and v1 body for any exception a route raised. Unknown ones are 500."""
     if isinstance(exc, RequestError):
         return STATUS[exc.code], exc.headers, exc.body
     if not isinstance(exc, DomainError) or type(exc) not in STATUS:
-        return 500, {}, {"error": "INTERNAL"}
+        return STATUS["INTERNAL"], {}, {"error": "INTERNAL"}
     headers = {}
     retry_after = getattr(exc, "retry_after", None)
+    if isinstance(exc, GlobalConcurrency):
+        retry_after = 5
     if retry_after is not None:
         headers["Retry-After"] = str(retry_after)
     return STATUS[type(exc)], headers, {"error": exc.code, **exc.detail}
@@ -50,3 +52,14 @@ class RequestError(Exception):
         self.code = code
         self.headers = headers or {}
         self.body = body or {"error": code}
+
+
+def http_error(exc, request_id, *, v1):
+    status, headers, body = _v1_error(exc)
+    if v1:
+        return status, headers, body
+    code = exc.code if isinstance(exc, (RequestError, DomainError)) else "INTERNAL"
+    error = {"code": code, "message": code.replace("_", " ").capitalize(), "request_id": request_id}
+    if "Retry-After" in headers:
+        error["retry_after_sec"] = int(headers["Retry-After"])
+    return status, headers, {"error": error}

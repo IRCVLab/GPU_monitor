@@ -85,8 +85,8 @@ def summary(runtime, view, now):
 
 
 def session(handler):
-    status, body, cookie = handler._session()
-    return json_response(body, status, {"Set-Cookie": cookie} if cookie else {})
+    body, cookie = handler._session()
+    return json_response(body, headers={"Set-Cookie": cookie} if cookie else {})
 
 
 def servers(handler):
@@ -139,9 +139,7 @@ def rescan(handler, server_id):
         raise RequestError("BAD_JSON") from None
     if body != {}:
         raise RequestError("BAD_BODY")
-    status, body, actor = handler._require_post_auth()
-    if status != 200:
-        return json_response(body, status)
+    actor = handler._require_post_auth()
     runtime = handler.server.runtime
     if runtime.fleet is None:
         raise RescanDisabled()
@@ -187,10 +185,9 @@ def dispatch(handler, target):
             continue
         if handler.command != method:
             raise RequestError("METHOD_NOT_ALLOWED", headers={"Allow": method})
+        handler.v1_route = True
         if auth == "read":
-            denied = handler._require_read_auth()
-            if denied:
-                return json_response(denied[1], denied[0])
+            handler._require_read_auth()
             if handler.server.runtime.fleet is None:
                 raise RequestError("UNCONFIGURED", body={"error": "api not configured"})
         return action(handler, *match.groups())

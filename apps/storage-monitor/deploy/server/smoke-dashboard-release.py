@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 from threading import Thread
+import selectors
 from urllib.parse import quote
 from unittest.mock import patch
 
@@ -30,6 +31,27 @@ def serve(runtime):
         finally:
             server.shutdown()
             thread.join()
+
+
+@contextmanager
+def packaged_dashboard(release):
+    with subprocess.Popen([sys.executable, release / "viewer/serve.py", "0"], cwd=release,
+                          stdout=subprocess.PIPE, text=True) as proc:
+        try:
+            with selectors.DefaultSelector() as ready:
+                ready.register(proc.stdout, selectors.EVENT_READ)
+                if not ready.select(10):
+                    raise RuntimeError("packaged dashboard failed to start within 10 seconds")
+                line = proc.stdout.readline()
+            if not line.startswith("storage-viz serving "):
+                raise RuntimeError(f"packaged dashboard did not start: {line}")
+            yield int(line.rsplit(":", 1)[1])
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def fetch(port: int, path: str) -> bytes:
@@ -62,8 +84,7 @@ def smoke(root: Path, release: Path) -> None:
     }
     sys.dont_write_bytecode = True
     with patch.dict(os.environ, environment, clear=True):
-        dashboard = runpy.run_path(str(release / "viewer/serve.py"))
-        with serve(dashboard) as dashboard_port:
+        with packaged_dashboard(release) as dashboard_port:
             os.environ["STORAGE_VIZ_PROXY_UPSTREAM_PORT"] = str(dashboard_port)
             proxy = runpy.run_path(str(release / "deploy/direct_proxy.py"))
             with serve(proxy) as proxy_port:

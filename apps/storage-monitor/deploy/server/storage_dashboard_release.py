@@ -24,6 +24,12 @@ VIEWER_PAGES = ("viewer/index.html",)
 PACKAGED_DOCUMENTATION = frozenset({"docs/schema-v1.md"})
 REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | frozenset(
     {
+        "api/__init__.py",
+        "api/errors.py",
+        "api/auth.py",
+        "api/fixtures.py",
+        "api/routes.py",
+        "api/server.py",
         "viewer/serve.py",
         "viewer/api.js",
         "viewer/columns.js",
@@ -63,7 +69,6 @@ REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | froz
 )
 
 BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {
-    "api/__init__.py", "api/errors.py",
     "collector/contract.py", "collector/errors.py", "collector/health.py", "collector/ids.py", "collector/judge.py",
     "collector/live_capacity.py", "collector/update.py", "storage_fstypes.py",
 }

@@ -50,7 +50,8 @@ STORAGE_DASHBOARD_RULE = PathRule(
     prefixes=(
         "apps/storage-monitor/collector/",
         "apps/storage-monitor/config/",
-        "apps/storage-monitor/data/",
+        "apps/storage-monitor/api/",
+        "apps/storage-monitor/tests/fixtures/",
         "apps/storage-monitor/deploy/server/",
         "apps/storage-monitor/viewer/",
         "deploy/storage-dashboard/",
@@ -58,6 +59,9 @@ STORAGE_DASHBOARD_RULE = PathRule(
     exact=(
         "apps/storage-monitor/.gitignore",
         "apps/storage-monitor/Makefile",
+        "apps/storage-monitor/tests/test_fixtures.py",
+        "apps/storage-monitor/tools/gen_sample.py",
+        "apps/storage-monitor/tools/scrub_fixture.py",
         "apps/storage-monitor/deploy/build-dashboard-release.py",
         "apps/storage-monitor/deploy/direct_proxy.py",
         "apps/storage-monitor/deploy/test_dashboard_release.py",

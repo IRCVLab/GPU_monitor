@@ -433,3 +433,24 @@ class DataFixtureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_scrub_fixture_preserves_tree_and_owner_links():
+    from tools.scrub_fixture import scrub
+
+    source = json.loads((DATA_DIR / "hinton.json").read_bytes())
+    fixture = scrub(source)
+    assert scrub(source) == fixture
+    assert fixture["scan_generation"] == f'{fixture["server_id"]}-{fixture["scan_started_unix"]}-v1'
+    for old, new in zip(source["mounts"], fixture["mounts"]):
+        for a, b in zip(walk_tree(old["tree"]), walk_tree(new["tree"]), strict=True):
+            assert a["bytes"] == b["bytes"]
+            assert a["name"] != b["name"]
+            assert a["uid"] != b["uid"]
+        assert new["tree"]["name"] == new["scan_root"]
+        assert old.get("capacity_id") == new.get("capacity_id")
+    owners = {row["uid"]: row["name"] for row in fixture["users"]}
+    for row in fixture["top_files"] + fixture["stale"]:
+        assert row["owner"] == owners[row["uid"]]
+    for user in source["users"]:
+        assert json.dumps(user["name"]) not in json.dumps(fixture)

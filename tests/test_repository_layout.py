@@ -4,11 +4,11 @@ from pathlib import Path
 
 
 ALLOWED_STORAGE_SAMPLE_FIXTURES = {
-    "apps/storage-monitor/data/atlas.sample.json",
-    "apps/storage-monitor/data/hinton.sample.json",
-    "apps/storage-monitor/data/hosts.json",
-    "apps/storage-monitor/data/orion.sample.json",
-    "apps/storage-monitor/data/zeus.sample.json",
+    "apps/storage-monitor/tests/fixtures/fleet/atlas.json",
+    "apps/storage-monitor/tests/fixtures/fleet/hinton.json",
+    "apps/storage-monitor/tests/fixtures/fleet/hosts.json",
+    "apps/storage-monitor/tests/fixtures/fleet/orion.json",
+    "apps/storage-monitor/tests/fixtures/fleet/zeus.json",
 }
 
 DISALLOWED_DIR_NAMES = {
@@ -272,7 +272,7 @@ class RepositoryLayoutTest(unittest.TestCase):
                 'PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \\',
                 "find viewer -name '*.js' -print0 | xargs -0 -n1 node --check; \\",
                 'node --test viewer/test/*.test.js; \\',
-                'node viewer/browser/stale-select-hit.test.js; \\',
+                'node viewer/browser/stale-select-hit.test.js tests/fixtures/fleet; \\',
                 'python3 tools/check_bug_coverage.py; \\',
                 'bash deploy/test_deploy_scripts.sh; \\',
                 "test ! -e scanner/hstscan || { printf '%s\\n' 'FAIL: deploy tests left scanner/hstscan behind'; exit 1; }; \\",
@@ -327,8 +327,7 @@ class RepositoryLayoutTest(unittest.TestCase):
     def test_storage_readme_commands_match_their_stated_working_directory(self):
         content = Path("apps/storage-monitor/README.md").read_text()
         self.assertIn("Run the local sample dashboard from `apps/storage-monitor`:", content)
-        self.assertIn('STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data"', content)
-        self.assertIn("python3 viewer/serve.py", content)
+        self.assertIn("python3 -m api.server --fixtures tests/fixtures/fleet", content)
         self.assertNotIn("Run the local sample dashboard from the repository root:", content)
 
     def test_ci_workflow_contract_defines_required_path_aware_validation(self):

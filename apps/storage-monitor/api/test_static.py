@@ -10,7 +10,9 @@ from api.server import Runtime, Server
 def test_static_matches_release():
     manifest = runpy.run_path(str(routes.VIEWER_DIR.parent / "deploy/server/storage_dashboard_release.py"))
     shipped = {name for name in manifest["BUILD_RELEASE_FILES"] if name.startswith("viewer/")}
-    assert {"viewer/" + p for p in routes.ASSETS} == shipped - {"viewer/serve.py"}
+    assets = shipped - {"viewer/serve.py"}
+    expected = {"/" + name.removeprefix("viewer/"): routes.VIEWER_DIR.parent / name for name in assets}
+    assert routes.STATIC == {**expected, "/": expected["/index.html"]}
 
 
 def test_c7_traversal_variants_404(monkeypatch):

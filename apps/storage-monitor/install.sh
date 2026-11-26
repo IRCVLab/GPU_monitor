@@ -167,11 +167,6 @@ INV_DEST="$(prefix_path "$INVENTORY_FILE")"
 reject_symbolic_links "$APP_DEST"
 if [[ "$SOURCE_ROOT" != "$APP_DEST" ]]; then
   reject_symbolic_links "$APP_DEST/install.sh"
-  reject_symbolic_links "$APP_DEST/data"
-  for sample in "$SOURCE_ROOT"/data/hosts.json "$SOURCE_ROOT"/data/*.sample.json; do
-    [[ -e "$sample" ]] || continue
-    reject_symbolic_links "$APP_DEST/data/$(basename "$sample")"
-  done
 fi
 
 printf '[*] source      : %s\n' "$SOURCE_ROOT"
@@ -186,16 +181,11 @@ mkdir -p "$APP_DEST" "$CONFIG_DEST" "$KEY_DEST" "$(dirname "$KNOWN_HOSTS_DEST")"
 chmod 0750 "$KEY_DEST"
 
 if [[ "$SOURCE_ROOT" != "$APP_DEST" ]]; then
-  for item in collector config docs viewer storage_fstypes.py README.md; do
+  for item in api collector config docs viewer storage_fstypes.py README.md; do
     if [[ -e "$SOURCE_ROOT/$item" ]]; then
       rm -rf "$APP_DEST/$item"
       cp -R "$SOURCE_ROOT/$item" "$APP_DEST/$item"
     fi
-  done
-  mkdir -p "$APP_DEST/data"
-  for sample in "$SOURCE_ROOT"/data/hosts.json "$SOURCE_ROOT"/data/*.sample.json; do
-    [[ -e "$sample" ]] || continue
-    install_file "$sample" "$APP_DEST/data/$(basename "$sample")" 0644
   done
   install_file "$SOURCE_ROOT/install.sh" "$APP_DEST/install.sh" 0755
 fi
@@ -220,7 +210,7 @@ ENVEOF
 fi
 
 if command -v python3 >/dev/null 2>&1; then
-  python3 -m py_compile "$APP_DEST/viewer/serve.py" "$APP_DEST/collector/inventory.py" "$APP_DEST/collector/service.py" "$APP_DEST/collector/transport.py"
+  python3 -m py_compile "$APP_DEST/viewer/serve.py" "$APP_DEST/collector/inventory.py" "$APP_DEST/api/server.py" "$APP_DEST/collector/transport.py"
 fi
 if command -v systemd-analyze >/dev/null 2>&1; then
   systemd-analyze verify "$UNIT_DEST"

@@ -8,7 +8,7 @@ from pathlib import Path
 def scrub(snapshot):
     """Preserve measurements and relationships, replacing identifying strings."""
     def token(kind, value):
-        digest = hashlib.sha256(str(value).encode()).hexdigest()[:16]
+        digest = hashlib.sha256(str(value).encode("utf-8", "surrogatepass")).hexdigest()[:16]
         return f"{kind}-{digest}"
 
     def path(value):
@@ -16,6 +16,8 @@ def scrub(snapshot):
 
     # Display paths are sufficient for a synthetic fixture. Never retain a
     # second copy of a source path in its base64 representation or diagnostics.
+    uids = {}
+
     def visit(value, key=""):
         if isinstance(value, list):
             return [visit(row, key) for row in value]
@@ -34,7 +36,9 @@ def scrub(snapshot):
         if value is None:
             return None
         if key == "uid":
-            return int(token("uid", value)[4:14], 16) % 2147483647
+            if value not in uids:
+                uids[value] = 100000 + len(uids)
+            return uids[value]
         if isinstance(value, str):
             if key in {"name", "raw_name", "path", "scan_root", "mount_root", "mountpoint", "mount_source"}:
                 return path(value)
@@ -43,7 +47,7 @@ def scrub(snapshot):
             if key in {"server_id", "hostname"}:
                 return token("server", value)
             if key in {"status", "kind", "storage_media", "storage_media_confidence", "fstype", "severity",
-                       "error_code", "reason", "major_minor", "scanner_version", "config_digest"}:
+                       "error_code", "reason", "major_minor", "capacity_id", "scanner_version", "config_digest"}:
                 # Preserve only bounded schema tokens; scrub free-form diagnostic text.
                 if key in {"error_code", "reason"} and value not in {"EACCES", "EIO", "ENOENT", "EPERM"}:
                     return "OTHER"
@@ -53,7 +57,9 @@ def scrub(snapshot):
 
     if snapshot.get("schema_version") != 1:
         raise ValueError("expected a v1 snapshot")
-    return visit(snapshot)
+    fixture = visit(snapshot)
+    fixture["scan_generation"] = f'{fixture["server_id"]}-{fixture["scan_started_unix"]}-v1'
+    return fixture
 
 
 if __name__ == "__main__":
