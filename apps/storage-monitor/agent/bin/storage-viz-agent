@@ -1,0 +1,11 @@
+#!/usr/bin/python3 -I
+"""Entry point of an agent release; the bundle installs it as bin/storage-viz-agent."""
+import os
+import sys
+
+RELEASE_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, RELEASE_ROOT)
+
+from agent.release_cli import main  # noqa: E402
+
+sys.exit(main(sys.argv[1:], RELEASE_ROOT))

@@ -68,6 +68,15 @@ REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | froz
     }
 )
 
+# The signed host agent bundle for the same SHA (target-design §4.5). The
+# puller fetches it from CI, verifies it and requires it in every release it
+# activates; `fleet.desired_agent()` reads it from the active release.
+AGENT_BUNDLE_FILES = frozenset({
+    "agent/storage-viz-agent.tar.gz",
+    "agent/storage-viz-agent.tar.gz.sig",
+    "agent/storage-viz-agent.json",
+})
+
 BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {
     "collector/contract.py", "collector/errors.py", "collector/health.py", "collector/ids.py", "collector/judge.py",
     "collector/live_capacity.py", "collector/update.py", "storage_fstypes.py",

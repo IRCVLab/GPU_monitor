@@ -658,6 +658,12 @@ PATH="$FAKEBIN:$PATH" "$DASHBOARD_DEPLOYER" --dry-run --prefix "$DASH_DRY_PREFIX
 [[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-viz-proxy-launcher.py" ]] || fail "dashboard dry-run did not render proxy launcher"
 [[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-monitor-release-puller.py" ]] || fail "dashboard dry-run did not render puller"
 [[ -f "$DASH_DRY_PREFIX/usr/local/libexec/storage-release-authorizer.py" ]] || fail "dashboard dry-run did not render Storage-owned authorizer copy"
+cmp -s "$DASH_DRY_PREFIX/etc/storage-viz/agent-allowed-signers" "$ROOT/agent/bootstrap/allowed_signers" || fail "dashboard dry-run did not install the pinned agent release signers"
+[[ -f "$DASH_DRY_PREFIX/etc/storage-viz/github-token" && ! -s "$DASH_DRY_PREFIX/etc/storage-viz/github-token" ]] || fail "dashboard dry-run did not create an empty github-token"
+[[ "$(file_mode "$DASH_DRY_PREFIX/etc/storage-viz/github-token")" == "640" ]] || fail "github-token mode is not 0640"
+printf 'operator-token\n' > "$DASH_DRY_PREFIX/etc/storage-viz/github-token"
+PATH="$FAKEBIN:$PATH" "$DASHBOARD_DEPLOYER" --dry-run --prefix "$DASH_DRY_PREFIX" >/dev/null
+[[ "$(cat "$DASH_DRY_PREFIX/etc/storage-viz/github-token")" == operator-token ]] || fail "a rerun overwrote the operator's github-token"
 [[ -f "$DASH_DRY_PREFIX/etc/systemd/system/storage-monitor-release-puller.service" ]] || fail "dashboard dry-run did not render puller service"
 [[ -f "$DASH_DRY_PREFIX/etc/systemd/system/storage-monitor-release-puller.timer" ]] || fail "dashboard dry-run did not render puller timer"
 [[ -f "$DASH_DRY_PREFIX/etc/systemd/system/storage-viz-proxy.service" ]] || fail "dashboard dry-run did not render managed proxy service"
