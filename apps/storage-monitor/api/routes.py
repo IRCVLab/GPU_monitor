@@ -14,6 +14,47 @@ from collector.view import error_row_v1, job_v1, scan_status_v1, snapshot_v1_chu
 VIEWER_DIR = Path(__file__).resolve().parents[1] / "viewer"
 
 
+# The release validator runs independently of the installed app. test_static
+# compares both inventories so a release cannot omit or expose a viewer asset.
+ASSETS = (
+    "index.html",
+    "api.js",
+    "columns.js",
+    "echarts.min.js",
+    "effects.js",
+    "format.js",
+    "main.js",
+    "removal.js",
+    "router.js",
+    "state.js",
+    "store.js",
+    "styles.css",
+    "users-chart.js",
+    "views/files.js",
+    "views/header.js",
+    "views/notices.js",
+    "views/overview.js",
+    "views/scan-status.js",
+    "views/selection-bar.js",
+    "views/server.js",
+    "views/theme.js",
+    "views/treemap.js",
+    "views/users.js",
+)
+STATIC = {"/" + name: VIEWER_DIR / name for name in ASSETS}
+STATIC["/"] = STATIC["/index.html"]
+CONTENT_TYPES = {".js": "text/javascript", ".html": "text/html", ".css": "text/css"}
+
+
+def static(handler, path):
+    asset = STATIC.get(path)
+    if asset is None:
+        raise RequestError("NOT_FOUND")
+    if handler.command not in ("GET", "HEAD"):
+        raise RequestError("METHOD_NOT_ALLOWED", headers={"Allow": "GET, HEAD"})
+    return Response([asset.read_bytes()], content_type=CONTENT_TYPES[asset.suffix])
+
+
 @dataclass
 class Response:
     chunks: list[bytes]
