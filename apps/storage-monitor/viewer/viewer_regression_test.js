@@ -2725,6 +2725,20 @@ function testCleanupPanelRendersRemovalCommandWithoutReveal() {
   assert.match(danger.innerHTML, /sudo rm -ri --one-file-system -- &#39;\/data\/project&#39;/, 'directory removal command must render immediately');
 }
 
+function testCleanupCopyFeedbackRestoresLabelAfterRepeatedClicks() {
+  const viewer = loadViewer();
+  const timers = [];
+  viewer.setTimeout = (fn) => { timers.push(fn); return timers.length; };
+  const button = viewer.document.getElementById('cleanupCopyAll');
+  button.textContent = 'Copy';
+  viewer.setButtonFeedback(button, 'Copied', 'done');
+  viewer.setButtonFeedback(button, 'Copied', 'done');
+  timers.forEach(fn => fn());
+  assert.strictEqual(button.textContent, 'Copy', 'a second click during the feedback window must not make "Copied" the permanent label');
+  const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  assert(/\.cleanup-panel:not\(\.expanded\)\s+\.cleanup-head\s*>\s*:first-child\s*\{[^}]*min-width:\s*0/.test(css), 'the collapsed summary must be able to shrink so Show and Clear stay reachable on narrow screens');
+}
+
 function testCleanupPanelStartsCollapsedWithFullCopy() {
   const viewer = loadViewer();
   viewer.currentServerId = 'alpha-1';
@@ -3226,6 +3240,7 @@ async function main() {
   testCleanupPanelResponsiveCssAndDangerListSemantics();
   testCleanupPanelRendersRemovalCommandWithoutReveal();
   testCleanupPanelStartsCollapsedWithFullCopy();
+  testCleanupCopyFeedbackRestoresLabelAfterRepeatedClicks();
   console.log('viewer regression tests passed');
 }
 

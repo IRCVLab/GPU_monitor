@@ -467,7 +467,8 @@ async function writeClipboardText(text) {
 
 function setButtonFeedback(btn, label, className) {
   if (!btn) return;
-  const old = btn.textContent;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  const old = btn.dataset.label;
   btn.textContent = label;
   if (className) btn.classList.add(className);
   setTimeout(() => {
