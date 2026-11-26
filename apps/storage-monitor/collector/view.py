@@ -124,7 +124,8 @@ def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[st
                 "error_count": counts["errors"], "scan_finished_unix": capture.scan_finished_unix,
             })
             mounts.append({
-                "path": path, "mount_id": mount_id, "scan_root": path, "fstype": volume.fstype, **_capacity(volume),
+                "path": path, "mount_id": mount_id, "scan_root": path, "fstype": volume.fstype,
+                **_capacity(volume, manifest.written_unix),
                 "scanned_bytes": counts["bytes"], "scanned_files": counts["files"], "scanned_dirs": counts["dirs"],
                 "errors": counts["errors"], "tree": {**_node(root.tree), "name": path},
                 "storage_media": volume.media, "storage_media_confidence": volume.media_confidence,
@@ -139,7 +140,9 @@ def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[st
             stale.extend({**row, "kind": _kind(row["kind"]), "owner": names.get(row["uid"], str(row["uid"]))} for row in root.stale)
     return {
         "schema_version": 1, "hostname": manifest.hostname, "server_id": server_id, "scanner_version": CAPTURE_SCHEMA,
-        "scan_started_unix": started, "scan_finished_unix": finished, "scan_duration_sec": finished - started,
+        "scan_started_unix": started, "scan_finished_unix": finished,
+        # The last run's own duration; the span of the captures can cover unrelated runs.
+        "scan_duration_sec": (manifest.last_run.finished_unix - manifest.last_run.started_unix) if manifest.last_run else None,
         # Changes with every manifest, so the viewer refetches when capacity or a capture changes.
         "scan_generation": f"{server_id}-{manifest.seq}-v2", "run_as_root": False,
         "selected_roots": selected_roots, "mounts": mounts,
@@ -165,10 +168,15 @@ def _v1_root(volume: Volume, state: str, problems: Mapping[str, str], mount_id: 
     }
 
 
-def _capacity(volume: Volume) -> dict:
+def _capacity(volume: Volume, written_unix: int) -> dict:
+    """The manifest's capacity sample, unless it failed or is older than v1 accepts a live sample.
+    Both times are host times (I20). A sample that is not current keeps its time and is not judged."""
     capacity = volume.capacity
     if capacity is None:
         return {"df_total": None, "df_used": None, "df_avail": None, "df_use_pct": None, "capacity_observed_unix": None}
+    if capacity.status != "ok" or not judge.capacity_sample_current(capacity.observed_unix, written_unix):
+        return {"df_total": None, "df_used": None, "df_avail": None, "df_use_pct": None,
+                "capacity_observed_unix": capacity.observed_unix}
     usable = capacity.used + capacity.avail
     # df's Use%: used over what an unprivileged writer can reach, rounded up, as v1 agents reported it.
     use_pct = -(-capacity.used * 100 // usable) if usable else None
@@ -297,6 +305,15 @@ def scan_status_v1(view: ServerView, now_monotonic: float) -> dict:
     return result
 
 
+def freshness(view: ServerView, overview: Optional[Mapping[str, Any]], now_monotonic: float) -> str:
+    """The worst volume (§3.2): a v2 volume with no accepted capture is unknown."""
+    judged = judge.freshness(overview, host_now(view, now_monotonic), judge.FRESHNESS_SLACK_SECONDS)
+    manifest = view.data.manifest
+    if isinstance(manifest, HostManifest) and any(volume.volume_id not in view.data.accepted for volume in manifest.volumes):
+        return judge.worst_freshness(judged, "unknown")
+    return judged
+
+
 def summary_v1(view: ServerView, now_monotonic: float) -> dict:
     overview = view.snapshot.overview if view.snapshot is not None else None
     row = {
@@ -305,7 +322,7 @@ def summary_v1(view: ServerView, now_monotonic: float) -> dict:
         "order": view.server.order,
         "status": "error" if view.error else "ok",
         "snapshot_availability": "available" if view.snapshot is not None else "absent",
-        "freshness": judge.freshness(overview, host_now(view, now_monotonic), judge.FRESHNESS_SLACK_SECONDS),
+        "freshness": freshness(view, overview, now_monotonic),
         "latest_pull_status": latest_pull_status(view),
         "latest_scan_result": latest_scan_result(view),
         "configuration_sync": configuration_sync(view),

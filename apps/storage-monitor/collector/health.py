@@ -250,6 +250,13 @@ def _publication_observed(data: Data, event: PublicationObserved) -> Tuple[Data,
     # A volume the publication no longer names is dropped; one it names without a capture keeps what is held.
     accepted = {volume_id: sha for volume_id, sha in data.accepted.items() if volume_id in named}
     rejected = {sha: entry for sha, entry in data.rejected.items() if sha in named.values()}
+    # A capture names its own volume, so one sha cannot serve two volumes: a volume that names
+    # another volume's held capture is refused once, without a transfer.
+    held_by = {sha: volume_id for volume_id, sha in accepted.items()}
+    rejected = _capped({**rejected, **{
+        sha: {"volume_id": volume_id, "reason": "VOLUME_MISMATCH", "at": event.at}
+        for volume_id, sha in named.items()
+        if sha is not None and sha not in rejected and held_by.get(sha, volume_id) != volume_id}})
     gone = {sha: entry for sha, entry in data.gone.items() if sha in named.values()}
     fetches = tuple(
         Fetch(volume_id, sha, event.publication) for volume_id, sha in sorted(named.items())
@@ -272,17 +279,21 @@ def _capture_accepted(data: Data, event: CaptureAccepted) -> Tuple[Data, Tuple[F
 
 
 def _reject(data: Data, volume_id: str, sha: str, generation: Optional[str], reason: str, at: int) -> Data:
-    if sha in data.accepted.values():
-        # Bytes the store holds were valid once; a sha is never both accepted and rejected.
+    if data.accepted.get(volume_id) == sha:
+        # Bytes the volume holds were valid once: never both accepted and rejected for one volume.
         return replace(data, fetching=data.fetching - {sha}, retried=data.retried - {sha})
     entry = {"volume_id": volume_id, "reason": reason, "at": at}
     if generation is not None:
         entry["generation"] = generation
-    rejected = {**data.rejected, sha: entry}
+    return replace(data, rejected=_capped({**data.rejected, sha: entry}), fetching=data.fetching - {sha},
+                   retried=data.retried - {sha})
+
+
+def _capped(rejected: Dict[str, Mapping]) -> Dict[str, Mapping]:
     if len(rejected) > MAX_REJECTED:
         oldest = sorted(rejected, key=lambda key: rejected[key]["at"])[: len(rejected) - MAX_REJECTED]
         rejected = {key: value for key, value in rejected.items() if key not in oldest}
-    return replace(data, rejected=rejected, fetching=data.fetching - {sha}, retried=data.retried - {sha})
+    return rejected
 
 
 def _capture_rejected(data: Data, event: CaptureRejected) -> Tuple[Data, Tuple[Fetch, ...]]:

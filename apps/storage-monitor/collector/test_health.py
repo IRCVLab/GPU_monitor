@@ -176,7 +176,8 @@ def test_data_random_events():
         return TransferFailed(volume, sha)
 
     def check(before, event, after, effects):
-        assert not set(after.accepted.values()) & set(after.rejected), "a sha is both accepted and rejected"
+        assert not any(after.rejected.get(sha, {}).get("volume_id") == volume_id for volume_id, sha in after.accepted.items()), \
+            "a volume's held sha is also rejected for that volume"
         assert len(after.rejected) <= health.MAX_REJECTED
         for fetch in effects:
             assert fetch.sha not in before.rejected, "fetched a rejected capture"

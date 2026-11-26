@@ -164,7 +164,7 @@ def test_capacity_from_a_new_manifest_updates_the_mount_without_a_download(tmp_p
     collector, host = v2_collector(tmp_path)
     calls = len(collector.host.capture_calls)
     binding, root, data, fields = host.volumes[VA]
-    sampled = collector.clock.now
+    sampled = 1764103405 - 30  # host time, 30 s before manifest_doc's written_unix
     host.volumes[VA] = (binding, root, data, {**fields, "capacity": {
         "total": 1000, "used": 950, "avail": 50, "observed_unix": sampled, "status": "ok"}})
     host.publish()
@@ -568,3 +568,58 @@ def test_a_capture_that_stays_gone_backs_off_and_is_shown_but_never_rejected(tmp
     collector.tick(600)
     assert record(collector).data.accepted[VA] == sha(data)
     assert {root["mount_id"]: root for root in snapshot(collector)["selected_roots"]}[VA]["data_error"] is None
+
+
+# ------------------------------------------------------------------ M5a review nits
+
+
+def test_scan_duration_is_the_last_runs_own_duration(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    host.publish(last_run={"run_id": "1" * 32, "trigger": "timer", "plan": "full", "started_unix": 1000,
+                           "finished_unix": 1600, "outcome": "complete", "agent_sha": None})
+    collector.tick()
+    assert snapshot(collector)["scan_duration_sec"] == 600
+
+
+def test_a_volume_without_an_accepted_capture_makes_the_server_freshness_unknown(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    assert collector.summary()["freshness"] == "fresh"
+    host.volume("v-000000000000000c", "b-000000000000000c", "/c", None)
+    host.publish()
+    collector.tick()
+    assert collector.summary()["freshness"] == "unknown", "a volume with no data was left out of freshness"
+
+
+def test_a_failed_or_old_capacity_sample_is_not_judged_as_current(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    binding, root, data, fields = host.volumes[VA]
+    written = 1764103405  # manifest_doc's written_unix, host clock
+    for capacity in ({"total": 1000, "used": 990, "avail": 10, "observed_unix": written, "status": "failed"},
+                     {"total": 1000, "used": 990, "avail": 10, "observed_unix": written - 901, "status": "ok"}):
+        host.volumes[VA] = (binding, root, data, {**fields, "capacity": capacity})
+        host.publish()
+        collector.tick()
+        row = mounts(collector)[VA]
+        assert (row["df_used"], row["used_pct"], row["severity"]) == (None, None, "unknown"), capacity
+        assert row["capacity_observed_unix"] == capacity["observed_unix"]
+    host.volumes[VA] = (binding, root, data, {**fields, "capacity": {
+        "total": 1000, "used": 990, "avail": 10, "observed_unix": written - 900, "status": "ok"}})
+    host.publish()
+    collector.tick()
+    assert mounts(collector)[VA]["severity"] == "critical"
+
+
+def test_a_volume_naming_another_volumes_capture_is_rejected_once_without_a_fetch(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    shared = host.volumes[VB][2]
+    binding, root, _, fields = host.volumes[VA]
+    host.volumes[VA] = (binding, root, shared, fields)
+    host.publish()
+    calls = len(collector.host.capture_calls)
+    for _ in range(5):
+        collector.tick()
+    held = record(collector).data
+    assert len(collector.host.capture_calls) == calls, "fetched a capture another volume holds"
+    assert held.rejected[sha(shared)] == {"volume_id": VA, "reason": "VOLUME_MISMATCH", "at": held.rejected[sha(shared)]["at"]}
+    assert held.accepted[VB] == sha(shared) and mounts(collector)[VB]["data_state"] == "current"
+    assert mounts(collector)[VA]["data_state"] == "stale_rejected"

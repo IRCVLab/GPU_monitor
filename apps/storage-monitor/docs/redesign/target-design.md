@@ -386,7 +386,7 @@ stateDiagram-v2
 | `fetching` | the manifest names a sha not yet in `captures/` and not rejected |
 | `stale_rejected` | the manifest names a rejected sha; `accepted[v]` is served |
 
-Events: `ManifestAccepted(m)`, `CaptureAccepted(v, sha)`, `CaptureRejected(v, sha, reason)`. A checksum mismatch gets one clean retry before it becomes a rejection, so a truncated transfer is not quarantined. Never: a sha in both `accepted` and `rejected`; a fetch of a rejected sha (I8); a manifest with lower `seq` replacing a higher one. The record is kept and `link` goes to `protocol_error` with `MANIFEST_SEQ_REGRESSED`.
+Events: `ManifestAccepted(m)`, `CaptureAccepted(v, sha)`, `CaptureRejected(v, sha, reason)`. A checksum mismatch gets one clean retry before it becomes a rejection, so a truncated transfer is not quarantined. Never: a sha accepted for a volume and rejected for that same volume (a volume naming another volume's held sha is rejected as `VOLUME_MISMATCH` without a fetch, since a capture names its own volume); a fetch of a rejected sha (I8); a manifest with lower `seq` replacing a higher one. The record is kept and `link` goes to `protocol_error` with `MANIFEST_SEQ_REGRESSED`.
 
 **Freshness** (derived per volume by `judge.freshness(volume, host_now)`): `fresh` when `host_now - capture.scan_finished_unix <= cadence_sec + GRACE_SEC`, with `GRACE_SEC = 2 × observe_idle_interval + 360`. `stale` otherwise. `unknown` without a capture or without `host_now`. The server is the worst of its volumes. A fresh capacity sample never renews a tree.
 

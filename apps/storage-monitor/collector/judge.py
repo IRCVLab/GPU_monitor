@@ -49,6 +49,13 @@ def freshness(payload: Optional[Mapping[str, Any]], now: Optional[int], polling_
     return "stale" if now > deadline else "fresh"
 
 
+FRESHNESS_ORDER = ("fresh", "unknown", "stale")
+
+
+def worst_freshness(*states: str) -> str:
+    return max(states, key=FRESHNESS_ORDER.index)
+
+
 def _valid_bytes(value: Any) -> bool:
     return type(value) is int and 0 <= value <= MAX_SAFE_INTEGER
 
