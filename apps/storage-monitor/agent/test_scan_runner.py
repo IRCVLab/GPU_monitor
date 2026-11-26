@@ -218,7 +218,7 @@ class ScanRunnerTests(unittest.TestCase):
                 return original_select(entries, *args, **kwargs)
             def fake(argv, **kwargs):
                 tail = argv[argv.index("--out") + 2:]
-                roots = tail[1::3]
+                roots = tail[1::4]
                 scanner_roots.append(tuple(roots))
                 pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload_many(roots)), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
@@ -251,7 +251,7 @@ class ScanRunnerTests(unittest.TestCase):
                 return original_select(entries, *args, **kwargs)
             def fake(argv, **kwargs):
                 tail = argv[argv.index("--out") + 2:]
-                roots = tail[1::3]
+                roots = tail[1::4]
                 scanner_roots.append(tuple(roots))
                 pathlib.Path(argv[argv.index("--out") + 1]).write_text(json.dumps(raw_payload_many(roots)), encoding="utf-8")
                 return scan_runner.CompletedScan(0, "", "")
@@ -290,7 +290,7 @@ class ScanRunnerTests(unittest.TestCase):
             self.assertEqual(argv[:2], ["/bin/hstscan", "--threads"])
             self.assertIn("--out", argv)
             tail = argv[argv.index("--out") + 2:]
-            self.assertEqual(tail, ["--target", "/home", "8:1"])
+            self.assertEqual(tail, ["--target", "/home", "8:1", "home"])
             self.assertNotIn("/", argv[:argv.index("--out")])
 
 
@@ -326,8 +326,8 @@ class ScanRunnerTests(unittest.TestCase):
             "--top", "7",
             "--stale-days", "180",
             "--out", "/tmp/out.json",
-            "--target", "/home", "8:1",
-            "--target", "/data", "8:2",
+            "--target", "/home", "8:1", "home",
+            "--target", "/data", "8:2", "data",
         ])
         self.assertNotIn("/home", argv[:argv.index("--out") + 2])
 
@@ -1433,8 +1433,8 @@ class ScanRunnerTests(unittest.TestCase):
 
             def fake(argv, **kwargs):
                 tail = argv[argv.index("--out") + 2:]
-                self.assertEqual(tuple(tail), ("--target", "/home", "8:1", "--target", "/data", "8:1"))
-                roots = list(tail[1::3])
+                self.assertEqual(tuple(tail), ("--target", "/home", "8:1", "home", "--target", "/data", "8:1", "data"))
+                roots = list(tail[1::4])
                 pathlib.Path(argv[argv.index("--out") + 1]).write_text(
                     json.dumps(raw_payload_many(roots, errors_by_path={"/data": 0})), encoding="utf-8"
                 )
@@ -1583,7 +1583,7 @@ class ScheduleTests(unittest.TestCase):
                 expected_status = "partial" if slow_errors else "complete"
 
                 def fake(argv, **kwargs):
-                    paths = argv[argv.index("--out") + 3::3]
+                    paths = argv[argv.index("--out") + 3::4]
                     calls.append(tuple(paths))
                     raw = raw_payload_many(paths, errors_by_path={"/data": slow_errors})
                     raw.update(

@@ -538,8 +538,13 @@ def _scanner_argv(cfg: ScannerConfig, out_path: pathlib.Path, roots: Sequence[mo
         "--out", str(out_path),
     ]
     for root in roots:
-        argv.extend(["--target", root.mountpoint, root.entry.major_minor])
+        argv.extend(["--target", root.mountpoint, root.entry.major_minor, _prune_class(root)])
     return argv
+
+
+def _prune_class(root: mount_policy.SelectedRoot) -> str:
+    """hstscan prunes `home` targets with prune_home_mb and `data` targets with prune_data_mb."""
+    return "home" if root.mountpoint == "/home" else "data"
 
 
 def _validate_raw_payload(raw: Any) -> None:
