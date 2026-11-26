@@ -303,6 +303,67 @@ def test_reducer_failure_keeps_last_good_view_and_other_servers_run(tmp_path, mo
     assert host.fleet.view("beta-2").error is None
 
 
+def test_a_failed_tick_stops_showing_the_error_after_the_next_good_tick(tmp_path):
+    # M2b review: TICK_FAILED stayed on the server until restart.
+    host = Collector(tmp_path, "alpha-1")
+    host.host.observe_errors["alpha-1"] = RuntimeError("one bad reply")
+    host.tick()
+    assert host.summary()["status"] == "error"
+    host.host.observe_errors.clear()
+    host.tick()
+    assert host.summary()["status"] == "ok"
+    assert host.fleet.view("alpha-1").error is None
+
+
+def test_a_failed_tick_backs_off_instead_of_contacting_the_host_again_at_once(tmp_path):
+    # M2b review: a failure before the next contact was scheduled left it in the past, so the actor spun.
+    host = Collector(tmp_path, "alpha-1")
+    host.host.observe_errors["alpha-1"] = RuntimeError("bug")
+    host.clock.now += judge.IDLE_TELEMETRY_INTERVAL_SECONDS + 1
+    before = len(host.host.observe_calls)
+    for _ in range(20):
+        host.actor().step()
+    assert len(host.host.observe_calls) - before == 1
+    gaps = []
+    for _ in range(8):
+        calls = len(host.host.observe_calls)
+        waited = 0
+        while len(host.host.observe_calls) == calls:
+            host.tick(1)
+            waited += 1
+        gaps.append(waited)
+    assert gaps == sorted(gaps) and gaps[0] >= judge.IDLE_TELEMETRY_INTERVAL_SECONDS, f"retries came after {gaps} s"
+    assert gaps[-1] == gaps[-2], "the back-off is not capped"
+    host.host.observe_errors.clear()
+    host.tick(gaps[-1])
+    host.tick(judge.IDLE_TELEMETRY_INTERVAL_SECONDS)
+    calls = len(host.host.observe_calls)
+    host.tick(judge.IDLE_TELEMETRY_INTERVAL_SECONDS)
+    assert len(host.host.observe_calls) == calls + 1, "a good tick did not restore the normal interval"
+
+
+def test_a_failure_while_applying_a_capture_does_not_block_later_fetches(tmp_path, monkeypatch):
+    # M2b review: an exception before commit left data.fetching set, so no capture was fetched again.
+    import collector.actor as actor_module
+
+    host = Collector(tmp_path, "alpha-1")
+    real = actor_module.render_snapshot
+    calls = []
+
+    def flaky(payload):
+        calls.append(1)
+        if len(calls) == 1:
+            raise MemoryError("transient")
+        return real(payload)
+
+    monkeypatch.setattr(actor_module, "render_snapshot", flaky)
+    host.host.publish("alpha-1", started=1719203000)
+    host.tick()
+    assert snapshot_generation(host) == GENERATION
+    host.tick()
+    assert snapshot_generation(host) == "alpha-1-1719203000-v1"
+
+
 def test_commit_failure_keeps_memory_at_the_last_durable_record(tmp_path, monkeypatch):
     host = Collector(tmp_path, "alpha-1")
     host.host.publish("alpha-1", started=1719203000)
