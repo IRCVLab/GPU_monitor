@@ -339,7 +339,7 @@ function commandCardHtml(entry, copyLabel) {
       '<button type="button" class="cleanup-copy-btn" data-copy-command="' + htmlEscape(entry.command) + '"' +
         ' aria-label="' + htmlEscape(copyLabel + " " + entry.label) + '">Copy</button>' +
     '</div>' +
-    '<pre class="cleanup-command-code"><code>' + htmlEscape(entry.command) + '</code></pre>' +
+    '<pre class="cleanup-command-code" tabindex="0" role="region" aria-label="' + htmlEscape(entry.label + " command") + '"><code>' + htmlEscape(entry.command) + '</code></pre>' +
   '</li>';
 }
 
