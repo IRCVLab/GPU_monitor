@@ -91,7 +91,7 @@ def validate_download(status: Mapping[str, Any], downloaded: bytes, desired: Des
     status_digest = _required_digest(status.get("config_digest"), "status config_digest")
     try:
         payload = json.loads(bytes(downloaded).decode("utf-8"))
-    except Exception as exc:
+    except (ValueError, RecursionError) as exc:
         raise ValueError("snapshot payload must be a JSON object") from exc
     _validate_payload(payload, server_id, generation, status_finished, status_value, status_digest)
     config_sync = "in_sync" if status_digest == desired_digest else "drifted"

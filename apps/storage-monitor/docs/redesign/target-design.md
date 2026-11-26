@@ -216,6 +216,7 @@ STATE_DIR/
 - Captures are stored byte for byte, so the file name is the hash. A restart lists `captures/` (C8).
 - `accepted` can lag the manifest: a volume whose new capture was rejected keeps its last accepted sha and shows `data_state: stale_rejected`.
 - `rejected` holds at most 32 entries, evicted when the manifest no longer names the sha (C2).
+- `link.seq` on disk is a reserved ceiling: no `contact_seq` above it has been issued. The actor reserves seqs in blocks and resumes above the ceiling after a restart, so an exchange alone does not rewrite the record; it is written when another field changes or a block runs out (I7).
 - `durations` keeps the last 5 `(finished_unix, seconds)` per plan, taken from `last_run` when its outcome is `complete` or `partial`. The keys and the rule are today's (`collector/service.py:118-126`), so the shipped ETA keeps working. M2 imports `scan-duration-history/<sid>.json` once.
 
 **RolloutState** (`rollout.json`, one per central host):

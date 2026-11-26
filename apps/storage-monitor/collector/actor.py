@@ -32,6 +32,12 @@ _LOG = logging.getLogger(__name__)
 _REJECT_CODES = frozenset({"SNAPSHOT_TOO_LARGE", "BAD_STATUS", "BAD_GENERATION"})
 _MISMATCH_CODES = frozenset({"SIZE_MISMATCH"})
 _MISMATCH_MESSAGES = ("byte_size does not match downloaded bytes", "sha256 does not match downloaded bytes")
+# What malformed capture content raises inside validation. Anything else (MemoryError, OSError) is retried.
+_CONTENT_ERRORS = (ValueError, TypeError, KeyError, IndexError, AttributeError, RecursionError)
+TICK_FAILED = "TICK_FAILED"
+MAX_TICK_BACKOFF_SECONDS = 10 * 60
+SEQ_BLOCK = 1000
+"""Contact sequence numbers reserved per record write. record.json stores the ceiling as link.seq."""
 
 
 class Clock(Protocol):
@@ -51,12 +57,17 @@ def spawn_thread(work: Callable[[], None], name: str) -> None:
 
 
 class Ask:
-    """A reply slot with a bound. Once the asker gives up, the actor drops the request unseen."""
+    """A reply slot with a bound. The asker waits at most its timeout.
 
-    def __init__(self) -> None:
+    A request the actor has not claimed by then is dropped unseen. One it has claimed
+    still completes, and ``settled`` runs once either way, when the outcome is final.
+    """
+
+    def __init__(self, settled: Callable[[], None] = lambda: None) -> None:
         self._lock = threading.Lock()
         self._done = threading.Event()
         self._state = "open"
+        self._settled = settled
         self.value: Any = None
 
     def claim(self) -> bool:
@@ -69,17 +80,19 @@ class Ask:
     def reply(self, value: Any) -> None:
         self.value = value
         self._done.set()
+        self._settled()
 
     def wait(self, timeout: float) -> Any:
+        """The reply, or None when none came within ``timeout``."""
         if self._done.wait(timeout):
             return self.value
         with self._lock:
-            if self._state == "open":
+            cancelled = self._state == "open"
+            if cancelled:
                 self._state = "cancelled"
-                return None
-        # The actor already took the request: its answer follows one record write.
-        self._done.wait()
-        return self.value
+        if cancelled:
+            self._settled()
+        return self.value if self._done.is_set() else None
 
 
 @dataclass(frozen=True)
@@ -130,6 +143,12 @@ def _capture_event(message: Fetched, at: int) -> health.DataEvent:
     return TransferFailed(message.sha)
 
 
+def _durable(record: Record) -> Record:
+    """The record less what changes on every exchange or lives only in memory; a change here needs a write."""
+    return replace(record, link=replace(record.link, seq=0, last_ok_unix=None),
+                   data=replace(record.data, fetching=None, retried=frozenset()))
+
+
 def record_duration(durations: Mapping[str, Any], status: Mapping[str, Any]) -> Mapping[str, Any]:
     """Keep the last completed full and ssd scan durations for the ETA (today's rule)."""
     plan = status.get("scan_plan")
@@ -166,7 +185,10 @@ class ServerActor:
         self._host_clock = None
         self._error: Optional[str] = None
         self._seq = 0
+        self._ceiling = 0
+        """No seq above this was issued: the link.seq record.json holds."""
         self._next_contact = 0.0
+        self._failed_ticks = 0
 
     # ------------------------------------------------------------ driving
 
@@ -209,17 +231,21 @@ class ServerActor:
             self._error = StoreUnavailable.code
         except Exception:
             _LOG.exception("actor tick failed for %s", self.server.id)
-            self._error = "TICK_FAILED"
+            self._error = TICK_FAILED
         self._publish()
 
     # ------------------------------------------------------------ state
 
     def load(self) -> None:
+        """Read the record and its capture. A read error leaves both untouched and is retried on the next tick.
+
+        Load deletes no file: a capture it finds corrupt goes with the next regular commit.
+        """
         self._next_contact = self.clock.monotonic() + judge.IDLE_TELEMETRY_INTERVAL_SECONDS
         stored = self.store.load()
         if stored is None:
             stored, capture = self.store.import_legacy() or (Record(), None)
-            self.store.commit(stored, capture)
+            self.store.commit(stored, capture, prune=False)
         self._snapshot = self._load_snapshot(stored)
         record = stored
         if self._snapshot is None and record.data.accepted is not None:
@@ -227,9 +253,9 @@ class ServerActor:
         if record.job is not None:
             record = self._with_job(record, jobs.reduce(record.job, jobs.Restarted(int(self.clock.time())))[0])
         if record != stored:
-            self.store.commit(record)
+            self.store.commit(record, prune=False)
         self._record = record
-        self._seq = record.link.seq
+        self._seq = self._ceiling = record.link.seq
         self._error = None
         self.loaded = True
         self._next_contact = 0.0
@@ -238,21 +264,30 @@ class ServerActor:
         sha = record.data.accepted
         if sha is None:
             return None
+        stored = self.store.read_capture(sha)
         try:
-            return render_snapshot(json.loads(self.store.read_capture(sha)))
-        except (StoreUnavailable, ValueError):
-            _LOG.warning("stored capture for %s is unreadable; it will be fetched again", self.server.id)
+            return render_snapshot(json.loads(stored))
+        except ValueError:
+            _LOG.warning("stored capture for %s is corrupt; it will be fetched again", self.server.id)
             return None
 
     def _commit(self, record: Record, capture: Optional[tuple] = None) -> bool:
-        if record == self._record and capture is None:
+        """Make ``record`` current, writing it only when its durable part changed or a capture comes with it."""
+        if capture is None and _durable(record) == _durable(self._record):
+            self._record = record
             return True
+        return self._write(record, capture)
+
+    def _write(self, record: Record, capture: Optional[tuple] = None) -> bool:
+        # On disk link.seq is the ceiling of issued seqs, so a restart resumes above all of them (I7).
+        ceiling = self._ceiling if self._seq <= self._ceiling else self._seq + SEQ_BLOCK - 1
         try:
-            self.store.commit(record, capture)
+            self.store.commit(replace(record, link=replace(record.link, seq=ceiling)), capture)
         except StoreUnavailable:
             _LOG.exception("commit failed for %s", self.server.id)
             self._error = StoreUnavailable.code
             return False
+        self._ceiling = ceiling
         self._record = record
         if self._error == StoreUnavailable.code:
             self._error = None
@@ -263,6 +298,9 @@ class ServerActor:
 
     def _next_seq(self) -> int:
         self._seq += 1
+        if self._seq > self._ceiling:
+            # Reserve a block before the seq leaves the actor. If the write fails, the next seq tries again.
+            self._write(self._record)
         return self._seq
 
     @staticmethod
@@ -271,11 +309,11 @@ class ServerActor:
             return replace(record, job=None, last_job=job)
         return replace(record, job=job)
 
-    def _job_observed(self, record: Record) -> tuple:
+    def _job_observed(self, record: Record, held: Optional[Snapshot]) -> tuple:
         if self._scan is None:
             return record.job, ()
         rejected = frozenset(entry.get("generation") for entry in record.data.rejected.values())
-        accepted = self._snapshot.overview.get("scan_generation") if self._snapshot is not None else None
+        accepted = held.overview.get("scan_generation") if held is not None else None
         event = jobs.Observed(int(self.clock.time()), self._scan, accepted, rejected)
         return jobs.reduce(record.job, event)
 
@@ -295,12 +333,19 @@ class ServerActor:
         if not self.loaded:
             self.load()
             return
+        # Until the observe schedules the next contact, a failure waits out a back-off that grows to a cap.
+        backoff = judge.IDLE_TELEMETRY_INTERVAL_SECONDS * 2 ** min(self._failed_ticks, 8)
+        self._next_contact = self.clock.monotonic() + min(backoff, MAX_TICK_BACKOFF_SECONDS)
+        self._failed_ticks += 1
         self._observe()
         record = self._record
         if record.job is not None:
             longest = judge.eta(record.durations, "full", None)[1]
             job, _ = jobs.reduce(record.job, jobs.Tick(int(self.clock.time()), jobs.run_deadline_seconds(longest)))
             self._commit(self._with_job(record, job))
+        self._failed_ticks = 0
+        if self._error == TICK_FAILED:
+            self._error = None
 
     def _observe(self) -> None:
         seq = self._next_seq()
@@ -330,7 +375,7 @@ class ServerActor:
                          durations=record_duration(record.durations, observation.status))
         dispatches: tuple = ()
         if record.job is not None:
-            job, dispatches = self._job_observed(record)
+            job, dispatches = self._job_observed(record, self._snapshot)
             record = self._with_job(record, job)
         self._schedule(record.job is not None or observation.status.get("state") == "running")
         if not self._commit(record):
@@ -362,7 +407,7 @@ class ServerActor:
         last = record.last_job.requested_unix if record.last_job is not None else None
         if last is not None and message.at - last < message.cooldown_seconds:
             return Admitted(error="COOLDOWN", retry_after=message.cooldown_seconds - (message.at - last))
-        job = jobs.admit(message.request_id, message.actor, message.at, self._scan)
+        job = jobs.admit(message.request_id, message.actor, message.at)
         if not self._commit(replace(record, job=job)):
             return Admitted(error=StoreUnavailable.code)
         self._publish()
@@ -395,10 +440,14 @@ class ServerActor:
             desired = snapshot.DesiredServer(server_id=server.id, config_digest=server.scanner_digest)
             try:
                 valid = snapshot.validate_download(manifest, data, desired)
-            except Exception as exc:
+            except _CONTENT_ERRORS as exc:
                 mismatch = str(exc) in _MISMATCH_MESSAGES
                 self.post(Fetched(seq, sha, generation, "mismatch" if mismatch else "rejected",
                                   "SHA_MISMATCH" if mismatch else "INVALID_SNAPSHOT"))
+                return
+            except Exception:
+                _LOG.exception("capture validation failed for %s", server.id)
+                self.post(Fetched(seq, sha, generation, "retry", "TRANSFER_FAILED"))
                 return
             self.post(Fetched(seq, sha, generation, "accepted", payload=valid.payload, data=data))
 
@@ -407,19 +456,27 @@ class ServerActor:
     def _fetched(self, message: Fetched) -> None:
         at = int(self.clock.time())
         record = self._record
-        link_event = ExchangeFailed(message.seq, at, message.code) if message.outcome == "transport" else ExchangeOk(message.seq, at)
-        data, _ = health.reduce_data(record.data, _capture_event(message, at))
-        record = replace(record, link=health.reduce_link(record.link, link_event), data=data)
-        accepted = message.outcome == "accepted" and data.accepted == message.sha != self._record.data.accepted
-        snapshot_view = render_snapshot(message.payload) if accepted else self._snapshot
-        previous = self._snapshot
-        self._snapshot = snapshot_view
-        if record.job is not None and record.job.state == "collecting":
-            job, _ = self._job_observed(record)
-            record = self._with_job(record, job)
+        try:
+            link_event = ExchangeFailed(message.seq, at, message.code) if message.outcome == "transport" else ExchangeOk(message.seq, at)
+            data, _ = health.reduce_data(record.data, _capture_event(message, at))
+            record = replace(record, link=health.reduce_link(record.link, link_event), data=data)
+            accepted = message.outcome == "accepted" and data.accepted == message.sha != self._record.data.accepted
+            held = render_snapshot(message.payload) if accepted else self._snapshot
+            if record.job is not None and record.job.state == "collecting":
+                job, _ = self._job_observed(record, held)
+                record = self._with_job(record, job)
+        except Exception:
+            self._drop_fetch(message.sha)
+            raise
         if not self._commit(record, (message.sha, message.data) if accepted else None):
-            self._snapshot = previous
-            self._record = replace(self._record, data=replace(self._record.data, fetching=None))
+            self._drop_fetch(message.sha)
+            return
+        self._snapshot = held
+
+    def _drop_fetch(self, sha: str) -> None:
+        """The transfer's result was not applied, so the next observe fetches the capture again."""
+        data, _ = health.reduce_data(self._record.data, TransferFailed(sha))
+        self._record = replace(self._record, data=data)
 
     # ------------------------------------------------------------ rescan
 

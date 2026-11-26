@@ -118,21 +118,27 @@ class Fleet:
             if busy >= self.max_active_jobs:
                 raise GlobalConcurrency(audit=audit("GLOBAL_CONCURRENCY", None))
             self._admitting.add(server.id)
-        try:
-            ask = Ask()
-            self.actors[server.id].post(Admit(uuid.uuid4().hex, actor_name, now, self.cooldown_seconds, ask))
-            reply = ask.wait(self.reply_timeout)
-        finally:
+
+        def release() -> None:
             with self._lock:
                 self._admitting.discard(server.id)
+
+        # The reservation lasts until the admission is final, even when this request stops waiting
+        # first: an admission the actor already took still writes its job (C5).
+        ask = Ask(settled=release)
+        self.actors[server.id].post(Admit(uuid.uuid4().hex, actor_name, now, self.cooldown_seconds, ask))
+        reply = ask.wait(self.reply_timeout)
         if reply is None:
             raise ServerBusy(audit=audit("SERVER_BUSY", None))
         if reply.error == "ACTIVE_JOB":
             raise ActiveJob(job=job_v1(reply.job, server.id), audit=audit("ACTIVE_JOB", reply.job.request_id))
         if reply.error == "COOLDOWN":
             raise Cooldown(reply.retry_after, retry_after_seconds=reply.retry_after, audit=audit("COOLDOWN", None))
-        if reply.error is not None:
+        if reply.error == StoreUnavailable.code:
             raise StoreUnavailable(audit=audit(reply.error, None))
+        if reply.error is not None:
+            # The edge answers 500 INTERNAL and logs this under the request id (section 4.3).
+            raise RuntimeError(f"rescan admission for {server.id} failed: {reply.error}")
         event = audit("ACCEPTED", reply.job.request_id)
         _LOG.info("rescan accepted %s", event)
         return {"status": "started", "job": job_v1(reply.job, server.id), "audit": event}

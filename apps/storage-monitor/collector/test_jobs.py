@@ -14,7 +14,7 @@ def running_manual(run_id="r1", run_state="running"):
 
 
 def dispatched():
-    job, effects = observe(admit("q" * 32, "operator", 0, IDLE_AFTER_R0), IDLE_AFTER_R0)
+    job, effects = observe(admit("q" * 32, "operator", 0), IDLE_AFTER_R0)
     assert (job.state, job.dispatches, effects) == ("dispatching", 1, (Dispatch(),))
     return job
 
@@ -52,7 +52,7 @@ def test_c4_scheduled_scan_during_request_stays_pending():
 
 def test_running_full_scan_satisfies_the_request_without_a_second_scan():
     scan = Scan(invocation="inv-s", full=True, run_id="r1", run_state="running", run_full=True)
-    job = admit("q" * 32, "operator", 0, scan)
+    job = admit("q" * 32, "operator", 0)
     job, effects = observe(job, scan)
     assert (job.state, job.invocation, job.agent_run, effects) == ("running", "inv-s", "r1", ())
 
@@ -88,7 +88,7 @@ def test_deadlines_end_waiting_states():
 
 def test_restart_makes_an_in_flight_dispatch_ambiguous():
     assert reduce(dispatched(), Restarted(at=5))[0].state == "reconciling"
-    fresh = admit("q" * 32, "operator", 0, None)
+    fresh = admit("q" * 32, "operator", 0)
     assert reduce(fresh, Restarted(at=5))[0] == fresh
 
 
@@ -111,7 +111,7 @@ def test_job_random_events():
         )
 
     def event(rng, job, index):
-        at = index * 600
+        at = index * 1800
         kind = rng.randrange(4)
         if kind == 0:
             return Observed(at, scan(rng), rng.choice(("g0", "g1", None)), frozenset(rng.sample(("g1", "g2"), rng.randrange(3))))
@@ -132,5 +132,43 @@ def test_job_random_events():
             assert effects == (Dispatch(),) and after.state == "dispatching"
             assert after.dispatches == before.dispatches + 1, "dispatched twice for one attempt"
         assert after.request_id == before.request_id, "a second request id for one admitted job"
+        assert after.dispatches <= jobs.MAX_DISPATCHES, "the scan was started without limit"
+        if isinstance(event, Tick) and event.at - after.requested_unix >= jobs.job_deadline_seconds(event.run_deadline_seconds):
+            assert after.state in jobs.TERMINAL, "a job outlived its deadline from admission"
 
-    run_random_events(lambda rng: admit("q" * 32, "op", 0, scan(rng)), event, reduce, check)
+    run_random_events(lambda rng: admit("q" * 32, "op", 0), event, reduce, check)
+
+
+def test_a_job_restarts_its_scan_a_bounded_number_of_times():
+    # M2b review: every lost-lock round started the scan again, without limit.
+    job = dispatched()
+    starts = 1
+    for index in range(1, 10):
+        job, _ = reduce(job, DispatchReturned(at=index * 100, ok=False, code="RESCAN_FAILED"))
+        scheduled = Scan(run_id=f"s{index}", run_state="complete", run_full=False, generation=f"g{index}")
+        job, effects = observe(job, scheduled, at=index * 100 + 50)
+        starts += len(effects)
+        if job.state in jobs.TERMINAL:
+            break
+    assert starts == jobs.MAX_DISPATCHES
+    assert (job.state, job.result_code) == ("failed", "RESCAN_NOT_STARTED")
+
+
+def test_state_changes_never_postpone_the_deadline_from_admission():
+    # M2b review: each transition reset since_unix, so a job that kept changing state never timed out.
+    job = dispatched()
+    limit = jobs.job_deadline_seconds(jobs.MIN_RUN_DEADLINE_SECONDS)
+    job, _ = observe(job, Scan(invocation="inv-s", full=False, run_id="s1", run_state="running"), at=limit - 60)
+    assert job.state == "pending"
+    assert reduce(job, Tick(at=limit - 1))[0].state == "pending"
+    assert reduce(job, Tick(at=limit))[0].result_code == "RESCAN_NOT_STARTED"
+
+
+def test_a_finished_run_seen_while_the_unit_starts_is_not_the_jobs_run():
+    # M2b review: a job admitted without an observation had no baseline, so any finished run was "new".
+    job = admit("q" * 32, "operator", 0)
+    starting = Scan(invocation="inv-1", full=True, run_id="r0", run_state="complete", run_full=True, generation="g0")
+    job, _ = observe(job, starting)
+    assert job.state == "running"
+    job, _ = observe(job, IDLE_AFTER_R0, at=20)
+    assert (job.state, job.result_code) == ("unconfirmed", "RUN_UNCORRELATED")

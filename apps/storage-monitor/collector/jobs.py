@@ -17,6 +17,7 @@ DISPATCH_DEADLINE_SECONDS = 10 * 60
 RECONCILE_DEADLINE_SECONDS = 10 * 60
 COLLECT_DEADLINE_SECONDS = 15 * 60
 MIN_RUN_DEADLINE_SECONDS = 2 * 3600
+MAX_DISPATCHES = 3
 
 STATES = ("dispatching", "pending", "running", "reconciling", "collecting", "succeeded", "failed", "unconfirmed")
 TERMINAL = frozenset({"succeeded", "failed", "unconfirmed"})
@@ -32,7 +33,7 @@ class Job:
     state: str = "dispatching"
     dispatches: int = 0
     baseline_run: Optional[str] = None
-    """The agent run that had finished when the job was admitted; any other run is newer."""
+    """The agent run the observation before the last start showed; any other run started after it."""
     invocation: Optional[str] = None
     """InvocationID of the scan unit the job is tied to."""
     agent_run: Optional[str] = None
@@ -96,13 +97,18 @@ EVENT_KINDS = ("Observed", "DispatchReturned", "Tick", "Restarted")
 Result = Tuple[Job, Tuple[Dispatch, ...]]
 
 
-def admit(request_id: str, actor: str, at: int, scan: Optional[Scan]) -> Job:
-    baseline = scan.run_id if scan is not None and scan.run_state != "running" else None
-    return Job(request_id=request_id, actor=actor, requested_unix=at, since_unix=at, baseline_run=baseline)
+def admit(request_id: str, actor: str, at: int) -> Job:
+    """The baseline run comes from the first observation after admission, never from an older one."""
+    return Job(request_id=request_id, actor=actor, requested_unix=at, since_unix=at)
 
 
 def run_deadline_seconds(longest_sec: Optional[int]) -> int:
     return max(MIN_RUN_DEADLINE_SECONDS, 3 * longest_sec) if longest_sec else MIN_RUN_DEADLINE_SECONDS
+
+
+def job_deadline_seconds(run_deadline: int) -> int:
+    """Time from admission to a terminal state: a scheduled scan to wait out, our own run, then the pull."""
+    return 2 * run_deadline + RECONCILE_DEADLINE_SECONDS + COLLECT_DEADLINE_SECONDS
 
 
 def _to(job: Job, state: str, at: int, **fields) -> Job:
@@ -123,8 +129,10 @@ def _new_run(job: Job, scan: Scan) -> Optional[str]:
 
 def _correlate(job: Job, event: Observed) -> Job:
     scan = event.scan
-    agent_run = _new_run(job, scan) if scan.run_state == "running" else None
-    return _to(job, "running", event.at, invocation=scan.invocation, agent_run=agent_run)
+    if scan.run_state == "running":
+        return _to(job, "running", event.at, invocation=scan.invocation, agent_run=_new_run(job, scan))
+    # The unit has not written its lifecycle yet, so the run shown finished before it started.
+    return _to(job, "running", event.at, invocation=scan.invocation, agent_run=None, baseline_run=scan.run_id)
 
 
 def _collect(job: Job, event: Observed) -> Result:
@@ -145,12 +153,19 @@ def _run_ended(job: Job, event: Observed) -> Result:
     return _collect(_to(job, "collecting", event.at, agent_run=scan.run_id, generation=scan.generation), event)
 
 
+def _dispatch(job: Job, event: Observed) -> Result:
+    """Start the scan unit. No unit is active, so the run this observation shows is not ours."""
+    if job.dispatches >= MAX_DISPATCHES:
+        return _finish(job, "failed", event.at, "RESCAN_NOT_STARTED"), ()
+    return _to(job, "dispatching", event.at, baseline_run=event.scan.run_id, dispatches=job.dispatches + 1), (Dispatch(),)
+
+
 def _dispatching_observed(job: Job, event: Observed) -> Result:
     scan = event.scan
     if scan.invocation is not None:
         return (_correlate(job, event), ()) if scan.full else (_to(job, "pending", event.at), ())
     if job.dispatches == 0:
-        return replace(job, dispatches=1), (Dispatch(),)
+        return _dispatch(job, event)
     return job, ()
 
 
@@ -158,7 +173,7 @@ def _pending_observed(job: Job, event: Observed) -> Result:
     scan = event.scan
     if scan.invocation is not None:
         return (_correlate(job, event), ()) if scan.full else (job, ())
-    return _to(job, "dispatching", event.at, dispatches=job.dispatches + 1), (Dispatch(),)
+    return _dispatch(job, event)
 
 
 def _running_observed(job: Job, event: Observed) -> Result:
@@ -176,15 +191,18 @@ def _reconciling_observed(job: Job, event: Observed) -> Result:
         return (_correlate(job, event), ()) if scan.full else (_to(job, "pending", event.at), ())
     if _new_run(job, scan) is None or scan.run_state not in FINISHED_RUN:
         return job, ()
-    if scan.run_full:
+    # A run that started after our start and failed before it chose a plan is ours failing.
+    if scan.run_full or scan.run_state == "failed":
         return _run_ended(job, event)
     # A partial scheduled run held the lock, so our start lost it (C4). Start again.
-    return _to(job, "dispatching", event.at, baseline_run=scan.run_id, dispatches=job.dispatches + 1), (Dispatch(),)
+    return _dispatch(job, event)
 
 
 def _after(seconds: Callable[[Job, Tick], int], state: str, code: str):
+    """End the state after its own wait, and any state at the job deadline that no transition moves."""
     def handler(job: Job, event: Tick) -> Result:
-        if event.at - job.since_unix < seconds(job, event):
+        if (event.at - job.since_unix < seconds(job, event)
+                and event.at - job.requested_unix < job_deadline_seconds(event.run_deadline_seconds)):
             return job, ()
         return _finish(job, state, event.at, code), ()
     return handler

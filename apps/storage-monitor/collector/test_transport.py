@@ -205,12 +205,12 @@ class OpenSshTransportTests(unittest.TestCase):
         from collector.transport import MAX_SNAPSHOT_BYTES, OpenSshTransport, TransportError
 
         good = dict(status_for(base_payload())[0])
-        for bad_size in [True, -1, 0, MAX_SNAPSHOT_BYTES + 1]:
+        for bad_size, code in [(True, "BAD_STATUS"), (-1, "BAD_STATUS"), (0, "BAD_STATUS"), (MAX_SNAPSHOT_BYTES + 1, "SNAPSHOT_TOO_LARGE")]:
             fake = FakeRunner(); fake.statuses = [dict(good, byte_size=bad_size)]
             with self.subTest(bad_size=bad_size):
                 with self.assertRaises(TransportError) as ctx:
                     OpenSshTransport(runner=fake).fetch_snapshot(server())
-                self.assertIn(ctx.exception.code, {"BAD_STATUS", "SNAPSHOT_TOO_LARGE"})
+                self.assertEqual(ctx.exception.code, code)
                 self.assertEqual(len(fake.calls), 1)
 
         fake = FakeRunner(); fake.statuses = [dict(good, generation="beta-2-1719200000-v1.json")]
@@ -233,10 +233,12 @@ class OpenSshTransportTests(unittest.TestCase):
             OpenSshTransport(runner=fake, max_status_bytes=10).fetch_status(server())
         self.assertEqual(ctx.exception.code, "STATUS_TOO_LARGE")
 
+        # The cap is the declared byte_size, so a file that outgrows it disagrees with its publication:
+        # one clean retry, not a permanent size rejection (M2b review).
         fake = FakeRunner(); fake.statuses = [dict(status)]; fake.snapshots[status["generation"]] = data; fake.returncode_next = -signal.SIGXFSZ
         with self.assertRaises(TransportError) as ctx:
             OpenSshTransport(runner=fake).fetch_snapshot(server(), expected_status=status)
-        self.assertEqual(ctx.exception.code, "SNAPSHOT_TOO_LARGE")
+        self.assertEqual(ctx.exception.code, "SIZE_MISMATCH")
 
     @unittest.skipIf(os.name != "posix", "RLIMIT_FSIZE is POSIX-only")
     def test_threaded_transfers_enforce_the_file_cap_without_a_fork_callback(self):
@@ -269,7 +271,7 @@ with open(destination, "wb", buffering=0) as output:
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     self.assertEqual(list(pool.map(lambda _: fetch(), range(8))), ["STATUS_TOO_LARGE"] * 8)
 
-    def test_nonzero_sftp_at_cap_maps_to_limit_but_below_cap_stays_unreachable(self):
+    def test_nonzero_sftp_at_cap_is_a_limit_for_status_but_a_transfer_error_for_snapshots(self):
         from collector.transport import OpenSshTransport, TransportError
 
         payload = base_payload(); status, data = status_for(payload)
@@ -279,11 +281,12 @@ with open(destination, "wb", buffering=0) as output:
             OpenSshTransport(runner=fake, max_status_bytes=10).fetch_status(server())
         self.assertEqual(ctx.exception.code, "STATUS_TOO_LARGE")
 
+        # A snapshot transfer that failed after writing its declared size is a transfer error (M2b review).
         fake = FakeRunner(); fake.statuses = [dict(status)]; fake.snapshots[status["generation"]] = data
         fake.returncode_next = 1; fake.truncate_to_cap_on_nonzero = True
         with self.assertRaises(TransportError) as ctx:
             OpenSshTransport(runner=fake).fetch_snapshot(server(), expected_status=status)
-        self.assertEqual(ctx.exception.code, "SNAPSHOT_TOO_LARGE")
+        self.assertEqual(ctx.exception.code, "UNREACHABLE")
 
         fake = FakeRunner(); fake.statuses = [dict(status)]; fake.returncode_next = 1
         with self.assertRaises(TransportError) as ctx:

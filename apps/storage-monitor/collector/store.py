@@ -6,17 +6,20 @@ so a crash leaves either the old record or the new one with its capture.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field
 import json
 import logging
 import os
 import pathlib
 import re
 import tempfile
-from typing import Any, Mapping, Optional, Tuple
+import types
+import typing
+from typing import Any, Collection, Mapping, Optional, Tuple
 
+from collector import jobs, update
 from collector.errors import StoreUnavailable
-from collector.health import LEGACY_VOLUME, Data, Link
+from collector.health import LEGACY_VOLUME, LINK_STATES, Data, Link
 from collector.ids import SERVER_ID_RE
 from collector.jobs import Job
 from collector.update import Update
@@ -72,7 +75,8 @@ class ServerStore:
         except OSError as exc:
             raise StoreUnavailable("capture unreadable") from exc
 
-    def commit(self, record: Record, capture: Optional[Tuple[str, bytes]] = None) -> None:
+    def commit(self, record: Record, capture: Optional[Tuple[str, bytes]] = None, *, prune: bool = True) -> None:
+        """Write the capture if any, then the record; with ``prune``, then delete captures the record does not name."""
         try:
             for directory in (self.state_root / "servers", self.directory, self.captures):
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -80,7 +84,8 @@ class ServerStore:
             if capture is not None:
                 _write_atomic(self._capture_path(capture[0]), capture[1])
             _write_atomic(self.record_path, _encode_record(record, self.server_id))
-            self._prune(record)
+            if prune:
+                self._prune(record)
         except (OSError, ValueError) as exc:
             raise StoreUnavailable(f"record not writable: {type(exc).__name__}") from exc
 
@@ -187,20 +192,36 @@ def _parse_record(raw: Any, server_id: str) -> Record:
         raise ValueError("record rejected is malformed")
     if raw["manifest"] is not None and not isinstance(raw["manifest"], dict):
         raise ValueError("record manifest is malformed")
+    active_states = frozenset(jobs.STATES) - jobs.TERMINAL
     return Record(
-        link=_dataclass(Link, raw["link"]),
+        link=_dataclass(Link, raw["link"], LINK_STATES),
         data=Data(manifest=raw["manifest"], accepted=sha, rejected=rejected),
-        job=_dataclass(Job, raw["job"]) if raw["job"] is not None else None,
-        last_job=_dataclass(Job, raw["last_job"]) if raw["last_job"] is not None else None,
-        update=_dataclass(Update, raw["update"]),
+        job=_dataclass(Job, raw["job"], active_states) if raw["job"] is not None else None,
+        last_job=_dataclass(Job, raw["last_job"], jobs.TERMINAL) if raw["last_job"] is not None else None,
+        update=_dataclass(Update, raw["update"], update.STATES),
         durations=_parse_durations(raw["durations"]),
     )
 
 
-def _dataclass(kind, value: Any):
-    if not isinstance(value, dict) or set(value) != {item.name for item in fields(kind)}:
+def _dataclass(kind, value: Any, states: Collection[str]):
+    """Build ``kind`` from a JSON object whose keys, field types and state match its definition."""
+    hints = typing.get_type_hints(kind)
+    if not isinstance(value, dict) or set(value) != set(hints):
         raise ValueError(f"record {kind.__name__} is malformed")
+    for name, hint in hints.items():
+        if not _has_type(value[name], hint):
+            raise ValueError(f"record {kind.__name__}.{name} is malformed")
+    if value["state"] not in states:
+        raise ValueError(f"record {kind.__name__}.state is not allowed here")
     return kind(**value)
+
+
+def _has_type(value: Any, hint: Any) -> bool:
+    if typing.get_origin(hint) in (typing.Union, types.UnionType):
+        return any(_has_type(value, arg) for arg in typing.get_args(hint))
+    if hint in (int, str, type(None)):
+        return type(value) is hint
+    raise TypeError(f"record field type {hint} has no check")
 
 
 def _parse_durations(value: Any) -> dict:
@@ -287,7 +308,8 @@ def _old_job(active: Any) -> Optional[Job]:
         state, finished, code = "failed", requested, "INTERRUPTED"
     else:
         state, finished, code = active["state"], active.get("finished_unix") or requested, active.get("result_code")
-    return Job(
+    job = Job(
         request_id=str(active["id"]), actor=str(active["actor"]), requested_unix=requested,
         since_unix=finished, state=state, finished_unix=finished, result_code=code,
     )
+    return _dataclass(Job, asdict(job), jobs.TERMINAL)
