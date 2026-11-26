@@ -179,6 +179,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
@@ -202,6 +204,10 @@ jobs:
           docker run --rm -v "$PWD":/w -w /w/apps/storage-monitor -e PYTHONDONTWRITEBYTECODE=1 \
             python:3.8-slim@sha256:1d52838af602b4b5a831beb13a0e4d073280665ea7be7f69ce2382f29c5a613f \
             sh -c 'pip install -q pytest==8.3.5 && python -m pytest -q -p no:cacheprovider agent'
+      - name: Build the agent bundle unsigned (agent-bundle.yml signs it after a push to main)
+        if: needs.impact.outputs.storage_agent == 'true'
+        run: |
+          python3.12 apps/storage-monitor/deploy/build-agent-release.py --sha "$(git rev-parse HEAD)" --output-dir "$RUNNER_TEMP/agent-bundle"
       - name: Run Linux storage verification
         run: make test-storage
 

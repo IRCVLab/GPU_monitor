@@ -117,6 +117,42 @@ class BuildAgentReleaseTest(unittest.TestCase):
         self.assertEqual(metadata["size"], len(data))
 
 
+@unittest.skipUnless(shutil.which("ssh-keygen"), "ssh-keygen is required")
+class SignAgentReleaseTest(unittest.TestCase):
+    """deploy/sign-agent-release.sh, the CI signing step, run with throwaway keys."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sv-sign."))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.out = self.tmp / "out"
+        self.out.mkdir()
+        self.bundle = self.out / builder.ARCHIVE_NAME
+        self.bundle.write_bytes(fixtures.bundle("a" * 40))
+        self.key = fixtures.SigningKey(self.tmp)
+        self.signers = self.key.write_allowed_signers(self.tmp / "allowed_signers")
+
+    def sign(self, key, signers):
+        env = {"PATH": "/usr/bin:/bin", "AGENT_SIGNING_KEY": key.private.read_text() if key else ""}
+        return subprocess.run(["bash", str(APP_ROOT / "deploy/sign-agent-release.sh"), str(self.out), str(signers)],
+                              env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+
+    def test_signature_verifies_as_hosts_verify_it(self):
+        self.assertEqual(self.sign(self.key, self.signers).returncode, 0)
+        signature = (self.out / f"{builder.ARCHIVE_NAME}.sig").read_bytes()
+        self.assertTrue(update.verify_signature(self.signers, self.bundle.read_bytes(), signature, self.tmp))
+
+    def test_key_hosts_do_not_pin_publishes_no_signature(self):
+        stranger = fixtures.SigningKey(self.tmp, "stranger")
+        for signers in (self.signers, APP_ROOT / "agent/bootstrap/allowed_signers"):
+            with self.subTest(signers=signers.name):
+                done = self.sign(stranger, signers)
+                self.assertEqual(done.returncode, 1, done.stderr)
+                self.assertFalse((self.out / f"{builder.ARCHIVE_NAME}.sig").exists())
+
+    def test_missing_secret_fails(self):
+        self.assertEqual(self.sign(None, self.signers).returncode, 2)
+
+
 @unittest.skipUnless(shutil.which("cc") and shutil.which("git"), "cc and git are required to build hstscan")
 class ReleaseSelftestTest(unittest.TestCase):
     """The release entry point, as the updater's sandboxed self-test runs it."""

@@ -85,6 +85,7 @@ STORAGE_AGENT_RULE = PathRule(
         "apps/storage-monitor/deploy/build-agent-release.py",
         "apps/storage-monitor/deploy/deploy-agent.sh",
         "apps/storage-monitor/deploy/install-agent.sh",
+        "apps/storage-monitor/deploy/sign-agent-release.sh",
         "apps/storage-monitor/deploy/sudoers/storage-viz-monitoring",
         "apps/storage-monitor/deploy/test_agent_release.py",
         "apps/storage-monitor/deploy/systemd/storage-viz-scan.service.in",

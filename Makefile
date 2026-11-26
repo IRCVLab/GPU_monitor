@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-puller-test storage-release-puller-test release-script-test archive-ref-test build-gpu-release build-storage-release test-gpu build-gpu test-storage verify diff-check
+.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-puller-test storage-release-puller-test release-script-test archive-ref-test build-gpu-release build-storage-release agent-bundle-signed test-gpu build-gpu test-storage verify diff-check
 
 test: layout-test history-test release-puller-test storage-release-puller-test
 	$(MAKE) impact-test
@@ -45,6 +45,13 @@ build-gpu-release:
 
 build-storage-release:
 	python3.12 apps/storage-monitor/deploy/build-dashboard-release.py --sha "$$(git rev-parse HEAD)" --output-dir "$${OUTPUT_DIR:-apps/storage-monitor/dist/releases}"
+
+# CI only: .github/workflows/agent-bundle.yml runs this after ci passes on main,
+# with AGENT_SIGNING_KEY from the agent-signing environment.
+agent-bundle-signed:
+	@test -n "$(OUTPUT_DIR)" || { echo 'OUTPUT_DIR is required' >&2; exit 2; }
+	python3 apps/storage-monitor/deploy/build-agent-release.py --sha "$$(git rev-parse HEAD)" --output-dir "$(OUTPUT_DIR)"
+	bash apps/storage-monitor/deploy/sign-agent-release.sh "$(OUTPUT_DIR)"
 
 test-gpu:
 	cd apps/gpu-monitor/frontend && npm run check
