@@ -184,10 +184,10 @@ def _encode_record(record: Record, server_id: str) -> bytes:
 
 
 def _upgrade_v2(raw: Any) -> Any:
-    """A /2 record has no manifest_sha256 and its jobs no protocol: it only ever held v1 hosts."""
+    """A /2 record has no manifest_sha256 and its jobs no protocol or last_dispatch_unix: it only ever held v1 hosts."""
     if not isinstance(raw, dict) or raw.get("schema") != RECORD_V2_SCHEMA or "manifest_sha256" in raw:
         return raw
-    jobs_v3 = {key: {**raw[key], "protocol": "invocation"} if isinstance(raw.get(key), dict) else raw.get(key)
+    jobs_v3 = {key: {**raw[key], "protocol": "invocation", "last_dispatch_unix": None} if isinstance(raw.get(key), dict) else raw.get(key)
                for key in ("job", "last_job") if key in raw}
     return {**raw, **jobs_v3, "schema": RECORD_SCHEMA, "manifest_sha256": None}
 

@@ -22,6 +22,8 @@ RECONCILE_DEADLINE_SECONDS = 10 * 60
 COLLECT_DEADLINE_SECONDS = 15 * 60
 MIN_RUN_DEADLINE_SECONDS = 2 * 3600
 MAX_DISPATCHES = 3
+RESEND_INTERVAL_SECONDS = 60
+"""The idle observe interval: a receipt job sends its id again at most this often."""
 
 STATES = ("dispatching", "pending", "running", "reconciling", "collecting", "succeeded", "failed", "unconfirmed")
 TERMINAL = frozenset({"succeeded", "failed", "unconfirmed"})
@@ -52,6 +54,8 @@ class Job:
     result_code: Optional[str] = None
     protocol: str = "invocation"
     """``receipt`` for a v2 host; ``invocation`` is SHIM(M2b..M5c) S4."""
+    last_dispatch_unix: Optional[int] = None
+    """When a receipt job last sent its id, so resends are spaced in time."""
 
 
 @dataclass(frozen=True)
@@ -83,11 +87,9 @@ class Traced:
     """What one observation of a v2 host shows of the job's request id."""
     at: int
     pending: bool = False
-    """The id waits in ``requests/``."""
+    """The id waits in ``requests/``: delivered, so never sent again."""
     running: bool = False
     """run.json lists the id: the running scan serves it."""
-    scanning: bool = False
-    """Some scan holds the lock, perhaps a scheduled one that does not list the id (C4)."""
     receipt: Optional[str] = None
     """The outcome of the manifest receipt for the id, as written. Unknown outcomes are ignored."""
     captures: str = "current"
@@ -262,17 +264,24 @@ def _restart_dispatching(job: Job, event: Restarted) -> Result:
 # ------------------------------------------------------------------ receipt jobs (v2 hosts)
 
 
-def _resend(job: Job, event: Traced) -> Result:
-    """The same request id again: the host answers already_received and never scans twice for it.
+def _send(job: Job, event: Traced) -> Result:
+    return replace(job, dispatches=job.dispatches + 1, last_dispatch_unix=event.at), (Dispatch(),)
 
-    Bounded like the invocation job's starts. A host holding the id that never starts is
-    RESCAN_NOT_STARTED; one that never showed the id is unconfirmed.
+
+def _resend(job: Job, event: Traced) -> Result:
+    """The id shows nowhere on the host: send it again, at most once per idle observe interval.
+
+    The host answers already_received for an id it holds, so a resend never scans twice.
+    Bounded like the invocation job's starts: after the last send, a job the host accepted
+    is RESCAN_NOT_STARTED, and one it never acknowledged is unconfirmed.
     """
+    if job.last_dispatch_unix is not None and event.at - job.last_dispatch_unix < RESEND_INTERVAL_SECONDS:
+        return job, ()
     if job.dispatches >= MAX_DISPATCHES:
         if job.state == "reconciling":
             return _finish(job, "unconfirmed", event.at, "NO_TRACE"), ()
         return _finish(job, "failed", event.at, "RESCAN_NOT_STARTED"), ()
-    return replace(job, dispatches=job.dispatches + 1), (Dispatch(),)
+    return _send(job, event)
 
 
 def _receipt(job: Job, event: Traced) -> Optional[Result]:
@@ -297,20 +306,19 @@ def _traced(job: Job, event: Traced, *, unseen: Callable[[Job, Traced], Result])
     if event.running:
         return _to(job, "running", event.at), ()
     if event.pending:
-        if job.state == "pending" and not event.scanning:
-            return _resend(job, event)  # idle host with our id still waiting: start the unit again
-        return _to(job, "pending", event.at), ()  # a scheduled scan holds the lock; the id waits (C4)
+        # Delivered and waiting: the host starts it, or the scan holding the lock serves it (C4).
+        return _to(job, "pending", event.at), ()
     return unseen(job, event)
 
 
 def _dispatching_traced(job: Job, event: Traced) -> Result:
     if job.dispatches == 0:
-        return _resend(job, event)
-    return _traced(job, event, unseen=_ignore)
+        return _send(job, event)
+    return _traced(job, event, unseen=_ignore)  # the reply to the send in flight decides
 
 
 def _pending_traced(job: Job, event: Traced) -> Result:
-    return _traced(job, event, unseen=_ignore)
+    return _traced(job, event, unseen=_resend)
 
 
 def _running_traced(job: Job, event: Traced) -> Result:

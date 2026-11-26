@@ -509,3 +509,30 @@ def test_the_real_viewer_refuses_scan_roots_and_counts_the_volume_capacity_once(
     assert result["verdicts"] == {"/srv/share": "scan_root", "/srv/share/proj": "accepted", "/data/proj": "accepted",
                                   "/data/srv/share/proj": "accepted"}
     assert (result["totalBytes"], result["groups"]) == (1000, 1)
+
+
+# ------------------------------------------------------------------ M5a review F2: a delivered request is not sent again
+
+
+def test_a_request_waiting_in_the_mailbox_is_sent_once_while_the_clock_stands_still(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    collector.host.runs[SID] = HostRun(pending=frozenset({"e" * 32}))  # delivered; run.json not written yet
+    start = collector.clock.now
+    admit(collector)
+    for _ in range(50):
+        collector.actor().step()
+    assert collector.clock.now == start
+    assert collector.host.rescan_requests == [(SID, "e" * 32)], "a delivered request was sent again"
+    assert record(collector).job.state == "pending"
+
+
+def test_a_request_with_no_trace_is_resent_at_most_once_per_idle_interval(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    admit(collector)
+    for _ in range(50):
+        collector.actor().step()
+    assert len(collector.host.rescan_requests) == 1, "resent with no time passing"
+    collector.tick(30)
+    assert len(collector.host.rescan_requests) == 1
+    collector.tick(31)
+    assert len(collector.host.rescan_requests) == 2

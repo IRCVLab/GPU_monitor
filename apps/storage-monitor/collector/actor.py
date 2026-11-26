@@ -394,7 +394,7 @@ class ServerActor:
         receipts = manifest.requests if isinstance(manifest, HostManifest) else ()
         return jobs.Traced(
             int(self.clock.time()), pending=request_id in self._run.pending, running=request_id in self._run.request_ids,
-            scanning=self._run.scanning, receipt=next((r.outcome for r in receipts if r.request_id == request_id), None),
+            receipt=next((r.outcome for r in receipts if r.request_id == request_id), None),
             captures=health.captures_progress(record.data))
 
     # ------------------------------------------------------------ messages
