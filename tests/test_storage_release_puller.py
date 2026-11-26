@@ -968,6 +968,92 @@ class AgentBundleTest(unittest.TestCase):
         with self.assertRaisesRegex(self.puller.PullError, "exactly the verified agent bundle"):
             self.puller.run_once(self.cfg, get_json=github.get_json, run_command=run_command, download=github.download)
 
+    # -- a release that carried the previous bundle (review proof p9) -----------------
+
+    def fixed_bundle(self):
+        sha = AGENT_SHA[:-1] + "4"
+        return self.signed(self.fixtures.bundle(sha, release_seq=130, floor=110),
+                           source_sha=sha, release_seq=130, rollback_floor_seq=110)
+
+    def pull_at(self, github, now):
+        return self.puller.run_once(self.cfg, get_json=github.get_json, run_command=self.run_command,
+                                    download=github.download, now_fn=lambda: now)
+
+    def test_successful_rerun_of_the_signing_job_is_picked_up(self):
+        """Review proof p9: a SHA shipped with the old bundle was never revisited."""
+        previous, fixed = self.signed(), self.fixed_bundle()
+        self.install_previous_release(previous)
+        failed = [{"id": AGENT_RUN_ID, "event": "workflow_run", "head_branch": "main", "head_sha": SHA1,
+                   "status": "completed", "conclusion": "failure"}]
+        github = FakeGitHub(SHA1, agent_runs=failed, agent_files=fixed)
+        self.assertEqual(self.pull_at(github, 1000.0), "activated")
+        self.assertEqual(self.activations, [previous])
+        self.assertEqual(self.puller.read_agent_pending(self.cfg)["sha"], SHA1)
+        github.agent_runs = None  # the maintainer re-runs the job: success, artifact uploaded
+        self.assertEqual(self.pull_at(github, 1000.0 + 60), "agent-pending", "inside the backoff: no API calls")
+        self.assertEqual(github.downloads, [])
+        self.assertEqual(self.pull_at(github, 1000.0 + 900), "activated")
+        self.assertEqual(self.activations, [previous, fixed])
+        self.assertIsNone(self.puller.read_agent_pending(self.cfg))
+        self.assertEqual(self.pull_at(github, 1000.0 + 2000), "already-current")
+
+    def test_pending_recheck_backs_off_while_the_run_stays_failed(self):
+        self.install_previous_release(self.signed())
+        failed = [{"id": AGENT_RUN_ID, "event": "workflow_run", "head_branch": "main", "head_sha": SHA1,
+                   "status": "completed", "conclusion": "failure"}]
+        github = FakeGitHub(SHA1, agent_runs=failed)
+        self.assertEqual(self.pull_at(github, 0.0), "activated")
+        now, delays = 0.0, []
+        for _ in range(6):
+            now = self.puller.read_agent_pending(self.cfg)["retry_after"]
+            self.assertEqual(self.pull_at(github, now), "agent-pending")
+            delays.append(self.puller.read_agent_pending(self.cfg)["retry_after"] - now)
+        self.assertEqual(delays, [1800.0, 3600.0, 7200.0, 14400.0, 21600.0, 21600.0])
+        self.assertEqual(len(self.builds), 1, "no rebuild without a fresh bundle")
+
+    def test_newer_sha_clears_the_pending_marker(self):
+        self.install_previous_release(self.signed())
+        failed = [{"id": AGENT_RUN_ID, "event": "workflow_run", "head_branch": "main", "head_sha": SHA1,
+                   "status": "completed", "conclusion": "failure"}]
+        self.assertEqual(self.pull_at(FakeGitHub(SHA1, agent_runs=failed), 0.0), "activated")
+        NEWER = "6" * 40
+        newer = FakeGitHub(NEWER, agent_files=self.signed())
+        original = self.run_command
+
+        def run_command(argv, **kwargs):
+            if argv[0] == "python3" and str(self.cfg.authorizer) in argv:
+                return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": NEWER}), "")
+            if any(str(part).endswith("build-dashboard-release.py") for part in argv):
+                self.builds.append(list(argv))
+                StorageReleasePullerTest().write_build_output(argv, sha=NEWER)
+                return CompletedProcess(argv, 0, "", "")
+            return original(argv, **kwargs)
+
+        def activate(argv, **kwargs):
+            if argv[0] == str(self.cfg.activate):
+                outdir = Path(argv[argv.index("--metadata") + 1]).parent
+                digest = hashlib.sha256(next(outdir.glob("*.tar.gz")).read_bytes()).hexdigest()
+                return CompletedProcess(argv, 0, json.dumps({
+                    "status": "active", "source_sha": NEWER, "archive_digest": digest,
+                    "runtime_digest": self.puller.validate_artifact(outdir, NEWER)[2],
+                    "release": f"/srv/storage-viz-dashboard/releases/{NEWER}/storage-monitor"}), "")
+            return run_command(argv, **kwargs)
+
+        result = self.puller.run_once(self.cfg, get_json=newer.get_json, run_command=activate,
+                                      download=newer.download, now_fn=lambda: 10.0)
+        self.assertEqual(result, "activated")
+        self.assertIsNone(self.puller.read_agent_pending(self.cfg))
+
+    def test_pending_marker_is_dropped_when_the_channel_is_turned_off(self):
+        self.install_previous_release(self.signed())
+        failed = [{"id": AGENT_RUN_ID, "event": "workflow_run", "head_branch": "main", "head_sha": SHA1,
+                   "status": "completed", "conclusion": "failure"}]
+        github = FakeGitHub(SHA1, agent_runs=failed)
+        self.assertEqual(self.pull_at(github, 0.0), "activated")
+        self.token.write_text("")
+        self.assertEqual(self.pull_at(github, 1e9), "already-current")
+        self.assertIsNone(self.puller.read_agent_pending(self.cfg))
+
     # -- staging (review proof p6) ----------------------------------------------------
 
     def test_staging_never_follows_a_builder_planted_link(self):

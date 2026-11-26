@@ -289,6 +289,35 @@ def read_puller_state(config: Config) -> dict[str, object]:
     return bounded
 
 
+def agent_pending_path(config: Config) -> Path:
+    return config.state_dir / "agent-pending.json"
+
+
+def read_agent_pending(config: Config) -> dict[str, object] | None:
+    """The released SHA that carried an old agent bundle and still waits for its own."""
+    try:
+        payload = json.loads(agent_pending_path(config).read_text(encoding="utf-8"))
+        sha = validate_sha(payload.get("sha"), "agent pending sha")
+        checks, retry_after = payload.get("checks"), payload.get("retry_after")
+        if type(checks) is not int or checks < 0 or not isinstance(retry_after, (int, float)) or isinstance(retry_after, bool):
+            return None
+    except (OSError, ValueError, AttributeError, PullError):
+        return None
+    return {"sha": sha, "checks": checks, "retry_after": float(retry_after)}
+
+
+def write_agent_pending(config: Config, sha: str, checks: int, now: float) -> None:
+    delay = min(config.failure_backoff_base_seconds * (2 ** min(checks, 30)), config.failure_backoff_max_seconds)
+    write_json_atomic(agent_pending_path(config), {"checks": checks, "retry_after": now + delay, "sha": sha})
+
+
+def clear_agent_pending(config: Config) -> None:
+    try:
+        agent_pending_path(config).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def read_failed_release(config: Config) -> dict[str, object] | None:
     try:
         payload = json.loads(failed_release_path(config).read_text(encoding="utf-8"))
@@ -825,7 +854,29 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
         except BlockingIOError:
             return "locked"
         sha = current_main_sha(config, get_json)
-        if read_state_sha(config) == sha:
+        now = None
+        pending = read_agent_pending(config)
+        if pending is not None and pending["sha"] != sha:
+            clear_agent_pending(config)  # a newer SHA plans its own bundle
+            pending = None
+        if pending is not None and read_state_sha(config) == sha:
+            # Released with a carried-forward bundle: look for its own, with backoff, and
+            # rebuild only once a fresh signed bundle exists.
+            now = float(now_fn())
+            if now < pending["retry_after"]:
+                return "agent-pending"
+            try:
+                recheck = plan_agent_bundle(config, sha, {}, get_json, now)
+            except PullError:
+                recheck = None  # still running, or the evidence is unreadable this tick
+            if recheck is not None and recheck.kind == "none":
+                clear_agent_pending(config)
+                return "already-current"
+            if recheck is None or recheck.kind == "previous":
+                write_agent_pending(config, sha, int(pending["checks"]) + 1, now)
+                return "agent-pending"
+            log(f"a fresh agent bundle now exists for {sha}; rebuilding the release with it")
+        elif read_state_sha(config) == sha:
             write_state_sha(config, sha)
             clear_failed_release(config)
             return "already-current"
@@ -834,11 +885,12 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
             clear_failed_release(config)
             failure = None
         activation_state = read_activation_state(config)
-        if activation_state["current"] == sha:
+        if activation_state["current"] == sha and pending is None:
             write_state_sha(config, sha)
             clear_failed_release(config)
             return "reconciled-current"
-        now = float(now_fn())
+        if now is None:
+            now = float(now_fn())
         if failure is not None and now < failure["retry_after"]:
             return "backoff"
         workflow_run, check_runs, _ = fetch_evidence(config, sha, get_json)
@@ -856,6 +908,7 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
             if activation_state["runtime_digest"] == runtime_digest:
                 write_state_sha(config, sha)
                 clear_failed_release(config)
+                record_agent_outcome(config, sha, plan, now)
                 shutil.rmtree(config.work_dir / "out", ignore_errors=True)
                 shutil.rmtree(config.agent_staging_dir, ignore_errors=True)
                 return "unchanged-runtime"
@@ -868,9 +921,18 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
             raise PullError(f"release pipeline failed: {type(error).__name__}") from error
         write_state_sha(config, sha)
         clear_failed_release(config)
+        record_agent_outcome(config, sha, plan, now)
         shutil.rmtree(config.work_dir / "out", ignore_errors=True)
         shutil.rmtree(config.agent_staging_dir, ignore_errors=True)
         return "activated"
+
+
+def record_agent_outcome(config: Config, sha: str, plan: AgentPlan, now: float) -> None:
+    """A release that carried the previous bundle stays pending until its own bundle arrives."""
+    if plan.kind == "previous":
+        write_agent_pending(config, sha, 0, now)
+    else:
+        clear_agent_pending(config)
 
 
 def parse_args(argv: list[str]) -> Config:
