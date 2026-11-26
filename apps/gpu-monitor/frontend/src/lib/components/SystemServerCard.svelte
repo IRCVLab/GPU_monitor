@@ -2,32 +2,32 @@
  import {metric,powerLabel,timeLabel,hardwareFreshness,buildPsuRows,type SystemNode} from '$lib/utils/systemDashboard';
  import {temperatureTone,psuLoad,psuInputDistribution,telemetryDelta,gpuActivity,type ServerTelemetryHistory} from '$lib/utils/systemTelemetryVisuals';
  import SystemSparkline from './SystemSparkline.svelte';import SystemFanRotor from './SystemFanRotor.svelte';
- export let node:SystemNode;export let now=Date.now();export let compact=true;export let history:ServerTelemetryHistory|undefined=undefined;
- let expanded=!compact,previousCompact=compact;
- $: if(compact!==previousCompact){previousCompact=compact;expanded=!compact;}
- $: state=node.state;
- $: activity=gpuActivity(state,now);
- $: freshness=hardwareFreshness(node.hardware,now);
- $: fresh=freshness==='fresh';
- $: psus=buildPsuRows(node.psuInput,node.psuOutput,node.hardware?.psu_rated_output_watts);
- $: inputDistribution=psuInputDistribution(psus);
- $: serverFans=node.serverFans.filter(fan=>fan.value!==null);
- $: gpuFans=node.gpuFans.filter(fan=>fan.value!==null);
- $: gpuRpm=gpuFans.length?gpuFans.reduce((sum,fan)=>sum+fan.value!,0)/gpuFans.length:null;
- $: cpuSensors=(node.hardware?.sensors??[]).filter(sensor=>sensor.kind==='temperature'&&/cpu/i.test(sensor.name)&&!/dimm/i.test(sensor.name));
- $: cpuValues=cpuSensors.map(sensor=>sensor.value).filter((value):value is number=>value!==null&&Number.isFinite(value));
- $: gpuValues=state.gpus.map(gpu=>gpu.temperature).filter(value=>Number.isFinite(value));
- $: cpuAverage=cpuValues.length?cpuValues.reduce((sum,value)=>sum+value,0)/cpuValues.length:null;
- $: gpuMaximum=gpuValues.length?Math.max(...gpuValues):null;
- $: gpuAverage=gpuValues.length?gpuValues.reduce((sum,value)=>sum+value,0)/gpuValues.length:null;
- $: cpuWarnings=cpuSensors.map(sensor=>sensor.upper_warning).filter((value):value is number=>value!==null&&value>0);
- $: cpuWarning=cpuWarnings.length?Math.min(...cpuWarnings):75;
- $: cpuCriticals=cpuSensors.map(sensor=>sensor.upper_critical).filter((value):value is number=>value!==null&&value>0);
- $: cpuCritical=cpuCriticals.length?Math.min(...cpuCriticals):90;
- $: network=state.system as (NonNullable<typeof state.system>&{network_rx_bytes_per_second?:number|null;network_tx_bytes_per_second?:number|null})|null;
- $: rx=network?.network_rx_bytes_per_second;
- $: tx=network?.network_tx_bytes_per_second;
- $: delta=telemetryDelta(history?.power??[]);
+ let {node,now=Date.now(),compact=true,history=undefined}:{node:SystemNode;now?:number;compact?:boolean;history?:ServerTelemetryHistory}=$props();
+ let expanded=$state(false);
+ $effect.pre(()=>{expanded=!compact;});
+ const serverState=$derived(node.state);
+ const activity=$derived(gpuActivity(serverState,now));
+ const freshness=$derived(hardwareFreshness(node.hardware,now));
+ const fresh=$derived(freshness==='fresh');
+ const psus=$derived(buildPsuRows(node.psuInput,node.psuOutput,node.hardware?.psu_rated_output_watts));
+ const inputDistribution=$derived(psuInputDistribution(psus));
+ const serverFans=$derived(node.serverFans.filter(fan=>fan.value!==null));
+ const gpuFans=$derived(node.gpuFans.filter(fan=>fan.value!==null));
+ const gpuRpm=$derived(gpuFans.length?gpuFans.reduce((sum,fan)=>sum+fan.value!,0)/gpuFans.length:null);
+ const cpuSensors=$derived((node.hardware?.sensors??[]).filter(sensor=>sensor.kind==='temperature'&&/cpu/i.test(sensor.name)&&!/dimm/i.test(sensor.name)));
+ const cpuValues=$derived(cpuSensors.map(sensor=>sensor.value).filter((value):value is number=>value!==null&&Number.isFinite(value)));
+ const gpuValues=$derived(serverState.gpus.map(gpu=>gpu.temperature).filter(value=>Number.isFinite(value)));
+ const cpuAverage=$derived(cpuValues.length?cpuValues.reduce((sum,value)=>sum+value,0)/cpuValues.length:null);
+ const gpuMaximum=$derived(gpuValues.length?Math.max(...gpuValues):null);
+ const gpuAverage=$derived(gpuValues.length?gpuValues.reduce((sum,value)=>sum+value,0)/gpuValues.length:null);
+ const cpuWarnings=$derived(cpuSensors.map(sensor=>sensor.upper_warning).filter((value):value is number=>value!==null&&value>0));
+ const cpuWarning=$derived(cpuWarnings.length?Math.min(...cpuWarnings):75);
+ const cpuCriticals=$derived(cpuSensors.map(sensor=>sensor.upper_critical).filter((value):value is number=>value!==null&&value>0));
+ const cpuCritical=$derived(cpuCriticals.length?Math.min(...cpuCriticals):90);
+ const network=$derived(serverState.system as (NonNullable<typeof serverState.system>&{network_rx_bytes_per_second?:number|null;network_tx_bytes_per_second?:number|null})|null);
+ const rx=$derived(network?.network_rx_bytes_per_second);
+ const tx=$derived(network?.network_tx_bytes_per_second);
+ const delta=$derived(telemetryDelta(history?.power??[]));
  const kw=(value:number|null)=>value===null?'—':metric(value/1000,3);
  const rate=(value:number|null|undefined)=>typeof value==='number'&&Number.isFinite(value)?metric(value/1e6,3):'—';
  const percent=(value:number|null)=>Math.max(0,Math.min(100,value??0));
@@ -35,8 +35,8 @@
  function keyToggle(event:KeyboardEvent){if(event.target!==event.currentTarget||(event.key!=='Enter'&&event.key!==' '))return;event.preventDefault();expanded=!expanded;}
 </script>
 
-<div class="sys-server-row hardware-card" class:hardware-expanded={expanded} role="button" tabindex="0" aria-label={`${state.server_name} 서버`} aria-expanded={expanded} aria-controls={`system-details-${state.server_id}`} onclick={toggle} onkeydown={keyToggle}>
- <header class="hardware-heading"><div class="hardware-identity"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M6 6.5h1m3 0h7M6 17.5h1m3 0h7"/></svg><h3>{state.server_name}</h3><span>{state.host}</span><span class="hardware-status" class:attention={node.needsAttention}>{state.status==='offline'?'연결 끊김':state.status==='unknown'?'대기':node.needsAttention?'주의':'정상'}</span></div><div class="hardware-heading-end"><span class="hardware-activity" title="사용자 연결 · GPU 사용률 >5% · GPU 메모리 >10% 중 하나">GPU active <b>{activity.active===null?'—':activity.active}/{activity.total}</b></span>{#if freshness==='stale'||freshness==='snapshot'}<span>{freshness==='stale'?'갱신 지연':'보관 기록'}</span>{/if}<svg class:open={expanded} width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 7 5 5 5-5"/></svg></div></header>
+<div class="sys-server-row hardware-card" class:hardware-expanded={expanded} role="button" tabindex="0" aria-label={`${serverState.server_name} 서버`} aria-expanded={expanded} aria-controls={`system-details-${serverState.server_id}`} onclick={toggle} onkeydown={keyToggle}>
+ <header class="hardware-heading"><div class="hardware-identity"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M6 6.5h1m3 0h7M6 17.5h1m3 0h7"/></svg><h3>{serverState.server_name}</h3><span>{serverState.host}</span><span class="hardware-status" class:attention={node.needsAttention}>{serverState.status==='offline'?'연결 끊김':serverState.status==='unknown'?'대기':node.needsAttention?'주의':'정상'}</span></div><div class="hardware-heading-end"><span class="hardware-activity" title="사용자 연결 · GPU 사용률 >5% · GPU 메모리 >10% 중 하나">GPU active <b>{activity.active===null?'—':activity.active}/{activity.total}</b></span>{#if freshness==='stale'||freshness==='snapshot'}<span>{freshness==='stale'?'갱신 지연':'보관 기록'}</span>{/if}<svg class:open={expanded} width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 7 5 5 5-5"/></svg></div></header>
  <div class="hardware-zones">
   <section class="hardware-power"><h4 class="zone-label"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m11 1-7 10h5l-1 8 8-11h-5z"/></svg>전력 · PSU 부하 <small>서버 DCMI</small></h4><div class="hardware-main-value power-value">{kw(node.powerWatts)}<small> kW</small>{#if delta!==null}<span class="hardware-delta">{delta>=0?'+':''}{metric(delta/1000,3)} kW</span>{/if}</div><SystemSparkline series={[{points:history?.power??[],color:'var(--sys-power,#e7d969)'}]} {now} height={20} label="서버 전력 · 최근 실제 이력"/>
    <div class="hardware-psus" aria-label="PSU별 정격 출력 대비 부하">
@@ -71,7 +71,7 @@
   <section class="hardware-network"><h4 class="zone-label"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 1v14m-3-3 3 3 3-3M16 19V5m-3 3 3-3 3 3"/></svg>네트워크 <small title="Linux 물리 NIC의 합계 · NAS 전용 NIC 포함">물리 NIC 합계 · MB/s</small></h4><div class="network-reading"><span class="rx-label">↓ RX</span><strong>{rate(rx)}</strong></div><div class="network-reading"><span class="tx-label">↑ TX</span><strong>{rate(tx)}</strong></div><SystemSparkline series={[{points:history?.network_rx??[],color:'var(--net-rx)'},{points:history?.network_tx??[],color:'var(--net-tx)'}]} {now} height={51} label="수신 RX와 송신 TX · 최근 실제 이력"/></section>
  </div>
  <div class="hardware-resource-strip"><div><span>CPU</span><span class="resource-track"><i style:width={`${percent(node.cpuPercent)}%`}></i></span><strong>{metric(node.cpuPercent)}%</strong></div><div><span>RAM</span><span class="resource-track"><i style:width={`${percent(node.ramPercent)}%`}></i></span><strong>{metric(node.ramPercent)}%</strong></div>{#if node.issues.length}<span class="hardware-issue">{node.issues[0]}</span>{/if}</div>
- <div id={`system-details-${state.server_id}`} hidden={!expanded} class="hardware-details"><section><h4 class="zone-label">PSU 입력 / 출력 · kW</h4><table><thead><tr><th>장치</th><th>입력</th><th>출력</th><th>정격</th><th>입력 이력</th></tr></thead><tbody>{#each psus as psu}<tr><th>{psu.name}</th><td>{kw(psu.inputWatts)}</td><td>{kw(psu.outputWatts)}</td><td>{kw(psu.ratedOutputWatts)}</td><td><SystemSparkline series={[{points:history?.psu?.[psu.name]??[],color:'var(--sys-power,#e7d969)'}]} {now} height={22} label={`${psu.name} 입력 전력 이력`}/></td></tr>{/each}</tbody></table>
+ <div id={`system-details-${serverState.server_id}`} hidden={!expanded} class="hardware-details"><section><h4 class="zone-label">PSU 입력 / 출력 · kW</h4><table><thead><tr><th>장치</th><th>입력</th><th>출력</th><th>정격</th><th>입력 이력</th></tr></thead><tbody>{#each psus as psu}<tr><th>{psu.name}</th><td>{kw(psu.inputWatts)}</td><td>{kw(psu.outputWatts)}</td><td>{kw(psu.ratedOutputWatts)}</td><td><SystemSparkline series={[{points:history?.psu?.[psu.name]??[],color:'var(--sys-power,#e7d969)'}]} {now} height={22} label={`${psu.name} 입력 전력 이력`}/></td></tr>{/each}</tbody></table>
    {#if inputDistribution.length}
     <div class="psu-distribution">
      <small>측정된 PSU 입력 분담</small>
@@ -86,7 +86,7 @@
       {/each}
      </div>
     </div>
-   {/if}</section><section><h4 class="zone-label">CPU / GPU 개별 온도</h4><div class="detail-devices">{#each cpuSensors as sensor}<span data-tone={temperatureTone(sensor.value,cpuWarning,cpuCritical)}><span>{sensor.name}</span><strong>{metric(sensor.value)}°C</strong></span>{/each}{#each state.gpus as gpu}<span data-device="gpu" data-tone={temperatureTone(gpu.temperature,80,90)}><span>GPU {gpu.index}</span><strong>{metric(gpu.temperature)}°C</strong></span>{/each}</div></section><section><h4 class="zone-label">개별 냉각 팬 · BMC RPM</h4><div class="detail-fans">{#each [...node.serverFans,...node.gpuFans] as fan}<span><SystemFanRotor rpm={fan.value} {fresh} size={22} label={fan.name}/><span>{fan.name}</span><strong>{metric(fan.value)}</strong></span>{/each}</div></section><footer>{timeLabel(node.hardware?.collected_at)}{#if node.issues.length} · {node.issues.join(' · ')}{/if}</footer></div>
+   {/if}</section><section><h4 class="zone-label">CPU / GPU 개별 온도</h4><div class="detail-devices">{#each cpuSensors as sensor}<span data-tone={temperatureTone(sensor.value,cpuWarning,cpuCritical)}><span>{sensor.name}</span><strong>{metric(sensor.value)}°C</strong></span>{/each}{#each serverState.gpus as gpu}<span data-device="gpu" data-tone={temperatureTone(gpu.temperature,80,90)}><span>GPU {gpu.index}</span><strong>{metric(gpu.temperature)}°C</strong></span>{/each}</div></section><section><h4 class="zone-label">개별 냉각 팬 · BMC RPM</h4><div class="detail-fans">{#each [...node.serverFans,...node.gpuFans] as fan}<span><SystemFanRotor rpm={fan.value} {fresh} size={22} label={fan.name}/><span>{fan.name}</span><strong>{metric(fan.value)}</strong></span>{/each}</div></section><footer>{timeLabel(node.hardware?.collected_at)}{#if node.issues.length} · {node.issues.join(' · ')}{/if}</footer></div>
 </div>
 
 <style>
