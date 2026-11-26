@@ -34,7 +34,9 @@ function cleanupBoundedReason(code, message) {
 }
 
 function hasControlCharacters(value) {
-  return /[\u0000-\u001F\u007F]/.test(String(value || ""));
+  const text = String(value || "");
+  return /[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/.test(text) ||
+    (typeof text.isWellFormed === "function" && !text.isWellFormed());
 }
 
 function pathDepth(path) {
@@ -202,8 +204,8 @@ function buildCleanupCommandPlan(snapshot, candidate) {
     id: validation.kind === "file" ? "rm-file" : "rm-directory",
     label: validation.kind === "file" ? "Remove file" : "Remove directory",
     command: validation.kind === "file"
-      ? "sudo rm -i -- " + quotedPath
-      : "sudo rm -ri --one-file-system -- " + quotedPath,
+      ? "sudo rm -f -- " + quotedPath
+      : "sudo rm -rf --one-file-system --preserve-root=all -- " + quotedPath,
   };
 
   return {
@@ -350,7 +352,7 @@ function cleanupRemovalScript(entries) {
     .filter(plan => plan && plan.kind === "directory" && isCanonicalCleanupPath(plan.path))
     .map(plan => plan.path);
   const seen = new Set();
-  return source
+  const kept = source
     .filter(entry => {
       const plan = entry && entry.plan ? entry.plan : entry;
       const path = plan && plan.path;
@@ -358,10 +360,19 @@ function cleanupRemovalScript(entries) {
       seen.add(path);
       return !directoryPaths.some(directoryPath => directoryPath !== path && cleanupPathWithinRoot(path, directoryPath));
     })
-    .map(entry => entry && entry.plan ? entry.plan.destructiveCommand : entry && entry.destructiveCommand)
-    .filter(Boolean)
-    .map(command => command.command)
-    .join("\n");
+    .map(entry => entry && entry.plan ? entry.plan : entry)
+    .filter(plan => plan && plan.destructiveCommand && isCanonicalCleanupPath(plan.path));
+  const quoted = kind => kept.filter(plan => plan.kind === kind).map(plan => shellQuote(plan.path)).join(" ");
+  const commands = [];
+  if (quoted("directory")) commands.push("sudo rm -rf --one-file-system --preserve-root=all -- " + quoted("directory"));
+  if (quoted("file")) commands.push("sudo rm -f -- " + quoted("file"));
+  if (!commands.length) return "";
+  const body = commands.join("; ");
+  const snapshot = currentCleanupSnapshot();
+  const host = snapshot && typeof snapshot.hostname === "string" ? snapshot.hostname.split(".")[0] : "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(host)) return body;
+  return "if [ \"$(hostname -s)\" = '" + host + "' ]; then " + body +
+    "; else echo 'storage-viz: these paths belong to " + host + "; nothing was removed' >&2; fi";
 }
 
 function syncCleanupSelectionControls() {

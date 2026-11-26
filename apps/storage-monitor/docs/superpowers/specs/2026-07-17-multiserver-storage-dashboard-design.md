@@ -293,10 +293,10 @@ The first release has a fixed command allowlist:
 - size inspection: `sudo du -shx -- <path>`;
 - largest descendants: a fixed `sudo find <path> -xdev ...` template with no user-supplied flags; selected paths are absolute, so they cannot be parsed as options;
 - metadata inspection: fixed `sudo stat -- <path>` and modification-time listing templates;
-- file removal: `sudo rm -i -- <path>` only for a snapshot node typed as a file;
-- directory removal: `sudo rm -ri --one-file-system -- <path>` only for a snapshot node typed as a directory.
+- file removal: `sudo rm -f -- <path>` only for a snapshot node typed as a file;
+- directory removal: `sudo rm -rf --one-file-system -- <path>` only for a snapshot node typed as a directory.
 
-Destructive templates are never shown by default. They require a separate explicit reveal after inspection commands, retain interactive confirmation, never use `-f`, and cannot be combined into multi-path or shell-pipeline commands. The browser offers copy only; the backend has no command-execution endpoint.
+Removal commands do not prompt. The person who selected the paths has already decided, and per-file prompts both block bulk removal and swallow the next pasted line as an answer (decided 2026-11-26). Path validation, `--` and `--one-file-system` remain the safety rails. The browser offers copy only; the backend has no command-execution endpoint.
 
 Example command groups may include:
 

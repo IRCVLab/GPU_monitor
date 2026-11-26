@@ -2340,7 +2340,7 @@ function testDeleteCommandQuoting() {
   const plan = viewer.buildCleanupCommandPlan(snapshot, { path: "/data/O'Hara/checkpoint.pt", kind: 'file' }, { freshness: 'stale', revealDestructive: false });
   assert.strictEqual(plan.inspectionCommands, undefined, 'selection must not produce unrelated size or metadata inspection commands');
   assert.strictEqual(plan.destructiveVisible, undefined, 'removal commands must not require a reveal state');
-  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -i -- '/data/O'\"'\"'Hara/checkpoint.pt'");
+  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -f -- '/data/O'\"'\"'Hara/checkpoint.pt'");
 }
 
 function testTreemapCleanupModeBindsCleanupRenderedListenerOnce() {
@@ -2377,8 +2377,8 @@ function testCleanupSelectionLifecycleShowsRemovalImmediatelyAndResetsOnServerCh
 
   assert.strictEqual(viewer.setCleanupSelectedItem({ path: '/data/one', kind: 'file', bytes: 10, source: 'top' }, true), true, 'first valid selection should be accepted');
   let plan = viewer.renderCleanupPanel();
-  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -i -- '/data/one'");
-  assert.match(viewer.document.getElementById('cleanupDangerCommand').innerHTML, /sudo rm -i -- &#39;\/data\/one&#39;/, 'the removal command must be visible immediately');
+  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -f -- '/data/one'");
+  assert.match(viewer.document.getElementById('cleanupDangerCommand').innerHTML, /sudo rm -f -- &#39;\/data\/one&#39;/, 'the removal command must be visible immediately');
 
   assert.strictEqual(viewer.setCleanupSelectedItem({ path: '/data/two', kind: 'file', bytes: 20, source: 'top' }, true), true, 'changing to a different valid selection should be accepted');
   plan = viewer.renderCleanupPanel();
@@ -2418,12 +2418,12 @@ function testCleanupSelectionKeepsMultipleTreemapPaths() {
     item,
     plan: viewer.buildCleanupCommandPlan(viewer.DATA, item, {}),
   }));
-  assert.strictEqual(viewer.cleanupRemovalScript(plans), "sudo rm -ri --one-file-system -- '/data/one'\nsudo rm -i -- '/data/two'", 'different directories must stay readable as one command per line');
+  assert.strictEqual(viewer.cleanupRemovalScript(plans), "sudo rm -rf --one-file-system --preserve-root=all -- '/data/one'; sudo rm -f -- '/data/two'", 'the removal script is one line so a paste cannot feed later lines to a prompt');
   const nestedPlans = plans.concat({
     item: { path: '/data/one/model.bin', kind: 'file', bytes: 5 },
     plan: viewer.buildCleanupCommandPlan(viewer.DATA, { path: '/data/one/model.bin', kind: 'file', bytes: 5 }, {}),
   });
-  assert.strictEqual(viewer.cleanupRemovalScript(nestedPlans), "sudo rm -ri --one-file-system -- '/data/one'\nsudo rm -i -- '/data/two'", 'a selected directory command must subsume selected descendants instead of emitting redundant rm commands');
+  assert.strictEqual(viewer.cleanupRemovalScript(nestedPlans), "sudo rm -rf --one-file-system --preserve-root=all -- '/data/one'; sudo rm -f -- '/data/two'", 'a selected directory command must subsume selected descendants instead of emitting redundant rm commands');
   const removalHtml = viewer.document.getElementById('cleanupDangerCommand').innerHTML;
   assert.strictEqual((removalHtml.match(/<li\b/g) || []).length, 1, 'multi-selection must render one compact command card');
   assert.doesNotMatch(removalHtml, /sudo (?:du|find|stat)\b/, 'the panel must not include unrelated inspection commands');
@@ -2709,6 +2709,38 @@ function testCleanupPanelResponsiveCssAndDangerListSemantics() {
   assert(/#cleanupDangerCommand\b[\s\S]*list-style:\s*none/.test(css) || /\.cleanup-command-list\b[\s\S]*list-style:\s*none/.test(css), 'cleanup command lists must reset list bullets');
 }
 
+function testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts() {
+  const { execFileSync } = require('child_process');
+  const os = require('os');
+  const viewer = loadViewer();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rm-script-'));
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+  const data = path.join(root, 'data');
+  viewer.DATA = { hostname: 'hinton.lab', server_id: 'hinton', selected_roots: [{ mount_id: 'data', mount_root: data, mountpoint: data, scan_root: data, status: 'complete' }], mounts: [{ mount_id: 'data', path: data, scan_root: data }] };
+  const items = [{ path: data + "/it's dir", kind: 'directory', bytes: 1 }, { path: data + '/-model.bin', kind: 'file', bytes: 1 }];
+  const plans = items.map(item => ({ item, plan: viewer.buildCleanupCommandPlan(viewer.DATA, item, {}) }));
+  const script = viewer.cleanupRemovalScript(plans);
+  assert.ok(!script.includes('\n'), 'the removal script must be a single line');
+  const run = host => {
+    fs.mkdirSync(path.join(data, "it's dir", 'sub'), { recursive: true });
+    const readOnly = path.join(data, "it's dir", 'sub', 'ro.txt');
+    if (!fs.existsSync(readOnly)) fs.writeFileSync(readOnly, 'x', { mode: 0o444 });
+    fs.writeFileSync(path.join(data, '-model.bin'), 'x');
+    fs.writeFileSync(path.join(bin, 'hostname'), '#!/bin/sh\necho ' + host + '\n', { mode: 0o755 });
+    execFileSync('bash', ['-c', script], { env: { PATH: bin + ':' + process.env.PATH }, stdio: ['ignore', 'ignore', 'ignore'] });
+    return fs.readdirSync(data).sort();
+  };
+  assert.deepStrictEqual(run('neo'), ['-model.bin', "it's dir"], 'pasted on another server, the script must remove nothing');
+  assert.deepStrictEqual(run('hinton'), [], 'pasted on its own server, the script must remove every selected path without asking');
+  for (const bad of ['/data/a\u202Eb', '/data/a\ud800b', '/data/a\u0085b']) {
+    const plan = viewer.buildCleanupCommandPlan(viewer.DATA, { path: data + bad.slice(5), kind: 'directory', bytes: 1 }, {});
+    assert.strictEqual(plan.destructiveCommand, null, 'paths with bidi, lone surrogate or C1 characters must not get a removal command');
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 function testCleanupPanelRendersRemovalCommandWithoutReveal() {
   const viewer = loadViewer();
   viewer.currentServerId = 'alpha-1';
@@ -2722,7 +2754,7 @@ function testCleanupPanelRendersRemovalCommandWithoutReveal() {
   const danger = viewer.document.getElementById('cleanupDangerCommand');
   assert.ok(danger, 'destructive command list must exist');
   viewer.renderCleanupPanel();
-  assert.match(danger.innerHTML, /sudo rm -ri --one-file-system -- &#39;\/data\/project&#39;/, 'directory removal command must render immediately');
+  assert.match(danger.innerHTML, /sudo rm -rf --one-file-system --preserve-root=all -- &#39;\/data\/project&#39;/, 'directory removal command must render immediately');
 }
 
 function testCleanupCopyFeedbackRestoresLabelAfterRepeatedClicks() {
@@ -3239,6 +3271,7 @@ async function main() {
   testTreemapScaleNoteStaysInLegendWithoutCoveringTiles();
   testCleanupPanelResponsiveCssAndDangerListSemantics();
   testCleanupPanelRendersRemovalCommandWithoutReveal();
+  testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts();
   testCleanupPanelStartsCollapsedWithFullCopy();
   testCleanupCopyFeedbackRestoresLabelAfterRepeatedClicks();
   console.log('viewer regression tests passed');
