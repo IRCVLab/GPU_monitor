@@ -18,24 +18,17 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping
 
-from collector import legacy
-from collector.contract import HostRun, ManifestPointer
+from collector import contract, legacy
+from collector.contract import ContractError
 from collector.health import AUTH_CODES, TRANSPORT_CODES
-from collector.ids import RELEASE_SHA_RE, REQUEST_ID_RE, RUN_ID_RE, SHA256_RE
 from collector.inventory import Server
 from collector.jobs import RescanReply
 from collector.transport import (
     NOT_GATE, GateTransport, TransportError, status_tuple, validate_snapshot_status, validate_status_envelope,
 )
-from collector.update import Attempt
 
-OBSERVE_SCHEMA = "storage-viz.observe/1"
-SCAN_STATES = frozenset({"idle", "running", "interrupted"})
-ATTEMPT_ACTIONS = frozenset({"activate", "rollback"})
-ATTEMPT_OUTCOMES = frozenset({"activated", "already_active", "rolled_back", "busy", "refused", "failed"})
-MAX_PENDING = 16
 SERVICE_UNITS = (legacy.MANUAL_UNIT, legacy.SCHEDULED_UNIT)
 """The units of the gate's ``legacy.services`` blocks, in its order."""
 
@@ -43,32 +36,27 @@ SERVICE_UNITS = (legacy.MANUAL_UNIT, legacy.SCHEDULED_UNIT)
 def parse_observe(raw: bytes, server: Server) -> legacy.Observation:
     """The gate's ``observe`` reply as an Observation, or TransportError BAD_TELEMETRY.
 
-    Scan state comes from the host's lock and run.json (I12). The S7 ``legacy``
-    section goes through the v1 telemetry parser, so a v1 agent behind the gate
-    reads as it does over S2.
+    ``contract.parse_observation`` reads the bytes. The S7 ``legacy`` section then goes
+    through the v1 telemetry parser, so a v1 agent behind the gate reads as it does over S2.
     """
     try:
-        obj = json.loads(raw)
-        if not isinstance(obj, dict) or obj.get("schema") != OBSERVE_SCHEMA:
-            raise TransportError("BAD_TELEMETRY", "not a gate observe reply")
-        section = obj["legacy"]
-        units = obj["units"]
+        facts = contract.parse_observation(raw)
+    except ContractError as exc:
+        raise TransportError("BAD_TELEMETRY", f"gate observe reply refused: {exc.reason}") from exc
+    section = facts.legacy
+    try:
         probe = {
             "lifecycle": section["lifecycle"], "published": section["published"], "progress": section["progress"],
-            "services": _services(section["services"], units), "timer": section["timer"],
+            "services": _services(section["services"], facts.units), "timer": section["timer"],
             "remote_unix": section["remote_unix"], "remote_monotonic": section["remote_monotonic"],
         }
-        agent = _agent(obj["agent"], obj["update"])
-        facts = _v2_facts(obj)
-    except TransportError:
-        raise
-    except Exception as exc:
-        raise TransportError("BAD_TELEMETRY", "gate observe reply is malformed") from exc
-    observation = legacy.parse_telemetry(probe, server, lambda unit_active: facts)
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise TransportError("BAD_TELEMETRY", "gate observe legacy section is malformed") from exc
+    observation = legacy.parse_telemetry(probe, server, lambda unit_active: (facts.manifest, facts.run, facts.progress))
     # The run facts come from the lock and run.json for a v1 agent too: the update track stages only on an idle host.
     return legacy.Observation(observation.host_now, observation.status, observation.publication,
                               observation.publication_error, observation.scan, observation.manifest,
-                              facts[1], transport="gate", agent=agent)
+                              facts.run, transport="gate", agent=facts.agent)
 
 
 def _services(services: Any, units: Mapping[str, Any]) -> list:
@@ -81,50 +69,6 @@ def _services(services: Any, units: Mapping[str, Any]) -> list:
         invocation = unit.get("InvocationID") or ""
         blocks.append(f"{block}\nId={name}\nInvocationID={invocation}")
     return blocks
-
-
-def _v2_facts(obj: Mapping[str, Any]) -> Tuple[Optional[ManifestPointer], HostRun, Any]:
-    """The manifest pointer (None for a v1 host), the run facts from the lock and run.json, and progress.json."""
-    manifest = obj["manifest"]
-    if manifest is not None and (not isinstance(manifest.get("sha256"), str) or not SHA256_RE.fullmatch(manifest["sha256"])):
-        raise TransportError("BAD_TELEMETRY", "manifest pointer is invalid")
-    state = obj["scan"]["state"]
-    if state not in SCAN_STATES:
-        raise TransportError("BAD_TELEMETRY", "scan state is invalid")
-    run = obj["scan"]["run"]
-    run = run if isinstance(run, dict) and not run.get("invalid") and not run.get("truncated") else {}
-    run_id, ids = run.get("run_id"), run.get("request_ids") or []
-    pending = obj["requests_pending"]
-    if not isinstance(ids, list) or not isinstance(pending, list) or len(pending) > MAX_PENDING or not all(
-            isinstance(item, str) and REQUEST_ID_RE.fullmatch(item) for item in [*ids, *pending]):
-        raise TransportError("BAD_TELEMETRY", "request ids are invalid")
-    seq = manifest.get("seq") if manifest is not None else None
-    pointer = ManifestPointer(manifest["sha256"], seq if type(seq) is int else None) if manifest is not None else None
-    return pointer, HostRun(
-        present=state != "idle", scanning=state == "running",
-        run_id=run_id if isinstance(run_id, str) and RUN_ID_RE.fullmatch(run_id) else None,
-        request_ids=frozenset(ids), pending=frozenset(pending)), obj["progress"]
-
-
-def _agent(agent: Mapping[str, Any], update: Any) -> legacy.AgentFacts:
-    release = agent["release_sha"]
-    if release is not None and not (isinstance(release, str) and RELEASE_SHA_RE.fullmatch(release)):
-        raise TransportError("BAD_TELEMETRY", "agent release is invalid")
-    return legacy.AgentFacts(release_sha=release, broken=agent["health"] == "broken", attempt=_attempt(update))
-
-
-def _attempt(update: Any) -> Optional[Attempt]:
-    """The updater's last attempt. state.json is the updater's file; an unusable one reads as no attempt."""
-    attempt = update.get("last_attempt") if isinstance(update, dict) else None
-    if not isinstance(attempt, dict):
-        return None
-    action, sha, outcome, code, finished = (attempt.get(key) for key in ("action", "sha", "outcome", "code", "finished_unix"))
-    if (action is not None and action not in ATTEMPT_ACTIONS) or outcome not in ATTEMPT_OUTCOMES \
-            or (sha is not None and not (isinstance(sha, str) and RELEASE_SHA_RE.fullmatch(sha))) \
-            or (code is not None and not (isinstance(code, str) and code.isascii() and len(code) <= 64)) \
-            or type(finished) is not int or finished < 0:
-        return None
-    return Attempt(action, sha, outcome, code, finished)
 
 
 class GateHost:

@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
 
 from collector import contract, health, jobs, judge, snapshot
 from collector import update as updates
-from collector.contract import ContractError, HostManifest, HostRun, LastRun, ManifestPointer
+from collector.contract import AgentFacts, ContractError, HostManifest, HostRun, LastRun, ManifestPointer
 from collector.errors import RescanUnavailable, StoreUnavailable
 from collector.health import (
     LEGACY_VOLUME, CaptureAccepted, CaptureGone, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
@@ -28,7 +28,6 @@ from collector.health import (
 from collector.inventory import Server
 from collector.store import DURATION_LIMIT, DURATION_PLANS, Record, ServerStore
 from collector.transport import TransportError
-from collector.legacy import AgentFacts
 from collector.view import ObservationView, ServerView, Snapshot, build_view, render_snapshot, volumes_payload
 
 _LOG = logging.getLogger(__name__)

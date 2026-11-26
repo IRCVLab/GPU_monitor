@@ -12,11 +12,11 @@ import json
 import pathlib
 import threading
 
-from collector.contract import HostRun, ManifestPointer
+from collector.contract import AgentFacts, HostRun, ManifestPointer
 from collector.fleet import Fleet
 from collector.inventory import Server
 from collector.jobs import RescanReply, Scan
-from collector.legacy import AgentFacts, Observation, empty_status
+from collector.legacy import Observation, empty_status
 from collector.update import Attempt
 from collector.test_snapshot import base_payload, status_for
 from collector.transport import TransportError

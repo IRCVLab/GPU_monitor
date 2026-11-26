@@ -15,10 +15,9 @@ from typing import Any, Callable, Mapping, Optional
 
 from collector import judge
 from collector.inventory import Server
-from collector.contract import HostRun, ManifestPointer
+from collector.contract import AgentFacts, HostRun, ManifestPointer
 from collector.ids import REQUEST_ID_RE, SHA256_RE as HEX64_RE, RUN_ID_RE
 from collector.jobs import RescanReply, Scan
-from collector.update import Attempt
 from collector.transport import KNOWN_ACTIVE_STATES, OpenSshTransport, TransportError, validate_status_envelope
 
 MANUAL_UNIT = "storage-viz-scan.service"
@@ -190,17 +189,6 @@ service_props = 'Id,ActiveState,InvocationID,StateChangeTimestampMonotonic,ExecM
 services = show(('storage-viz-scan.service', 'storage-viz-scheduled-scan.service'),service_props).strip().split('\n\n')
 print(json.dumps({'lifecycle':life,'published':published,'progress':progress,'services':services,'timer':timer,'v2':v2,'remote_unix':time.time(),'remote_monotonic':time.clock_gettime(time.CLOCK_MONOTONIC)}))
 '''.replace('REQUEST_PATTERN', repr(REQUEST_ID_RE.pattern))
-
-
-@dataclass(frozen=True)
-class AgentFacts:
-    """What the gate reports of the agent release and its updater. Empty over S2."""
-    release_sha: Optional[str] = None
-    """The release ``/opt/storage-viz/current`` points at."""
-    broken: bool = False
-    """The release's ``check-config`` fails on the host."""
-    attempt: Optional[Attempt] = None
-    """The updater's last attempt, from ``update/state.json``."""
 
 
 @dataclass(frozen=True)
