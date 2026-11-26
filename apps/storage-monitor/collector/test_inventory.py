@@ -185,12 +185,13 @@ class InventoryTests(unittest.TestCase):
             self.load(cfg)
 
 
-    def test_transport_defaults_to_the_gate_and_legacy_must_be_explicit(self):
+    def test_transport_defaults_to_legacy_and_gate_pins_a_host_to_the_gate(self):
         cfg = self.valid_config()
         parsed = inventory.parse_inventory(cfg)
-        self.assertEqual({server.transport for server in parsed.servers}, {"gate"})
-        cfg["servers"][0]["transport"] = "legacy"
-        self.assertEqual(inventory.parse_inventory(cfg).servers[0].transport, "legacy")
+        self.assertEqual({server.transport for server in parsed.servers}, {"legacy"},
+                         "a host not bootstrapped at deploy keeps working with no inventory edit")
+        cfg["servers"][0]["transport"] = "gate"
+        self.assertEqual(inventory.parse_inventory(cfg).servers[0].transport, "gate")
         for bad in ("sftp", "", ["gate"], True):
             cfg["servers"][0]["transport"] = bad
             with self.assertRaisesRegex(ValueError, "transport"):

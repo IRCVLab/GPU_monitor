@@ -7,8 +7,8 @@ gate's ``observe`` JSON: it maps it into the ``Observation`` the reducers read.
 
 ``HostRouter`` picks the transport per server, explicitly (``link.transport``):
 
-- inventory ``transport: gate``: every verb goes over the gate;
-- inventory ``transport: legacy``: S2, until the gate answers an ``observe`` with its
+- inventory ``transport: gate``: every verb goes over the gate, with no S2 fallback;
+- inventory ``transport: legacy``, the default: S2, until the gate answers an ``observe`` with its
   header, then the gate. The gate is tried on the first contact and after each failed
   S2 observe, because a bootstrap turns S2 off for the host. A reply without the gate
   header (NOT_GATE) on such a host means the bootstrap was reverted: back to S2. A

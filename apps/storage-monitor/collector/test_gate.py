@@ -398,3 +398,18 @@ def test_an_unreachable_legacy_host_is_not_contacted_twice_per_observe():
     with pytest.raises(TransportError):
         hosts.observe(server)
     assert s2.calls == [] and hosts.transport(server) == "legacy"
+
+
+def test_a_host_the_inventory_leaves_unmarked_is_legacy_and_moves_to_the_gate_once_it_answers():
+    from collector.inventory import parse_inventory
+
+    raw = {"servers": [{"id": SERVER.id, "display_name": "Alpha", "host": SERVER.host, "username": "monitoring",
+                        "identity_file": str(SERVER.identity_file), "known_hosts_file": str(SERVER.known_hosts_file)}]}
+    server = parse_inventory(raw).servers[0]
+    hosts, gate, s2 = router()
+    gate.errors = [NOT_GATE]  # not bootstrapped yet
+    assert hosts.observe(server).transport == "legacy" and hosts.transport(server) == "legacy"
+    s2.errors = ["TELEMETRY_UNAVAILABLE"]  # bootstrapped: the forced command refuses the S2 probe
+    with pytest.raises(TransportError):
+        hosts.observe(server)
+    assert hosts.observe(server).transport == "gate" and hosts.transport(server) == "gate"

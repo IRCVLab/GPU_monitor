@@ -119,8 +119,8 @@ class Server:
     known_hosts_file: pathlib.PurePosixPath
     scanner: Mapping[str, Any]
     scanner_digest: str
-    transport: str = "gate"
-    """``gate``, or ``legacy`` for a host not bootstrapped yet: S2 until its gate answers (collector/gate.py)."""
+    transport: str = "legacy"
+    """``legacy`` (the default): S2 until the host's gate answers, then the gate. ``gate``: the gate only (collector/gate.py)."""
     canary: bool = False
     """Takes a new agent release before the rest of the fleet (§3.4). At most one server has it."""
 
@@ -202,7 +202,7 @@ def _parse_server(raw: Any, idx: int) -> Server:
     known_hosts_file = _safe_absolute_external_path(_string(raw.get("known_hosts_file"), "known_hosts_file"), "known_hosts_file")
     scanner = _parse_scanner(raw.get("scanner", {}), sid)
     digest = scanner_digest(scanner)
-    transport = raw.get("transport", "gate")
+    transport = raw.get("transport", "legacy")
     if transport not in TRANSPORTS:
         raise ValueError(f"transport must be one of {', '.join(TRANSPORTS)}")
     return Server(sid, display_name, order, host, port, enabled, username, identity_file, known_hosts_file, scanner, digest,
