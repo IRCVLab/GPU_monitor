@@ -56,6 +56,7 @@ into the repo as a failing test before any redesign unit touches its area.
 | A7 | Non-UTF-8 sibling names collide as `�` | S5 | hstscan.c name encoding |
 | A8 | The lifecycle keeps `phase: publishing` after completion | S2 | scan_runner.py final publish_lifecycle |
 | A9 | HDD capacity figures can be up to 3 h old because the whole cached capture is reused | S1/S5 | scan_runner.py slow-capture reuse |
+| A10 | A tree deeper than the collector's 128-level cap gets the whole snapshot rejected; default pruning already emits 150 levels for a 101 MB file at depth 150 (found in M4) | S5 | hstscan.c rollup depth vs collector snapshot.py depth cap |
 
 ## Fixed earlier on 2026-11-26 (shipped)
 

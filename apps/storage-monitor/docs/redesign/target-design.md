@@ -736,6 +736,8 @@ Each step reads state from disk, so a rerun after a crash converges. Unit: `Prot
 
 Host requirements become python3, systemd, sudo and OpenSSH 8.1 or later. `cc`, `make` and `sftp-server` are no longer needed.
 
+**Limits found in M4 (accepted 2026-11-27).** Row paths in `top_files`, `stale` and error rows are capped at 4096 bytes, because the agent and collector reject longer strings. Longer rows are skipped from those lists, but their bytes still count in totals. An error row deeper than that is reported at its deepest ancestor that fits. Tree depth is capped at 128 levels by folding deeper levels into `other_bytes` at the cap (A10, fixed in M5). `vanished_dirs` counts VANISHED, REPLACED and FD_BUDGET_REOPEN_FAILED rows, not EACCES.
+
 ## 5. Bug coverage
 
 Test paths are under `apps/storage-monitor/`. Every test lands in M0 as a strict expected failure named after its bug id and flips to passing in the named unit. The reference-branch column names the source of the regression case: the hunt repro for every id, plus the viewer branch's test for V1 to V9. `tools/check_bug_coverage.py` parses the ids from `bug-catalog.md` and fails CI if an id has no test citing it.
@@ -820,7 +822,7 @@ Rules for every unit: it lands as one commit series, or as the named a/b series.
 - Rollback: dashboard rollback. The previous bundle is in `passed`, so hosts return to it.
 - Deletes: the fixed path buffer, reopen-by-path, the `strcmp(tg, "/")` prune special case.
 
-#### M5. Per-volume publication from group runs (A2, A3, A4, A8, A9; C4 host side)
+#### M5. Per-volume publication from group runs (A2, A3, A4, A8, A9, A10; C4 host side)
 
 - Changes, central first (M5a): `contract.parse_manifest`, per-volume captures and receipt-based jobs in the actor. A host whose `observe` shows no `manifest.json` stays on S3 and S4.
 - Changes, agent (M5b): the `storage_viz_agent` package replaces `scan_runner.py`, delivered by the channel through the canary. The new agent leaves the v1 files in place (S8), so a rollback finds them.
