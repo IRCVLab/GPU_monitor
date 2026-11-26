@@ -34,6 +34,7 @@ MAX_COMMAND = 256
 MAX_BUNDLE = 64 * MiB
 MAX_SIGNATURE = 4 * KiB
 MAX_JSON_FILE = 16 * KiB
+MAX_MANIFEST = 64 * KiB
 MAX_PENDING_REQUESTS = 128
 STALE_REQUEST_SECONDS = 24 * 3600
 SCAN_UNIT = "storage-viz-scan.service"
@@ -154,10 +155,10 @@ def _read_small(path: Path, cap: int = MAX_JSON_FILE) -> Optional[bytes]:
     return data
 
 
-def _read_json(path: Path) -> object:
+def _read_json(path: Path, cap: int = MAX_JSON_FILE) -> object:
     """JSON from a small file, None when absent, {"invalid": true} when unusable."""
     try:
-        data = _read_small(path)
+        data = _read_small(path, cap)
         return None if data is None else json.loads(data)
     except (Refused, OSError, ValueError):
         return {"invalid": True}
@@ -190,7 +191,10 @@ def observe(paths: Paths, host: Host) -> bytes:
     held = lock_held(paths.scan_lock)
     run = _read_json(paths.data / "run.json")
     state = "running" if held else ("interrupted" if run is not None else "idle")
-    manifest_bytes = _read_small(paths.data / "manifest.json", 64 * KiB)
+    try:
+        manifest_bytes = _read_small(paths.data / "manifest.json", MAX_MANIFEST)
+    except (Refused, OSError):
+        manifest_bytes = b"\0"  # present but unusable: seq None, and its digest changes with it
     manifest = None
     if manifest_bytes is not None:
         try:
@@ -236,7 +240,33 @@ def observe(paths: Paths, host: Host) -> bytes:
             "remote_monotonic": time.clock_gettime(time.CLOCK_MONOTONIC),
         },
     }
-    return (json.dumps(report, sort_keys=True) + "\n").encode()
+    return _fit(report, VERBS["observe"][1])
+
+
+# Fields observe may shrink, largest first, when the whole report would pass its
+# cap. The scan state, units, update state and agent health always stay whole.
+DEGRADABLE = (("legacy", "lifecycle"), ("legacy", "published"), ("legacy", "progress"), ("progress",),
+              ("legacy", "services"), ("legacy", "timer"), ("scan", "run"))
+
+
+def _fit(report: dict, cap: int) -> bytes:
+    """Serialize the report, replacing the largest degradable fields until it fits."""
+    while True:
+        body = (json.dumps(report, sort_keys=True) + "\n").encode()
+        if len(body) <= cap:
+            return body
+        sizes = []
+        for path in DEGRADABLE:
+            parent = report
+            for key in path[:-1]:
+                parent = parent[key]
+            value = parent[path[-1]]
+            if not (isinstance(value, dict) and value.get("truncated")):
+                sizes.append((len(json.dumps(value)), path, parent))
+        if not sizes:
+            raise Refused("OUTPUT_TOO_LARGE")
+        size, path, parent = max(sizes, key=lambda item: item[0])
+        parent[path[-1]] = {"truncated": True, "bytes": size}
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
@@ -280,7 +310,7 @@ def _request_recorded(paths: Paths, request_id: str) -> bool:
     run = _read_json(paths.data / "run.json")
     if isinstance(run, dict) and request_id in (run.get("request_ids") or []):
         return True
-    manifest = _read_json(paths.data / "manifest.json")
+    manifest = _read_json(paths.data / "manifest.json", MAX_MANIFEST)
     receipts = manifest.get("requests") if isinstance(manifest, dict) else None
     return isinstance(receipts, list) and any(isinstance(r, dict) and r.get("request_id") == request_id for r in receipts)
 

@@ -150,6 +150,39 @@ class GateTest(unittest.TestCase):
         self.assertEqual(set(report["units"]), set(gate.UNITS))
         self.assertLess(len(json.dumps(report)), 64 * 1024)
 
+    def test_observe_degrades_per_field_instead_of_refusing(self):
+        big = json.dumps({"pad": "x" * (gate.MAX_JSON_FILE - 100)})
+        for rel in ("scan-lifecycle.json", "scan-status.json", "run.json"):
+            (self.paths.data / rel).write_text(big)
+        for rel in ("progress.json", "scan-progress.json"):
+            (self.paths.run / rel).write_text(big)
+        (self.paths.update / "state.json").write_text('{"active": "%s"}' % SHA)
+        self.hold_scan_lock()
+        code, header, body = self.serve("observe")
+        report = json.loads(body)
+        self.assertEqual(code, 0)
+        self.assertLessEqual(len(body), 64 * 1024)
+        self.assertEqual(report["scan"]["state"], "running")
+        self.assertEqual(report["update"], {"active": SHA}, "update state is never dropped")
+        truncated = [key for key in ("lifecycle", "published", "progress") if report["legacy"][key].get("truncated")]
+        self.assertTrue(truncated)
+        self.assertGreater(report["legacy"]["lifecycle"].get("bytes", 0) or report["legacy"]["published"].get("bytes", 0), 1000)
+
+    def test_rescan_recognises_a_receipt_in_a_large_manifest(self):
+        receipts = [{"request_id": f"{i:032x}", "pad": "x" * 200} for i in range(200)]
+        receipts.append({"request_id": REQUEST})
+        manifest = json.dumps({"requests": receipts})
+        self.assertGreater(len(manifest), gate.MAX_JSON_FILE)
+        self.assertLess(len(manifest), 64 * 1024)
+        (self.paths.data / "manifest.json").write_text(manifest)
+        self.assertEqual(self.serve(f"rescan {REQUEST}")[2], b"already_received\n")
+
+    def test_oversized_manifest_does_not_break_observe(self):
+        (self.paths.data / "manifest.json").write_bytes(b"x" * (64 * 1024 + 1))
+        code, _, body = self.serve("observe")
+        self.assertEqual(code, 0)
+        self.assertIsNone(json.loads(body)["manifest"]["seq"])
+
     def test_oversized_host_file_is_not_echoed(self):
         (self.paths.data / "scan-lifecycle.json").write_bytes(b"{" + b" " * (gate.MAX_JSON_FILE + 10) + b"}")
         report = json.loads(self.serve("observe")[2])

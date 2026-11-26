@@ -6,21 +6,29 @@ The gate writes `update/incoming/activate` with one line, `activate <sha>` or
 as root. The steps follow target-design §4.5:
 
 1. Take /run/storage-viz/scan.lock without waiting; if a scan holds it, record
-   BUSY and exit 75, leaving the request for the next start.
+   BUSY and exit 75, leaving the request for the next start. Otherwise rename
+   the request to `activate.processing`, so a request the gate writes during
+   the run survives and is processed next in the same run.
 2. An installed release is re-checked against its manifest. A new bundle is
    read once into memory, then its signature (`ssh-keygen -Y verify` against
    the pinned allowed_signers), manifest, rollback floor and bootstrap version
    are checked. A sha or archive digest in the bad list is refused.
+   The floor is max(floor_high_water, active release's rollback_floor_seq).
+   floor_high_water only rises, so central cannot walk a host down one
+   signed release at a time.
 3. Safe extract to releases/<sha>.tmp: regular files only, no absolute or `..`
    paths, no links or devices, modes 0644 or 0755, every digest checked.
 4. Self-test the release under the scan unit's sandbox (systemd-run --pipe).
-   A failure adds the sha and digest to `bad` and leaves `current` alone.
+   A failure leaves `current` alone and backs the sha off (6 h, doubling, at
+   most 7 days); it may be environmental, so it is not a permanent mark.
 5. Rename releases/<sha>.tmp to releases/<sha>, then swap the `current`
-   symlink with one rename and record {active, previous, bad, last_attempt}.
+   symlink with one rename and record the state.
 
-`rollback <sha>` is the bad-run signal: central sends it when a release fails
-its first real run. It re-activates the recorded previous release and adds the
-failed one to `bad`, so it never activates again.
+Permanent `bad` marks: a signed bundle whose content or floor fails, and a
+release rolled back by `rollback <sha>`, the bad-run signal central sends when
+a release fails its first real run. That re-activates the recorded previous
+release even below the floor: it was active just before, and the rollback
+consumes `previous`, so it cannot chain.
 
 Every step reads its state from disk, so a rerun after a crash converges.
 Standard library only, Python 3.8. The update channel never replaces this file.
@@ -52,6 +60,10 @@ MAX_SIGNATURE = 4096
 MAX_MEMBERS = 256
 MAX_EXPANDED = 256 * 1024 * 1024
 KEEP_RELEASES = 3
+KEEP_BAD = 64
+SELFTEST_BACKOFF_BASE = 6 * 3600
+SELFTEST_BACKOFF_MAX = 7 * 24 * 3600
+MAX_REQUESTS_PER_RUN = 4
 EXIT_BUSY = 75
 SHA40 = re.compile(r"[0-9a-f]{40}")
 MANIFEST = "RELEASE-MANIFEST.json"
@@ -152,13 +164,26 @@ class Updater:
             state = {}
         except (OSError, ValueError):
             state = {}  # rebuilt below from what is on disk
+        if not isinstance(state, dict):
+            state = {}
         active = self.current_sha()
-        bad = [b for b in state.get("bad", []) if isinstance(b, dict)] if isinstance(state, dict) else []
-        previous = state.get("previous") if isinstance(state, dict) else None
+        bad = [b for b in state.get("bad", []) if isinstance(b, dict)]
+        previous = state.get("previous")
         if not (isinstance(previous, str) and (self.paths.releases / previous).is_dir() and previous != active):
             previous = None
+        high_water = state.get("floor_high_water")
+        high_water = high_water if type(high_water) is int and high_water >= 0 else 0
+        if active:  # a lost state file still keeps the active release's floor
+            high_water = max(high_water, self._manifest_floor(active))
+        backoff = state.get("selftest_backoff")
+        backoff = {k: v for k, v in backoff.items() if SHA40.fullmatch(k) and isinstance(v, dict)} if isinstance(backoff, dict) else {}
         return {"schema": "storage-viz.update/1", "active": active, "previous": previous, "bad": bad,
-                "last_attempt": state.get("last_attempt") if isinstance(state, dict) else None}
+                "floor_high_water": high_water, "selftest_backoff": backoff,
+                "last_attempt": state.get("last_attempt")}
+
+    def _manifest_floor(self, sha: str) -> int:
+        floor = self.release_manifest(sha).get("rollback_floor_seq", 0)
+        return floor if type(floor) is int else 0
 
     def write_state(self, state: dict) -> None:
         _write_atomic(self.paths.state, (json.dumps(state, sort_keys=True) + "\n").encode(), 0o640)
@@ -184,9 +209,12 @@ class Updater:
                 if exc.errno not in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
                     raise
                 state = self.read_state()
+                pending = self.paths.incoming / "activate"
+                if not pending.exists():
+                    pending = self._processing
                 try:  # name the waiting request, so central sees what is deferred
-                    action, sha = self._read_request()
-                except (Failed, FileNotFoundError):
+                    action, sha = self._read_request(pending)
+                except Failed:
                     action, sha = None, None
                 state["last_attempt"] = self._attempt(action, sha, "busy", "BUSY")
                 self.write_state(state)
@@ -195,13 +223,31 @@ class Updater:
         finally:
             os.close(lock_fd)
 
+    @property
+    def _processing(self) -> Path:
+        return self.paths.incoming / "activate.processing"
+
+    def _claim(self) -> bool:
+        """Move the newest request to activate.processing; a crash leftover stays claimed."""
+        try:
+            os.replace(str(self.paths.incoming / "activate"), str(self._processing))
+        except FileNotFoundError:
+            pass
+        return os.path.lexists(str(self._processing))
+
     def _locked_run(self) -> int:
-        if not (self.paths.incoming / "activate").exists():
-            return 0  # nothing requested: a rerun after success changes nothing
+        status = 0  # nothing requested: a rerun after success changes nothing
+        for _ in range(MAX_REQUESTS_PER_RUN):
+            if not self._claim():
+                break
+            status = self._process_claimed()
+        return status
+
+    def _process_claimed(self) -> int:
         state = self.read_state()
         action, sha = None, None
         try:
-            action, sha = self._read_request()
+            action, sha = self._read_request(self._processing)
             if action == "rollback":
                 outcome = self._rollback(state, sha)
             else:
@@ -210,18 +256,22 @@ class Updater:
         except Failed as failure:
             outcome, code, status = "refused" if failure.code in REFUSALS else "failed", failure.code, 1
             print(f"storage-viz-update: {failure}", file=sys.stderr)
+        except OSError as error:  # ENOSPC, a file/directory clash in the bundle, ...
+            outcome, code, status = "failed", "IO_ERROR", 1
+            print(f"storage-viz-update: IO_ERROR: {error}", file=sys.stderr)
+        state["bad"] = state["bad"][-KEEP_BAD:]
         state["last_attempt"] = self._attempt(action, sha, outcome, code)
         self.write_state(state)
-        _unlink(self.paths.incoming / "activate")
+        _unlink(self._processing)
         self._prune(state)
         return status
 
     def _attempt(self, action, sha, outcome, code) -> dict:
         return {"action": action, "sha": sha, "outcome": outcome, "code": code, "finished_unix": int(self.clock())}
 
-    def _read_request(self) -> Tuple[str, str]:
+    def _read_request(self, path: Path) -> Tuple[str, str]:
         try:
-            raw = _read_regular(self.paths.incoming / "activate", 128)
+            raw = _read_regular(path, 128)
         except FileNotFoundError:
             raise Failed("REQUEST_INVALID", "the request vanished")
         parts = raw.decode("ascii", "replace").strip().split(" ")
@@ -246,12 +296,17 @@ class Updater:
         if state["active"] == sha:
             self._check_installed(sha)
             return "already_active"
+        backoff = state["selftest_backoff"].get(sha)
+        if backoff and self.clock() < backoff.get("retry_after", 0):
+            raise Failed("SELFTEST_BACKOFF", f"retry after {backoff['retry_after']}")
         if (self.paths.releases / sha).is_dir():
             manifest = self._check_installed(sha)
             self._check_policy(state, manifest)
         else:
-            self._install(state, sha)
+            manifest = self._install(state, sha)
         self._switch(sha)
+        state["selftest_backoff"].pop(sha, None)
+        state["floor_high_water"] = max(state["floor_high_water"], manifest["rollback_floor_seq"])
         state.update(previous=state["active"], active=sha)
         for suffix in (".tar.gz", ".tar.gz.sig"):
             _unlink(self.paths.incoming / f"{sha}{suffix}")
@@ -280,14 +335,17 @@ class Updater:
                 raise Failed("INSTALLED_CORRUPT", rel)
         return manifest
 
-    def _check_policy(self, state: dict, manifest: dict) -> None:
-        floor = self.release_manifest(state["active"]).get("rollback_floor_seq", 0) if state["active"] else 0
+    def _check_floor(self, state: dict, manifest: dict) -> None:
+        floor = max(state["floor_high_water"], self._manifest_floor(state["active"]) if state["active"] else 0)
         if manifest["release_seq"] < floor:
             raise Failed("FLOOR", f"release_seq {manifest['release_seq']} < floor {floor}")
+
+    def _check_policy(self, state: dict, manifest: dict) -> None:
+        self._check_floor(state, manifest)
         if manifest["bootstrap_version"] > BOOTSTRAP_VERSION:
             raise Failed("BOOTSTRAP_TOO_OLD", f"needs bootstrap {manifest['bootstrap_version']}")
 
-    def _install(self, state: dict, sha: str) -> None:
+    def _install(self, state: dict, sha: str) -> dict:
         try:
             bundle = _read_regular(self.paths.incoming / f"{sha}.tar.gz", MAX_BUNDLE)
             signature = _read_regular(self.paths.incoming / f"{sha}.tar.gz.sig", MAX_SIGNATURE)
@@ -297,9 +355,15 @@ class Updater:
         if any(entry.get("archive_sha256") == archive_sha256 for entry in state["bad"]):
             raise Failed("BAD_RELEASE", "archive digest")
         if not self.verify(self.paths.signers, bundle, signature, self.paths.update):
-            raise Failed("SIGNATURE")
-        members, manifest = read_bundle(bundle, sha)
-        self._check_policy(state, manifest)
+            raise Failed("SIGNATURE")  # no mark: anyone who can stage can send garbage
+        try:
+            members, manifest = read_bundle(bundle, sha)
+            self._check_floor(state, manifest)
+        except Failed:
+            # CI signed this bundle and it is broken or below the floor: it never becomes valid.
+            state["bad"].append({"sha": sha, "archive_sha256": archive_sha256})
+            raise
+        self._check_policy(state, manifest)  # BOOTSTRAP_TOO_OLD clears once the host's bootstrap tier is upgraded
         staging = self.paths.releases / f"{sha}.tmp"
         shutil.rmtree(str(staging), ignore_errors=True)
         extract(members, staging)
@@ -309,11 +373,14 @@ class Updater:
         ok, output = self.selftest(staging, self.paths.config)
         if not ok:
             shutil.rmtree(str(staging), ignore_errors=True)
-            state["bad"].append({"sha": sha, "archive_sha256": archive_sha256})
+            failures = state["selftest_backoff"].get(sha, {}).get("failures", 0) + 1
+            delay = min(SELFTEST_BACKOFF_BASE * 2 ** (failures - 1), SELFTEST_BACKOFF_MAX)
+            state["selftest_backoff"][sha] = {"failures": failures, "retry_after": int(self.clock()) + delay}
             raise Failed("SELFTEST_FAILED", output)
         _fsync_tree(staging)
         os.rename(str(staging), str(self.paths.releases / sha))
         _fsync_dir(self.paths.releases)
+        return manifest
 
     def _switch(self, sha: str) -> None:
         link = self.paths.opt / "current.new"
@@ -337,7 +404,7 @@ class Updater:
                 spare -= 1
 
 
-REFUSALS = {"BAD_RELEASE", "FLOOR", "BOOTSTRAP_TOO_OLD", "ROLLBACK_TARGET"}
+REFUSALS = {"BAD_RELEASE", "FLOOR", "BOOTSTRAP_TOO_OLD", "ROLLBACK_TARGET", "SELFTEST_BACKOFF"}
 
 
 def read_bundle(bundle: bytes, sha: str) -> Tuple[Dict[str, Tuple[bytes, int]], dict]:

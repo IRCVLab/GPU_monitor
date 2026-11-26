@@ -117,11 +117,13 @@ class UpdaterTest(unittest.TestCase):
             "setuid": member("bin/suid", size=1, mode=0o4755),
             "directory": member("bin/sub", type=tarfile.DIRTYPE, mode=0o755),
         }
-        for label, add in cases.items():
+        for index, (label, add) in enumerate(cases.items()):
             with self.subTest(label):
-                self.stage(SHA_A, fixtures.bundle(SHA_A, extra_members=add))
+                sha = f"{index:x}" * 40
+                self.stage(sha, fixtures.bundle(sha, extra_members=add))
                 self.assertEqual(self.updater().run(), 1)
                 self.assertEqual(self.state()["last_attempt"]["code"], "UNSAFE_ARCHIVE")
+                self.assertIn(sha, [entry["sha"] for entry in self.state()["bad"]], "CI signed it broken")
                 self.assertIsNone(self.current())
                 self.assertEqual(list(self.paths.releases.iterdir()), [])
 
@@ -138,20 +140,109 @@ class UpdaterTest(unittest.TestCase):
         self.assertEqual(self.state()["last_attempt"]["code"], "BOOTSTRAP_TOO_OLD")
         self.assertIsNone(self.current())
 
-    def test_selftest_failure_leaves_previous_release_active(self):
+    def test_selftest_failure_leaves_previous_release_active_and_backs_off(self):
         self.activate(SHA_A)
         self.selftest_ok = False
         self.assertEqual(self.activate(SHA_B), 1)
         state = self.state()
         self.assertEqual(state["last_attempt"]["code"], "SELFTEST_FAILED")
         self.assertEqual(self.current(), f"releases/{SHA_A}")
-        self.assertEqual([entry["sha"] for entry in state["bad"]], [SHA_B])
+        self.assertEqual(state["bad"], [], "a self-test can fail for a transient reason")
+        self.assertEqual(state["selftest_backoff"][SHA_B], {"failures": 1, "retry_after": 1000 + 6 * 3600})
         self.assertFalse((self.paths.releases / SHA_B).exists())
         self.assertFalse((self.paths.releases / f"{SHA_B}.tmp").exists())
-        # A bad sha never activates again, even once the self-test would pass.
+
+    def test_selftest_backoff_doubles_to_seven_days_then_a_pass_clears_it(self):
+        self.selftest_ok = False
+        now = [1000]
+        expected = []
+        for failure in range(1, 8):
+            self.stage(SHA_B, fixtures.bundle(SHA_B))
+            self.assertEqual(update.Updater(self.paths, selftest=self.selftest, clock=lambda: now[0]).run(), 1)
+            entry = self.state()["selftest_backoff"][SHA_B]
+            expected.append(entry["retry_after"] - now[0])
+            self.stage(SHA_B)  # retry before the deadline: refused without a self-test
+            runs = len(self.selftests)
+            self.assertEqual(update.Updater(self.paths, selftest=self.selftest, clock=lambda: now[0]).run(), 1)
+            self.assertEqual(self.state()["last_attempt"]["code"], "SELFTEST_BACKOFF")
+            self.assertEqual(len(self.selftests), runs)
+            now[0] = entry["retry_after"]
+        self.assertEqual(expected, [6 * 3600 * 2 ** i for i in range(5)] + [7 * 24 * 3600] * 2)
         self.selftest_ok = True
-        self.assertEqual(self.activate(SHA_B), 1)
-        self.assertEqual(self.state()["last_attempt"]["code"], "BAD_RELEASE")
+        self.stage(SHA_B, fixtures.bundle(SHA_B))
+        self.assertEqual(update.Updater(self.paths, selftest=self.selftest, clock=lambda: now[0]).run(), 0)
+        self.assertEqual(self.current(), f"releases/{SHA_B}")
+        self.assertEqual(self.state()["selftest_backoff"], {})
+
+    def test_floor_never_ratchets_down_one_signed_release_at_a_time(self):
+        """Review proof p1: each step at the active release's floor walked the host down."""
+        self.assertEqual(self.activate("e" * 40, release_seq=100, floor=80), 0)
+        self.assertEqual(self.activate("1" * 40, release_seq=50, floor=30), 1)
+        self.assertEqual(self.state()["last_attempt"]["code"], "FLOOR")
+        self.assertEqual(self.activate("2" * 40, release_seq=80, floor=60), 0, "at the floor is allowed")
+        self.assertEqual(self.state()["floor_high_water"], 80)
+        for sha, seq, floor in (("3" * 40, 60, 40), ("4" * 40, 40, 20), ("5" * 40, 50, 30)):
+            with self.subTest(seq=seq):
+                self.assertEqual(self.activate(sha, release_seq=seq, floor=floor), 1)
+                self.assertEqual(self.state()["last_attempt"]["code"], "FLOOR")
+                self.assertEqual(self.current(), f"releases/{'2' * 40}")
+        self.stage("e" * 40)  # the installed seq-100 release is still above the high water
+        self.assertEqual(self.updater().run(), 0)
+
+    def test_high_water_survives_a_lost_state_file(self):
+        self.activate(SHA_A, release_seq=100, floor=90)
+        self.paths.state.unlink()
+        self.assertEqual(self.activate(SHA_B, release_seq=89, floor=70), 1)
+        self.assertEqual(self.state()["last_attempt"]["code"], "FLOOR")
+
+    def test_rollback_to_previous_is_allowed_below_the_floor_the_failed_release_raised(self):
+        self.activate(SHA_A, release_seq=100, floor=80)
+        self.activate(SHA_B, release_seq=120, floor=110)  # a schema boundary
+        self.stage(SHA_A, action="rollback")
+        self.assertEqual(self.updater().run(), 0)
+        self.assertEqual(self.current(), f"releases/{SHA_A}")
+        self.assertEqual(self.state()["floor_high_water"], 110, "the floor does not drop with the rollback")
+        self.assertEqual(self.activate(SHA_C, release_seq=105, floor=90), 1)
+        self.assertEqual(self.state()["last_attempt"]["code"], "FLOOR")
+
+    def test_request_written_during_a_run_is_processed_not_deleted(self):
+        """Review proof p5: rollback-update arriving mid-run was unlinked unread."""
+        self.activate(SHA_A)
+
+        def selftest(release, config):
+            (self.paths.incoming / "activate").write_text(f"rollback {SHA_A}\n")
+            return True, ""
+
+        self.stage(SHA_B, fixtures.bundle(SHA_B))
+        self.assertEqual(update.Updater(self.paths, selftest=selftest, clock=lambda: 1000).run(), 0)
+        state = self.state()
+        self.assertEqual(state["last_attempt"]["outcome"], "rolled_back")
+        self.assertEqual(self.current(), f"releases/{SHA_A}")
+        self.assertEqual([entry["sha"] for entry in state["bad"]], [SHA_B])
+        self.assertFalse((self.paths.incoming / "activate").exists())
+        self.assertFalse((self.paths.incoming / "activate.processing").exists())
+
+    def test_claimed_request_left_by_a_crash_is_resumed(self):
+        self.stage(SHA_A, fixtures.bundle(SHA_A))
+        os.replace(self.paths.incoming / "activate", self.paths.incoming / "activate.processing")
+        self.assertEqual(self.updater().run(), 0)
+        self.assertEqual(self.current(), f"releases/{SHA_A}")
+
+    def test_os_error_during_install_is_recorded(self):
+        files = fixtures.release_files()
+        files["agent"] = (b"a file where a directory must go", 0o644)
+        self.assertEqual(self.activate(SHA_A, files=files), 1)
+        self.assertEqual(self.state()["last_attempt"]["code"], "IO_ERROR")
+        self.assertIsNone(self.current())
+        self.assertEqual(list(self.paths.releases.iterdir()), [], "the half-extracted release is removed")
+
+    def test_garbage_signature_does_not_poison_the_sha(self):
+        data = fixtures.bundle(SHA_A)
+        self.stage(SHA_A, data, b"garbage")
+        self.assertEqual(self.updater().run(), 1)
+        self.assertEqual(self.state()["bad"], [])
+        self.stage(SHA_A, data)
+        self.assertEqual(self.updater().run(), 0)
 
     def test_busy_scan_lock_defers_without_touching_the_release(self):
         self.activate(SHA_A)
