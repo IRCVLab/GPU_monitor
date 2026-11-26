@@ -6,6 +6,9 @@ import time
 import unittest
 from unittest import mock
 
+import pytest
+
+from collector.test_bug_harness import Collector
 from collector.inventory import Server
 from collector.jobs import RescanJobManager
 from collector.store import CentralStore
@@ -302,6 +305,25 @@ class JobsTest(unittest.TestCase):
         self.assertLessEqual(len(event["actor"]), 128)
         self.assertNotIn("/", event["actor"])
         self.assertLessEqual(len(event["job_id"]), 128)
+
+
+@pytest.mark.xfail(
+    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C4 "),
+    reason='C4 A scheduled scan starting between the rescan check and the job thread marks the scan "failed"',
+)
+def test_c4_scheduled_scan_during_request_stays_pending(tmp_path, monkeypatch):
+    host = Collector(tmp_path, "alpha-1")
+    # Preflight sees idle, then the scheduled scan owns the unit.
+    states = iter(["inactive", "active"])
+    monkeypatch.setattr(host.transport, "scan_active_state", lambda server: next(states, "active"))
+    jobs = RescanJobManager(host.service, clock=host.clock)
+    code, _ = jobs.request_rescan("alpha-1", "operator")
+    assert code == 202
+    jobs.wait_for_idle(timeout=5)
+    summary, = host.service.server_summaries()
+    state = summary["active_job"]["state"]
+    assert state == "pending", f"C4 scheduled scan left accepted rescan {state}"
+    assert summary["latest_scan_result"] != "failed"
 
 
 if __name__ == "__main__":

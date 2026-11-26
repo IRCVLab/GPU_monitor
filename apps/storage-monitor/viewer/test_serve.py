@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import fcntl
 import http.client
 import re
 import json
@@ -12,9 +13,14 @@ import tempfile
 import threading
 import time
 import unittest
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from unittest.mock import patch
 from pathlib import Path
+
+import pytest
+
+from collector.test_bug_harness import Collector
+from collector.jobs import RescanJobManager
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVE = ROOT / "viewer" / "serve.py"
@@ -640,6 +646,136 @@ print(type(serve.jobs).__name__, serve.central_poller)
             result = subprocess.run([sys.executable, "-c", code, tmp], cwd=str(ROOT.parents[1]), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "ExecutionDisabledRescanJobManager None")
+
+
+@pytest.fixture
+def collector_api(tmp_path, monkeypatch):
+    from viewer import serve
+
+    host = Collector(tmp_path, "alpha-1", "beta-2")
+    origin = "https://dashboard.example.test"
+    for name, value in {
+        "service": host.service, "jobs": RescanJobManager(host.service, clock=host.clock),
+        "live_capacity": None, "TRUSTED_PROXY": True, "RESCAN_API_ENABLED": True,
+        "DIRECT_LOOPBACK_RESCAN": False, "OPERATORS": {"operator"}, "ALLOWED_ORIGINS": {origin},
+    }.items():
+        monkeypatch.setattr(serve, name, value)
+    with serve.Server(("127.0.0.1", 0), serve.Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        thread.start()
+
+        def request(method, path, body=None, headers=None):
+            conn = http.client.HTTPConnection(*server.server_address, timeout=6)
+            try:
+                conn.request(method, path, body, {serve.IDENTITY_HEADER: "operator", **(headers or {})})
+                with conn.getresponse() as response:
+                    return response.status, json.load(response), response.headers
+            finally:
+                conn.close()
+
+        try:
+            yield host, request, origin
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+@pytest.mark.xfail(
+    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C3 "),
+    reason="C3 One server's unreadable state blanks /api/servers for every server",
+)
+def test_c3_fleet_isolates_unreadable_server(collector_api):
+    host, request, _ = collector_api
+    code, fleet, _ = request("GET", "/api/servers")
+    assert code == 200
+    healthy = next(row for row in fleet["servers"] if row["id"] == "alpha-1")
+    directory = host.state_dir / "beta-2"
+    state_path = directory / json.loads((directory / "current.json").read_text())["state"]
+    state = json.loads(state_path.read_text())
+    state_path.write_text(json.dumps({**state, "future_field": 1}))
+
+    try:
+        code, fleet, _ = request("GET", "/api/servers")
+    except http.client.RemoteDisconnected:
+        raise AssertionError("C3 unreadable server disconnected the fleet request") from None
+    assert code == 200
+    assert healthy in fleet["servers"]
+    broken = next(row for row in fleet["servers"] if row.get("id", row.get("server_id")) == "beta-2")
+    assert broken["error"]["code"] == "STORE_UNAVAILABLE"
+
+
+@pytest.mark.xfail(
+    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C5 "),
+    reason='C5 A rescan POST gets no HTTP response when the store lock is busy',
+)
+def test_c5_rescan_always_answers_when_actor_busy(collector_api):
+    host, request, origin = collector_api
+    code, session, headers = request("GET", "/api/session")
+    assert code == 200 and session["can_rescan"]
+    auth = {"Origin": origin, "Cookie": headers["Set-Cookie"].split(";", 1)[0],
+            "X-CSRF-Token": session["csrf_token"]}
+    with (host.state_dir / "alpha-1" / "store.lock").open("rb") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            code, body, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
+        except http.client.RemoteDisconnected:
+            raise AssertionError("C5 busy store disconnected the rescan POST without an HTTP response") from None
+    assert code == 503
+    assert body["error"] in ("STORE_UNAVAILABLE", "SERVER_BUSY")
+
+
+@pytest.mark.xfail(
+    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C6 "),
+    reason='C6 A store error on a known server is reported as UNKNOWN_SERVER (404)',
+)
+def test_c6_store_error_on_known_server_is_503(collector_api):
+    host, request, _ = collector_api
+    directory = host.state_dir / "alpha-1"
+    (directory / "current.json").write_text("{")
+    (directory / "previous.json").unlink(missing_ok=True)
+    code, body, _ = request("GET", "/api/servers/alpha-1/snapshot")
+    assert code == 503, f"C6 known server with unreadable store returned {code} {body}"
+    assert body["error"] == "STORE_UNAVAILABLE"
+
+
+@pytest.mark.xfail(
+    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C9 "),
+    reason='C9 /api/servers stalls up to about 400 ms while a snapshot is committed',
+)
+def test_c9_fleet_p99_during_large_commit(tmp_path, monkeypatch):
+    host = Collector(tmp_path, "alpha-1")
+    host.transport.publish("alpha-1", started=1719203000)
+    entered = threading.Event()
+    release = threading.Event()
+    reading = threading.Event()
+    commit = host.store.commit_snapshot
+
+    def slow_commit(*args, **kwargs):
+        entered.set()
+        if not release.wait(5):
+            raise RuntimeError("commit barrier was never released")
+        return commit(*args, **kwargs)
+
+    def read_summary():
+        reading.set()
+        return host.service.server_summaries()
+
+    monkeypatch.setattr(host.store, "commit_snapshot", slow_commit)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer = pool.submit(host.service.poll_once)
+        try:
+            assert entered.wait(2), "writer never reached commit"
+            reader = pool.submit(read_summary)
+            assert reading.wait(2), "reader never started"
+            try:
+                summaries = reader.result(timeout=0.050)
+            except FutureTimeoutError:
+                raise AssertionError("C9 fleet summary stalled beyond 50 ms during commit") from None
+            assert [row["id"] for row in summaries] == ["alpha-1"]
+        finally:
+            release.set()
+            assert writer.result(timeout=5)["alpha-1"]["latest_pull_status"] == "succeeded"
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
