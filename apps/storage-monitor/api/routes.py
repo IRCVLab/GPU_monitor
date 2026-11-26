@@ -101,7 +101,7 @@ def scan_status(handler, server_id):
     status = scan_status_v1(view, runtime.fleet.clock.monotonic())
     if runtime.live_capacity is not None and view.snapshot is not None:
         value = view.snapshot.overview
-        status["capacity"] = {"scan_generation": value["scan_generation"], "mounts": overview(runtime, server_id, value)["mounts"]}
+        status["capacity"] = {"scan_generation": value["scan_generation"], "mounts": overview(runtime, server_id, value)["mounts"]}  # SHIM(M2b..M8) S5
     return json_response(status)
 
 

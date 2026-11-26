@@ -23,13 +23,15 @@ import gzip
 import hashlib
 import io
 import json
-import re
 import shutil
 import subprocess
 import sys
 import tarfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from agent.storage_viz_agent.ids import RELEASE_SHA_RE
 
 APP = "apps/storage-monitor"
 APPLICATION = "storage-viz-agent"
@@ -56,7 +58,6 @@ AGENT_INPUTS = (
     f":(exclude){APP}/agent/testdata",
     f":(exclude,glob){APP}/agent/**/test_*.py",
 )
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class BuildError(Exception):
@@ -172,7 +173,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--hstscan-binary", type=Path, help="prebuilt hstscan instead of the docker build")
     args = parser.parse_args(argv)
-    if not SHA_RE.fullmatch(args.sha):
+    if not RELEASE_SHA_RE.fullmatch(args.sha):
         parser.error("--sha must be 40 lowercase hex characters")
     try:
         metadata = build(args.repo, args.sha, args.output_dir, args.hstscan_binary)

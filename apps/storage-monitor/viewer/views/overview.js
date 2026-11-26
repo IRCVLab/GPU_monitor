@@ -106,12 +106,11 @@ function canonicalMajorMinor(value) {
   return String(major) + ":" + String(minor);
 }
 
-const VOLUME_ID = /^[vx]-[0-9a-f]{16}$/;
 
 function capacityIdentityFromRoot(root) {
   if (!root || typeof root !== "object") return null;
   // A v2 host names its filesystem by volume id (SHIM(M5a..M8) S5), so its roots share one capacity entry.
-  if (typeof root.volume_id === "string" && VOLUME_ID.test(root.volume_id)) {
+  if (typeof root.volume_id === "string" && root.volume_id) {
     return { kind: "volume_id", value: root.volume_id, key: "volume_id:" + root.volume_id };
   }
   if (hasOwn(root, "capacity_id")) {

@@ -41,7 +41,7 @@ import hashlib
 import io
 import json
 import os
-import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -65,7 +65,11 @@ SELFTEST_BACKOFF_BASE = 6 * 3600
 SELFTEST_BACKOFF_MAX = 7 * 24 * 3600
 MAX_REQUESTS_PER_RUN = 4
 EXIT_BUSY = 75
-SHA40 = re.compile(r"[0-9a-f]{40}")
+if __package__:
+    from .gate import SHA40
+else:
+    gate_path = Path(__file__).with_name("gate" if Path(__file__).suffix == "" else "gate.py")
+    SHA40 = runpy.run_path(str(gate_path))["SHA40"]
 MANIFEST = "RELEASE-MANIFEST.json"
 # The scan units' sandbox (systemd/storage-viz-scan.service). test_update
 # checks that the unit file and this list agree, so the self-test runs a

@@ -51,7 +51,7 @@ export function bindEffects(store, fetcher = fetchResource) {
     for (const row of fleet.servers) {
       const cached = resource(detailKey(row.id))?.data;
       if (!Object.hasOwn(row,'overview_snapshot') || current === row.id) {
-        const changed = row.overview_snapshot && row.overview_snapshot.scan_generation !== cached?.scan_generation;
+        const changed = row.overview_snapshot && row.overview_snapshot.scan_generation !== cached?.scan_generation;  // SHIM(M2b..M8) S5
         detail(row.id,current === row.id && (force || changed));
       }
     }

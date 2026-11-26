@@ -212,7 +212,7 @@ class SnapshotBuilder:
             "scan_started_unix": self.scan_start,
             "scan_finished_unix": self.scan_finished,
             "scan_duration_sec": SCAN_DURATION_SEC,
-            "scan_generation": f"{self.server_id}-{self.scan_start}-v1",
+            "scan_generation": f"{self.server_id}-{self.scan_start}-v1",  # SHIM(M2b..M8) S5
             "run_as_root": True,
             "selected_roots": selected_roots,
             "mounts": mounts,

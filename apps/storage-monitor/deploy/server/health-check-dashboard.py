@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 
 ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
-SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+SERVER_ID_RE = re.compile(r"\A(?!\.{1,2}\Z)[A-Za-z0-9_.-]{1,128}\Z")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHELLY_VALUE_RE = re.compile(r"[\s`$'\";&|<>\\]")
 FIXED_PROXY_OPERATOR = "fixed-proxy-operator"

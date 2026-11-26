@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import http.client
 import http.server
-import json
 import os
 import re
 import socketserver
@@ -27,7 +26,7 @@ UNTRUSTED_LOOPBACK_HOST = "storage-viz-proxy.invalid"
 OPERATOR_ID = os.environ.get("STORAGE_VIZ_PROXY_OPERATOR", "").strip()
 PUBLIC_ORIGIN = os.environ.get("STORAGE_VIZ_PROXY_PUBLIC_ORIGIN", "").strip()
 MAX_POST_BYTES = 4096
-RESCAN_PATH = re.compile(r"^/api/servers/([A-Za-z0-9_.-]{1,128})/rescan$")
+RESCAN_PATH = re.compile(r"^/api/servers/((?!\.{1,2}/)[A-Za-z0-9_.-]{1,128})/rescan$")
 RESPONSE_CHUNK_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = int(os.environ.get("STORAGE_VIZ_PROXY_MAX_RESPONSE_BYTES", str(512 * 1024 * 1024)))
 if not 1 <= MAX_RESPONSE_BYTES <= 512 * 1024 * 1024:
@@ -141,18 +140,15 @@ def is_allowed_rescan_request(
         and not request_path.query
         and not request_path.fragment
         and match is not None
-        and match.group(1) not in {".", ".."}
         and origin == public_origin
         and host.lower() == configured_origin.netloc.lower()
     )
 
 
 def is_empty_rescan_body(body: bytes) -> bool:
-    try:
-        value = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return False
-    return isinstance(value, dict) and not value
+    # An empty JSON object permits only RFC 8259 whitespace around its braces.
+    return re.fullmatch(rb"[ \t\n\r]*\{[ \t\n\r]*\}[ \t\n\r]*", body) is not None
+
 
 
 class ResponseTooLarge(Exception):

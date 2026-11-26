@@ -40,7 +40,7 @@ function detailCanonicalMajorMinor(value) {
 function detailCapacityIdentity(root, mount) {
   // A v2 host names its filesystem by volume id (SHIM(M5a..M8) S5), so its roots share one capacity entry.
   const volumeId = String((root && root.volume_id) || (mount && mount.volume_id) || "");
-  if (/^[vx]-[0-9a-f]{16}$/.test(volumeId)) return { key: "volume_id:" + volumeId, value: volumeId };
+  if (volumeId) return { key: "volume_id:" + volumeId, value: volumeId };
   const capacityId = detailCanonicalCapacityId(
     String((root && root.capacity_id) || (mount && mount.capacity_id) || "")
   );

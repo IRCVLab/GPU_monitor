@@ -20,7 +20,7 @@ const LIVE_CAPACITY_FIELDS = ["df_total", "df_used", "df_avail", "df_use_pct", "
 
 function applyObservedCapacity(snapshot, capacity) {
   if (!Array.isArray(snapshot?.mounts) || !Array.isArray(capacity?.mounts) ||
-      snapshot.scan_generation !== capacity.scan_generation) return snapshot;
+      snapshot.scan_generation !== capacity.scan_generation) return snapshot;  // SHIM(M2b..M8) S5
   const readings = new Map(capacity.mounts.map(mount => [mount.mount_id, mount]));
   let changed = false;
   const mounts = snapshot.mounts.map(mount => {

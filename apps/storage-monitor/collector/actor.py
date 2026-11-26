@@ -389,7 +389,7 @@ class ServerActor:
         if self._scan is None:
             return record.job, ()
         rejected = frozenset(entry.get("generation") for entry in record.data.rejected.values())
-        accepted = held.overview.get("scan_generation") if held is not None else None
+        accepted = held.overview.get("scan_generation") if held is not None else None  # SHIM(M2b..M5c) S3
         event = jobs.Observed(int(self.clock.time()), self._scan, accepted, rejected)
         return jobs.reduce(record.job, event)
 

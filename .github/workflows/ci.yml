@@ -208,6 +208,13 @@ jobs:
         if: needs.impact.outputs.storage_agent == 'true'
         run: |
           python3.12 apps/storage-monitor/deploy/build-agent-release.py --sha "$(git rev-parse HEAD)" --output-dir "$RUNNER_TEMP/agent-bundle"
+      - name: Check storage redesign invariants
+        working-directory: apps/storage-monitor
+        run: |
+          python3 tools/check_shims.py
+          python3 tools/lint_ids.py
+          python3 tools/lint_viewer_judgments.py
+          python3 tools/lint_owners.py
       - name: Run Linux storage verification
         env:
           STORAGE_VIZ_SCREENSHOT_DIR: ${{ runner.temp }}/storage-fixture-shots

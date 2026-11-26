@@ -8,10 +8,9 @@ import os
 import re
 from typing import Any, Dict, Mapping, Optional, Set
 
-from collector.ids import SERVER_ID_RE
+from collector.ids import SERVER_ID_RE, SHA256_RE
 
 GENERATION_RE = re.compile(r"^[A-Za-z0-9_.-]+-\d+-v1\.json$")
-HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_COUNTER = 10**18
 MAX_TIME = 4_102_444_800
 MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
@@ -125,8 +124,8 @@ def _validate_payload(payload: Any, server_id: str, generation_filename: str, st
     expected_generation = f"{server_id}-{started}-v1"
     if generation_filename != expected_generation + ".json":
         raise ValueError("generation must bind server_id, scan_started_unix, and v1")
-    if payload.get("scan_generation") != expected_generation:
-        raise ValueError("embedded scan_generation must bind server_id, scan_started_unix, and v1")
+    if payload.get("scan_generation") != expected_generation:  # SHIM(M2b..M5c) S3
+        raise ValueError("embedded scan_generation must bind server_id, scan_started_unix, and v1")  # SHIM(M2b..M5c) S3
 
     roots = payload.get("selected_roots")
     if not isinstance(roots, list) or not roots:
@@ -410,7 +409,7 @@ def _generation_filename(value: Any) -> str:
 
 
 def _required_digest(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not HEX64_RE.fullmatch(value):
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise ValueError(f"{label} must be lowercase 64-hex")
     return value
 
