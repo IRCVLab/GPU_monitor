@@ -96,6 +96,9 @@ function testCleanupCommandSafetyContracts() {
     [{ path: "relative/path", kind: "file" }, "noncanonical_path"],
     [{ path: "/data/../escape", kind: "file" }, "noncanonical_path"],
     [{ path: "/data/control\nchar", kind: "file" }, "control_character"],
+    // The collector accepts any UTF-8 path without NUL (§2.2); removal is where these are refused (§4.4).
+    [{ path: "/data/a\tb", kind: "file" }, "control_character"],
+    [{ path: "/data/esc\u001b[0m", kind: "directory" }, "control_character"],
   ];
   for (const [input, code] of rejectedCases) {
     const rejected = validateCleanupSelection(snapshot, input);

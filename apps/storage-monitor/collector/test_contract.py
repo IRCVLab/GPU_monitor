@@ -309,3 +309,18 @@ def test_parsers_raise_only_contract_errors_on_any_mutation(kind):
             parse_manifest(junk) if kind == "manifest" else parse_capture(junk, contract.Expected(VID, sha(junk), want.roots))
         except ContractError:
             pass
+
+
+def test_any_utf8_path_without_nul_parses_and_removal_decides_on_control_characters():
+    # M5a review F6: a file named "a<TAB>b" made the whole volume stale. §4.4 refuses it at removal selection.
+    doc = capture_doc()
+    doc["roots"][0]["top_files"][0]["path"] = "/data/a\tb"
+    doc["roots"][0]["stale"][0]["path"] = "/data/c\x1b[0mé"
+    data, want = expected(doc)
+    root = parse_capture(data, want).roots[0]
+    assert (root.top_files[0]["path"], root.stale[0]["path"]) == ("/data/a\tb", "/data/c\x1b[0mé")
+    for bad, reason in (("/data/a\x00b", contract.BAD_FIELD), ("data/a", contract.BAD_FIELD), ("/data/" + "x" * 5000, contract.BAD_FIELD)):
+        doc = capture_doc()
+        doc["roots"][0]["top_files"][0]["path"] = bad
+        data, want = expected(doc)
+        assert reason_of(lambda: parse_capture(data, want)) == reason

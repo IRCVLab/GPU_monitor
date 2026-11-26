@@ -566,8 +566,9 @@ def _code(value: Any, label: str) -> str:
 
 
 def _path(value: Any, label: str) -> str:
+    """Any absolute UTF-8 path without NUL (§2.2). Control characters are refused at removal selection (§4.4)."""
     text = _text(value, label, 4096)
-    if not text.startswith("/") or any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+    if not text.startswith("/"):
         raise ContractError(BAD_FIELD, f"{label} is not an absolute path")
     return text
 
