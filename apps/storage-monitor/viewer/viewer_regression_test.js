@@ -295,11 +295,10 @@ function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
     {
       server_id: 'beta-2',
       mounts: [
-        { path: '/data', df_total: 1000 * 1024 ** 3, df_used: 950 * 1024 ** 3, df_use_pct: 95, df_avail: 800 * 1024 ** 3 },
-        { path: '/archive', df_total: 5 * 1024 ** 4, df_used: 3 * 1024 ** 4, df_use_pct: 60, df_avail: 2 * 1024 ** 4 },
+        { path: '/data', df_total: 1000 * 1024 ** 3, df_used: 950 * 1024 ** 3, df_use_pct: 95, used_pct: 95, severity: "critical", df_avail: 800 * 1024 ** 3 },
+        { path: '/archive', df_total: 5 * 1024 ** 4, df_used: 3 * 1024 ** 4, df_use_pct: 60, used_pct: 60, severity: "normal", df_avail: 2 * 1024 ** 4 },
       ],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   const staleRow = viewer.buildOverviewServer(
     {
@@ -316,9 +315,8 @@ function testOverviewRenderingKeepsStableOrderAndVisibleCapacityBars() {
     },
     {
       server_id: 'alpha-1',
-      mounts: [{ path: '/scratch', df_total: 1000 * 1024 ** 3, df_used: 810 * 1024 ** 3, df_use_pct: 81, df_avail: 700 * 1024 ** 3 }],
+      mounts: [{ path: '/scratch', df_total: 1000 * 1024 ** 3, df_used: 810 * 1024 ** 3, df_use_pct: 81, used_pct: 81, severity: "warning", df_avail: 700 * 1024 ** 3 }],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
 
   const overviewList = viewer.__elements.get('overviewList') || viewer.document.getElementById('overviewList');
@@ -371,7 +369,6 @@ function testSnapshotLoadFailureRendersAsVisibleException() {
       active_job: null,
     },
     null,
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
     new Error('network failed'),
   );
   assert.strictEqual(row.primaryStatus.code, 'snapshot_load_failed', 'healthy summaries with client snapshot failures must expose a dedicated exceptional status');
@@ -508,7 +505,7 @@ async function testApiBootstrapUsesEmbeddedOverviewSnapshotsWithoutFullDownloads
   const overviewSnapshot = {
     server_id: 'alpha-1',
     selected_roots: [{ mount_id: 'data', capacity_id: 'dev-8-1', storage_media: 'ssd' }],
-    mounts: [{ mount_id: 'data', path: '/data', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 }],
+    mounts: [{ mount_id: 'data', path: '/data', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, used_pct: 40, severity: "critical" }],
   };
   const bootstrap = await viewer.loadBootstrapDataWith({
     loadSession: async () => ({ authenticated: false, can_rescan: false, csrf_token: '' }),
@@ -602,20 +599,18 @@ function testMountCentricOverviewDomFieldsAndStableNavigation() {
         { mount_id: 'data', capacity_id: 'dev-8-16', block_media: 'hdd' },
       ],
       mounts: [
-        { mount_id: 'home', path: '/home', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40 },
-        { mount_id: 'data', path: '/data', df_total: 2000 * 1024 ** 3, df_used: 1800 * 1024 ** 3, df_avail: 200 * 1024 ** 3, df_use_pct: 90 },
+        { mount_id: 'home', path: '/home', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40, used_pct: 40, severity: "normal" },
+        { mount_id: 'data', path: '/data', df_total: 2000 * 1024 ** 3, df_used: 1800 * 1024 ** 3, df_avail: 200 * 1024 ** 3, df_use_pct: 90, used_pct: 90, severity: "warning" },
       ],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   const later = viewer.buildOverviewServer(
     { id: 'atlas', display_name: 'atlas', order: 1, mount_count: 1 },
     {
       server_id: 'atlas',
       selected_roots: [{ mount_id: 'archive', capacity_id: 'dev-9-1', storage_media: 'mixed' }],
-      mounts: [{ mount_id: 'archive', path: '/archive', df_total: 3000 * 1024 ** 3, df_used: 300 * 1024 ** 3, df_avail: 2700 * 1024 ** 3, df_use_pct: 10 }],
+      mounts: [{ mount_id: 'archive', path: '/archive', df_total: 3000 * 1024 ** 3, df_used: 300 * 1024 ** 3, df_avail: 2700 * 1024 ** 3, df_use_pct: 10, used_pct: 10, severity: "normal" }],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   const opened = [];
   const list = viewer.document.getElementById('overviewList');
@@ -661,12 +656,11 @@ function testMountStatusTextAppearsOnlyForExceptionalPressure() {
         { mount_id: 'crit', capacity_id: 'dev-8-3', storage_media: 'hdd' },
       ],
       mounts: [
-        { mount_id: 'healthy', path: '/healthy', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40 },
-        { mount_id: 'warn', path: '/warn', df_total: 1000 * 1024 ** 3, df_used: 810 * 1024 ** 3, df_avail: 190 * 1024 ** 3, df_use_pct: 81 },
-        { mount_id: 'crit', path: '/crit', df_total: 1000 * 1024 ** 3, df_used: 930 * 1024 ** 3, df_avail: 70 * 1024 ** 3, df_use_pct: 93 },
+        { mount_id: 'healthy', path: '/healthy', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40, used_pct: 40, severity: "normal" },
+        { mount_id: 'warn', path: '/warn', df_total: 1000 * 1024 ** 3, df_used: 810 * 1024 ** 3, df_avail: 190 * 1024 ** 3, df_use_pct: 81, used_pct: 81, severity: "warning" },
+        { mount_id: 'crit', path: '/crit', df_total: 1000 * 1024 ** 3, df_used: 930 * 1024 ** 3, df_avail: 70 * 1024 ** 3, df_use_pct: 93, used_pct: 93, severity: "critical" },
       ],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   const list = viewer.document.getElementById('overviewList');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
@@ -693,11 +687,10 @@ function testServerHeaderMetaIsActionableMountCountOnly() {
         { mount_id: 'data-bind', capacity_id: 'dev-8-16', storage_media: 'hdd' },
       ],
       mounts: [
-        { mount_id: 'data', path: '/data', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
-        { mount_id: 'data-bind', path: '/data-bind', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+        { mount_id: 'data', path: '/data', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
+        { mount_id: 'data-bind', path: '/data-bind', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
       ],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   assert.strictEqual(row.aggregate.availableLabel, '500 B', 'model may keep aggregate capacity for non-header calculations');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
@@ -730,11 +723,10 @@ function testSharedCapacityOverviewGroupsPhysicalDiskAndPreservesScanPathOrder()
         { mount_id: 'data', capacity_id: 'dev-259-3', mountpoint: '/', scan_root: '/data', storage_media: 'ssd', scanned_bytes: 20 * 1024 },
       ],
       mounts: [
-        { mount_id: 'home', path: '/home', mountpoint: '/', scan_root: '/home', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3, df_avail: 820 * 1024 ** 3, df_use_pct: 77, scanned_bytes: 700 * 1024 ** 3 },
-        { mount_id: 'data', path: '/data', mountpoint: '/', scan_root: '/data', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3 + 8192, df_avail: 820 * 1024 ** 3 - 8192, df_use_pct: 77, scanned_bytes: 20 * 1024 },
+        { mount_id: 'home', path: '/home', mountpoint: '/', scan_root: '/home', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3, df_avail: 820 * 1024 ** 3, df_use_pct: 77, used_pct: 77, severity: "normal", scanned_bytes: 700 * 1024 ** 3 },
+        { mount_id: 'data', path: '/data', mountpoint: '/', scan_root: '/data', df_total: 3600 * 1024 ** 3, df_used: 2780 * 1024 ** 3 + 8192, df_avail: 820 * 1024 ** 3 - 8192, df_use_pct: 77, used_pct: 77, severity: "normal", scanned_bytes: 20 * 1024 },
       ],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   const list = viewer.document.getElementById('overviewList');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
@@ -770,17 +762,16 @@ function testOverviewSharedCapacityRequiresKnownConsistentMetrics() {
         { mount_id: 'mismatch-avail-data', capacity_id: 'dev-8-4', scan_root: '/mismatch-avail-data' },
       ],
       mounts: [
-        { mount_id: 'unknown-home', path: '/unknown-home', df_total: 1000, df_used: 400, df_use_pct: 40 },
-        { mount_id: 'unknown-data', path: '/unknown-data', df_total: 1000, df_used: 400, df_use_pct: 40 },
-        { mount_id: 'mismatch-home', path: '/mismatch-home', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
-        { mount_id: 'mismatch-data', path: '/mismatch-data', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 41 },
+        { mount_id: 'unknown-home', path: '/unknown-home', df_total: 1000, df_used: 400, df_use_pct: 40, used_pct: 40 },
+        { mount_id: 'unknown-data', path: '/unknown-data', df_total: 1000, df_used: 400, df_use_pct: 40, used_pct: 40 },
+        { mount_id: 'mismatch-home', path: '/mismatch-home', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, used_pct: 40, severity: "critical" },
+        { mount_id: 'mismatch-data', path: '/mismatch-data', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 41, used_pct: 41, severity: "critical" },
         { mount_id: 'missing-pct-home', path: '/missing-pct-home', df_total: 1000, df_used: 400, df_avail: 600 },
         { mount_id: 'missing-pct-data', path: '/missing-pct-data', df_total: 1000, df_used: 400, df_avail: 600 },
-        { mount_id: 'mismatch-avail-home', path: '/mismatch-avail-home', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
-        { mount_id: 'mismatch-avail-data', path: '/mismatch-avail-data', df_total: 1000, df_used: 400, df_avail: 500, df_use_pct: 40 },
+        { mount_id: 'mismatch-avail-home', path: '/mismatch-avail-home', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, used_pct: 40, severity: "critical" },
+        { mount_id: 'mismatch-avail-data', path: '/mismatch-avail-data', df_total: 1000, df_used: 400, df_avail: 500, df_use_pct: 40, used_pct: 40, severity: "critical" },
       ],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
 
   assert.strictEqual(row.capacityGroups.length, 8, 'unknown or mismatched physical-capacity metrics must keep same-identity scan roots separate');
@@ -817,11 +808,10 @@ function testUnknownMountCapacityDomStaysNeutralAndAccessible() {
         { mount_id: 'invalid-cap', capacity_id: 'dev-8-16', storage_media: 'mixed' },
       ],
       mounts: [
-        { mount_id: 'missing-free', path: '/missing-free', df_total: 2048, df_used: 1024, df_use_pct: 95 },
-        { mount_id: 'invalid-cap', path: '/invalid-cap', df_total: '4096', df_used: -1, df_avail: Infinity, df_use_pct: 80 },
+        { mount_id: 'missing-free', path: '/missing-free', df_total: 2048, df_used: 1024, df_use_pct: 95, used_pct: 95 },
+        { mount_id: 'invalid-cap', path: '/invalid-cap', df_total: '4096', df_used: -1, df_avail: Infinity, df_use_pct: 80, used_pct: null },
       ],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   assert.strictEqual(row.primaryStatus.code, 'normal', 'unknown-only mount pressure must not promote the server row to warning or critical');
   const list = viewer.document.getElementById('overviewList');
@@ -871,7 +861,9 @@ async function testDetailSharedCapacityUsesOneCapacityRowAndSeparateScanNavigati
         df_total: 1000 * 1024 ** 3,
         df_used: 400 * 1024 ** 3,
         df_avail: 600 * 1024 ** 3,
-        df_use_pct: 77,
+        df_use_pct: 85,
+        used_pct: 85,
+        severity: "warning",
         scanned_bytes: 700 * 1024 ** 3,
       },
       {
@@ -884,7 +876,9 @@ async function testDetailSharedCapacityUsesOneCapacityRowAndSeparateScanNavigati
         df_total: 1000 * 1024 ** 3,
         df_used: 400 * 1024 ** 3 + 8192,
         df_avail: 600 * 1024 ** 3 - 8192,
-        df_use_pct: 77,
+        df_use_pct: 85,
+        used_pct: 85,
+        severity: "warning",
         scanned_bytes: 20 * 1024,
       },
     ],
@@ -897,7 +891,7 @@ async function testDetailSharedCapacityUsesOneCapacityRowAndSeparateScanNavigati
   assert.strictEqual(caps.children.length, 1, 'detail capacity rail must group shared-capacity scan roots into one physical-disk row');
   const groupedHtml = caps.children[0].innerHTML;
   assert.strictEqual(caps.children[0].getAttribute('data-pressure'), 'warning', 'original df_use_pct must control grouped capacity pressure when byte ratio differs');
-  assert.match(groupedHtml, /<div class="cap-pct"[^>]*>77<span>%<\/span>/, 'grouped capacity percentage must preserve original df_use_pct instead of recomputing from used and total');
+  assert.match(groupedHtml, /<div class="cap-pct"[^>]*>85<span>%<\/span>/, 'grouped capacity percentage must preserve original df_use_pct instead of recomputing from used and total');
   assert.doesNotMatch(groupedHtml, />40<span>%<\/span>/, 'grouped capacity percentage must not replace df_use_pct with the byte ratio');
   assert.match(groupedHtml, /볼륨 사용량/);
   const folderButtons = findByClass(caps.children[0], 'cap-folder-button');
@@ -937,14 +931,14 @@ async function testDetailSharedCapacityRequiresKnownConsistentMetrics() {
       { mount_id: 'mismatch-avail-data', capacity_id: 'dev-8-4', scan_root: '/mismatch-avail-data' },
     ],
     mounts: [
-      { mount_id: 'unknown-home', path: '/unknown-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_use_pct: 40, scanned_bytes: 100 },
-      { mount_id: 'unknown-data', path: '/unknown-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_use_pct: 40, scanned_bytes: 200 },
-      { mount_id: 'mismatch-home', path: '/mismatch-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, scanned_bytes: 300 },
-      { mount_id: 'mismatch-data', path: '/mismatch-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 41, scanned_bytes: 400 },
+      { mount_id: 'unknown-home', path: '/unknown-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_use_pct: 40, used_pct: 40, scanned_bytes: 100 },
+      { mount_id: 'unknown-data', path: '/unknown-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_use_pct: 40, used_pct: 40, scanned_bytes: 200 },
+      { mount_id: 'mismatch-home', path: '/mismatch-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, used_pct: 40, severity: "critical", scanned_bytes: 300 },
+      { mount_id: 'mismatch-data', path: '/mismatch-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 41, used_pct: 41, severity: "critical", scanned_bytes: 400 },
       { mount_id: 'missing-pct-home', path: '/missing-pct-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, scanned_bytes: 500 },
       { mount_id: 'missing-pct-data', path: '/missing-pct-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, scanned_bytes: 600 },
-      { mount_id: 'mismatch-avail-home', path: '/mismatch-avail-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, scanned_bytes: 700 },
-      { mount_id: 'mismatch-avail-data', path: '/mismatch-avail-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 500, df_use_pct: 40, scanned_bytes: 800 },
+      { mount_id: 'mismatch-avail-home', path: '/mismatch-avail-home', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, used_pct: 40, severity: "critical", scanned_bytes: 700 },
+      { mount_id: 'mismatch-avail-data', path: '/mismatch-avail-data', fstype: 'ext4', df_total: 1000, df_used: 400, df_avail: 500, df_use_pct: 40, used_pct: 40, severity: "critical", scanned_bytes: 800 },
     ],
   });
   viewer.navigateToServer('neo', { skipHistory: true, skipDataLoad: true });
@@ -974,8 +968,8 @@ async function testDetailScopeCapacityUsesScanRootBytes() {
       { mount_id: 'data', capacity_id: 'dev-259-3', scan_root: '/data', scanned_bytes: 20 * 1024 },
     ],
     mounts: [
-      { mount_id: 'home', path: '/home', fstype: 'ext4', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40, scanned_bytes: 700 * 1024 ** 3 },
-      { mount_id: 'data', path: '/data', fstype: 'ext4', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40, scanned_bytes: 20 * 1024 },
+      { mount_id: 'home', path: '/home', fstype: 'ext4', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40, used_pct: 40, severity: "normal", scanned_bytes: 700 * 1024 ** 3 },
+      { mount_id: 'data', path: '/data', fstype: 'ext4', df_total: 1000 * 1024 ** 3, df_used: 400 * 1024 ** 3, df_avail: 600 * 1024 ** 3, df_use_pct: 40, used_pct: 40, severity: "normal", scanned_bytes: 20 * 1024 },
     ],
   });
   viewer.navigateToServer('neo', { skipHistory: true, skipDataLoad: true });
@@ -1008,9 +1002,9 @@ async function testDetailCapacityUsesCompactRowsAndFiltersBootMounts() {
     top_files: [],
     stale: [],
     mounts: [
-      { mount_id: 'boot', path: '/boot', fstype: 'vfat', storage_media: 'ssd', df_total: 1024, df_used: 512, df_avail: 512, df_use_pct: 50 },
-      { mount_id: 'root', path: '/', fstype: 'ext4', storage_media: 'ssd', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
-      { mount_id: 'data', path: '/data', fstype: 'xfs', storage_media: 'hdd', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      { mount_id: 'boot', path: '/boot', fstype: 'vfat', storage_media: 'ssd', df_total: 1024, df_used: 512, df_avail: 512, df_use_pct: 50, used_pct: 50, severity: "critical" },
+      { mount_id: 'root', path: '/', fstype: 'ext4', storage_media: 'ssd', df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, used_pct: 40, severity: "critical" },
+      { mount_id: 'data', path: '/data', fstype: 'xfs', storage_media: 'hdd', df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
     ],
   });
   viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true });
@@ -1057,10 +1051,10 @@ async function testDetailNormalizationFiltersBootEverywhereAndRecomputesUsers() 
     scanner_version: '1.0',
     run_as_root: true,
     mounts: [
-      { mount_id: 'boot', path: '/boot', fstype: 'vfat', df_total: 1000, df_used: 900, df_avail: 100, df_use_pct: 90 },
-      { mount_id: 'efi', path: '/boot/efi', fstype: 'vfat', df_total: 1000, df_used: 800, df_avail: 200, df_use_pct: 80 },
-      { mount_id: 'data', path: '/data', fstype: 'xfs', df_total: 5000, df_used: 1200, df_avail: 3800, df_use_pct: 24 },
-      { mount_id: 'bootloader', path: '/bootloader', fstype: 'xfs', df_total: 2000, df_used: 300, df_avail: 1700, df_use_pct: 15 },
+      { mount_id: 'boot', path: '/boot', fstype: 'vfat', df_total: 1000, df_used: 900, df_avail: 100, df_use_pct: 90, used_pct: 90, severity: "critical" },
+      { mount_id: 'efi', path: '/boot/efi', fstype: 'vfat', df_total: 1000, df_used: 800, df_avail: 200, df_use_pct: 80, used_pct: 80, severity: "critical" },
+      { mount_id: 'data', path: '/data', fstype: 'xfs', df_total: 5000, df_used: 1200, df_avail: 3800, df_use_pct: 24, used_pct: 24, severity: "critical" },
+      { mount_id: 'bootloader', path: '/bootloader', fstype: 'xfs', df_total: 2000, df_used: 300, df_avail: 1700, df_use_pct: 15, used_pct: 15, severity: "critical" },
     ],
     users: [
       { uid: 1000, name: 'alice', bytes: 9999, files: 4, by_mount: { '/boot': 4000, '/boot/efi': 3000, '/data': 1200, '/bootloader': 300 } },
@@ -1125,9 +1119,9 @@ async function testZeroActionableMountsUseExactKoreanEmptyCopy() {
   const snapshot = {
     server_id: 'boot-only',
     selected_roots: [{ mount_id: 'boot', capacity_id: 'dev-8-1', storage_media: 'ssd' }],
-    mounts: [{ mount_id: 'boot', path: '/boot', df_total: 1000, df_used: 500, df_avail: 500, df_use_pct: 50 }],
+    mounts: [{ mount_id: 'boot', path: '/boot', df_total: 1000, df_used: 500, df_avail: 500, df_use_pct: 50, used_pct: 50, severity: "critical" }],
   };
-  const row = viewer.buildOverviewServer({ id: 'boot-only', display_name: 'boot-only', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null }, snapshot, viewer.DEFAULT_CAPACITY_THRESHOLDS);
+  const row = viewer.buildOverviewServer({ id: 'boot-only', display_name: 'boot-only', mount_count: 1, snapshot_availability: 'available', freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync', active_job: null }, snapshot);
   const list = viewer.document.getElementById('overviewList');
   viewer.renderOverviewList(list, [row], { onOpenServer() {} });
   assert.strictEqual(textTree(list), 'boot-only정상0개 마운트표시할 데이터 마운트 없음', 'overview must keep the hidden healthy status and exact Korean empty-mount copy');
@@ -1177,12 +1171,11 @@ function testOverviewMonitorCardHierarchyContract() {
         { mount_id: 'gamma', capacity_id: 'dev-8-3', storage_media: 'mixed' },
       ],
       mounts: [
-        { mount_id: 'alpha', path: '/alpha', df_total: 1000 * 1024 ** 3, df_used: 200 * 1024 ** 3, df_avail: 800 * 1024 ** 3, df_use_pct: 20 },
-        { mount_id: 'beta', path: '/beta', df_total: 1000 * 1024 ** 3, df_used: 850 * 1024 ** 3, df_avail: 150 * 1024 ** 3, df_use_pct: 85 },
-        { mount_id: 'gamma', path: '/gamma', df_total: 1000 * 1024 ** 3, df_used: 940 * 1024 ** 3, df_avail: 60 * 1024 ** 3, df_use_pct: 94 },
+        { mount_id: 'alpha', path: '/alpha', df_total: 1000 * 1024 ** 3, df_used: 200 * 1024 ** 3, df_avail: 800 * 1024 ** 3, df_use_pct: 20, used_pct: 20, severity: "normal" },
+        { mount_id: 'beta', path: '/beta', df_total: 1000 * 1024 ** 3, df_used: 850 * 1024 ** 3, df_avail: 150 * 1024 ** 3, df_use_pct: 85, used_pct: 85, severity: "warning" },
+        { mount_id: 'gamma', path: '/gamma', df_total: 1000 * 1024 ** 3, df_used: 940 * 1024 ** 3, df_avail: 60 * 1024 ** 3, df_use_pct: 94, used_pct: 94, severity: "critical" },
       ],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   let opened = 0;
   viewer.renderOverviewList(list, [row], { onOpenServer() { opened += 1; } });
@@ -1224,9 +1217,8 @@ function testOverviewMonitorCardHierarchyContract() {
     {
       server_id: 'healthy-1',
       selected_roots: [{ mount_id: 'healthy-root', capacity_id: 'dev-9-1', storage_media: 'ssd' }],
-      mounts: [{ mount_id: 'healthy-root', path: '/data', df_total: 1000 * 1024 ** 3, df_used: 200 * 1024 ** 3, df_avail: 800 * 1024 ** 3, df_use_pct: 20 }],
+      mounts: [{ mount_id: 'healthy-root', path: '/data', df_total: 1000 * 1024 ** 3, df_used: 200 * 1024 ** 3, df_avail: 800 * 1024 ** 3, df_use_pct: 20, used_pct: 20, severity: "normal" }],
     },
-    viewer.DEFAULT_CAPACITY_THRESHOLDS,
   );
   viewer.renderOverviewList(list, [healthyRow], { onOpenServer() {} });
   const healthyStatusText = findByClass(list.children[0].children[0], 'overview-status-text')[0];
@@ -2210,12 +2202,12 @@ async function testOlderSameServerSuccessCannotOverrideNewerSuccess() {
   await withMutedConsole(async () => {
     viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
     viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
-    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-new', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 910 * 1024 ** 3, df_use_pct: 91, df_avail: 700 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-new', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 910 * 1024 ** 3, df_use_pct: 91, used_pct: 91, severity: "warning", df_avail: 700 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
     await flushPromises();
     assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-new', 'newer alpha request should win the detail data');
     assert(overviewRowText(viewer, 'alpha-1').includes('91%'), 'overview should reflect the newer alpha snapshot');
 
-    older.resolve({ server_id: 'alpha-1', hostname: 'alpha-old', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 110 * 1024 ** 3, df_use_pct: 11, df_avail: 900 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    older.resolve({ server_id: 'alpha-1', hostname: 'alpha-old', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 110 * 1024 ** 3, df_use_pct: 11, used_pct: 11, severity: "normal", df_avail: 900 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
     await flushPromises();
   });
 
@@ -2300,7 +2292,7 @@ async function testOlderSameServerFailureCannotOverrideNewerSuccess() {
   await withMutedConsole(async () => {
     viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
     viewer.navigateToServer('alpha-1', { skipHistory: true, forceReload: true });
-    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-fresh', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 770 * 1024 ** 3, df_use_pct: 77, df_avail: 800 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
+    newer.resolve({ server_id: 'alpha-1', hostname: 'alpha-fresh', mounts: [{ path: '/data', df_total: 1000 * 1024 ** 3, df_used: 770 * 1024 ** 3, df_use_pct: 77, used_pct: 77, severity: "normal", df_avail: 800 * 1024 ** 3 }], users: [], top_files: [], stale: [] });
     await flushPromises();
     assert.strictEqual(viewer.getCurrentDetailDebugState().data.hostname, 'alpha-fresh');
     older.reject(new Error('stale alpha failed'));
@@ -3301,11 +3293,11 @@ async function testDetailCapacityPressureMatchesOverviewRule() {
       { mount_id: 'vol2', capacity_id: 'dev-2', mountpoint: '/vol2', scan_root: '/vol2', status: 'complete' },
     ],
     mounts: [
-      { mount_id: 'root', path: '/home', mountpoint: '/', scan_root: '/home', df_total: 78.3 * GB, df_used: 50.1 * GB, df_avail: 28.2 * GB, df_use_pct: 64, scanned_bytes: GB },
-      { mount_id: 'vol2', path: '/vol2', mountpoint: '/vol2', scan_root: '/vol2', df_total: 1400 * GB, df_used: 980 * GB, df_avail: 420 * GB, df_use_pct: 70, scanned_bytes: GB },
+      { mount_id: 'root', path: '/home', mountpoint: '/', scan_root: '/home', df_total: 78.3 * GB, df_used: 50.1 * GB, df_avail: 28.2 * GB, df_use_pct: 64, used_pct: 64, severity: "critical", scanned_bytes: GB },
+      { mount_id: 'vol2', path: '/vol2', mountpoint: '/vol2', scan_root: '/vol2', df_total: 1400 * GB, df_used: 980 * GB, df_avail: 420 * GB, df_use_pct: 70, used_pct: 70, severity: "warning", scanned_bytes: GB },
     ],
   };
-  const overview = viewer.buildOverviewServer({ id: 'alpha-1', display_name: 'alpha', mount_count: 2 }, snapshot, viewer.DEFAULT_CAPACITY_THRESHOLDS);
+  const overview = viewer.buildOverviewServer({ id: 'alpha-1', display_name: 'alpha', mount_count: 2 }, snapshot);
   viewer.rememberBootstrap(apiBootstrapForRescan([]));
   viewer.loadSnapshotForCurrentSource = async () => snapshot;
   viewer.navigateToServer('alpha-1', { skipHistory: true, skipDataLoad: true });
@@ -3337,7 +3329,7 @@ async function testTopFilesAgeUsesScanTimeLikeStale() {
   viewer.rememberBootstrap(apiBootstrapForRescan([]));
   viewer.loadSnapshotForCurrentSource = async () => ({
     server_id: 'alpha-1', hostname: 'alpha', scan_started_unix: scan, users: [], mounts: [{ path: '/data' }],
-    top_files: [file], stale: [{ ...file, age_days: 400 }],
+    top_files: [{ ...file, age_days: 400 }], stale: [{ ...file, age_days: 400 }],
   });
   const rows = stableTbody(viewer, '#topTbl tbody');
   viewer.navigateToServer('alpha-1', { skipHistory: true, tab: 'topfiles', skipDataLoad: true });
@@ -3495,9 +3487,9 @@ async function main() {
   testCleanupCopyFeedbackRestoresLabelAfterRepeatedClicks();
   // Bug catalog repros (docs/redesign/bug-catalog.md), ported from fix/storage-viewer-sweep 487f873.
   await expectedFailure(['V1'], 'a focus or timer refresh of the same scan must keep the folder, drill path and removal picks', testSameServerRefreshKeepsFolderDrillAndExistingRemovalPicks);
-  await expectedFailure(['V2'], 'the server page must color each volume exactly as the server list does', testDetailCapacityPressureMatchesOverviewRule);
+  await testDetailCapacityPressureMatchesOverviewRule();
   await expectedFailure(['V3', 'V4'], '.vrow .vc-select must leave room for the whole Select button inside its padding', testStaleSelectButtonFitsAndHeaderScrollsWithRows);
-  await expectedFailure(['V5'], 'Top files must show the same age as Stale for the same file', testTopFilesAgeUsesScanTimeLikeStale);
+  await testTopFilesAgeUsesScanTimeLikeStale();
   await expectedFailure(['V6'], 'a card click must open the tab its link names, not the tab of the last server', testOverviewCardClickOpensTreemapLikeItsLink);
   await expectedFailure(['V7'], 'an unknown server must not show detail tabs', testUnknownServerRouteHidesDetailChrome);
   await expectedFailure(['V8'], 'back then forward to the same server must keep its owner filter', testHistoryReturnKeepsTopFilesOwnerFilter);

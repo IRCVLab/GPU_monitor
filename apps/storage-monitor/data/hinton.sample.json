@@ -160,7 +160,9 @@
           }
         ]
       },
-      "capacity_id": "dev-8-1"
+      "capacity_id": "dev-8-1",
+      "used_pct": 64,
+      "severity": "critical"
     },
     {
       "path": "/data",
@@ -380,7 +382,9 @@
           }
         ]
       },
-      "capacity_id": "dev-8-16"
+      "capacity_id": "dev-8-16",
+      "used_pct": 89,
+      "severity": "warning"
     },
     {
       "path": "/data1",
@@ -466,7 +470,9 @@
           }
         ]
       },
-      "capacity_id": "dev-8-32"
+      "capacity_id": "dev-8-32",
+      "used_pct": 77,
+      "severity": "warning"
     },
     {
       "path": "/data3",
@@ -541,7 +547,9 @@
           }
         ]
       },
-      "capacity_id": "dev-8-48"
+      "capacity_id": "dev-8-48",
+      "used_pct": 94,
+      "severity": "critical"
     }
   ],
   "users": [
@@ -640,7 +648,8 @@
       "bytes": 408169742336,
       "uid": 0,
       "owner": "root",
-      "mtime": 1683776000
+      "mtime": 1683776000,
+      "age_days": 410
     },
     {
       "path": "/data/shared/public_datasets/laion_subset.tar",
@@ -648,7 +657,8 @@
       "bytes": 344515936256,
       "uid": 0,
       "owner": "root",
-      "mtime": 1712115200
+      "mtime": 1712115200,
+      "age_days": 82
     },
     {
       "path": "/data/sungjin/datasets/pile_dedup.bin",
@@ -656,7 +666,8 @@
       "bytes": 279210622976,
       "uid": 1002,
       "owner": "sungjin",
-      "mtime": 1716521600
+      "mtime": 1716521600,
+      "age_days": 31
     },
     {
       "path": "/data3/archive/2024_projects/dataset_v3.tar",
@@ -664,7 +675,8 @@
       "bytes": 258546335744,
       "uid": 0,
       "owner": "root",
-      "mtime": 1701488000
+      "mtime": 1701488000,
+      "age_days": 205
     },
     {
       "path": "/data/sungoh/imagenet/imagenet_full.tar",
@@ -672,7 +684,8 @@
       "bytes": 225625243648,
       "uid": 1003,
       "owner": "sungoh",
-      "mtime": 1698464000
+      "mtime": 1698464000,
+      "age_days": 240
     },
     {
       "path": "/data/jaehyeon/llm_corpus/c4_en.jsonl",
@@ -680,7 +693,8 @@
       "bytes": 202484219904,
       "uid": 1006,
       "owner": "jaehyeon",
-      "mtime": 1715225600
+      "mtime": 1715225600,
+      "age_days": 46
     },
     {
       "path": "/data3/donguk_archive/raw_capture_2023.tar",
@@ -688,7 +702,8 @@
       "bytes": 139659837440,
       "uid": 1004,
       "owner": "donguk",
-      "mtime": 1706153600
+      "mtime": 1706153600,
+      "age_days": 151
     },
     {
       "path": "/data1/shchoi/backups/home_snapshot_0601.tar.zst",
@@ -696,7 +711,8 @@
       "bytes": 129596653568,
       "uid": 1008,
       "owner": "shchoi",
-      "mtime": 1717385600
+      "mtime": 1717385600,
+      "age_days": 21
     },
     {
       "path": "/data/sungjin/datasets/audio_set.tar",
@@ -704,7 +720,8 @@
       "bytes": 102528712704,
       "uid": 1002,
       "owner": "sungjin",
-      "mtime": 1716348800
+      "mtime": 1716348800,
+      "age_days": 33
     },
     {
       "path": "/data/donguk/video_raw/session_4k_master.mov",
@@ -712,7 +729,8 @@
       "bytes": 102361989120,
       "uid": 1004,
       "owner": "donguk",
-      "mtime": 1713929600
+      "mtime": 1713929600,
+      "age_days": 61
     },
     {
       "path": "/data/donguk/video_raw/drone_flight_8k.mov",
@@ -720,7 +738,8 @@
       "bytes": 82419122176,
       "uid": 1004,
       "owner": "donguk",
-      "mtime": 1713670400
+      "mtime": 1713670400,
+      "age_days": 64
     },
     {
       "path": "/data/sungoh/imagenet/val_high_res.tar",
@@ -728,7 +747,8 @@
       "bytes": 69564628992,
       "uid": 1003,
       "owner": "sungoh",
-      "mtime": 1701833600
+      "mtime": 1701833600,
+      "age_days": 201
     },
     {
       "path": "/data3/archive/old_checkpoints/gpt_pretrain_ep10.pt",
@@ -736,7 +756,8 @@
       "bytes": 56216256512,
       "uid": 1002,
       "owner": "sungjin",
-      "mtime": 1692848000
+      "mtime": 1692848000,
+      "age_days": 305
     },
     {
       "path": "/data/sungjin/checkpoints/run0421_final.pt",
@@ -744,7 +765,8 @@
       "bytes": 50899976192,
       "uid": 1002,
       "owner": "sungjin",
-      "mtime": 1718854400
+      "mtime": 1718854400,
+      "age_days": 4
     },
     {
       "path": "/data/dohyun/nerf_scenes/city_block_raw.zip",
@@ -752,7 +774,8 @@
       "bytes": 44881149952,
       "uid": 1005,
       "owner": "dohyun",
-      "mtime": 1718422400
+      "mtime": 1718422400,
+      "age_days": 9
     },
     {
       "path": "/data/sungoh/tmp/scratch_blob.bin",
@@ -760,7 +783,8 @@
       "bytes": 43837816832,
       "uid": 1003,
       "owner": "sungoh",
-      "mtime": 1719200000
+      "mtime": 1719200000,
+      "age_days": 0
     },
     {
       "path": "/data/donguk/features/clip_feats.npy",
@@ -768,7 +792,8 @@
       "bytes": 36895195136,
       "uid": 1004,
       "owner": "donguk",
-      "mtime": 1718076800
+      "mtime": 1718076800,
+      "age_days": 13
     },
     {
       "path": "/data3/archive/2023_projects/logs_archive.tar.gz",
@@ -776,7 +801,8 @@
       "bytes": 29180821504,
       "uid": 0,
       "owner": "root",
-      "mtime": 1684467200
+      "mtime": 1684467200,
+      "age_days": 402
     },
     {
       "path": "/data/shared/public_datasets/coco2017.zip",
@@ -784,7 +810,8 @@
       "bytes": 27017609216,
       "uid": 0,
       "owner": "root",
-      "mtime": 1712201600
+      "mtime": 1712201600,
+      "age_days": 81
     },
     {
       "path": "/data/jaehyeon/llm_corpus/wiki_dump.xml.bz2",
@@ -792,7 +819,8 @@
       "bytes": 24056430592,
       "uid": 1006,
       "owner": "jaehyeon",
-      "mtime": 1714880000
+      "mtime": 1714880000,
+      "age_days": 50
     },
     {
       "path": "/data1/shchoi/scratch/core.dump",
@@ -800,7 +828,8 @@
       "bytes": 19547553792,
       "uid": 1008,
       "owner": "shchoi",
-      "mtime": 1719113600
+      "mtime": 1719113600,
+      "age_days": 1
     },
     {
       "path": "/data1/geonyeong/diffusion/sd_xl_weights.safetensors",
@@ -808,7 +837,8 @@
       "bytes": 14233370624,
       "uid": 1007,
       "owner": "geonyeong",
-      "mtime": 1718940800
+      "mtime": 1718940800,
+      "age_days": 3
     },
     {
       "path": "/data/sungoh/models/vit_huge.bin",
@@ -816,7 +846,8 @@
       "bytes": 12748587008,
       "uid": 1003,
       "owner": "sungoh",
-      "mtime": 1718249600
+      "mtime": 1718249600,
+      "age_days": 11
     },
     {
       "path": "/data/dohyun/ckpt/nerf_big_080000.pth",
@@ -824,7 +855,8 @@
       "bytes": 9745465344,
       "uid": 1005,
       "owner": "dohyun",
-      "mtime": 1718854400
+      "mtime": 1718854400,
+      "age_days": 4
     },
     {
       "path": "/data1/geonyeong/samples/grid_render.mp4",
@@ -832,7 +864,8 @@
       "bytes": 8881438720,
       "uid": 1007,
       "owner": "geonyeong",
-      "mtime": 1719113600
+      "mtime": 1719113600,
+      "age_days": 1
     },
     {
       "path": "/data/sungjin/runs/tensorboard_events.bin",
@@ -840,7 +873,8 @@
       "bytes": 8227127296,
       "uid": 1002,
       "owner": "sungjin",
-      "mtime": 1719113600
+      "mtime": 1719113600,
+      "age_days": 1
     },
     {
       "path": "/data/shared/conda_envs/env_torch.tar.gz",
@@ -848,7 +882,8 @@
       "bytes": 7321157632,
       "uid": 0,
       "owner": "root",
-      "mtime": 1717299200
+      "mtime": 1717299200,
+      "age_days": 22
     },
     {
       "path": "/data/jaehyeon/eval/results_dump.parquet",
@@ -856,7 +891,8 @@
       "bytes": 6277824512,
       "uid": 1006,
       "owner": "jaehyeon",
-      "mtime": 1719027200
+      "mtime": 1719027200,
+      "age_days": 2
     },
     {
       "path": "/home/shchoi/miniconda3/pkgs/cuda_toolkit.tar",
@@ -864,7 +900,8 @@
       "bytes": 4763680768,
       "uid": 1008,
       "owner": "shchoi",
-      "mtime": 1715657600
+      "mtime": 1715657600,
+      "age_days": 41
     }
   ],
   "stale": [

@@ -11,24 +11,18 @@ from typing import Any, Callable, Mapping, Protocol
 from storage_fstypes import REMOTE_FSTYPES
 from collector.ids import SERVER_ID_RE
 from collector.inventory import Server
-from collector import snapshot
+from collector import judge, snapshot
+from collector.judge import ACTIVE_TELEMETRY_INTERVAL_SECONDS, IDLE_TELEMETRY_INTERVAL_SECONDS
 from collector.scan_telemetry import empty_status
 from collector import duration_history
 from collector.store import CentralStore, STATE_DEFAULTS, StoreLockedError
-from collector.transport import ACTIVE_SCAN_STATES, TransportError, status_tuple, validate_status_envelope
+from collector.transport import TransportError, status_tuple, validate_status_envelope
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_INTERVAL_SECONDS = 900
 MAX_PARALLEL_POLLS = 4
 MAX_PARALLEL_SNAPSHOT_PULLS = 2
-ACTIVE_TELEMETRY_INTERVAL_SECONDS = 5
-IDLE_TELEMETRY_INTERVAL_SECONDS = 60
-LOCAL_SCAN_CADENCE_SECONDS = 6 * 60 * 60
-FRESHNESS_GRACE_SECONDS = 60 * 60
-FRESH_SNAPSHOT_SECONDS = LOCAL_SCAN_CADENCE_SECONDS + FRESHNESS_GRACE_SECONDS
-SCHEDULED_TIMER_DELAY_SECONDS = 6 * 60
-ROOT_SCAN_CADENCE_SECONDS = {"ssd": 3600, "hdd": 3 * 3600, "mixed": 3 * 3600, "unknown": 3 * 3600}
 OVERVIEW_ROOT_FIELDS = (
     "mount_id", "capacity_id", "major_minor", "mount_source", "fstype", "storage_media", "block_media",
     "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
@@ -110,19 +104,9 @@ def record_completed_duration(history: Mapping[str, Any], status: Mapping[str, A
     return {**history, plan: [list(entry) for entry in updated]}
 
 
-def estimate_range(history: Mapping[str, Any], plan: str, agent_estimate: Any) -> tuple[int | None, int | None]:
-    """Typical (lower median) and longest duration among recent completions of one plan."""
-    candidates = [duration for _, duration in history.get(plan, [])]
-    if _count(agent_estimate) is not None:
-        candidates.append(agent_estimate)
-    if not candidates:
-        return None, None
-    ordered = sorted(candidates)
-    return ordered[(len(ordered) - 1) // 2], ordered[-1]
-
-
 class Clock(Protocol):
     def time(self) -> float: ...
+    def monotonic(self) -> float: ...
 
 
 class Transport(Protocol):
@@ -135,6 +119,7 @@ class Transport(Protocol):
 @dataclass(frozen=True)
 class ScanObservation:
     started_at: float
+    received_monotonic: float
     status: Mapping[str, Any]
 
 
@@ -203,6 +188,7 @@ class PollService:
         self._background_polls = _DaemonWorkQueue("storage-viz-status-reader", MAX_PARALLEL_POLLS)
         self._background_pulls = _DaemonWorkQueue("storage-viz-snapshot-pull", MAX_PARALLEL_SNAPSHOT_PULLS)
         self._telemetry_cache: dict[str, ScanObservation] = {}
+        self._host_clocks = {}
         self._telemetry_threads: dict[str, threading.Thread] = {}
         self._refresh_threads: dict[str, threading.Thread] = {}
         self._duration_history = {server.id: self._load_duration_history(server.id) for server in self.servers}
@@ -231,7 +217,7 @@ class PollService:
             return {
                 **STATE_DEFAULTS,
                 "snapshot_availability": "available" if overview is not None else "absent",
-                "freshness": _snapshot_freshness(overview, now, self.poll_interval_seconds),
+                "freshness": self._freshness(server_id, overview),
                 "latest_pull_status": "invalid_snapshot",
                 "last_error_code": "POLL_FAILED",
                 "last_error_unix": now,
@@ -348,12 +334,12 @@ class PollService:
         return self.transport.scan_active_state(server)
 
     def remote_scan_is_active(self, server_id: str) -> bool:
-        return self.scan_active_state(server_id) in ACTIVE_SCAN_STATES
+        return judge.unit_is_active(self.scan_active_state(server_id))
 
     def _manual_rescan_locked(self, server: Server) -> dict[str, Any]:
         try:
             state = self.transport.scan_active_state(server)
-            if state in ACTIVE_SCAN_STATES:
+            if judge.unit_is_active(state):
                 return self._mark_rescan_failed(server.id, TransportError("ACTIVE_JOB", "remote scan already active"))
             self.transport.start_rescan(server)
         except TransportError as exc:
@@ -396,7 +382,7 @@ class PollService:
                 result["estimate_duration_sec"] = status["estimate_duration_sec"]
         plan = result["scan_plan"]
         if plan in duration_history.PLANS:
-            result["estimate_duration_sec"], result["estimate_max_duration_sec"] = estimate_range(
+            result["estimate_duration_sec"], result["estimate_max_duration_sec"] = judge.eta(
                 self._duration_history.get(server_id, {}), plan, result["estimate_duration_sec"],
             )
         result["snapshot_generation"] = overview.get("scan_generation")
@@ -406,7 +392,13 @@ class PollService:
     def scan_status_for_api(self, server_id: str) -> dict[str, Any]:
         server = self._require_server(server_id)
         observation = self._telemetry_cache.get(server.id)
-        return self._status_with_history(server.id, observation.status if observation else None)
+        result = self._status_with_history(server.id, observation.status if observation else None)
+        result["host_now_unix"] = self._host_now(server.id)
+        result["activity"] = judge.activity(
+            result, observation.received_monotonic if observation else None, self.clock.monotonic(),
+        )
+        result["disconnected"] = result["activity"] == "unknown" and result["state"] != "unknown"
+        return result
 
     def poll_scan_status_once(self) -> None:
         now = self.clock.time()
@@ -437,11 +429,13 @@ class PollService:
                 publication = observation.publication
             else:
                 active = self.transport.scan_active_state(server)
-                status = {"state": "running" if active in ACTIVE_SCAN_STATES else "idle", "progress_available": False}
+                status = {"state": "running" if judge.unit_is_active(active) else "idle", "progress_available": False}
+            if status.get("observed_unix") is not None:
+                self._host_clocks[server.id] = (status["observed_unix"], self.clock.monotonic())
             status["observed_unix"] = int(self.clock.time())
         except Exception as exc:
             status = {"state": "unknown", "error_code": getattr(exc, "code", "TELEMETRY_UNAVAILABLE"), "progress_available": False}
-        self._telemetry_cache[server.id] = ScanObservation(started_at, status)
+        self._telemetry_cache[server.id] = ScanObservation(started_at, self.clock.monotonic(), status)
         self._record_duration(server.id, status)
         published = status.get("published_generation")
         if not published and status.get("state") in {"complete", "partial"}:
@@ -455,6 +449,13 @@ class PollService:
             self._refresh_threads[server.id] = worker
             worker.start()
 
+    def _host_now(self, server_id):
+        sample = self._host_clocks.get(server_id)
+        return judge.host_now(*sample, self.clock.monotonic()) if sample else None
+
+    def _freshness(self, server_id, overview):
+        return judge.freshness(overview, self._host_now(server_id), self.poll_interval_seconds)
+
     def server_summaries(self) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
         with self._summary_lock:
@@ -466,7 +467,7 @@ class PollService:
                     "display_name": server.display_name,
                     "order": server.order,
                     "snapshot_availability": state["snapshot_availability"],
-                    "freshness": _snapshot_freshness(overview, int(self.clock.time()), self.poll_interval_seconds),
+                    "freshness": self._freshness(server.id, overview),
                     "latest_pull_status": state["latest_pull_status"],
                     "latest_scan_result": state["latest_scan_result"],
                     "configuration_sync": state["configuration_sync"],
@@ -567,29 +568,6 @@ class PollService:
             last_error_message=None,
             last_error_unix=None,
         )
-
-
-def _snapshot_freshness(payload, now: int, polling_interval: int) -> str:
-    return _freshness_at(_snapshot_freshness_deadline(payload, polling_interval), now)
-
-
-def _freshness_at(deadline: int | None, now: int) -> str:
-    if deadline is None:
-        return "unknown"
-    return "stale" if now > deadline else "fresh"
-
-
-def _snapshot_freshness_deadline(payload, polling_interval: int) -> int | None:
-    finished = payload.get("scan_finished_unix") if payload else None
-    if not isinstance(finished, int) or isinstance(finished, bool):
-        return None
-    deadline = finished + FRESH_SNAPSHOT_SECONDS
-    for root in payload.get("selected_roots", ()):
-        root_finished = root.get("scan_finished_unix")
-        if root_finished is not None:
-            cadence = ROOT_SCAN_CADENCE_SECONDS.get(root.get("storage_media"), ROOT_SCAN_CADENCE_SECONDS["unknown"])
-            deadline = min(deadline, root_finished + cadence + polling_interval + SCHEDULED_TIMER_DELAY_SECONDS)
-    return deadline
 
 
 def _config_sync(status: Mapping[str, Any], server: Server) -> str:

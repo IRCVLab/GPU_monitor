@@ -6,13 +6,6 @@ function isSafeServerId(value) {
   return typeof value === "string" && SAFE_SERVER_ID_RE.test(value) && value !== "." && value !== "..";
 }
 const KNOWN_DETAIL_TABS = new Set(["treemap", "users", "topfiles", "stale"]);
-const DEFAULT_CAPACITY_THRESHOLDS = Object.freeze({
-  warning_used_pct: 80,
-  critical_used_pct: 92,
-  warning_free_bytes: 549755813888,
-  critical_free_bytes: 137438953472,
-});
-
 const STATUS_META = Object.freeze({
   normal: { tone: "normal", shape: "", label: "" },
   agent_missing: { tone: "critical", shape: "■", label: "미설치" },
@@ -70,15 +63,6 @@ function normalizeSummary(summary) {
   };
 }
 
-function pressureLevel(usedPct, freeBytes, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
-  if (typeof usedPct !== "number" || !Number.isFinite(usedPct) || typeof freeBytes !== "number" || !Number.isFinite(freeBytes)) return "unknown";
-  const used = Math.round(usedPct);
-  const free = Math.round(freeBytes);
-  if (used >= thresholds.critical_used_pct || free <= thresholds.critical_free_bytes) return "critical";
-  if (used >= thresholds.warning_used_pct || free <= thresholds.warning_free_bytes) return "warning";
-  return "normal";
-}
-
 function statusPresentation(code) {
   const meta = STATUS_META[code] || STATUS_META.normal;
   return Object.assign({ code }, meta, { text: meta.shape ? meta.shape + " " + meta.label : meta.label });
@@ -92,11 +76,6 @@ function normalizeBytes(value) {
   if (typeof value !== "number") return null;
   if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) return null;
   return value;
-}
-
-function normalizePercent(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 function isCanonicalDecimal(raw, allowZero) {
@@ -160,7 +139,7 @@ function scannedBytesForMount(mount, selectedRoot) {
   return normalizeBytes(selectedRoot && selectedRoot.scanned_bytes);
 }
 
-function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
+function summarizeMounts(snapshot) {
   const mounts = Array.isArray(snapshot && snapshot.mounts) ? snapshot.mounts : [];
   const rootsByMountId = selectedRootByMountId(snapshot);
   return mounts.filter(mount => isActionableMountPath(mount && (mount.path || mount.mountpoint))).map((mount, index) => {
@@ -169,9 +148,7 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
     const usedBytes = normalizeBytes(mount && mount.df_used);
     const totalBytes = normalizeBytes(mount && mount.df_total);
     const availableBytes = normalizeBytes(mount && mount.df_avail);
-    const explicitPct = normalizePercent(mount && mount.df_use_pct);
-    const computedPct = totalBytes && usedBytes != null ? Math.round((usedBytes / totalBytes) * 100) : null;
-    const usedPct = totalBytes != null && usedBytes != null ? (explicitPct != null ? explicitPct : normalizePercent(computedPct)) : null;
+    const usedPct = Number.isInteger(mount?.used_pct) ? mount.used_pct : null;
     const freeBytes = availableBytes;
     const media = String((selectedRoot && (selectedRoot.storage_media || selectedRoot.block_media)) || (mount && (mount.storage_media || mount.block_media)) || "unknown");
     const mediaConfidence = String((selectedRoot && (selectedRoot.storage_media_confidence || selectedRoot.block_media_confidence)) || (mount && (mount.storage_media_confidence || mount.block_media_confidence)) || "unknown");
@@ -180,7 +157,7 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
     const totalText = totalBytes == null ? "총용량 미확인" : "총 " + compactBytes(totalBytes);
     const freeText = availableBytes == null ? "여유 미확인" : "여유 " + compactBytes(availableBytes);
     const capacityText = "볼륨 " + totalText + " · " + freeText;
-    const pressure = pressureLevel(usedPct, freeBytes, thresholds);
+    const pressure = mount?.severity || "unknown";
     return {
       key: String((mount && mount.mount_id) || (mount && mount.path) || index),
       mountId,
@@ -191,7 +168,7 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       usedBytes,
       totalBytes,
       availableBytes,
-      capacityPct: explicitPct,
+      capacityPct: Number.isFinite(mount?.df_use_pct) ? usedPct : null,
       capacityObservedUnix: mount.capacity_observed_unix,
       usedPct,
       freeBytes,
@@ -423,9 +400,9 @@ const overviewHasActiveScan = typeof module !== "undefined" && module.exports
   ? require("./scan-status.js").isScanActive
   : summary => isScanActive(summary);
 
-function derivePrimaryStatus(summaryInput, snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS, error = null) {
+function derivePrimaryStatus(summaryInput, snapshot, error = null) {
   const summary = normalizeSummary(summaryInput);
-  const mounts = summarizeMounts(snapshot, thresholds);
+  const mounts = summarizeMounts(snapshot);
   const pressure = strongestPressure(mounts);
   if (summary.snapshot_availability === "absent" && summary.latest_pull_status === "not_installed") return statusPresentation("agent_missing");
   if (summary.snapshot_availability === "absent") return statusPresentation("snapshot_absent");
@@ -448,11 +425,11 @@ function deriveSecondaryStatus(summaryInput, primaryCode) {
   return null;
 }
 
-function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS, error = null) {
+function buildOverviewServer(summaryInput, snapshot, error = null) {
   const summary = normalizeSummary(summaryInput);
-  const mounts = summarizeMounts(snapshot, thresholds);
+  const mounts = summarizeMounts(snapshot);
   const snapshotHasMountList = Array.isArray(snapshot && snapshot.mounts);
-  const primaryStatus = derivePrimaryStatus(summary, snapshot, thresholds, error);
+  const primaryStatus = derivePrimaryStatus(summary, snapshot, error);
   const secondaryStatus = deriveSecondaryStatus(summary, primaryStatus.code);
   const aggregate = aggregateMountCapacity(mounts);
   const hasKnownCapacity = aggregate.availableLabel !== "—";
@@ -473,16 +450,16 @@ function buildOverviewServer(summaryInput, snapshot, thresholds = DEFAULT_CAPACI
   };
 }
 
-function buildOverviewRows(summaries, snapshotEntries, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
+function buildOverviewRows(summaries, snapshotEntries) {
   const entryMap = new Map();
   for (const entry of Array.isArray(snapshotEntries) ? snapshotEntries : []) entryMap.set(entry.id, entry);
   return (Array.isArray(summaries) ? summaries : []).map((summary) => {
     const entry = entryMap.get(summary && summary.id) || { snapshot: null, error: null };
     const embedded = summary?.overview_snapshot;
     if (embedded && (entry.snapshot?.scan_finished_unix ?? 0) <= (embedded.scan_finished_unix ?? 0)) {
-      return buildOverviewServer(summary, embedded, thresholds);
+      return buildOverviewServer(summary, embedded);
     }
-    return buildOverviewServer(summary, entry.snapshot, thresholds, entry.error || null);
+    return buildOverviewServer(summary, entry.snapshot, entry.error || null);
   });
 }
 
@@ -881,11 +858,9 @@ const overviewExports = {
   SAFE_SERVER_ID_RE,
   isSafeServerId,
   KNOWN_DETAIL_TABS,
-  DEFAULT_CAPACITY_THRESHOLDS,
   compactBytes,
   isActionableMountPath,
   normalizeSummary,
-  normalizePercent,
   selectedRootByMountId,
   summarizeMounts,
   summarizeCapacityGroups,
@@ -893,7 +868,6 @@ const overviewExports = {
   pressureText,
   aggregateMountCapacity,
   buildOverviewAggregate,
-  pressureLevel,
   statusPresentation,
   derivePrimaryStatus,
   buildOverviewServer,

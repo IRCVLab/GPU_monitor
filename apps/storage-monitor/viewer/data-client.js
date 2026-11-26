@@ -38,7 +38,6 @@ function fmtAge(days) {
   if (days < 365) return (days / 30).toFixed(days < 90 ? 1 : 0) + "mo";
   return (days / 365).toFixed(1) + "y";
 }
-function daysAgo(unix) { return unix ? Math.max(0, Math.round((nowUnix - unix) / 86400)) : null; }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -101,7 +100,6 @@ function assignColors(users) {
 /* ---- State ---- */
 let DATA = null;
 let ownerByUid = new Map();
-let nowUnix = Math.floor(Date.now() / 1000);
 let treemapChart = null, usersChart = null;
 let usersInited = false;
 let currentMountIdx = 0;
@@ -261,7 +259,7 @@ async function loadHost(host) {
 if (typeof globalThis !== "undefined") {
   Object.assign(globalThis, { DEFAULT_HOSTS, HOSTS, normalizeHosts, loadHostManifest, loadHost, loadSession, normalizeServerSummariesEnvelope, loadServerSummaries, loadServerSnapshot, loadServerJob, postServerRescan, loadOrderedSnapshotsForOverview, safeServerId, isSafeHostToken });
 }
-const LIVE_CAPACITY_FIELDS = ["df_total", "df_used", "df_avail", "df_use_pct", "capacity_observed_unix"];
+const LIVE_CAPACITY_FIELDS = ["df_total", "df_used", "df_avail", "df_use_pct", "used_pct", "severity", "capacity_observed_unix"];
 
 function applyObservedCapacity(snapshot, capacity) {
   if (!Array.isArray(snapshot?.mounts) || !Array.isArray(capacity?.mounts) ||
@@ -284,7 +282,6 @@ if (typeof module !== "undefined" && module.exports) {
 /* =========================================================================
    Header + capacity hero (rendered immediately for fast first paint)
    ========================================================================= */
-function capColor(p) { return p >= 90 ? "var(--crit)" : p >= 75 ? "var(--warn)" : "var(--ok)"; }
 function normalizedDetailPath(path) {
   return String(path || "").replace(/\/+$/, "") || "/";
 }
@@ -335,10 +332,6 @@ function normalizeDetailMounts() {
 }
 function detailCapacityNumber(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-}
-function detailExplicitCapacityPercent(mount) {
-  if (typeof (mount && mount.df_use_pct) === "number" && Number.isFinite(mount.df_use_pct)) return Math.max(0, Math.min(100, Math.round(mount.df_use_pct)));
-  return null;
 }
 function detailSelectedRootByMountId() {
   const byMountId = new Map();
@@ -413,7 +406,8 @@ function groupDetailCapacityMounts(mounts) {
     const usedBytes = detailCapacityNumber(mount.df_used);
     const totalBytes = detailCapacityNumber(mount.df_total);
     const availableBytes = detailCapacityNumber(mount.df_avail);
-    const capacityPct = detailExplicitCapacityPercent(mount);
+    const usedPct = Number.isInteger(mount.used_pct) ? mount.used_pct : null;
+    const capacityPct = Number.isFinite(mount.df_use_pct) ? usedPct : null;
     const identity = detailCapacityIdentity(root, mount);
     const identityKey = identity && identity.key ? identity.key : "";
     const existing = identityKey ? groupsByIdentity.get(identityKey) || null : null;
@@ -424,6 +418,8 @@ function groupDetailCapacityMounts(mounts) {
       totalBytes,
       availableBytes,
       capacityPct,
+      usedPct,
+      severity: mount.severity || "unknown",
       capacityObservedUnix: mount.capacity_observed_unix,
       media: String((mount.storage_media || mount.block_media || (root && (root.storage_media || root.block_media)) || "unknown")),
       fstype: String((mount.fstype || (root && root.fstype) || "")),
@@ -485,10 +481,10 @@ function renderHeader() {
     const usedBytes = group.usedBytes;
     const totalBytes = group.totalBytes;
     const availableBytes = group.availableBytes;
-    const pct = group.capacityPct;
-    const pressure = pct == null || availableBytes == null ? "unknown" : (pct >= 90 ? "critical" : (pct >= 75 ? "warning" : "normal"));
-    const color = pressure === "unknown" ? null : capColor(pct);
-    const fillStyle = pct == null ? "width:0%" : "width:" + Math.min(100, pct) + "%;background:" + color;
+    const pct = group.usedPct;
+    const pressure = group.severity;
+    const color = { critical: "var(--crit)", warning: "var(--warn)", normal: "var(--ok)" }[pressure] || null;
+    const fillStyle = pct == null ? "width:0%" : "width:" + Math.min(100, pct) + "%" + (color ? ";background:" + color : "");
     for (const root of group.scanRoots) {
       if (root.scannedBytes != null) {
         capUsedByMount[root.mountPath] = root.scannedBytes;

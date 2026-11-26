@@ -49,7 +49,9 @@ REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | froz
     }
 )
 
-BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {"collector/live_capacity.py", "collector/ids.py", "storage_fstypes.py"}
+BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {
+    "collector/contract.py", "collector/ids.py", "collector/judge.py", "collector/live_capacity.py", "storage_fstypes.py",
+}
 
 
 class ActivationError(RuntimeError):

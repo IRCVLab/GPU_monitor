@@ -142,17 +142,56 @@ class SnapshotResponseCacheTest(unittest.TestCase):
         status, data = status_data(payload)
         valid = validate_download(status, data, DesiredServer(self.host.id, self.host.scanner_digest))
         self.assertTrue(self.store.commit_snapshot(valid).accepted)
+        payload["mounts"][0].update(used_pct=70, severity="critical")
         return payload
 
     def get(self, server_id="hinton", *, authenticated=True):
+        return self.get_path(f"/api/servers/{server_id}/snapshot", authenticated=authenticated)
+
+    def get_path(self, path, *, authenticated=True):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=4)
         try:
             headers = {self.serve.IDENTITY_HEADER: "test-viewer"} if authenticated else {}
-            connection.request("GET", f"/api/servers/{server_id}/snapshot", headers=headers)
+            connection.request("GET", path, headers=headers)
             with connection.getresponse() as response:
                 return response.status, json.load(response)
         finally:
             connection.close()
+
+    def test_all_v1_capacity_views_use_inventory_after_live_overlay(self):
+        from collector.inventory import CapacityThresholds
+        from collector.live_capacity import CapacitySample, VolumeCapacity
+        from collector.test_service import payload_for, status_data
+
+        payload = payload_for(self.host.id)
+        started = payload["scan_started_unix"]
+        file_row = dict(path="/home/a", kind="file", bytes=20, uid=1000, owner="user", mtime=started - 86400)
+        payload["top_files"] = [file_row]
+        payload["stale"] = [dict(file_row, age_days=999)]
+        for row in (payload["selected_roots"][0], payload["mounts"][0]):
+            row.update(capacity_id="dev-8-1", storage_media="ssd", storage_media_confidence="resolved")
+        status, data = status_data(payload)
+        transport = self.service.transport
+        transport.status[self.host.id] = status
+        transport.downloads[self.host.id] = status, data
+        self.assertEqual(self.service.poll_server(self.host.id)["latest_pull_status"], "succeeded")
+        key = ("dev-8-1", "/dev/storage-viz/home", "ext4")
+        self.capacity._samples[(self.host.host, self.host.port)] = CapacitySample(
+            self.clock.now, {key: VolumeCapacity(100, 75, 25, 75)},
+        )
+        policy = CapacityThresholds(warning_used_pct=75, warning_free_bytes=10, critical_free_bytes=1)
+        with patch.object(self.serve, "capacity_thresholds", policy):
+            detail = self.get()[1]
+            summary = self.get_path("/api/servers")[1]["servers"][0]["overview_snapshot"]
+            scan = self.get_path("/api/servers/hinton/scan-status")[1]["capacity"]
+        for view in (detail, summary, scan):
+            self.assertEqual(view["mounts"][0]["used_pct"], 75)
+            self.assertEqual(view["mounts"][0]["severity"], "warning")
+        self.assertEqual(detail["top_files"][0]["age_days"], 1)
+        self.assertEqual(detail["stale"][0]["age_days"], 1)
+        stored = self.store.load_snapshot(self.host.id)
+        self.assertEqual(stored["stale"][0]["age_days"], 999)
+        self.assertNotIn("severity", stored["mounts"][0])
 
     def test_parallel_detail_reads_decode_and_encode_each_generation_once(self):
         expected = self.publish()

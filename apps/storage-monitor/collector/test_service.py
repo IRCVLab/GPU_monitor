@@ -60,6 +60,7 @@ def status_data(payload, status_value=None):
 class FakeClock:
     def __init__(self, now=1719200042 + 3600): self.now = now
     def time(self): return self.now
+    def monotonic(self): return self.now
 
 
 class FakeTransport:
@@ -125,6 +126,11 @@ class PollServiceTests(unittest.TestCase):
         from collector.service import PollService
         return PollService(servers, self.store, self.tx, clock=self.clock)
 
+    def observe_host_clock(self, service, server):
+        from collector.transport import RemoteScanObservation
+        self.tx.fetch_scan_status = lambda _: RemoteScanObservation({"state": "idle", "observed_unix": self.clock.time()})
+        service._collect_scan_status(server, self.clock.time())
+
     def seed(self, server, started=1719200000, **kwargs):
         payload = payload_for(server.id, started=started, digest=server.scanner_digest, **kwargs)
         st, data = status_data(payload)
@@ -136,6 +142,7 @@ class PollServiceTests(unittest.TestCase):
         s = make_server(); old_status, old_data = self.seed(s)
         self.tx.status[s.id] = old_status; self.tx.downloads[s.id] = (old_status, old_data)
         svc = self.service([s])
+        self.observe_host_clock(svc, s)
         result = svc.poll_once()
         self.assertEqual(len(self.tx.fetch_snapshot_calls), 1)
         result = svc.poll_once()
@@ -439,7 +446,8 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(len(self.tx.fetch_snapshot_calls), 1, "validated same tuple may skip later in-memory")
 
     def test_inventory_order_stable_disabled_skipped_and_default_interval_lightweight(self):
-        from collector.service import PollService, DEFAULT_POLL_INTERVAL_SECONDS, LOCAL_SCAN_CADENCE_SECONDS
+        from collector.service import PollService, DEFAULT_POLL_INTERVAL_SECONDS
+        from collector.judge import LOCAL_SCAN_CADENCE_SECONDS
         a = make_server("alpha-1", order=20); b = make_server("beta-2", order=10); c = make_server("off-3", order=15, enabled=False)
         for s in (a, b):
             p = payload_for(s.id, digest=s.scanner_digest); st, data = status_data(p); self.tx.status[s.id] = st; self.tx.downloads[s.id] = (st, data)
@@ -653,19 +661,19 @@ class PollServiceTests(unittest.TestCase):
                 self.assertEqual(accepted.payload["users"][0]["bytes"], 30)
 
     def test_retained_roots_age_independently_after_faster_scan(self):
-        from collector.service import _snapshot_freshness
+        from collector.judge import freshness
         now = self.clock.now
         legacy = {"scan_finished_unix": now - 6 * 3600, "selected_roots": [{"storage_media": "ssd"}]}
-        self.assertEqual(_snapshot_freshness(legacy, now, 900), "fresh")
+        self.assertEqual(freshness(legacy, now, 900), "fresh")
         payload = {"scan_finished_unix": now, "selected_roots": [
             {"storage_media": "ssd", "scan_finished_unix": now - 4790},
             {"storage_media": "hdd", "scan_finished_unix": now - 4 * 3600},
         ]}
-        self.assertEqual(_snapshot_freshness(payload, now, 900), "stale")
+        self.assertEqual(freshness(payload, now, 900), "stale")
         payload["selected_roots"][1]["scan_finished_unix"] = now - 3 * 3600
-        self.assertEqual(_snapshot_freshness(payload, now, 900), "fresh")
+        self.assertEqual(freshness(payload, now, 900), "fresh")
         payload["selected_roots"][0]["scan_finished_unix"] = now - 4861
-        self.assertEqual(_snapshot_freshness(payload, now, 900), "stale")
+        self.assertEqual(freshness(payload, now, 900), "stale")
 
     def test_overview_snapshot_omits_root_metadata_without_a_visible_mount(self):
         from collector.service import _overview_snapshot
@@ -727,6 +735,7 @@ class PollServiceTests(unittest.TestCase):
         status, data = status_data(payload_for(server.id))
         self.tx.status[server.id] = status
         self.tx.downloads[server.id] = (status, data)
+        self.observe_host_clock(service, server)
         with (
             patch.object(snapshot, "validate_download", wraps=snapshot.validate_download) as validate,
             patch.object(self.store, "load_snapshot", wraps=self.store.load_snapshot) as read_tree,
@@ -882,6 +891,7 @@ class PollServiceTests(unittest.TestCase):
         self.clock.now = old_status["scan_finished_unix"] + 2 * 60 * 60
         self.tx.status_errors[s.id] = TransportError("UNREACHABLE", "down")
         service = self.service([s])
+        self.observe_host_clock(service, s)
         service.poll_once()
         self.assertEqual(service.server_summaries()[0]["freshness"], "fresh")
         self.clock.now = old_status["scan_finished_unix"] + 8 * 60 * 60
@@ -959,14 +969,14 @@ class ScanDurationHistoryTests(unittest.TestCase):
                 self.assertIsNone(record_completed_duration({}, status))
 
     def test_estimate_range_is_typical_and_longest_duration(self):
-        from collector.service import estimate_range
+        from collector.judge import eta
         history = {"full": [[1000, 1396], [2000, 19], [3000, 21]], "ssd": [[1500, 18]]}
-        self.assertEqual(estimate_range(history, "full", 19), (19, 1396), "one cold run must not become the typical estimate")
-        self.assertEqual(estimate_range(history, "full", 1500), (21, 1500))
-        self.assertEqual(estimate_range(history, "ssd", None), (18, 18))
-        self.assertEqual(estimate_range({}, "full", 24), (24, 24))
-        self.assertEqual(estimate_range({}, "full", None), (None, None))
-        self.assertEqual(estimate_range({}, "full", True), (None, None))
+        self.assertEqual(eta(history, "full", 19), (19, 1396), "one cold run must not become the typical estimate")
+        self.assertEqual(eta(history, "full", 1500), (21, 1500))
+        self.assertEqual(eta(history, "ssd", None), (18, 18))
+        self.assertEqual(eta({}, "full", 24), (24, 24))
+        self.assertEqual(eta({}, "full", None), (None, None))
+        self.assertEqual(eta({}, "full", True), (None, None))
 
 
 if __name__ == "__main__":

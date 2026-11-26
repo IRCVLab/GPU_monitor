@@ -132,7 +132,9 @@
           }
         ]
       },
-      "capacity_id": "dev-9-301"
+      "capacity_id": "dev-9-301",
+      "used_pct": 88,
+      "severity": "warning"
     },
     {
       "path": "/srv/zeus/vol2",
@@ -198,7 +200,9 @@
           }
         ]
       },
-      "capacity_id": "dev-9-302"
+      "capacity_id": "dev-9-302",
+      "used_pct": 96,
+      "severity": "critical"
     }
   ],
   "users": [
@@ -250,7 +254,8 @@
       "bytes": 371149766656,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1717472300
+      "mtime": 1717472300,
+      "age_days": 20
     },
     {
       "path": "/srv/zeus/vol2/projects/models/zeus-01.bin",
@@ -258,7 +263,8 @@
       "bytes": 367805857792,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1716521900
+      "mtime": 1716521900,
+      "age_days": 31
     },
     {
       "path": "/srv/zeus/vol1/projects/scratch/zeus-02.bin",
@@ -266,7 +272,8 @@
       "bytes": 364675858432,
       "uid": 1103,
       "owner": "casey",
-      "mtime": 1715571500
+      "mtime": 1715571500,
+      "age_days": 42
     },
     {
       "path": "/srv/zeus/vol2/projects/reports/zeus-03.bin",
@@ -274,7 +281,8 @@
       "bytes": 361530130432,
       "uid": 1104,
       "owner": "devon",
-      "mtime": 1714621100
+      "mtime": 1714621100,
+      "age_days": 53
     },
     {
       "path": "/srv/zeus/vol1/projects/dataset/zeus-04.bin",
@@ -282,7 +290,8 @@
       "bytes": 357711216640,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1713670700
+      "mtime": 1713670700,
+      "age_days": 64
     },
     {
       "path": "/srv/zeus/vol2/projects/models/zeus-05.bin",
@@ -290,7 +299,8 @@
       "bytes": 354934587392,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1712720300
+      "mtime": 1712720300,
+      "age_days": 75
     },
     {
       "path": "/srv/zeus/vol1/projects/scratch/zeus-06.bin",
@@ -298,7 +308,8 @@
       "bytes": 351723847680,
       "uid": 1103,
       "owner": "casey",
-      "mtime": 1711769900
+      "mtime": 1711769900,
+      "age_days": 86
     },
     {
       "path": "/srv/zeus/vol2/projects/reports/zeus-07.bin",
@@ -306,7 +317,8 @@
       "bytes": 348735406080,
       "uid": 1104,
       "owner": "devon",
-      "mtime": 1710819500
+      "mtime": 1710819500,
+      "age_days": 97
     },
     {
       "path": "/srv/zeus/vol1/projects/dataset/zeus-08.bin",
@@ -314,7 +326,8 @@
       "bytes": 345452314624,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1709869100
+      "mtime": 1709869100,
+      "age_days": 108
     },
     {
       "path": "/srv/zeus/vol2/projects/models/zeus-09.bin",
@@ -322,7 +335,8 @@
       "bytes": 342324412416,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1708918700
+      "mtime": 1708918700,
+      "age_days": 119
     }
   ],
   "stale": [

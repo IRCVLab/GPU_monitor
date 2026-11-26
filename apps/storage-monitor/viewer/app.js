@@ -499,7 +499,7 @@ function renderOverview() {
     renderFleetUserUsage(fleetUsage, buildFleetUserUsage(currentOverviewSummaries, currentOverviewSnapshotEntries));
     return;
   }
-  const rows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries, DEFAULT_CAPACITY_THRESHOLDS);
+  const rows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries);
   const list = document.getElementById("overviewList");
   renderOverviewList(list, rows, { onOpenServer: (serverId) => navigateToServer(serverId) });
   updateOverviewStatus();
@@ -515,7 +515,7 @@ async function loadStaticBootstrap() {
     order: index,
     mount_count: 0,
     snapshot_availability: "available",
-    freshness: "fresh",
+    freshness: "unknown",
     latest_pull_status: "succeeded",
     latest_scan_result: "complete",
     configuration_sync: "in_sync",
@@ -833,7 +833,7 @@ function syncRescanButton() {
   if (!currentSession.can_rescan) return setRescanUnsupported(btn, "Read-only session: manual rescan is disabled.");
   if (rescanServerId === currentServerId && (rescanPollInFlight || rescanTimer || rescanSawActive)) return;
   const status = scanStatusByServer.get(currentServerId);
-  if (status && status.state === "running" && !status.disconnected && Date.now() / 1000 - status.observed_unix <= 90) {
+  if (status && isScanActive({ scan_status: status })) {
     setRescanActivityState(btn, "running");
     btn.disabled = true;
     btn.textContent = "Rescan";

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import random
+import sys
 from typing import Any, Callable
 
 GiB = 1024 ** 3
@@ -187,7 +188,7 @@ class SnapshotBuilder:
         rows.sort(key=lambda u: u["bytes"], reverse=True)
         return rows
 
-    def file_rows(self, templates: list[tuple[str, int, int, int]], *, stale: bool = False) -> list[dict[str, Any]]:
+    def file_rows(self, templates: list[tuple[str, int, int, int]]) -> list[dict[str, Any]]:
         out = []
         for path, uid, gib, days in templates:
             row = {
@@ -198,8 +199,6 @@ class SnapshotBuilder:
                 "owner": USERS[uid],
                 "mtime": mtime(days, start=self.scan_start),
             }
-            if stale:
-                row["age_days"] = days
             out.append(row)
         out.sort(key=lambda f: f["bytes"], reverse=True)
         return out
@@ -303,7 +302,7 @@ def hinton_snapshot() -> dict[str, Any]:
         ("/home/minseo/old_env.tar.gz", 1010, 6, 95),
         ("/data/jaehyeon/eval/old_results.parquet", 1006, 5, 220),
         ("/home/minseo/journal_archive.gz", 1010, 3, 130),
-    ], stale=True)
+    ])
     return b.doc(mounts, roots, top, stale)
 
 
@@ -346,7 +345,7 @@ def simple_snapshot(server_id: str, *, offset: int, medias: list[str], use_pcts:
             180 + idx * 35,
         ))
     top = b.file_rows(top_templates)
-    stale = b.file_rows(stale_templates, stale=True)
+    stale = b.file_rows(stale_templates)
     return b.doc(mounts, roots, top, stale)
 
 
@@ -370,10 +369,13 @@ def check_tree(node: dict[str, Any], path: str = "/") -> None:
 
 
 def main() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from collector.contract import snapshot_response
+
     out_dir = Path(__file__).resolve().parent
     docs = []
     for sid, factory in SNAPSHOTS:
-        doc = factory()
+        doc = snapshot_response(factory())
         for mount in doc["mounts"]:
             check_tree(mount["tree"])
         out = out_dir / f"{sid}.sample.json"

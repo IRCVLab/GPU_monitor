@@ -14,13 +14,13 @@ import sys
 import tempfile
 from typing import Any, Mapping, Optional, Protocol, Tuple
 
+from collector import judge
 from collector.inventory import Server
 
 STATUS_PATH = "/var/lib/storage-viz/scan-status.json"
 SNAPSHOT_DIR = "/var/lib/storage-viz/snapshots"
 RESCAN_COMMAND = ("sudo", "-n", "/usr/bin/systemctl", "start", "storage-viz-scan.service")
 ACTIVE_STATE_COMMAND = ("/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service", "storage-viz-scheduled-scan.service")
-ACTIVE_SCAN_STATES = frozenset({"active", "activating", "reloading"})
 KNOWN_ACTIVE_STATES = frozenset({"active", "reloading", "inactive", "failed", "activating", "deactivating", "maintenance"})
 MAX_STATUS_BYTES = 64 * 1024
 MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
@@ -185,7 +185,7 @@ class OpenSshTransport:
         states = text.split()
         if len(text) > 64 or not 1 <= len(states) <= 2 or any(state not in KNOWN_ACTIVE_STATES for state in states):
             raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
-        return next((state for state in states if state in ACTIVE_SCAN_STATES), states[0])
+        return next((state for state in states if judge.unit_is_active(state)), states[0])
 
     def start_rescan(self, server: Server) -> None:
         self._validate_server(server)
@@ -280,7 +280,7 @@ def observed_scan_service(observation: Mapping[str, Any]) -> tuple[str, int | No
         if state in KNOWN_ACTIVE_STATES:
             recent = monotonic(props, "StateChangeTimestampMonotonic")
             started = max(monotonic(props, "ExecMainStartTimestampMonotonic"), monotonic(props, "InactiveExitTimestampMonotonic"))
-            services.append((state in ACTIVE_SCAN_STATES, recent, state, started))
+            services.append((judge.unit_is_active(state), recent, state, started))
     if not services:
         raise TransportError("ACTIVE_STATE_FAILED", "service state is unavailable")
     active, _, state, started = max(services)

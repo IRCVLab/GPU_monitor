@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Any, Mapping, Protocol
 
+from collector import judge
 from collector.ids import SERVER_ID_RE
 from collector.store import AtomicWriteDurabilityUncertain, StoreLockedError
 
@@ -16,7 +17,6 @@ _TERMINAL_WRITE_RETRY_SECONDS = 2.0
 _TERMINAL_WRITE_RETRY_INTERVAL_SECONDS = 0.025
 
 SAFE_FIELD_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
-ACTIVE_SCAN_STATES = frozenset({"active", "activating", "reloading"})
 DEFAULT_COOLDOWN_SECONDS = 15 * 60
 DEFAULT_MAX_CONCURRENT_JOBS = 2
 MAX_AUDIT_EVENTS = 100
@@ -95,7 +95,7 @@ class RescanJobManager:
                 code = _safe_code(getattr(exc, "code", "ACTIVE_STATE_FAILED"))
                 event = self._record(now, actor_id, sid, "ACTIVE_STATE_FAILED", None)
                 return 503, {"error": "ACTIVE_STATE_FAILED", "code": code, "audit": event}
-            if remote_state in ACTIVE_SCAN_STATES:
+            if judge.unit_is_active(remote_state):
                 event = self._record(now, actor_id, sid, "ACTIVE_JOB", None)
                 return 409, {"error": "ACTIVE_JOB", "remote_active_state": _safe_field(remote_state), "audit": event}
             with self._lock:

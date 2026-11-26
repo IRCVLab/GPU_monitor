@@ -36,21 +36,16 @@ function pendingScanGeneration(status, snapshot) {
       : null);
 }
 
-function scanObservationIsDisconnected(status, now) {
-  const observed = scanNumber(status.observed_unix);
-  return !!status.disconnected || (observed !== null && now - observed > 90);
-}
-
-function isScanActive(summary, now = Date.now() / 1000) {
+function isScanActive(summary) {
   const status = summary.scan_status;
   return !!(activeRescanState(summary.active_job) || (
-    status?.state === "running" && scanNumber(status.observed_unix) !== null && !scanObservationIsDisconnected(status, now)
+    (status?.activity ?? status?.state) === "running" && scanNumber(status.observed_unix) !== null && !status.disconnected
   ));
 }
 
-function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
+function scanStatusModel(status, snapshot, now = scanNumber(status?.host_now_unix) ?? Date.now() / 1000) {
   const s = status || {}, data = snapshot || {};
-  const disconnected = scanObservationIsDisconnected(s, now);
+  const disconnected = !!s.disconnected;
   const state = disconnected ? "unknown" : (s.state || "unknown");
   const running = state === "running";
   const started = scanNumber(s.started_unix);
@@ -64,8 +59,7 @@ function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
     ? scanNumber(s.estimate_duration_sec)
     : completeSnapshot ? scanNumber(data.scan_duration_sec) : null;
   const elapsed = running && started !== null ? Math.max(0, now - started) : null;
-  const heartbeat = scanNumber(s.updated_unix);
-  const heartbeatStale = running && (s.error_code === "STALE_PROGRESS" || (heartbeat !== null && now - heartbeat > 30));
+  const heartbeatStale = running && s.error_code === "STALE_PROGRESS";
   const measurable = running && s.progress_available && !heartbeatStale;
   const predicted = elapsed !== null && estimateDuration > 0 ? started + estimateDuration : null;
   const eta = predicted > now && !heartbeatStale ? predicted : null;
@@ -120,7 +114,7 @@ function renderScanStatus(status, snapshot, options = {}) {
   const doc = options.document || document;
   const panel = doc.getElementById("scanStatusPanel");
   if (!panel) return;
-  const now = options.now ?? Date.now() / 1000;
+  const now = options.now ?? scanNumber(status?.host_now_unix) ?? Date.now() / 1000;
   const model = scanStatusModel(status, snapshot, now);
   const set = (id, value) => { const el = doc.getElementById(id); if (el && el.textContent !== value) el.textContent = value; };
   const title = (id, value) => { const el = doc.getElementById(id); if (el) el.title = value; };

@@ -22,8 +22,9 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
 from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlsplit
 
+from collector.contract import snapshot_response
 from collector.ids import SERVER_ID_RE
-from collector.inventory import Server as InventoryServer, load_inventory
+from collector.inventory import CapacityThresholds, Server as InventoryServer, load_inventory
 
 SAMPLE_FILE_TOKEN_RE = SERVER_ID_RE
 from collector.jobs import RescanJobManager
@@ -253,7 +254,7 @@ class _DevSampleService:
         out = []
         for s in self.servers:
             snap = self.load_snapshot_for_api(s.id)
-            out.append({"id": s.id, "display_name": s.display_name, "order": s.order, "snapshot_availability": "available", "freshness": "fresh", "latest_pull_status": "succeeded", "latest_scan_result": "complete", "configuration_sync": "in_sync", "mount_count": len(snap.get("mounts", [])), "active_job": None, "scan_status": self.scan_status_for_api(s.id)})
+            out.append({"id": s.id, "display_name": s.display_name, "order": s.order, "snapshot_availability": "available", "freshness": "unknown", "latest_pull_status": "succeeded", "latest_scan_result": "complete", "configuration_sync": "in_sync", "mount_count": len(snap.get("mounts", [])), "active_job": None, "scan_status": self.scan_status_for_api(s.id)})
         return out
 
     def scan_status_for_api(self, server_id: str) -> dict[str, Any]:
@@ -271,6 +272,7 @@ class _DevSampleService:
         return {"active_job": None}
 
 
+capacity_thresholds = CapacityThresholds()
 service: Any
 jobs: RescanJobManager | None = None
 RESCAN_API_ENABLED = False
@@ -278,6 +280,7 @@ if DEV_SAMPLE_DIR:
     service = _DevSampleService(DEV_SAMPLE_DIR)
 elif INVENTORY_PATH:
     inventory = load_inventory(INVENTORY_PATH)
+    capacity_thresholds = inventory.capacity_thresholds
     service = PollService(list(inventory.servers), CentralStore(STATE_DIR), OpenSshTransport())
     service.data_mode = "inventory"
     jobs = None
@@ -410,7 +413,7 @@ class SnapshotResponseCache:
 
                 snapshot = selected.read()
                 sample = capacity.sample_for(server_id) if capacity is not None else None
-                body = _encode_json(LiveCapacity.project_sample(snapshot, sample))
+                body = _encode_json(snapshot_response(LiveCapacity.project_sample(snapshot, sample), capacity_thresholds))
                 key = (selected.revision, sample.revision if sample is not None else None)
 
             with self._lock:
@@ -642,11 +645,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"error": "api not configured"}, 503)
         if parts == ["api", "servers"]:
             summaries = service.server_summaries()
-            if live_capacity is not None:
-                for summary in summaries:
-                    overview = summary.get("overview_snapshot")
-                    if overview is not None:
-                        summary["overview_snapshot"] = live_capacity.project(summary["id"], overview)
+            for summary in summaries:
+                overview = summary.get("overview_snapshot")
+                if overview is not None:
+                    if live_capacity is not None:
+                        overview = live_capacity.project(summary["id"], overview)
+                    summary["overview_snapshot"] = snapshot_response(overview, capacity_thresholds)
             return self._json({"data_mode": getattr(service, "data_mode", "inventory"), "servers": summaries})
         if len(parts) == 4 and parts[1] == "servers" and parts[3] == "scan-status":
             try:
@@ -657,7 +661,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         projected = live_capacity.project(parts[2], overview)
                         status["capacity"] = {
                             "scan_generation": overview["scan_generation"],
-                            "mounts": projected["mounts"],
+                            "mounts": snapshot_response(projected, capacity_thresholds)["mounts"],
                         }
             except ValueError:
                 return self._json({"error": "UNKNOWN_SERVER"}, 404)
@@ -668,7 +672,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     body = snapshot_responses.get(service, live_capacity, parts[2])
                 else:
                     snap = service.load_snapshot_for_api(parts[2])
-                    body = _encode_json(snap) if snap is not None else None
+                    body = _encode_json(snapshot_response(snap, capacity_thresholds)) if snap is not None else None
             except Exception:
                 return self._json({"error": "UNKNOWN_SERVER"}, 404)
             if body is None:

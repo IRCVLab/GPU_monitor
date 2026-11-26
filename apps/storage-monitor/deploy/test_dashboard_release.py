@@ -82,6 +82,8 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "collector/__init__.py": "",
             "collector/duration_history.py": "PLANS = ()\n",
             "storage_fstypes.py": "REMOTE_FSTYPES = frozenset()\n",
+            "collector/contract.py": "",
+            "collector/judge.py": "",
             "collector/ids.py": "SERVER_ID_RE = None\n",
             "collector/inventory.py": "def load_inventory(): pass\n",
             "collector/jobs.py": "class RescanJobManager: pass\n",

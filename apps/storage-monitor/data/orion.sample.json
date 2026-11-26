@@ -113,7 +113,9 @@
           }
         ]
       },
-      "capacity_id": "dev-9-201"
+      "capacity_id": "dev-9-201",
+      "used_pct": 93,
+      "severity": "critical"
     },
     {
       "path": "/srv/orion/vol2",
@@ -179,7 +181,9 @@
           }
         ]
       },
-      "capacity_id": "dev-9-202"
+      "capacity_id": "dev-9-202",
+      "used_pct": 70,
+      "severity": "warning"
     }
   ],
   "users": [
@@ -231,7 +235,8 @@
       "bytes": 263781875712,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1717472200
+      "mtime": 1717472200,
+      "age_days": 20
     },
     {
       "path": "/srv/orion/vol2/projects/models/orion-01.bin",
@@ -239,7 +244,8 @@
       "bytes": 259882221568,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1716521800
+      "mtime": 1716521800,
+      "age_days": 31
     },
     {
       "path": "/srv/orion/vol1/projects/scratch/orion-02.bin",
@@ -247,7 +253,8 @@
       "bytes": 257051066368,
       "uid": 1103,
       "owner": "casey",
-      "mtime": 1715571400
+      "mtime": 1715571400,
+      "age_days": 42
     },
     {
       "path": "/srv/orion/vol2/projects/reports/orion-03.bin",
@@ -255,7 +262,8 @@
       "bytes": 253506879488,
       "uid": 1104,
       "owner": "devon",
-      "mtime": 1714621000
+      "mtime": 1714621000,
+      "age_days": 53
     },
     {
       "path": "/srv/orion/vol1/projects/dataset/orion-04.bin",
@@ -263,7 +271,8 @@
       "bytes": 250667335680,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1713670600
+      "mtime": 1713670600,
+      "age_days": 64
     },
     {
       "path": "/srv/orion/vol2/projects/models/orion-05.bin",
@@ -271,7 +280,8 @@
       "bytes": 247766974464,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1712720200
+      "mtime": 1712720200,
+      "age_days": 75
     },
     {
       "path": "/srv/orion/vol1/projects/scratch/orion-06.bin",
@@ -279,7 +289,8 @@
       "bytes": 244630683648,
       "uid": 1103,
       "owner": "casey",
-      "mtime": 1711769800
+      "mtime": 1711769800,
+      "age_days": 86
     },
     {
       "path": "/srv/orion/vol2/projects/reports/orion-07.bin",
@@ -287,7 +298,8 @@
       "bytes": 241037213696,
       "uid": 1104,
       "owner": "devon",
-      "mtime": 1710819400
+      "mtime": 1710819400,
+      "age_days": 97
     },
     {
       "path": "/srv/orion/vol1/projects/dataset/orion-08.bin",
@@ -295,7 +307,8 @@
       "bytes": 237327351808,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1709869000
+      "mtime": 1709869000,
+      "age_days": 108
     },
     {
       "path": "/srv/orion/vol2/projects/models/orion-09.bin",
@@ -303,7 +316,8 @@
       "bytes": 234692280320,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1708918600
+      "mtime": 1708918600,
+      "age_days": 119
     }
   ],
   "stale": [

@@ -11,11 +11,12 @@ import json
 import time
 from typing import Any, Callable, Iterable, Mapping
 
+from collector import judge
 from collector.inventory import Server
 
 
 POLL_SECONDS = 30
-MAX_AGE_SECONDS = 900
+MAX_AGE_SECONDS = judge.MAX_CAPACITY_AGE_SECONDS
 MAX_RESPONSE_BYTES = 1024 * 1024
 
 
@@ -121,7 +122,7 @@ class LiveCapacity:
     def sample_for(self, server_id: str) -> CapacitySample | None:
         target = self._targets.get(server_id)
         sample = self._samples.get(target)
-        if sample is None or not 0 <= int(self._clock()) - sample.observed_unix <= MAX_AGE_SECONDS:
+        if sample is None or not judge.capacity_sample_current(sample.observed_unix, int(self._clock())):
             return None
         return sample
 

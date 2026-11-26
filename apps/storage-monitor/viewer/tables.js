@@ -177,7 +177,7 @@ function sortRows(rows, sort) {
 let topSort = { key: "bytes", dir: -1 }, topOwnerFilter = "";
 let topRowsCache = null;
 function topRowsAll() {
-  if (!topRowsCache) topRowsCache = (DATA.top_files || []).map(f => ({ ...f, age: daysAgo(f.mtime), mount: mountOf(f.path) }));
+  if (!topRowsCache) topRowsCache = (DATA.top_files || []).map(f => ({ ...f, age: f.age_days ?? null, mount: mountOf(f.path) }));
   return topRowsCache;
 }
 function renderTopFiles() {

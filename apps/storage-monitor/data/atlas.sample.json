@@ -113,7 +113,9 @@
           }
         ]
       },
-      "capacity_id": "dev-9-101"
+      "capacity_id": "dev-9-101",
+      "used_pct": 10,
+      "severity": "normal"
     },
     {
       "path": "/srv/atlas/vol2",
@@ -179,7 +181,9 @@
           }
         ]
       },
-      "capacity_id": "dev-9-102"
+      "capacity_id": "dev-9-102",
+      "used_pct": 82,
+      "severity": "warning"
     }
   ],
   "users": [
@@ -231,7 +235,8 @@
       "bytes": 156287107072,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1717472100
+      "mtime": 1717472100,
+      "age_days": 20
     },
     {
       "path": "/srv/atlas/vol2/projects/models/atlas-01.bin",
@@ -239,7 +244,8 @@
       "bytes": 152494407680,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1716521700
+      "mtime": 1716521700,
+      "age_days": 31
     },
     {
       "path": "/srv/atlas/vol1/projects/scratch/atlas-02.bin",
@@ -247,7 +253,8 @@
       "bytes": 149963145216,
       "uid": 1103,
       "owner": "casey",
-      "mtime": 1715571300
+      "mtime": 1715571300,
+      "age_days": 42
     },
     {
       "path": "/srv/atlas/vol2/projects/reports/atlas-03.bin",
@@ -255,7 +262,8 @@
       "bytes": 146433638400,
       "uid": 1104,
       "owner": "devon",
-      "mtime": 1714620900
+      "mtime": 1714620900,
+      "age_days": 53
     },
     {
       "path": "/srv/atlas/vol1/projects/dataset/atlas-04.bin",
@@ -263,7 +271,8 @@
       "bytes": 143276376064,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1713670500
+      "mtime": 1713670500,
+      "age_days": 64
     },
     {
       "path": "/srv/atlas/vol2/projects/models/atlas-05.bin",
@@ -271,7 +280,8 @@
       "bytes": 139785666560,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1712720100
+      "mtime": 1712720100,
+      "age_days": 75
     },
     {
       "path": "/srv/atlas/vol1/projects/scratch/atlas-06.bin",
@@ -279,7 +289,8 @@
       "bytes": 137166323712,
       "uid": 1103,
       "owner": "casey",
-      "mtime": 1711769700
+      "mtime": 1711769700,
+      "age_days": 86
     },
     {
       "path": "/srv/atlas/vol2/projects/reports/atlas-07.bin",
@@ -287,7 +298,8 @@
       "bytes": 133638914048,
       "uid": 1104,
       "owner": "devon",
-      "mtime": 1710819300
+      "mtime": 1710819300,
+      "age_days": 97
     },
     {
       "path": "/srv/atlas/vol1/projects/dataset/atlas-08.bin",
@@ -295,7 +307,8 @@
       "bytes": 130161836032,
       "uid": 1101,
       "owner": "avery",
-      "mtime": 1709868900
+      "mtime": 1709868900,
+      "age_days": 108
     },
     {
       "path": "/srv/atlas/vol2/projects/models/atlas-09.bin",
@@ -303,7 +316,8 @@
       "bytes": 127543541760,
       "uid": 1102,
       "owner": "blake",
-      "mtime": 1708918500
+      "mtime": 1708918500,
+      "age_days": 119
     }
   ],
   "stale": [

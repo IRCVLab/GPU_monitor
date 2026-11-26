@@ -2,7 +2,8 @@
 from datetime import datetime, timezone
 import math
 import re
-from collector.transport import TransportError, ACTIVE_SCAN_STATES
+from collector import judge
+from collector.transport import TransportError
 
 NUMBERS = ('started_unix','finished_unix','updated_unix','scanned_files','scanned_dirs','scanned_bytes','roots_completed','roots_total','last_finished_unix','last_duration_sec','estimate_duration_sec','published_finished_unix','snapshot_finished_unix')
 STATES = {'idle','running','complete','partial','failed','unknown'}
@@ -70,7 +71,7 @@ def merge_status(lifecycle, progress, active, timer, now, *, service_started=Non
     current_lifecycle = life.get('state') == 'running' and not (
         service_started is not None and live_start is not None and live_start < service_started - 2
     )
-    if active in ACTIVE_SCAN_STATES:
+    if judge.unit_is_active(active):
         result['state'] = 'running'
         if not current_lifecycle:
             for key in ('started_unix','finished_unix','phase','current_root','generation','updated_unix', 'error_code', 'scan_plan', 'estimate_duration_sec', 'scanned_files','scanned_dirs','scanned_bytes','roots_completed','roots_total'):
@@ -87,7 +88,7 @@ def merge_status(lifecycle, progress, active, timer, now, *, service_started=Non
                 else:
                     result.update({k:v for k,v in prog.items() if k not in {'state','started_unix','finished_unix','generation'}})
                 result['progress_available'] = True
-            if result.get('updated_unix') is not None and now - result['updated_unix'] > 30:
+            if judge.progress_stale(result.get('updated_unix'), now):
                 result['error_code'] = 'STALE_PROGRESS'
                 result['progress_available'] = False
         if result.get('started_unix') is None and service_started is not None:
@@ -99,7 +100,7 @@ def merge_status(lifecycle, progress, active, timer, now, *, service_started=Non
         result['state'] = 'unknown'; result['error_code'] = 'SCAN_INTERRUPTED'
     elif not life:
         result['state'] = 'idle' if active == 'inactive' else 'unknown'
-    if not life or (active in ACTIVE_SCAN_STATES and not current_lifecycle):
+    if not life or (judge.unit_is_active(active) and not current_lifecycle):
         result.pop('estimate_duration_sec',None)
     result.pop('server_id',None); result.pop('run_id',None); result.pop('progress_run_id',None)
     return result

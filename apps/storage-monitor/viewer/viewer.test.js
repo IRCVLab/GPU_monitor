@@ -35,7 +35,7 @@ assert.equal(require("./app.js").shouldFallbackToStatic({ status: 404 }), true);
   const { buildOverviewRows } = require("./overview.js");
   const capacity = (used, scanTime = 100) => ({
     scan_finished_unix: scanTime,
-    mounts: [{ mount_id: "data", path: "/data", df_used: used, df_total: 100, df_use_pct: used }],
+    mounts: [{ mount_id: "data", path: "/data", df_used: used, df_total: 100, df_use_pct: used, used_pct: used }],
   });
   const cached = [{ id: "turing", snapshot: capacity(10) }];
   const rows = (snapshot, cache = cached) => buildOverviewRows([{ id: "turing", overview_snapshot: snapshot }], cache);
@@ -284,41 +284,24 @@ function makeSnapshot(mountOverrides = []) {
   return {
     server_id: "alpha-1",
     mounts: mountOverrides.length ? mountOverrides : [
-      { path: "/data", df_total: 5000 * GiB, df_used: 4050 * GiB, df_use_pct: 81, df_avail: 900 * GiB },
-      { path: "/archive", df_total: 8000 * GiB, df_used: 7440 * GiB, df_use_pct: 93, df_avail: 600 * GiB },
+      { path: "/data", df_total: 5000 * GiB, df_used: 4050 * GiB, df_use_pct: 81, used_pct: 81, severity: "warning", df_avail: 900 * GiB },
+      { path: "/archive", df_total: 8000 * GiB, df_used: 7440 * GiB, df_use_pct: 93, used_pct: 93, severity: "critical", df_avail: 600 * GiB },
     ],
   };
 }
 
 function testOverviewCapacityThresholdsAndPrecedence() {
   const {
-    DEFAULT_CAPACITY_THRESHOLDS,
-    pressureLevel,
     derivePrimaryStatus,
     statusPresentation,
     buildOverviewServer,
   } = require("./overview.js");
 
-  assert.deepStrictEqual(DEFAULT_CAPACITY_THRESHOLDS, {
-    warning_used_pct: 80,
-    critical_used_pct: 92,
-    warning_free_bytes: 549755813888,
-    critical_free_bytes: 137438953472,
-  }, "overview thresholds must match the centralized inventory defaults");
-
-  assert.strictEqual(pressureLevel(79, DEFAULT_CAPACITY_THRESHOLDS.warning_free_bytes + 1), "normal");
-  assert.strictEqual(pressureLevel(80, 10 ** 12), "warning");
-  assert.strictEqual(pressureLevel(1, DEFAULT_CAPACITY_THRESHOLDS.warning_free_bytes), "warning");
-  assert.strictEqual(pressureLevel(92, 10 ** 12), "critical");
-  assert.strictEqual(pressureLevel(1, DEFAULT_CAPACITY_THRESHOLDS.critical_free_bytes), "critical");
-  assert.strictEqual(pressureLevel(null, 10 ** 12), "unknown", "missing utilization must not be promoted to a capacity-pressure warning");
-  assert.strictEqual(pressureLevel(10, null), "unknown", "missing free bytes must not be promoted to a false critical state");
-
   const observed = Date.now() / 1000;
   const scanSnapshot = { mounts: [] };
   const running = { state: "running", observed_unix: observed };
   assert.strictEqual(buildOverviewServer(makeSummary({ scan_status: running }), scanSnapshot).primaryStatus.code, "active_scan");
-  assert.strictEqual(buildOverviewServer(makeSummary({ scan_status: { ...running, observed_unix: observed - 91 } }), scanSnapshot).primaryStatus.code, "normal");
+  assert.strictEqual(buildOverviewServer(makeSummary({ scan_status: { ...running, activity: "unknown" } }), scanSnapshot).primaryStatus.code, "normal");
   assert.strictEqual(buildOverviewServer(makeSummary({ scan_status: { ...running, disconnected: true } }), scanSnapshot).primaryStatus.code, "normal");
   const failedDuringScan = buildOverviewServer(makeSummary({ latest_scan_result: "failed", scan_status: running }), scanSnapshot);
   assert.strictEqual(failedDuringScan.primaryStatus.code, "scan_failed");
@@ -333,18 +316,18 @@ function testOverviewCapacityThresholdsAndPrecedence() {
     [makeSummary({ configuration_sync: "drifted" }), makeSnapshot(), null, "config_drift"],
     [makeSummary({ latest_scan_result: "partial" }), makeSnapshot(), null, "partial_scan"],
     [makeSummary({ freshness: "stale" }), makeSnapshot(), null, "stale_snapshot"],
-    [makeSummary({ active_job: { id: "job-1", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 950 * GiB, df_use_pct: 95, df_avail: 900 * GiB }]), null, "active_scan"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 950 * GiB, df_use_pct: 95, df_avail: 900 * GiB }]), null, "pressure_critical"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 100 * GiB, df_use_pct: 10, df_avail: 20 * GiB }]), null, "pressure_critical"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 810 * GiB, df_use_pct: 81, df_avail: 900 * GiB }]), null, "pressure_warning"],
-    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 550 * GiB, df_use_pct: 55, df_avail: 900 * GiB }]), null, "normal"],
+    [makeSummary({ active_job: { id: "job-1", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 950 * GiB, df_use_pct: 95, used_pct: 95, severity: "critical", df_avail: 900 * GiB }]), null, "active_scan"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 950 * GiB, df_use_pct: 95, used_pct: 95, severity: "critical", df_avail: 900 * GiB }]), null, "pressure_critical"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 100 * GiB, df_use_pct: 10, used_pct: 10, severity: "critical", df_avail: 20 * GiB }]), null, "pressure_critical"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 810 * GiB, df_use_pct: 81, used_pct: 81, severity: "warning", df_avail: 900 * GiB }]), null, "pressure_warning"],
+    [makeSummary(), makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 550 * GiB, df_use_pct: 55, used_pct: 55, severity: "normal", df_avail: 900 * GiB }]), null, "normal"],
     [makeSummary(), null, new Error("snapshot load failed"), "snapshot_load_failed"],
     [makeSummary({ active_job: { id: "job-9", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }), null, new Error("snapshot load failed"), "snapshot_load_failed"],
     [makeSummary({ freshness: "stale" }), null, new Error("snapshot load failed"), "stale_snapshot"],
     [makeSummary({ latest_pull_status: "unreachable" }), null, new Error("snapshot load failed"), "pull_unreachable"],
   ];
   for (const [summary, snapshot, error, expectedCode] of precedenceCases) {
-    const status = derivePrimaryStatus(summary, snapshot, DEFAULT_CAPACITY_THRESHOLDS, error);
+    const status = derivePrimaryStatus(summary, snapshot, error);
     assert.strictEqual(status.code, expectedCode, `expected ${expectedCode} for ${JSON.stringify(summary)}`);
   }
 
@@ -359,8 +342,7 @@ function testOverviewCapacityThresholdsAndPrecedence() {
 
   const model = buildOverviewServer(
     makeSummary({ latest_scan_result: "failed", active_job: { id: "job-2", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }),
-    makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 930 * GiB, df_use_pct: 93, df_avail: 1024 * GiB }]),
-    DEFAULT_CAPACITY_THRESHOLDS,
+    makeSnapshot([{ path: "/data", df_total: 1000 * GiB, df_used: 930 * GiB, df_use_pct: 93, used_pct: 93, severity: "critical", df_avail: 1024 * GiB }]),
   );
   assert.strictEqual(model.primaryStatus.code, "scan_failed", "higher-priority operational state must win over capacity pressure");
   assert.strictEqual(model.secondaryStatus.code, "active_scan", "active scan must remain available as a secondary cue");
@@ -370,7 +352,6 @@ function testOverviewCapacityThresholdsAndPrecedence() {
   const loadFailureModel = buildOverviewServer(
     makeSummary({ active_job: { id: "job-3", server_id: "alpha-1", kind: "rescan", state: "running", actor: "operator-1", requested_unix: 1719200000, started_unix: 1719200001, finished_unix: null, result_code: null } }),
     null,
-    DEFAULT_CAPACITY_THRESHOLDS,
     new Error("snapshot load failed"),
   );
   assert.strictEqual(loadFailureModel.primaryStatus.code, "snapshot_load_failed", "client snapshot failure must be visible when summary state would otherwise be healthy/active/capacity-only");
@@ -389,9 +370,9 @@ function makeCapacitySnapshot(overrides = {}) {
       { mount_id: "bad-zero", major_minor: "0:0", storage_media: "unknown", storage_media_confidence: "unresolved" },
     ],
     mounts: [
-      { mount_id: "rootfs", path: "/", df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
-      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
-      { mount_id: "legacy", path: "/legacy", df_total: 3000, df_used: 1200, df_avail: 1800, df_use_pct: 40 },
+      { mount_id: "rootfs", path: "/", df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, used_pct: 40, severity: "critical" },
+      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
+      { mount_id: "legacy", path: "/legacy", df_total: 3000, df_used: 1200, df_avail: 1800, df_use_pct: 40, used_pct: 40, severity: "critical" },
     ],
   }, overrides);
 }
@@ -413,11 +394,11 @@ function testActionableMountFilteringPreservesNonBootOrder() {
       { mount_id: "bootloader", capacity_id: "dev-8-5", storage_media: "mixed" },
     ],
     mounts: [
-      { mount_id: "boot", path: "/boot", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
-      { mount_id: "home", path: "/home", df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40 },
-      { mount_id: "efi", path: "/boot/efi", df_total: 200, df_used: 50, df_avail: 150, df_use_pct: 25 },
-      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
-      { mount_id: "bootloader", path: "/bootloader", df_total: 300, df_used: 120, df_avail: 180, df_use_pct: 40 },
+      { mount_id: "boot", path: "/boot", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10, used_pct: 10, severity: "critical" },
+      { mount_id: "home", path: "/home", df_total: 1000, df_used: 400, df_avail: 600, df_use_pct: 40, used_pct: 40, severity: "critical" },
+      { mount_id: "efi", path: "/boot/efi", df_total: 200, df_used: 50, df_avail: 150, df_use_pct: 25, used_pct: 25, severity: "critical" },
+      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
+      { mount_id: "bootloader", path: "/bootloader", df_total: 300, df_used: 120, df_avail: 180, df_use_pct: 40, used_pct: 40, severity: "critical" },
     ],
   });
   assert.deepStrictEqual(summarizeMounts(snapshot).map(m => m.path), ["/home", "/data", "/bootloader"], "summaries must omit /boot mounts while preserving non-boot input order");
@@ -436,8 +417,8 @@ function testOnlyBootMountsProduceZeroActionableMountCount() {
         { mount_id: "efi", capacity_id: "dev-8-2", storage_media: "ssd" },
       ],
       mounts: [
-        { mount_id: "boot", path: "/boot", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
-        { mount_id: "efi", path: "/boot/efi", df_total: 200, df_used: 20, df_avail: 180, df_use_pct: 10 },
+        { mount_id: "boot", path: "/boot", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10, used_pct: 10, severity: "critical" },
+        { mount_id: "efi", path: "/boot/efi", df_total: 200, df_used: 20, df_avail: 180, df_use_pct: 10, used_pct: 10, severity: "critical" },
       ],
     },
   );
@@ -490,8 +471,8 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
       { mount_id: "data-bind", capacity_id: "dev-8-16" },
     ],
     mounts: [
-      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
-      { mount_id: "data-bind", path: "/data-bind", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
+      { mount_id: "data-bind", path: "/data-bind", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
     ],
   })));
   assert.strictEqual(exactDuplicate.totalBytes, 2000, "exact duplicate capacity identities within a server must count once");
@@ -507,8 +488,8 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
         { mount_id: "data-bind", capacity_id: "dev-8-16" },
       ],
       mounts: [
-        { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
-        { mount_id: "data-bind", path: "/data-bind", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
+        { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
+        { mount_id: "data-bind", path: "/data-bind", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
       ],
     }) },
   ])[0];
@@ -518,8 +499,8 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
 
   const inconsistentDuplicate = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
     mounts: [
-      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75 },
-      { mount_id: "data", path: "/data-stale", df_total: 3000, df_used: 1500, df_avail: 1500, df_use_pct: 50 },
+      { mount_id: "data", path: "/data", df_total: 2000, df_used: 1500, df_avail: 500, df_use_pct: 75, used_pct: 75, severity: "critical" },
+      { mount_id: "data", path: "/data-stale", df_total: 3000, df_used: 1500, df_avail: 1500, df_use_pct: 50, used_pct: 50, severity: "critical" },
     ],
   })));
   assert.deepStrictEqual({
@@ -533,7 +514,7 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
 
   const unresolved = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
     selected_roots: [{ mount_id: "missing", storage_media: "unknown", storage_media_confidence: "unresolved" }],
-    mounts: [{ mount_id: "missing", path: "/missing", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10 }],
+    mounts: [{ mount_id: "missing", path: "/missing", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10, used_pct: 10, severity: "critical" }],
   })));
   assert.strictEqual(unresolved.excludedMountCount, 1, "unresolved identities must increment excludedMountCount");
   assert.deepStrictEqual(unresolved.partialReasons, ["/missing: unresolved capacity identity, 1개 마운트 제외"], "unresolved identities must add a precise partial reason");
@@ -548,10 +529,10 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
       { mount_id: "invalid-capacity", capacity_id: "not-canonical", major_minor: "8:89", storage_media: "ssd", storage_media_confidence: "resolved" },
     ],
     mounts: [
-      { mount_id: "zero", path: "/zero", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
-      { mount_id: "invalid", path: "/invalid", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
-      { mount_id: "empty-capacity", path: "/empty", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
-      { mount_id: "invalid-capacity", path: "/invalid-capacity", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 },
+      { mount_id: "zero", path: "/zero", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10, used_pct: 10, severity: "critical" },
+      { mount_id: "invalid", path: "/invalid", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10, used_pct: 10, severity: "critical" },
+      { mount_id: "empty-capacity", path: "/empty", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10, used_pct: 10, severity: "critical" },
+      { mount_id: "invalid-capacity", path: "/invalid-capacity", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10, used_pct: 10, severity: "critical" },
     ],
   }));
   assert.deepStrictEqual(invalidIds.map(m => m.identity), [null, null, null, null], "zero, malformed, empty, and noncanonical identities must remain unresolved instead of falling back ambiguously");
@@ -560,8 +541,8 @@ function testOverviewIdentityAwareMountModelAndAggregate() {
     { id: "beta-2", display_name: "beta", order: 20, mount_count: 1 },
     { id: "alpha-1", display_name: "alpha", order: 10, mount_count: 2 },
   ], [
-    { id: "beta-2", snapshot: makeCapacitySnapshot({ server_id: "beta-2", selected_roots: [{ mount_id: "same", capacity_id: "dev-8-1" }], mounts: [{ mount_id: "same", path: "/beta", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10 }] }) },
-    { id: "alpha-1", snapshot: makeCapacitySnapshot({ server_id: "alpha-1", selected_roots: [{ mount_id: "same", capacity_id: "dev-8-1" }], mounts: [{ mount_id: "same", path: "/alpha", df_total: 2000, df_used: 500, df_avail: 1500, df_use_pct: 25 }] }) },
+    { id: "beta-2", snapshot: makeCapacitySnapshot({ server_id: "beta-2", selected_roots: [{ mount_id: "same", capacity_id: "dev-8-1" }], mounts: [{ mount_id: "same", path: "/beta", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10, used_pct: 10, severity: "critical" }] }) },
+    { id: "alpha-1", snapshot: makeCapacitySnapshot({ server_id: "alpha-1", selected_roots: [{ mount_id: "same", capacity_id: "dev-8-1" }], mounts: [{ mount_id: "same", path: "/alpha", df_total: 2000, df_used: 500, df_avail: 1500, df_use_pct: 25, used_pct: 25, severity: "critical" }] }) },
   ]);
   assert.deepStrictEqual(rows.map(row => row.id), ["beta-2", "alpha-1"], "overview rows must preserve manifest/server order exactly");
   assert.deepStrictEqual(rows.map(row => row.mounts.map(m => m.path)), [["/beta"], ["/alpha"]], "overview rows must preserve mount order exactly");
@@ -617,7 +598,7 @@ function testOverviewUnknownCapacityLabelsDoNotImplyZero() {
 
   const allUnresolved = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
     selected_roots: [{ mount_id: "mystery" }],
-    mounts: [{ mount_id: "mystery", path: "/mystery", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10 }],
+    mounts: [{ mount_id: "mystery", path: "/mystery", df_total: 1000, df_used: 100, df_avail: 900, df_use_pct: 10, used_pct: 10, severity: "critical" }],
   })));
   assert.deepStrictEqual({
     isPartial: allUnresolved.isPartial,
@@ -641,8 +622,8 @@ function testOverviewUnknownCapacityLabelsDoNotImplyZero() {
       { mount_id: "unknown" },
     ],
     mounts: [
-      { mount_id: "known", path: "/known", df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50 },
-      { mount_id: "unknown", path: "/unknown", df_total: 4096, df_used: 1024, df_avail: 3072, df_use_pct: 25 },
+      { mount_id: "known", path: "/known", df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50, used_pct: 50, severity: "critical" },
+      { mount_id: "unknown", path: "/unknown", df_total: 4096, df_used: 1024, df_avail: 3072, df_use_pct: 25, used_pct: 25, severity: "critical" },
     ],
   })));
   assert.strictEqual(knownPlusExcluded.totalLabel, "확인된 용량 ≥ 2.00 KB", "known-plus-excluded partial aggregate must label only the known lower bound");
@@ -650,7 +631,7 @@ function testOverviewUnknownCapacityLabelsDoNotImplyZero() {
 
   const actualZero = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
     selected_roots: [{ mount_id: "zero-cap", capacity_id: "dev-1-0" }],
-    mounts: [{ mount_id: "zero-cap", path: "/zero-cap", df_total: 0, df_used: 0, df_avail: 0, df_use_pct: 0 }],
+    mounts: [{ mount_id: "zero-cap", path: "/zero-cap", df_total: 0, df_used: 0, df_avail: 0, df_use_pct: 0, used_pct: 0, severity: "critical" }],
   })));
   assert.deepStrictEqual({
     isPartial: actualZero.isPartial,
@@ -665,7 +646,7 @@ function testOverviewUnknownCapacityLabelsDoNotImplyZero() {
     buildOverviewServer(makeSummary({ id: "known", display_name: "known" }), makeCapacitySnapshot({
       server_id: "known",
       selected_roots: [{ mount_id: "known", capacity_id: "dev-8-16" }],
-      mounts: [{ mount_id: "known", path: "/known", df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50 }],
+      mounts: [{ mount_id: "known", path: "/known", df_total: 2048, df_used: 1024, df_avail: 1024, df_use_pct: 50, used_pct: 50, severity: "critical" }],
     })),
   ]);
   assert.strictEqual(page.isPartial, true, "page aggregate containing an unavailable server must be partial");
@@ -674,11 +655,11 @@ function testOverviewUnknownCapacityLabelsDoNotImplyZero() {
 }
 
 function testUnknownMountCapacityRemainsNeutralAndHonest() {
-  const { buildOverviewServer, summarizeMounts, pressureLevel } = require("./overview.js");
+  const { buildOverviewServer, summarizeMounts } = require("./overview.js");
 
   const missingAvailable = summarizeMounts(makeCapacitySnapshot({
     selected_roots: [{ mount_id: "unknown-free", capacity_id: "dev-8-16", storage_media: "ssd" }],
-    mounts: [{ mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 50 }],
+    mounts: [{ mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 50, used_pct: 50 }],
   }))[0];
   assert.deepStrictEqual({
     availableBytes: missingAvailable.availableBytes,
@@ -696,7 +677,7 @@ function testUnknownMountCapacityRemainsNeutralAndHonest() {
 
   const invalidNumbers = summarizeMounts(makeCapacitySnapshot({
     selected_roots: [{ mount_id: "invalid-cap", capacity_id: "dev-8-16", storage_media: "hdd" }],
-    mounts: [{ mount_id: "invalid-cap", path: "/invalid-cap", df_total: "2048", df_used: -1, df_avail: Infinity, df_use_pct: 75 }],
+    mounts: [{ mount_id: "invalid-cap", path: "/invalid-cap", df_total: "2048", df_used: -1, df_avail: Infinity, df_use_pct: 75, used_pct: null }],
   }))[0];
   assert.deepStrictEqual({
     totalBytes: invalidNumbers.totalBytes,
@@ -718,13 +699,12 @@ function testUnknownMountCapacityRemainsNeutralAndHonest() {
     pressure: "unknown",
   }, "invalid capacity numbers must render as unknown labels and neutral pressure");
 
-  assert.strictEqual(pressureLevel(95, null), "unknown", "even a high percent must not promote when required free capacity is unavailable");
   const unknownOnlyRow = buildOverviewServer(
     makeSummary({ id: "unknown-only", display_name: "unknown-only" }),
     makeCapacitySnapshot({
       server_id: "unknown-only",
       selected_roots: [{ mount_id: "unknown-free", capacity_id: "dev-8-16", storage_media: "ssd" }],
-      mounts: [{ mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 95 }],
+      mounts: [{ mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 95, used_pct: 95 }],
     }),
   );
   assert.strictEqual(unknownOnlyRow.primaryStatus.code, "normal", "unknown capacity pressure must be ignored for warning/critical primary status promotion");
@@ -739,8 +719,8 @@ function testUnknownMountCapacityRemainsNeutralAndHonest() {
         { mount_id: "known-warning", capacity_id: "dev-8-32", storage_media: "hdd" },
       ],
       mounts: [
-        { mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 95 },
-        { mount_id: "known-warning", path: "/known-warning", df_total: 4096 * GiB, df_used: 3500 * GiB, df_avail: 596 * GiB, df_use_pct: 85 },
+        { mount_id: "unknown-free", path: "/unknown-free", df_total: 2048, df_used: 1024, df_use_pct: 95, used_pct: 95 },
+        { mount_id: "known-warning", path: "/known-warning", df_total: 4096 * GiB, df_used: 3500 * GiB, df_avail: 596 * GiB, df_use_pct: 85, used_pct: 85, severity: "warning" },
       ],
     }),
   );
@@ -764,7 +744,7 @@ function testOverviewCapacityIdExactSchemaValidation() {
   for (const [capacityId, expected] of cases) {
     const [mount] = summarizeMounts(makeCapacitySnapshot({
       selected_roots: [{ mount_id: "candidate", capacity_id: capacityId, major_minor: "8:88" }],
-      mounts: [{ mount_id: "candidate", path: "/candidate", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 }],
+      mounts: [{ mount_id: "candidate", path: "/candidate", df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10, used_pct: 10, severity: "critical" }],
     }));
     assert.deepStrictEqual(mount.identity, expected, `${JSON.stringify(capacityId)} must follow exact capacity_id schema and must not fallback to major_minor when present-but-invalid`);
   }
@@ -784,7 +764,7 @@ function testOverviewCapacityBytesRequireStrictJsonNumbers() {
   ];
   for (const [name, value] of invalidValues) {
     for (const field of ["df_total", "df_used", "df_avail"]) {
-      const mount = { mount_id: "bad", path: "/bad-" + name + "-" + field, df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10 };
+      const mount = { mount_id: "bad", path: "/bad-" + name + "-" + field, df_total: 100, df_used: 10, df_avail: 90, df_use_pct: 10, used_pct: 10, severity: "critical" };
       mount[field] = value;
       const aggregate = aggregateMountCapacity(summarizeMounts(makeCapacitySnapshot({
         selected_roots: [{ mount_id: "bad", capacity_id: "dev-8-16" }],
