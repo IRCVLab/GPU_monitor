@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(APP_ROOT))
@@ -96,8 +97,8 @@ class BootstrapHostTest(unittest.TestCase):
     def bootstrap(self):
         return bootstrap_host.Bootstrap(self.host, self.payload)
 
-    def install(self, server_id=None, monitoring_key=None):
-        self.bootstrap().install(server_id, monitoring_key, central_speaks_gate=True)
+    def install(self, server_id=None, monitoring_key=None, allow_other_keys=False):
+        self.bootstrap().install(server_id, monitoring_key, central_speaks_gate=True, allow_other_keys=allow_other_keys)
 
     def assert_untouched(self, before):
         self.assertEqual(snapshot(self.root, MANAGED_PREFIXES), before)
@@ -178,12 +179,23 @@ class BootstrapHostTest(unittest.TestCase):
             self.bootstrap().revert()
         self.assertEqual(snapshot(self.root, MANAGED_PREFIXES), before)
 
-    def test_explicit_monitoring_key_replaces_the_old_keys(self):
+    def test_rotated_central_key_left_active_refuses_the_install(self):
+        """Review proof p2b: an old central key still held by central would be a shell as monitoring."""
         key_file = self.tmp / "central.pub"
         key_file.write_text("ssh-ed25519 AAAAnewkey new@central\n")
-        self.install(monitoring_key=key_file)
+        before = snapshot(self.root, MANAGED_PREFIXES)
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "other active keys.*central@dashboard.*--allow-other-keys"):
+            self.install(monitoring_key=key_file)
+        self.assert_untouched(before)
+
+    def test_allow_other_keys_keeps_them_and_warns(self):
+        key_file = self.tmp / "central.pub"
+        key_file.write_text("ssh-ed25519 AAAAnewkey new@central\n")
+        with mock.patch("builtins.print") as printed:
+            self.install(monitoring_key=key_file, allow_other_keys=True)
         self.assertEqual((self.root / "home/monitoring/.ssh/authorized_keys").read_text(),
                          f'from="10.0.0.5" {CENTRAL_KEY}\n{GATE_OPTS} ssh-ed25519 AAAAnewkey new@central\n')
+        self.assertTrue(any("WARNING: --allow-other-keys" in str(call) for call in printed.call_args_list))
 
     def test_missing_central_key_stops_before_installing(self):
         (self.root / "home/monitoring/.ssh/authorized_keys").write_text("# ssh-ed25519 AAAAcommented old\n")
@@ -278,10 +290,21 @@ class AuthorizedKeysTest(unittest.TestCase):
         text, _ = bootstrap_host.authorized_keys_text(original, None)
         self.assertEqual(text, f'{GATE_OPTS},from="10.0.0.5,10.0.0.6" ssh-ed25519 AAAAcentral c\n')
 
-    def test_other_lines_are_kept_byte_for_byte(self):
+    def test_other_active_keys_are_refused_by_default(self):
+        original = '# old laptop\n\nssh-ed25519 AAAAold old-central\nssh-ed25519 AAAAcentral central\n'
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "old-central"):
+            bootstrap_host.authorized_keys_text(original, "ssh-ed25519 AAAAcentral central\n")
+
+    def test_comments_and_blank_lines_alone_are_fine(self):
+        original = '# rotated 2025\n\n# ssh-ed25519 AAAAold old\nssh-ed25519 AAAAcentral central\n'
+        text, others = bootstrap_host.authorized_keys_text(original, "ssh-ed25519 AAAAcentral central\n")
+        self.assertEqual(text, f'# rotated 2025\n\n# ssh-ed25519 AAAAold old\n{GATE_OPTS} ssh-ed25519 AAAAcentral central\n')
+        self.assertEqual(others, [])
+
+    def test_allowed_other_lines_are_kept_byte_for_byte(self):
         other = 'cert-authority,principals="ops" ssh-ed25519 AAAAca ops-ca  \n'
         original = other + 'ssh-ed25519 AAAAcentral central\n'
-        text, others = bootstrap_host.authorized_keys_text(original, "ssh-ed25519 AAAAcentral central\n")
+        text, others = bootstrap_host.authorized_keys_text(original, "ssh-ed25519 AAAAcentral central\n", allow_other_keys=True)
         self.assertEqual(text, other + f"{GATE_OPTS} ssh-ed25519 AAAAcentral central\n")
         self.assertEqual(others, ["ssh-ed25519 ops-ca"])
 

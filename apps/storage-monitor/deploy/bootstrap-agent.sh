@@ -25,7 +25,9 @@
 #                         of the active dashboard release on central)
 #   --monitoring-key FILE central's public key for HOST; by default the one
 #                         active key in monitoring's authorized_keys. Only that
-#                         key gets the forced command; other lines stay as they are
+#                         key gets the forced command
+#   --allow-other-keys    keep monitoring's other active keys (each a full shell
+#                         as monitoring); without it the bootstrap refuses them
 #   --server-id ID        must match scanner.yaml when it exists
 #   --ssh-opt OPT         extra ssh/scp option, repeatable (for example -p 2222)
 set -euo pipefail
@@ -39,13 +41,15 @@ MONITORING_KEY=""
 SERVER_ID=""
 SSH_OPTS=()
 CENTRAL_SPEAKS_GATE=0
+ALLOW_OTHER_KEYS=0
 
-usage() { sed -n '2,32s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,34s/^# \{0,1\}//p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --revert) ACTION=revert ;;
     --central-speaks-gate) CENTRAL_SPEAKS_GATE=1 ;;
+    --allow-other-keys) ALLOW_OTHER_KEYS=1 ;;
     --admin) ADMIN="${2:?--admin needs a user}"; shift ;;
     --bundle-dir) BUNDLE_DIR="${2:?--bundle-dir needs a directory}"; shift ;;
     --monitoring-key) MONITORING_KEY="${2:?--monitoring-key needs a file}"; shift ;;
@@ -86,6 +90,7 @@ if [[ "$ACTION" == install ]]; then
     exit 2
   fi
   remote_args+=(--central-speaks-gate)
+  [[ "$ALLOW_OTHER_KEYS" != 1 ]] || remote_args+=(--allow-other-keys)
 fi
 
 target="$ADMIN@$HOST"

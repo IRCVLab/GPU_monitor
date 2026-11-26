@@ -113,13 +113,15 @@ def restricted_line(key: KeyLine) -> str:
     return " ".join(part for part in (options, key.keytype, key.blob, key.comment) if part) + "\n"
 
 
-def authorized_keys_text(original: str, central: Optional[str]) -> Tuple[str, List[str]]:
+def authorized_keys_text(original: str, central: Optional[str], allow_other_keys: bool = False) -> Tuple[str, List[str]]:
     """monitoring's new authorized_keys, and the other active keys it leaves as they were.
 
     Central's key line (from `central`, or the one active key in `original`)
     gets `restrict,command=<gate>` and keeps its from=, cert-authority,
-    principals= and expiry-time= options. Every other line, comments included,
-    is kept byte for byte.
+    principals= and expiry-time= options. Comments and blank lines are kept
+    byte for byte. Every line of this file is a key into the monitoring
+    account, so another active key (a rotated-out central key, say) would be
+    an unrestricted shell: it is refused unless allow_other_keys.
     """
     lines = original.splitlines(True)
     parsed = [parse_key_line(line) for line in lines]
@@ -147,6 +149,9 @@ def authorized_keys_text(original: str, central: Optional[str]) -> Tuple[str, Li
         if key.blob not in written:
             out.append(restricted_line(key))
             written.add(key.blob)
+    if others and not allow_other_keys:
+        raise BootstrapError("monitoring has other active keys, each an unrestricted shell once central's key "
+                             f"is gated: {', '.join(others)}. Remove them, or pass --allow-other-keys")
     return "".join(out), others
 
 
@@ -284,13 +289,14 @@ class Bootstrap:
 
     # -- install -------------------------------------------------------------------
 
-    def install(self, server_id: Optional[str], monitoring_keys: Optional[Path], central_speaks_gate: bool = False) -> None:
+    def install(self, server_id: Optional[str], monitoring_keys: Optional[Path], central_speaks_gate: bool = False,
+                allow_other_keys: bool = False) -> None:
         if not central_speaks_gate:
             raise BootstrapError("central reaches hosts over SFTP until M3b ships the gate transport; "
                                  "bootstrap only with that release (--central-speaks-gate)")
         # 1. Preflight: everything that can fail, writing nothing.
         self.require_idle()
-        keys_text, other_keys = self.authorized_keys(monitoring_keys)
+        keys_text, other_keys = self.authorized_keys(monitoring_keys, allow_other_keys)
         config = self.agent_config(server_id)
         metadata = self.preflight_bundle(config)
         self.host.run(["visudo", "-cf", str(self.payload / "bootstrap/sudoers/storage-viz")])
@@ -320,7 +326,7 @@ class Bootstrap:
             self.revert()
             raise BootstrapError(f"bootstrap failed and was reverted: {error}")
         for key in other_keys:
-            print(f"[!] monitoring keeps another key without the forced command: {key}")
+            print(f"[!] WARNING: --allow-other-keys kept a key with full shell access as monitoring: {key}")
         print(self.host.run(["runuser", "-u", USER, "--", "env", "SSH_ORIGINAL_COMMAND=observe", GATE], check=False).stdout)
         print("[+] bootstrap complete")
 
@@ -375,7 +381,7 @@ class Bootstrap:
         if not self.host.fake and pwd.getpwnam(USER).pw_shell.endswith(("nologin", "false")):
             raise BootstrapError(f"{USER} needs a login shell: sshd runs the forced command through it")
 
-    def authorized_keys(self, monitoring_keys: Optional[Path]) -> Tuple[str, List[str]]:
+    def authorized_keys(self, monitoring_keys: Optional[Path], allow_other_keys: bool = False) -> Tuple[str, List[str]]:
         """The new authorized_keys text, from the pre-bootstrap file so reruns agree."""
         backed_up = self.backup / "files/monitoring-ssh/authorized_keys"
         try:
@@ -385,7 +391,7 @@ class Bootstrap:
         source = backed_up if (self.backup / "manifest.json").exists() else live
         original = source.read_text() if source is not None and source.exists() else ""
         central = monitoring_keys.read_text() if monitoring_keys else None
-        return authorized_keys_text(original, central)
+        return authorized_keys_text(original, central, allow_other_keys)
 
     def write_authorized_keys(self, text: str) -> None:
         # Root owns the home, .ssh and the file (StrictModes accepts root), so the
@@ -526,6 +532,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--monitoring-key", type=Path, help="central's public key(s) for this host")
     parser.add_argument("--central-speaks-gate", action="store_true",
                         help="central runs the gate transport (M3b); required for install")
+    parser.add_argument("--allow-other-keys", action="store_true",
+                        help="keep monitoring's other active keys unrestricted (refused by default)")
     args = parser.parse_args(argv)
     if os.geteuid() != 0:
         print("ERROR: run as root (bootstrap-agent.sh uses sudo)", file=sys.stderr)
@@ -533,7 +541,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     bootstrap = Bootstrap(Host(), args.payload)
     try:
         if args.action == "install":
-            bootstrap.install(args.server_id, args.monitoring_key, args.central_speaks_gate)
+            bootstrap.install(args.server_id, args.monitoring_key, args.central_speaks_gate, args.allow_other_keys)
         else:
             bootstrap.revert()
     except (BootstrapError, OSError, ValueError, KeyError) as error:
