@@ -2700,6 +2700,11 @@ function testCleanupPanelResponsiveCssAndDangerListSemantics() {
   assert(/#cleanupPanel\b[\s\S]*max-height:\s*calc\(100dvh\s*-/.test(css), 'cleanup panel must keep a modern dynamic-viewport max-height');
   assert(/#cleanupPanel\b[\s\S]*overflow-y:\s*auto/.test(css), 'cleanup panel must scroll internally when taller than the viewport');
   assert(/#cleanupPanel\b[\s\S]*overscroll-behavior:\s*contain/.test(css), 'cleanup panel must contain overscroll inside the panel');
+  const commandCodeRule = (css.match(/\.cleanup-command-code\s*\{([^}]*)\}/) || [])[1] || '';
+  const commandLines = Number((commandCodeRule.match(/max-height:\s*calc\(1\.5em\s*\*\s*(\d+)\)/) || [])[1]);
+  assert(commandLines > 0 && commandLines <= 12 && /overflow-y:\s*auto/.test(commandCodeRule), 'a long removal command must scroll inside a block of at most 12 lines so many selections never grow the panel over the treemap');
+  const selectionSource = fs.readFileSync(path.join(__dirname, 'selection.js'), 'utf8');
+  assert(/class="cleanup-command-code" tabindex="0" role="region" aria-label=/.test(selectionSource), 'the scrollable removal command must be keyboard-focusable and labelled');
   assert(/env\(safe-area-inset-top\)/.test(css) && /env\(safe-area-inset-bottom\)/.test(css), 'cleanup panel viewport bounds must include mobile safe-area insets');
   assert(/#cleanupDangerCommand\b[\s\S]*list-style:\s*none/.test(css) || /\.cleanup-command-list\b[\s\S]*list-style:\s*none/.test(css), 'cleanup command lists must reset list bullets');
 }
