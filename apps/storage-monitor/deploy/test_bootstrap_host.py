@@ -2,16 +2,23 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(APP_ROOT))
+from agent.bootstrap import fixtures  # noqa: E402
+
+GATE_OPTS = 'restrict,command="/usr/local/lib/storage-viz/gate"'
+SHA = "a" * 40
 spec = importlib.util.spec_from_file_location("bootstrap_host", APP_ROOT / "deploy/bootstrap_host.py")
 bootstrap_host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bootstrap_host)
@@ -54,6 +61,7 @@ MANAGED_PREFIXES = ("etc/sudoers.d", "etc/systemd/system", "etc/storage-viz", "u
                     "opt/storage-viz", "home/monitoring/.ssh", "var/lib/storage-viz")
 
 
+@unittest.skipUnless(shutil.which("ssh-keygen"), "ssh-keygen is required")
 class BootstrapHostTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="sv-bootstrap."))
@@ -64,32 +72,49 @@ class BootstrapHostTest(unittest.TestCase):
             (self.root / rel).write_text(text)
         os.chmod(self.root / "etc/sudoers.d/storage-viz-monitoring", 0o440)
         os.chmod(self.root / "opt/storage-viz/scanner/hstscan", 0o755)
+        self.key = fixtures.SigningKey(self.tmp)
         self.payload = self.make_payload()
-        self.host = bootstrap_host.Host(self.root, fake=True)
+        self.failing = set()
+        self.host = bootstrap_host.Host(self.root, fake=True, fail=self.fail)
 
-    def make_payload(self):
+    def fail(self, argv):
+        return any(" ".join(argv).startswith(prefix) or prefix in argv[0] for prefix in self.failing)
+
+    def make_payload(self, bundle=None, signature=None):
         payload = self.tmp / "payload"
         shutil.copytree(APP_ROOT / "agent/bootstrap", payload / "bootstrap",
                         ignore=shutil.ignore_patterns("test_*", "__pycache__", "fixtures.py", "__init__.py"))
+        self.key.write_allowed_signers(payload / "bootstrap/allowed_signers")
+        bundle = bundle if bundle is not None else fixtures.bundle(SHA, release_seq=9, floor=0)
         (payload / "agent").mkdir()
-        (payload / "agent/storage-viz-agent.tar.gz").write_bytes(b"bundle")
-        (payload / "agent/storage-viz-agent.tar.gz.sig").write_bytes(b"sig")
-        (payload / "agent/storage-viz-agent.json").write_text(json.dumps({"source_sha": "a" * 40, "release_seq": 9}))
+        (payload / "agent/storage-viz-agent.tar.gz").write_bytes(bundle)
+        (payload / "agent/storage-viz-agent.tar.gz.sig").write_bytes(signature or self.key.sign(bundle))
+        (payload / "agent/storage-viz-agent.json").write_text(json.dumps(
+            {"source_sha": SHA, "release_seq": 9, "sha256": hashlib.sha256(bundle).hexdigest()}))
         return payload
 
     def bootstrap(self):
         return bootstrap_host.Bootstrap(self.host, self.payload)
 
+    def install(self, server_id=None, monitoring_key=None):
+        self.bootstrap().install(server_id, monitoring_key, central_speaks_gate=True)
+
+    def assert_untouched(self, before):
+        self.assertEqual(snapshot(self.root, MANAGED_PREFIXES), before)
+        self.assertFalse((self.root / "var/backups/storage-viz-bootstrap").exists())
+
     def commands(self, first):
         return [c for c in self.host.commands if c[0] == first]
 
     def test_install_gives_monitoring_only_the_gate(self):
-        self.bootstrap().install(None, None)
+        self.install()
         self.assertEqual((self.root / "home/monitoring/.ssh/authorized_keys").read_text(),
-                         f'restrict,command="/usr/local/lib/storage-viz/gate" {CENTRAL_KEY}\n')
+                         f'{GATE_OPTS},from="10.0.0.5" {CENTRAL_KEY}\n')
+        for rel in ("home/monitoring", "home/monitoring/.ssh"):
+            self.assertEqual(stat.S_IMODE(os.stat(self.root / rel).st_mode), 0o755, "root-owned, StrictModes-safe")
 
     def test_install_lays_down_the_bootstrap_tier(self):
-        self.bootstrap().install(None, None)
+        self.install()
         lib = self.root / "usr/local/lib/storage-viz"
         self.assertEqual((lib / "gate").read_bytes(), (APP_ROOT / "agent/bootstrap/gate.py").read_bytes())
         self.assertEqual((lib / "storage-viz-update").read_bytes(), (APP_ROOT / "agent/bootstrap/update.py").read_bytes())
@@ -109,10 +134,10 @@ class BootstrapHostTest(unittest.TestCase):
         self.assertEqual((self.root / "var/lib/storage-viz/scan-status.json").read_text(), LEGACY["var/lib/storage-viz/scan-status.json"])
 
     def test_install_runs_the_mandatory_checks_and_activates_through_the_updater(self):
-        self.bootstrap().install(None, None)
+        self.install()
         visudo = self.commands("visudo")
-        self.assertEqual(len(visudo), 1)
-        self.assertEqual(visudo[0][:2], ["visudo", "-cf"])
+        self.assertEqual(len(visudo), 2, "the payload file in preflight, the staged copy at the swap")
+        self.assertTrue(all(c[:2] == ["visudo", "-cf"] for c in visudo))
         verified = [Path(p).name for c in self.commands("systemd-analyze") for p in c[2:]]
         self.assertEqual(sorted(verified), sorted(["storage-viz-agent-update.service", "storage-viz-scan.service",
                                                    "storage-viz-scheduled-scan.service", "storage-viz-scan.timer"]))
@@ -121,26 +146,26 @@ class BootstrapHostTest(unittest.TestCase):
                         systemctl.index(["enable", "--now", "storage-viz-scan.timer"]))
         incoming = self.root / "var/lib/storage-viz/update/incoming"
         self.assertEqual((incoming / "activate").read_text(), f"activate {'a' * 40}\n")
-        self.assertEqual((incoming / f"{'a' * 40}.tar.gz").read_bytes(), b"bundle")
+        self.assertEqual((incoming / f"{SHA}.tar.gz").read_bytes(), (self.payload / "agent/storage-viz-agent.tar.gz").read_bytes())
 
     def test_agent_config_keeps_server_id_and_prune_settings(self):
-        self.bootstrap().install(None, None)
+        self.install()
         config = json.loads((self.root / "etc/storage-viz/agent.yaml").read_text())
         self.assertEqual(config, {"server_id": "poseidon", "scanner_path": "/opt/storage-viz/current/bin/hstscan",
                                   "prune_home_mb": 7, "threads": 4})
         self.assertEqual((self.root / "etc/storage-viz/scanner.yaml").read_text(), LEGACY["etc/storage-viz/scanner.yaml"])
 
     def test_rerun_converges_and_keeps_the_first_backup(self):
-        self.bootstrap().install(None, None)
+        self.install()
         backup = snapshot(self.root, ["var/backups/storage-viz-bootstrap"])
         installed = snapshot(self.root, MANAGED_PREFIXES)
-        self.bootstrap().install(None, None)
+        self.install()
         self.assertEqual(snapshot(self.root, ["var/backups/storage-viz-bootstrap"]), backup)
         self.assertEqual(snapshot(self.root, MANAGED_PREFIXES), installed)
 
     def test_revert_restores_every_replaced_path(self):
         before = snapshot(self.root, MANAGED_PREFIXES)
-        self.bootstrap().install(None, None)
+        self.install()
         self.assertNotEqual(snapshot(self.root, MANAGED_PREFIXES), before)
         self.bootstrap().revert()
         self.assertEqual(snapshot(self.root, MANAGED_PREFIXES), before)
@@ -156,15 +181,16 @@ class BootstrapHostTest(unittest.TestCase):
     def test_explicit_monitoring_key_replaces_the_old_keys(self):
         key_file = self.tmp / "central.pub"
         key_file.write_text("ssh-ed25519 AAAAnewkey new@central\n")
-        self.bootstrap().install(None, key_file)
+        self.install(monitoring_key=key_file)
         self.assertEqual((self.root / "home/monitoring/.ssh/authorized_keys").read_text(),
-                         'restrict,command="/usr/local/lib/storage-viz/gate" ssh-ed25519 AAAAnewkey new@central\n')
+                         f'from="10.0.0.5" {CENTRAL_KEY}\n{GATE_OPTS} ssh-ed25519 AAAAnewkey new@central\n')
 
     def test_missing_central_key_stops_before_installing(self):
-        (self.root / "home/monitoring/.ssh/authorized_keys").write_text("# no keys\n")
-        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "no central key"):
-            self.bootstrap().install(None, None)
-        self.assertFalse((self.root / "usr/local/lib/storage-viz/gate").exists())
+        (self.root / "home/monitoring/.ssh/authorized_keys").write_text("# ssh-ed25519 AAAAcommented old\n")
+        before = snapshot(self.root, MANAGED_PREFIXES)
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "0 active keys"):
+            self.install()
+        self.assert_untouched(before)
 
     def test_running_scan_stops_the_bootstrap_before_any_change(self):
         lock = self.root / "run/storage-viz/scan.lock"
@@ -175,15 +201,103 @@ class BootstrapHostTest(unittest.TestCase):
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
             with self.assertRaisesRegex(bootstrap_host.BootstrapError, "scan is running"):
-                self.bootstrap().install(None, None)
+                self.install()
         finally:
             os.close(fd)
         self.assertEqual(snapshot(self.root, MANAGED_PREFIXES), before)
         self.assertFalse((self.root / "var/backups/storage-viz-bootstrap").exists())
 
     def test_server_id_must_match_the_existing_config(self):
+        before = snapshot(self.root, MANAGED_PREFIXES)
         with self.assertRaisesRegex(bootstrap_host.BootstrapError, "differs from scanner.yaml"):
-            self.bootstrap().install("hinton", None)
+            self.install("hinton")
+        self.assert_untouched(before)
+
+    def test_refuses_without_central_speaking_the_gate(self):
+        """Review proof p4: today's central (SFTP, Python probe) gets only USAGE from the gate."""
+        before = snapshot(self.root, MANAGED_PREFIXES)
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "central-speaks-gate"):
+            self.bootstrap().install(None, None)
+        self.assert_untouched(before)
+        self.assertEqual(self.host.commands, [])
+
+    def test_bad_signature_stops_before_any_change(self):
+        stranger = fixtures.SigningKey(self.tmp, "stranger")
+        bundle = fixtures.bundle(SHA, release_seq=9, floor=0)
+        shutil.rmtree(self.payload)
+        self.payload = self.make_payload(bundle, stranger.sign(bundle))
+        before = snapshot(self.root, MANAGED_PREFIXES)
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "signature"):
+            self.install()
+        self.assert_untouched(before)
+
+    def test_failed_selftest_stops_before_any_change(self):
+        self.failing.add("storage-viz-agent")
+        before = snapshot(self.root, MANAGED_PREFIXES)
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "self-test failed"):
+            self.install()
+        self.assert_untouched(before)
+        self.assertFalse(any(c[0] == "systemctl" for c in self.host.commands), "the timer was never touched")
+
+    def test_failure_after_a_disruptive_step_reverts_automatically(self):
+        before = snapshot(self.root, MANAGED_PREFIXES)
+        self.failing.add("systemctl enable --now storage-viz-scan.timer")
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "reverted"):
+            self.install()
+        self.assertEqual(snapshot(self.root, MANAGED_PREFIXES), before)
+        self.assertFalse((self.root / "var/backups/storage-viz-bootstrap").exists())
+
+    def test_failure_on_a_rerun_does_not_revert_a_working_bootstrap(self):
+        self.install()
+        installed = snapshot(self.root, MANAGED_PREFIXES)
+        self.failing.add("systemctl enable --now storage-viz-scan.timer")
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "rerun stopped part way"):
+            self.install()
+        self.assertEqual(snapshot(self.root, MANAGED_PREFIXES), installed)
+        self.assertTrue((self.root / "var/backups/storage-viz-bootstrap/manifest.json").exists())
+
+
+class AuthorizedKeysTest(unittest.TestCase):
+    """authorized_keys_text: central's line gets the forced command; nothing else changes."""
+
+    def test_comments_are_not_revived_and_central_keeps_from(self):
+        """Review proof p2."""
+        original = ('from="10.0.0.5",command="/usr/bin/true" ssh-ed25519 AAAAC3central central-dashboard\n'
+                    '# ssh-ed25519 AAAAC3revoked laptop-key-revoked-2025\n'
+                    '#ssh-rsa AAAAB3oldrevoked old\n'
+                    '\n')
+        text, others = bootstrap_host.authorized_keys_text(original, None)
+        self.assertEqual(text, f'{GATE_OPTS},from="10.0.0.5" ssh-ed25519 AAAAC3central central-dashboard\n'
+                               '# ssh-ed25519 AAAAC3revoked laptop-key-revoked-2025\n'
+                               '#ssh-rsa AAAAB3oldrevoked old\n'
+                               '\n')
+        self.assertEqual(others, [])
+
+    def test_quoted_option_values_with_commas_and_spaces(self):
+        original = 'from="10.0.0.5,10.0.0.6",environment="A=b c",no-pty ssh-ed25519 AAAAcentral c\n'
+        text, _ = bootstrap_host.authorized_keys_text(original, None)
+        self.assertEqual(text, f'{GATE_OPTS},from="10.0.0.5,10.0.0.6" ssh-ed25519 AAAAcentral c\n')
+
+    def test_other_lines_are_kept_byte_for_byte(self):
+        other = 'cert-authority,principals="ops" ssh-ed25519 AAAAca ops-ca  \n'
+        original = other + 'ssh-ed25519 AAAAcentral central\n'
+        text, others = bootstrap_host.authorized_keys_text(original, "ssh-ed25519 AAAAcentral central\n")
+        self.assertEqual(text, other + f"{GATE_OPTS} ssh-ed25519 AAAAcentral central\n")
+        self.assertEqual(others, ["ssh-ed25519 ops-ca"])
+
+    def test_central_cert_authority_line_keeps_its_options(self):
+        original = 'cert-authority,principals="central",from="10.0.0.0/24" ssh-ed25519 AAAAca central-ca\n'
+        text, _ = bootstrap_host.authorized_keys_text(original, None)
+        self.assertEqual(text, f'{GATE_OPTS},cert-authority,principals="central",from="10.0.0.0/24" ssh-ed25519 AAAAca central-ca\n')
+
+    def test_two_active_keys_need_an_explicit_central_key(self):
+        with self.assertRaisesRegex(bootstrap_host.BootstrapError, "2 active keys"):
+            bootstrap_host.authorized_keys_text("ssh-ed25519 AAAAa a\nssh-rsa AAAAb b\n", None)
+
+    def test_rerun_on_already_restricted_text_is_stable(self):
+        once, _ = bootstrap_host.authorized_keys_text('from="10.0.0.5" ssh-ed25519 AAAAc c\n', None)
+        twice, _ = bootstrap_host.authorized_keys_text(once, None)
+        self.assertEqual(once, twice)
 
 
 if __name__ == "__main__":

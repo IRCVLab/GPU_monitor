@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # One-time bootstrap of a storage host's agent update channel (target-design §4.5).
 #
-#   bootstrap-agent.sh [options] HOST            install the bootstrap tier
-#   bootstrap-agent.sh --revert [options] HOST   restore what the bootstrap replaced
+#   bootstrap-agent.sh --central-speaks-gate [options] HOST   install the bootstrap tier
+#   bootstrap-agent.sh --revert [options] HOST                restore what the bootstrap replaced
+#
+# After the bootstrap, the monitoring key runs only the gate, and today's central
+# (SFTP and a Python probe, until M3b) can no longer read the host. Install only
+# with the release whose central speaks the gate transport, and say so with
+# --central-speaks-gate; without it the host refuses. Everything that can fail
+# (bundle signature, self-test, central key, server id, a running scan) is
+# checked before anything changes, and a failure after that reverts at once.
 #
 # Run it from a machine that can reach HOST as an admin account with sudo. It
 # copies a payload (the bootstrap tier, deploy/bootstrap_host.py and the signed
@@ -11,12 +18,14 @@
 # admin password. Rerunning converges; the first run's backup is kept for --revert.
 #
 # Options:
+#   --central-speaks-gate central runs the gate transport (M3b); required to install
 #   --admin USER          admin account on HOST (default: $USER)
 #   --bundle-dir DIR      signed bundle: storage-viz-agent.tar.gz{,.sig} and .json
 #                         (default: /opt/storage-viz-dashboard/agent, the bundle
 #                         of the active dashboard release on central)
-#   --monitoring-key FILE central's public key for HOST; by default the keys
-#                         already in monitoring's authorized_keys are kept
+#   --monitoring-key FILE central's public key for HOST; by default the one
+#                         active key in monitoring's authorized_keys. Only that
+#                         key gets the forced command; other lines stay as they are
 #   --server-id ID        must match scanner.yaml when it exists
 #   --ssh-opt OPT         extra ssh/scp option, repeatable (for example -p 2222)
 set -euo pipefail
@@ -29,12 +38,14 @@ BUNDLE_DIR=/opt/storage-viz-dashboard/agent
 MONITORING_KEY=""
 SERVER_ID=""
 SSH_OPTS=()
+CENTRAL_SPEAKS_GATE=0
 
-usage() { sed -n '2,22s/^# \{0,1\}//p' "$0"; }
+usage() { sed -n '2,32s/^# \{0,1\}//p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --revert) ACTION=revert ;;
+    --central-speaks-gate) CENTRAL_SPEAKS_GATE=1 ;;
     --admin) ADMIN="${2:?--admin needs a user}"; shift ;;
     --bundle-dir) BUNDLE_DIR="${2:?--bundle-dir needs a directory}"; shift ;;
     --monitoring-key) MONITORING_KEY="${2:?--monitoring-key needs a file}"; shift ;;
@@ -70,6 +81,11 @@ if [[ "$ACTION" == install ]]; then
     remote_args+=(--monitoring-key monitoring.pub)
   fi
   [[ -z "$SERVER_ID" ]] || remote_args+=(--server-id "$SERVER_ID")
+  if [[ "$CENTRAL_SPEAKS_GATE" != 1 ]]; then
+    echo "ERROR: install needs --central-speaks-gate: until central runs the gate transport (M3b) it cannot read a bootstrapped host" >&2
+    exit 2
+  fi
+  remote_args+=(--central-speaks-gate)
 fi
 
 target="$ADMIN@$HOST"

@@ -90,13 +90,13 @@ docker exec "$CID" sh -c 'chown admin:admin /home/admin/.ssh/authorized_keys; ch
 docker cp "$app" "$CID:/root/legacy-src"
 docker exec "$CID" bash /root/legacy-src/deploy/install-agent.sh --server-id e2e-host >/dev/null
 docker exec "$CID" systemctl is-enabled storage-viz-scan.timer >/dev/null || fail "legacy timer not enabled"
-LEGACY_SNAPSHOT='cd / && for p in home/monitoring/.ssh etc/sudoers.d/storage-viz-monitoring etc/sudoers.d/storage-viz etc/systemd/system/storage-viz-scan.service etc/systemd/system/storage-viz-scheduled-scan.service etc/systemd/system/storage-viz-scan.timer etc/systemd/system/storage-viz-agent-update.service opt/storage-viz usr/local/lib/storage-viz etc/storage-viz; do if [ -e "$p" ]; then find "$p" -printf "%p %m %u:%g %y\n" | sort; find "$p" -type f -exec sha256sum {} + | sort; else echo "absent $p"; fi; done; systemctl is-enabled storage-viz-scan.timer'
+LEGACY_SNAPSHOT='cd / && stat -c "%n %a %U:%G" home/monitoring && for p in home/monitoring/.ssh etc/sudoers.d/storage-viz-monitoring etc/sudoers.d/storage-viz etc/systemd/system/storage-viz-scan.service etc/systemd/system/storage-viz-scheduled-scan.service etc/systemd/system/storage-viz-scan.timer etc/systemd/system/storage-viz-agent-update.service opt/storage-viz usr/local/lib/storage-viz etc/storage-viz; do if [ -e "$p" ]; then find "$p" -printf "%p %m %u:%g %y\n" | sort; find "$p" -type f -exec sha256sum {} + | sort; else echo "absent $p"; fi; done; systemctl is-enabled storage-viz-scan.timer'
 before="$(docker exec "$CID" sh -c "$LEGACY_SNAPSHOT")"
 pass "legacy agent installed by install-agent.sh on Ubuntu 20.04 ($(docker exec "$CID" systemctl --version | head -1))"
 
 SSH=(-oBatchMode=yes -oStrictHostKeyChecking=no -oUserKnownHostsFile="$WORK/known_hosts" -oIdentitiesOnly=yes -oPort="$PORT" -oLogLevel=ERROR)
 bootstrap() {
-  "$app/deploy/bootstrap-agent.sh" --admin admin --bundle-dir "$WORK/A" \
+  "$app/deploy/bootstrap-agent.sh" --admin admin --bundle-dir "$WORK/A" --central-speaks-gate \
     --ssh-opt "-oIdentityFile=$WORK/admin" $(printf -- '--ssh-opt %s ' "${SSH[@]}") "$@" 127.0.0.1
 }
 gate() { ssh "${SSH[@]}" -oIdentityFile="$WORK/central" monitoring@127.0.0.1 "$@"; }
@@ -118,11 +118,21 @@ stage() {  # stage DIR SHA
 }
 
 # -- 3. bootstrap ---------------------------------------------------------------
+set +e
+"$app/deploy/bootstrap-agent.sh" --admin admin --bundle-dir "$WORK/A" --ssh-opt "-oIdentityFile=$WORK/admin" \
+  $(printf -- '--ssh-opt %s ' "${SSH[@]}") 127.0.0.1 > "$WORK/guard.log" 2>&1
+rc_guard=$?
+set -e
+[[ $rc_guard -eq 2 ]] || fail "bootstrap ran without --central-speaks-gate (rc=$rc_guard)"
+[[ "$(docker exec "$CID" sh -c "$LEGACY_SNAPSHOT")" == "$before" ]] || fail "the refused bootstrap changed the host"
 bootstrap > "$WORK/bootstrap1.log" 2>&1 || { cat "$WORK/bootstrap1.log"; fail "bootstrap failed"; }
 grep -q '"schema": "storage-viz.observe/1"' "$WORK/bootstrap1.log" || fail "bootstrap did not print observe"
 bootstrap > "$WORK/bootstrap2.log" 2>&1 || { cat "$WORK/bootstrap2.log"; fail "second bootstrap failed"; }
 grep -q 'keeping the existing pre-bootstrap backup' "$WORK/bootstrap2.log" || fail "rerun replaced the backup"
-pass "bootstrap-agent.sh ran over ssh as admin with sudo, visudo -cf and systemd-analyze verify passed, rerun converged"
+grep -q '^restrict,command="/usr/local/lib/storage-viz/gate" ssh-ed25519 ' <(docker exec "$CID" cat /home/monitoring/.ssh/authorized_keys) || fail "forced command missing"
+[[ "$(docker exec "$CID" stat -c '%U %a' /home/monitoring /home/monitoring/.ssh /home/monitoring/.ssh/authorized_keys | sort -u)" == $'root 644\nroot 755' ]] \
+  || fail "monitoring's key path is not root-owned"
+pass "bootstrap-agent.sh --central-speaks-gate ran over ssh as admin with sudo (preflight self-test, visudo -cf, systemd-analyze verify), rerun converged, key path root-owned and accepted by sshd StrictModes"
 
 [[ "$(observe "d['agent']['release_sha']")" == "$SHA_A" ]] || fail "release A not current"
 [[ "$(observe "d['agent']['health']")" == ok ]] || fail "agent health is not ok"
@@ -182,9 +192,11 @@ pass "tampered bundle refused (SIGNATURE), B still current"
 stage "$WORK/C" "$SHA_C" >/dev/null
 gate "activate-update $SHA_C" >/dev/null
 [[ "$(wait_update "$SHA_C")" == "failed SELFTEST_FAILED" ]] || fail "self-test failure not detected"
-[[ "$(observe "d['agent']['release_sha'] + ' ' + str([b['sha'] for b in d['update']['bad']] == ['$SHA_C'])")" == "$SHA_B True" ]] \
-  || fail "C activated or not marked bad"
-pass "signed bundle whose hstscan miscounts failed the sandboxed self-test: not activated, marked bad"
+[[ "$(observe "d['agent']['release_sha'] + ' ' + str(d['update']['bad'] == [] and d['update']['selftest_backoff']['$SHA_C']['failures'] == 1)")" == "$SHA_B True" ]] \
+  || fail "C activated, or not backed off"
+gate "activate-update $SHA_C" >/dev/null
+[[ "$(wait_update "$SHA_C")" == "refused SELFTEST_BACKOFF" ]] || fail "C retried inside its backoff"
+pass "signed bundle whose hstscan miscounts failed the sandboxed self-test: not activated, backed off 6 h (not marked bad)"
 
 docker exec -d "$CID" flock /run/storage-viz/scan.lock sleep 15
 sleep 1
@@ -197,7 +209,7 @@ sleep 15
 
 gate "rollback-update $SHA_A" >/dev/null
 [[ "$(wait_update "$SHA_A")" == "rolled_back None" ]] || fail "rollback failed"
-[[ "$(observe "d['agent']['release_sha'] + ' ' + str(sorted(b['sha'] for b in d['update']['bad']) == sorted(['$SHA_B', '$SHA_C']))")" == "$SHA_A True" ]] \
+[[ "$(observe "d['agent']['release_sha'] + ' ' + str([b['sha'] for b in d['update']['bad']] == ['$SHA_B'])")" == "$SHA_A True" ]] \
   || fail "rollback did not restore A or mark B bad"
 gate "activate-update $SHA_B" >/dev/null
 [[ "$(wait_update "$SHA_B")" == "refused BAD_RELEASE" ]] || fail "rolled-back release activated again"
