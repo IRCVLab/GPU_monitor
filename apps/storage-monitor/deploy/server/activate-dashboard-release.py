@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -19,7 +20,6 @@ import time
 from typing import BinaryIO, Callable, Iterable, Mapping, Sequence
 
 from storage_dashboard_release import (
-    SHA_RE,
     APPLICATION_NAME,
     SCHEMA_VERSION,
     ActivationError,
@@ -29,6 +29,7 @@ from storage_dashboard_release import (
 )
 
 
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)

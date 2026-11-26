@@ -7,20 +7,15 @@ import hashlib
 from html.parser import HTMLParser
 import json
 import posixpath
-from pathlib import Path, PurePosixPath
-import runpy
+from pathlib import PurePosixPath
+import re
 import stat
 import tarfile
 from typing import BinaryIO
 from urllib.parse import unquote, urlsplit
 
 
-ids_path = Path(__file__).with_name("storage_monitor_ids.py")
-if not ids_path.exists():  # Source checkout.
-    ids_path = Path(__file__).resolve().parents[2] / "collector/ids.py"
-ids = runpy.run_path(str(ids_path))
-SHA_RE = ids["RELEASE_SHA_RE"]
-DIGEST_RE = ids["SHA256_RE"]
+DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 APPLICATION_NAME = "storage-monitor"
 SCHEMA_VERSION = 1
 ARTIFACT_FORMAT_VERSION = 1

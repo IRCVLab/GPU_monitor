@@ -8,16 +8,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import runpy
+import re
 import stat
 import sys
 from typing import Callable, Sequence
 
-ids_path = Path(__file__).with_name("storage_monitor_ids.py")
-if not ids_path.exists():  # Source checkout.
-    ids_path = Path(__file__).resolve().parents[2] / "collector/ids.py"
-ids = runpy.run_path(str(ids_path))
-SHA_RE = ids["RELEASE_SHA_RE"]
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class LauncherError(RuntimeError):
@@ -132,7 +128,7 @@ def _legacy_target(resolved: Path, config: LauncherConfig, state: dict[str, obje
     ):
         return False
     recovery_root = config.state_path.parent / "legacy-proxy"
-    if isinstance(managed_digest, str) and ids["SHA256_RE"].fullmatch(managed_digest):
+    if isinstance(managed_digest, str) and re.fullmatch(r"[0-9a-f]{64}", managed_digest):
         expected = recovery_root / managed_digest / "direct_proxy.py"
         if managed == str(expected.resolve(strict=False)):
             if resolved != expected.resolve(strict=False):
