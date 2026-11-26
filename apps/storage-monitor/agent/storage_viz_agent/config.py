@@ -112,5 +112,3 @@ def _int_range(value: Any, name: str, lo: int, hi: int) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < lo or value > hi:
         raise ValueError(f"{name} must be an integer in [{lo}, {hi}]")
     return value
-
-
