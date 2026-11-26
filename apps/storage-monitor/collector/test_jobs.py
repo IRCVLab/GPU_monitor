@@ -111,7 +111,7 @@ def test_job_random_events():
         )
 
     def event(rng, job, index):
-        at = index * 600
+        at = index * 1800
         kind = rng.randrange(4)
         if kind == 0:
             return Observed(at, scan(rng), rng.choice(("g0", "g1", None)), frozenset(rng.sample(("g1", "g2"), rng.randrange(3))))
@@ -132,5 +132,33 @@ def test_job_random_events():
             assert effects == (Dispatch(),) and after.state == "dispatching"
             assert after.dispatches == before.dispatches + 1, "dispatched twice for one attempt"
         assert after.request_id == before.request_id, "a second request id for one admitted job"
+        assert after.dispatches <= jobs.MAX_DISPATCHES, "the scan was started without limit"
+        if isinstance(event, Tick) and event.at - after.requested_unix >= jobs.job_deadline_seconds(event.run_deadline_seconds):
+            assert after.state in jobs.TERMINAL, "a job outlived its deadline from admission"
 
     run_random_events(lambda rng: admit("q" * 32, "op", 0, scan(rng)), event, reduce, check)
+
+
+def test_a_job_restarts_its_scan_a_bounded_number_of_times():
+    # M2b review: every lost-lock round started the scan again, without limit.
+    job = dispatched()
+    starts = 1
+    for index in range(1, 10):
+        job, _ = reduce(job, DispatchReturned(at=index * 100, ok=False, code="RESCAN_FAILED"))
+        scheduled = Scan(run_id=f"s{index}", run_state="complete", run_full=False, generation=f"g{index}")
+        job, effects = observe(job, scheduled, at=index * 100 + 50)
+        starts += len(effects)
+        if job.state in jobs.TERMINAL:
+            break
+    assert starts == jobs.MAX_DISPATCHES
+    assert (job.state, job.result_code) == ("failed", "RESCAN_NOT_STARTED")
+
+
+def test_state_changes_never_postpone_the_deadline_from_admission():
+    # M2b review: each transition reset since_unix, so a job that kept changing state never timed out.
+    job = dispatched()
+    limit = jobs.job_deadline_seconds(jobs.MIN_RUN_DEADLINE_SECONDS)
+    job, _ = observe(job, Scan(invocation="inv-s", full=False, run_id="s1", run_state="running"), at=limit - 60)
+    assert job.state == "pending"
+    assert reduce(job, Tick(at=limit - 1))[0].state == "pending"
+    assert reduce(job, Tick(at=limit))[0].result_code == "RESCAN_NOT_STARTED"

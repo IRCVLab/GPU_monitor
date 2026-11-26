@@ -478,3 +478,32 @@ def test_fleet_start_serves_stored_data_from_the_first_read(tmp_path):
             Fleet(host.servers, host.state_dir, host.host, clock=host.clock).start()
     finally:
         fleet.stop()
+
+
+def test_manual_run_that_fails_before_its_plan_fails_the_job_without_redispatch(tmp_path):
+    # M2b review: a manual run that failed before writing scan_plan looked like a lost lock (C4),
+    # so the job restarted the scan in a tight loop and no deadline ever fired.
+    spawn = ManualSpawn()
+    host = Collector(tmp_path, "alpha-1", spawn=spawn)
+    spawn.run()
+    host.settle()
+    host.host.scans["alpha-1"] = Scan(run_id="0" * 32, run_state="complete", run_full=True)
+    host.tick()
+    runs = iter(range(1, 1000))
+
+    def start(server):
+        host.host.rescans.append(server.id)
+        # The run fails at preflight (NO_SAFE_ROOTS) and is over before the next observe sees the unit.
+        host.host.scans["alpha-1"] = Scan(run_id=f"{next(runs):032x}", run_state="failed", error_code="NO_SAFE_ROOTS")
+
+    host.host.start_rescan = start
+    assert admit(host.actor(), int(host.clock.now)).error is None
+    for _ in range(300):
+        host.tick(5)
+        spawn.run()
+        host.settle()
+        if host.summary()["active_job"]["phase"] in ("succeeded", "failed", "unconfirmed"):
+            break
+    job = host.summary()["active_job"]
+    assert (job["phase"], job["result_code"]) == ("failed", "NO_SAFE_ROOTS")
+    assert len(host.host.rescans) == 1, f"the scan was started {len(host.host.rescans)} times"
