@@ -79,25 +79,35 @@ PYEOF
 UTF8_DEV="$($PY -c 'import os, sys; dev = os.stat(sys.argv[1]).st_dev; print(f"{os.major(dev)}:{os.minor(dev)}")' "$UTF8_DIR")"
 "$BIN" --threads 2 --top 20 --out "$TMP/utf8.json" --target "$UTF8_DIR" "$UTF8_DEV" data \
     || fail "UTF-8 fixture scan failed"
-$PY - "$TMP/utf8.json" "$UTF8_DIR" <<'PYEOF' || fail "JSON paths did not preserve UTF-8"
-import json, sys
+$PY - "$TMP/utf8.json" "$UTF8_DIR" <<'PYEOF' || fail "JSON paths did not preserve UTF-8 or the raw bytes of non-UTF-8 names"
+import base64, json, os, sys
 from pathlib import Path
 
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-def paths(value):
+def rows(value):
     if isinstance(value, dict):
-        nested = paths(list(value.values()))
+        nested = rows(list(value.values()))
         if "path" in value:
-            nested.add(value["path"])
+            nested[value["path"]] = value.get("path_b64")
         return nested
     if isinstance(value, list):
-        return set().union(*(paths(child) for child in value))
-    return set()
+        merged = {}
+        for child in value:
+            merged.update(rows(child))
+        return merged
+    return {}
 
-actual = paths(payload)
-for name in ("보고서.txt", "été.txt", "emoji😀.txt", 'quote"\r\n.txt',
-             "bad-�.txt", "short-�", "surrogate-���"):
-    assert str(Path(sys.argv[2]) / name) in actual, actual
+actual = rows(payload)
+root = os.fsencode(sys.argv[2])
+for name in ("보고서.txt", "été.txt", "emoji😀.txt", 'quote"\r\n.txt'):
+    path = str(Path(sys.argv[2]) / name)
+    assert path in actual and actual[path] is None, (path, actual)
+for display, raw in (("bad-�.txt", b"bad-\xff.txt"), ("short-�", b"short-\xf0"),
+                     ("surrogate-���", b"surrogate-\xed\xa0\x80")):
+    path = str(Path(sys.argv[2]) / display)
+    assert path in actual, (path, actual)
+    assert actual[path] is not None, ("missing path_b64", path)
+    assert base64.b64decode(actual[path]) == root + b"/" + raw, (path, actual[path])
 PYEOF
 
 # Reference: du disk usage of the whole tree (one filesystem, block size 1).
@@ -927,22 +937,18 @@ PYEOF
     "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 --out "$TMP/a7.json" \
         --target "$root" "$(dev_of "$root")" data || fail "A7 scan exited non-zero"
     $PY - "$TMP/a7.json" <<'PYEOF'
-import json, sys
+import base64, json, sys
 children = json.load(open(sys.argv[1], encoding="utf-8"))["mounts"][0]["tree"]["children"]
-if len(children) != 2:
-    raise SystemExit("setup: expected 2 child directories, got %d" % len(children))
-identities = {(c["name"], c.get("name_b64")) for c in children}
-if len(identities) == 2:
-    sys.exit(0)
-print("BUG A7: sibling names b'run-\\xff' and b'run-\\xfe' both emitted as %r with no raw-name field"
-      % children[0]["name"])
-sys.exit(1)
+assert len(children) == 2, "expected 2 child directories, got %d" % len(children)
+assert [c["name"] for c in children] == ["run-�", "run-�"], [c["name"] for c in children]
+raw = sorted(base64.b64decode(c["name_b64"]) for c in children)
+assert raw == [b"run-\xfe", b"run-\xff"], raw
 PYEOF
 }
-xfail_case a7_non_utf8_siblings_distinct A7 a7_non_utf8_siblings_distinct
+required_case a7_non_utf8_siblings_distinct a7_non_utf8_siblings_distinct
 
 echo "  expected failures = $XFAIL_COUNT"
-[ "$XFAIL_COUNT" -eq 4 ] || fail "expected 4 XFAIL cases, got $XFAIL_COUNT"
+[ "$XFAIL_COUNT" -eq 3 ] || fail "expected 3 XFAIL cases, got $XFAIL_COUNT"
 
 echo
 echo "ALL TESTS PASSED"

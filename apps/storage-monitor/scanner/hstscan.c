@@ -17,6 +17,8 @@
  *   - The directory tree is built incrementally (each node protected by its
  *     own lock), then pruned bottom-up before JSON emission so memory stays
  *     bounded. Pruned children fold their bytes into the parent's other_bytes.
+ *   - Names that are not valid UTF-8 are emitted as a display string with
+ *     U+FFFD plus a <field>_b64 copy of the raw bytes.
  */
 
 #define _GNU_SOURCE
@@ -1112,6 +1114,45 @@ static void json_escape(FILE *f, const char *s) {
     fputc('"', f);
 }
 
+static bool utf8_valid(const char *s) {
+    for (const unsigned char *p = (const unsigned char *)s; *p; ) {
+        if (*p < 0x80) { p++; continue; }
+        size_t length = utf8_sequence_length(p);
+        if (!length) return false;
+        p += length;
+    }
+    return true;
+}
+
+static void base64_write(FILE *f, const char *s) {
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const unsigned char *p = (const unsigned char *)s;
+    size_t n = strlen(s);
+    fputc('"', f);
+    for (size_t i = 0; i < n; i += 3) {
+        uint32_t v = (uint32_t)p[i] << 16;
+        if (i + 1 < n) v |= (uint32_t)p[i + 1] << 8;
+        if (i + 2 < n) v |= p[i + 2];
+        fputc(alphabet[(v >> 18) & 63], f);
+        fputc(alphabet[(v >> 12) & 63], f);
+        fputc(i + 1 < n ? alphabet[(v >> 6) & 63] : '=', f);
+        fputc(i + 2 < n ? alphabet[v & 63] : '=', f);
+    }
+    fputc('"', f);
+}
+
+/* "key":"display" and, when the raw bytes are not valid UTF-8,
+ * ,"key_b64":"raw bytes" so byte-distinct names stay distinct. */
+static void json_text_field(FILE *f, const char *key, const char *s) {
+    fprintf(f, "\"%s\":", key);
+    json_escape(f, s);
+    if (!utf8_valid(s)) {
+        fprintf(f, ",\"%s_b64\":", key);
+        base64_write(f, s);
+    }
+}
+
 static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
                            uint64_t dirs, bool force) {
     if (!g_progress_path) return;
@@ -1141,7 +1182,7 @@ static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
 static void emit_node(FILE *f, struct node *n, int indent) {
     (void)indent;
     fputc('{', f);
-    fputs("\"name\":", f); json_escape(f, n->name);
+    json_text_field(f, "name", n->name);
     fputs(",\"kind\":\"directory\"", f);
     fprintf(f, ",\"bytes\":%llu", (unsigned long long)n->bytes);
     fprintf(f, ",\"files\":%llu", (unsigned long long)n->files);
@@ -1436,7 +1477,7 @@ int main(int argc, char **argv) {
         struct mount_result *mr = &results[i];
         if (i) fputc(',', f);
         fputs("\n{", f);
-        fputs("\"path\":", f); json_escape(f, mr->path);
+        json_text_field(f, "path", mr->path);
         fputs(",\"fstype\":", f); json_escape(f, mr->fstype);
         fprintf(f, ",\"prune_class\":\"%s\"", mr->prune_class == PRUNE_HOME ? "home" : "data");
         fprintf(f, ",\"df_total\":%llu", (unsigned long long)mr->df_total);
@@ -1485,7 +1526,7 @@ int main(int argc, char **argv) {
         struct file_rec *r = &g_top.a[i];
         if (i) fputc(',', f);
         fputs("\n{", f);
-        fputs("\"path\":", f); json_escape(f, r->path);
+        json_text_field(f, "path", r->path);
         fputs(",\"kind\":\"file\"", f);
         fprintf(f, ",\"bytes\":%llu", (unsigned long long)r->bytes);
         fprintf(f, ",\"uid\":%u", (unsigned)r->uid);
@@ -1502,7 +1543,7 @@ int main(int argc, char **argv) {
         struct file_rec *r = &g_stale.a[i];
         if (i) fputc(',', f);
         fputs("\n{", f);
-        fputs("\"path\":", f); json_escape(f, r->path);
+        json_text_field(f, "path", r->path);
         fputs(",\"kind\":\"file\"", f);
         fprintf(f, ",\"bytes\":%llu", (unsigned long long)r->bytes);
         fprintf(f, ",\"uid\":%u", (unsigned)r->uid);
@@ -1518,7 +1559,7 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < g_blocked_n; i++) {
         if (i) fputc(',', f);
         fputs("\n{", f);
-        fputs("\"path\":", f); json_escape(f, g_blocked[i].path);
+        json_text_field(f, "path", g_blocked[i].path);
         fputs(",\"reason\":", f); json_escape(f, g_blocked[i].reason);
         fputc('}', f);
     }
