@@ -15,12 +15,14 @@ from typing import Any, Mapping, Optional
 
 from collector import judge
 from collector.inventory import Server
-from collector.jobs import Scan
+from collector.contract import HostRun, ManifestPointer
+from collector.ids import REQUEST_ID_RE, SHA256_RE as HEX64_RE
+from collector.jobs import RescanReply, Scan
 from collector.transport import KNOWN_ACTIVE_STATES, OpenSshTransport, TransportError, validate_status_envelope
 
 MANUAL_UNIT = "storage-viz-scan.service"
 SCHEDULED_UNIT = "storage-viz-scheduled-scan.service"
-MAX_PROBE_BYTES = 48 * 1024
+MAX_PROBE_BYTES = 64 * 1024
 INVOCATION_RE = re.compile(r"^[0-9a-f]{32}$")
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 GENERATION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,240}-[0-9]{1,12}-v1$")
@@ -127,7 +129,7 @@ def merge_status(lifecycle, progress, active, timer, now, *, service_started=Non
     return result
 
 # Fixed script: no browser/inventory values are interpolated into remote commands or paths.
-REMOTE_OBSERVATION_SCRIPT = r'''import json, os, re, stat, subprocess, time
+REMOTE_OBSERVATION_SCRIPT = r'''import hashlib, json, os, re, stat, subprocess, time
 
 def read(path):
     try:
@@ -146,6 +148,30 @@ def show(unit, properties):
         return p.stdout[:8192] if p.returncode == 0 else ''
     except Exception: return ''
 
+def pointer(path):
+    # A v2 host: report the manifest's sha256 and seq, never its body (SHIM(M2b..M3b) S2).
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode): return {'invalid': True}
+            data = f.read(65537)
+    except FileNotFoundError: return None
+    except Exception: return {'invalid': True}
+    try: seq = json.loads(data).get('seq')
+    except Exception: seq = None
+    return {'sha256': hashlib.sha256(data).hexdigest(), 'seq': seq if type(seq) is int else None}
+
+def mailbox(path):
+    try: return sorted(n for n in os.listdir(path) if re.fullmatch('[0-9a-f]{32}', n))[:16]
+    except Exception: return []
+
+manifest = pointer('/var/lib/storage-viz/manifest.json')
+run = read('/var/lib/storage-viz/run.json') if manifest is not None else {}
+if run and not run.get('invalid'):
+    ids = run.get('request_ids')
+    run = {'run_id': run.get('run_id'), 'request_ids': ids[:16] if isinstance(ids, list) else []}
+v2 = {'manifest': manifest, 'run': run, 'requests_pending': mailbox('/var/lib/storage-viz/requests') if manifest is not None else [],
+      'progress': read('/run/storage-viz/progress.json') if manifest is not None else {}}
 life = read('/var/lib/storage-viz/scan-lifecycle.json')
 published = read('/var/lib/storage-viz/scan-status.json')
 progress = read('/run/storage-viz/scan-progress.json')
@@ -163,7 +189,7 @@ if 'month' in mono or 'y' in mono:
         pass
 service_props = 'Id,ActiveState,InvocationID,StateChangeTimestampMonotonic,ExecMainStartTimestampMonotonic,InactiveExitTimestampMonotonic'
 services = show(('storage-viz-scan.service', 'storage-viz-scheduled-scan.service'),service_props).strip().split('\n\n')
-print(json.dumps({'lifecycle':life,'published':published,'progress':progress,'services':services,'timer':timer,'remote_unix':time.time(),'remote_monotonic':time.clock_gettime(time.CLOCK_MONOTONIC)}))
+print(json.dumps({'lifecycle':life,'published':published,'progress':progress,'services':services,'timer':timer,'v2':v2,'remote_unix':time.time(),'remote_monotonic':time.clock_gettime(time.CLOCK_MONOTONIC)}))
 '''
 
 
@@ -178,6 +204,9 @@ class Observation:
     publication_error: Optional[str]
     """Set when scan-status.json exists but is not a valid envelope."""
     scan: Scan
+    manifest: Optional[ManifestPointer] = None
+    """Set for a v2 host: one with manifest.json. Its v1 files are then left over for rollback (S8)."""
+    run: HostRun = HostRun()
 
 
 @dataclass(frozen=True)
@@ -265,8 +294,12 @@ def parse_probe(raw: Any, server: Server) -> Observation:
         units = _units(obj)
         active, started = _service_state(obj, units)
         timer = parse_timer(obj["timer"], remote_unix=obj["remote_unix"], remote_monotonic=obj["remote_monotonic"])
-        status = merge_status(obj["lifecycle"], obj["progress"], active, timer, int(obj["remote_unix"]), service_started=started)
         publication, publication_error = _publication(obj.get("published"), server)
+        pointer, run = _v2_facts(obj.get("v2"), any(unit.active for unit in units))
+        if pointer is not None:
+            status = _v2_status(obj["v2"], run, active, timer, int(obj["remote_unix"]), started)
+            return Observation(int(obj["remote_unix"]), status, publication, publication_error, Scan(), pointer, run)
+        status = merge_status(obj["lifecycle"], obj["progress"], active, timer, int(obj["remote_unix"]), service_started=started)
         if publication is not None and publication["status"] in {"complete", "partial"}:
             status["published_generation"] = publication["generation"].removesuffix(".json")
             status["published_finished_unix"] = publication["scan_finished_unix"]
@@ -275,6 +308,47 @@ def parse_probe(raw: Any, server: Server) -> Observation:
         raise
     except Exception as exc:
         raise TransportError("BAD_TELEMETRY", "telemetry is malformed") from exc
+
+
+def _v2_facts(v2: Any, unit_active: bool) -> tuple:
+    """The manifest pointer and run facts of a v2 host, or (None, HostRun()) for a v1 host."""
+    if v2 is None or v2.get("manifest") is None:
+        return None, HostRun()
+    manifest, run = v2["manifest"], v2["run"]
+    if manifest.get("invalid") or not HEX64_RE.fullmatch(manifest["sha256"]) or (
+            manifest["seq"] is not None and type(manifest["seq"]) is not int):
+        raise TransportError("BAD_TELEMETRY", "manifest pointer is invalid")
+    if not isinstance(run, dict) or run.get("invalid"):
+        raise TransportError("BAD_TELEMETRY", "run.json is invalid")
+    ids = run.get("request_ids", [])
+    pending = v2["requests_pending"]
+    if not all(isinstance(item, str) and REQUEST_ID_RE.fullmatch(item) for item in [*ids, *pending]):
+        raise TransportError("BAD_TELEMETRY", "request ids are invalid")
+    run_id = run.get("run_id")
+    present = bool(run)
+    return ManifestPointer(manifest["sha256"], manifest["seq"]), HostRun(
+        present=present, scanning=present and unit_active,
+        run_id=run_id if isinstance(run_id, str) and RUN_ID_RE.fullmatch(run_id) else None,
+        request_ids=frozenset(ids), pending=frozenset(pending))
+
+
+def _v2_status(v2: Mapping[str, Any], run: HostRun, active: str, timer: Mapping[str, Any], now: int,
+               started: Optional[int]) -> dict:
+    """The v1 scan-status fields for a v2 host, from run.json and progress.json (S5 consumers)."""
+    status = merge_status({}, {}, active, timer, now, service_started=started)
+    if run.present and not run.scanning:
+        status.update(state="unknown", error_code="SCAN_INTERRUPTED")
+    progress = v2.get("progress")
+    if run.scanning and isinstance(progress, dict) and run.run_id is not None and progress.get("run_id") == run.run_id:
+        counters = validate_lifecycle({
+            "scanned_bytes": progress.get("bytes"), "scanned_files": progress.get("files"),
+            "scanned_dirs": progress.get("dirs"), "roots_completed": progress.get("roots_completed"),
+            "roots_total": progress.get("roots_total"), "updated_unix": progress.get("updated_unix"),
+        })
+        status.update(counters, progress_available=True)
+        if judge.progress_stale(status.get("updated_unix"), now):
+            status.update(error_code="STALE_PROGRESS", progress_available=False)
+    return status
 
 
 def _publication(published: Any, server: Server) -> tuple:
@@ -289,7 +363,7 @@ def _publication(published: Any, server: Server) -> tuple:
 
 
 class LegacyHost:
-    """SHIM(M2b..M3b) S2: today's protocol, as the three calls the actor makes."""
+    """SHIM(M2b..M3b) S2: today's protocol, as the calls the actor makes. M3b adds the gate's implementation."""
 
     def __init__(self, transport: OpenSshTransport) -> None:
         self.transport = transport
@@ -300,6 +374,19 @@ class LegacyHost:
     def fetch_capture(self, server: Server, publication: Mapping[str, Any]) -> bytes:
         return self.transport.fetch_snapshot(server, expected_status=publication)[1]
 
+    def get_manifest(self, server: Server) -> bytes:
+        return self.transport.fetch_manifest(server)
+
+    def get_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes:
+        return self.transport.fetch_volume_capture(server, volume_id, sha256, cap)
+
+    delivers_request_ids = False
+    """A request id needs a write into requests/, which only the gate makes for this account (M3b).
+    The actor refuses a v2 rescan at admission, so ``rescan`` is never reached through it."""
+
+    def rescan(self, server: Server, request_id: str) -> RescanReply:
+        return RescanReply("rejected", "REQUEST_UNSUPPORTED")
+
     def start_rescan(self, server: Server) -> None:
-        """Blocks until the oneshot scan unit finishes: hours for a full scan."""
+        """SHIM(M2b..M5c) S4. Blocks until the oneshot scan unit finishes: hours for a full scan."""
         self.transport.start_rescan(server)

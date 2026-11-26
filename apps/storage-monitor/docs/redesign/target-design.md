@@ -199,14 +199,15 @@ STATE_DIR/
 
 ```json
 {
-  "schema": "storage-viz.server-record/2",
+  "schema": "storage-viz.server-record/3",
   "server_id": "s13",
   "manifest": {"…": "last accepted HostManifest, verbatim"},
+  "manifest_sha256": "64hex",
   "accepted": {"v-3f9a0c1d2e4b5a69": "64hex"},
   "rejected": {"64hex": {"volume_id": "v-…", "reason": "SHA_MISMATCH", "at": 0}},
   "link": {"state": "ok", "seq": 90211, "since": 0, "last_ok_unix": 0, "error": null},
   "job": null,
-  "last_job": {"request_id": "32hex", "state": "succeeded", "…": "…"},
+  "last_job": {"request_id": "32hex", "state": "succeeded", "protocol": "receipt", "…": "…"},
   "update": {"desired": "40hex", "state": "in_sync", "previous": "40hex", "attempts": 0,
              "next_try_unix": 0, "last_error": null},
   "durations": {"full": [[1764103400, 3400]], "ssd": [[1764100000, 610]]}
@@ -214,6 +215,8 @@ STATE_DIR/
 ```
 
 - Captures are stored byte for byte, so the file name is the hash. A restart lists `captures/` (C8).
+- `manifest_sha256` is the sha256 of the manifest bytes the host wrote; the verbatim object re-encoded no longer hashes to it. It is null for a v1 host, whose `manifest` is the scan-status envelope (S3). A job's `protocol` is `receipt` on a v2 host and `invocation` on a v1 host (S4).
+- Schema versions (M5a decision): no M2b to M4 release ships. Production goes from the pre-M2 release straight to the final one, and a rollback past M2 uses the untouched old store (R1). So the reader accepts `/2`, M2b's record, and upgrades it with `manifest_sha256: null`, and `protocol: "invocation"` and `last_dispatch_unix: null` on each job. It writes `/3` only. A record from a later schema is `STORE_UNAVAILABLE`.
 - `accepted` can lag the manifest: a volume whose new capture was rejected keeps its last accepted sha and shows `data_state: stale_rejected`.
 - `rejected` holds at most 32 entries, evicted when the manifest no longer names the sha (C2).
 - `link.seq` on disk is a reserved ceiling: no `contact_seq` above it has been issued. The actor reserves seqs in blocks and resumes above the ceiling after a restart, so an exchange alone does not rewrite the record; it is written when another field changes or a block runs out (I7).
@@ -383,7 +386,7 @@ stateDiagram-v2
 | `fetching` | the manifest names a sha not yet in `captures/` and not rejected |
 | `stale_rejected` | the manifest names a rejected sha; `accepted[v]` is served |
 
-Events: `ManifestAccepted(m)`, `CaptureAccepted(v, sha)`, `CaptureRejected(v, sha, reason)`. A checksum mismatch gets one clean retry before it becomes a rejection, so a truncated transfer is not quarantined. Never: a sha in both `accepted` and `rejected`; a fetch of a rejected sha (I8); a manifest with lower `seq` replacing a higher one. The record is kept and `link` goes to `protocol_error` with `MANIFEST_SEQ_REGRESSED`.
+Events: `ManifestAccepted(m)`, `CaptureAccepted(v, sha)`, `CaptureRejected(v, sha, reason)`. A checksum mismatch gets one clean retry before it becomes a rejection, so a truncated transfer is not quarantined. Never: a sha accepted for a volume and rejected for that same volume (a volume naming another volume's held sha is rejected as `VOLUME_MISMATCH` without a fetch, since a capture names its own volume); a fetch of a rejected sha (I8); a manifest with lower `seq` replacing a higher one. The record is kept and `link` goes to `protocol_error` with `MANIFEST_SEQ_REGRESSED`.
 
 **Freshness** (derived per volume by `judge.freshness(volume, host_now)`): `fresh` when `host_now - capture.scan_finished_unix <= cadence_sec + GRACE_SEC`, with `GRACE_SEC = 2 × observe_idle_interval + 360`. `stale` otherwise. `unknown` without a capture or without `host_now`. The server is the worst of its volumes. A fresh capacity sample never renews a tree.
 

@@ -12,7 +12,7 @@ from typing import Any, List, Mapping, Optional, Tuple
 
 from storage_fstypes import REMOTE_FSTYPES
 from collector import judge
-from collector.contract import snapshot_response
+from collector.contract import CAPTURE_SCHEMA, HostManifest, Volume, VolumeCapture, snapshot_response
 from collector.health import Data, Link, data_state
 from collector.inventory import CapacityThresholds, Server
 from collector.jobs import TERMINAL, Job
@@ -23,6 +23,7 @@ ETA_PLANS = ("full", "ssd")
 OVERVIEW_ROOT_FIELDS = (
     "mount_id", "capacity_id", "major_minor", "mount_source", "fstype", "storage_media", "block_media",
     "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
+    "cadence_sec", "identity", "diagnostic", "data_state", "data_error", "volume_id",
 )
 OVERVIEW_MOUNT_FIELDS = (
     "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
@@ -87,6 +88,112 @@ def render_snapshot(payload: Mapping[str, Any]) -> Snapshot:
         base = {"mounts": payload["mounts"], "selected_roots": payload.get("selected_roots", []),
                 "scan_finished_unix": payload.get("scan_finished_unix")}
     return Snapshot(overview_snapshot(payload), scan_result(payload), rest, base)
+
+
+def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[str, VolumeCapture],
+                    states: Mapping[str, str], problems: Mapping[str, str] = {}) -> dict:
+    """SHIM(M5a..M8) S5: a v2 host as one v1 snapshot, so today's viewer reads it as a v1 host.
+
+    One v1 selected root and mount per scan root, at its real path, as the v1 agent wrote
+    several roots on one filesystem. Each carries the volume's live capacity from the
+    manifest in place of scan-time df (A9) and the ``volume_id``, which groups a volume's
+    roots into one capacity entry. An ambiguous volume keeps its own id, so it is never
+    merged with another. A volume without an accepted capture shows its roots as skipped,
+    with ``data_state`` and ``diagnostic``. ``data_error`` names a fetch problem, such as a
+    capture the host keeps reporting missing.
+    """
+    held = [captures[volume.volume_id] for volume in manifest.volumes if volume.volume_id in captures]
+    started = min(capture.scan_started_unix for capture in held)
+    finished = max(capture.scan_finished_unix for capture in held)
+    selected_roots, mounts, top_files, stale = [], [], [], []
+    users: dict = {}
+    for volume in manifest.volumes:
+        capture = captures.get(volume.volume_id)
+        state = states.get(volume.volume_id, "none")
+        if capture is None:
+            for ref in volume.roots:
+                selected_roots.append({**_v1_root(volume, state, problems, _mount_id(volume, ref.binding), ref.scan_root),
+                                       "status": "skipped"})
+            continue
+        names = {row["uid"]: row["name"] for root in capture.roots for row in root.users}
+        for root in capture.roots:
+            mount_id, path, counts = _mount_id(volume, root.binding), root.scan_root, root.counts
+            selected_roots.append({
+                **_v1_root(volume, state, problems, mount_id, path), "status": root.outcome,
+                "scanned_bytes": counts["bytes"], "scanned_files": counts["files"], "scanned_dirs": counts["dirs"],
+                "error_count": counts["errors"], "scan_finished_unix": capture.scan_finished_unix,
+            })
+            mounts.append({
+                "path": path, "mount_id": mount_id, "scan_root": path, "fstype": volume.fstype,
+                **_capacity(volume, manifest.written_unix),
+                "scanned_bytes": counts["bytes"], "scanned_files": counts["files"], "scanned_dirs": counts["dirs"],
+                "errors": counts["errors"], "tree": {**_node(root.tree), "name": path},
+                "storage_media": volume.media, "storage_media_confidence": volume.media_confidence,
+                "volume_id": volume.volume_id, "diagnostic": volume.diagnostic, "data_state": state,
+            })
+            for row in root.users:
+                user = users.setdefault(row["uid"], {"uid": row["uid"], "name": row["name"], "bytes": 0, "files": 0, "by_mount": {}})
+                user["bytes"] += row["bytes"]
+                user["files"] += row["files"]
+                user["by_mount"][path] = user["by_mount"].get(path, 0) + row["bytes"]
+            top_files.extend({**row, "kind": "file", "owner": names.get(row["uid"], str(row["uid"]))} for row in root.top_files)
+            stale.extend({**row, "kind": _kind(row["kind"]), "owner": names.get(row["uid"], str(row["uid"]))} for row in root.stale)
+    return {
+        "schema_version": 1, "hostname": manifest.hostname, "server_id": server_id, "scanner_version": CAPTURE_SCHEMA,
+        "scan_started_unix": started, "scan_finished_unix": finished,
+        # The last run's own duration; the span of the captures can cover unrelated runs.
+        "scan_duration_sec": (manifest.last_run.finished_unix - manifest.last_run.started_unix) if manifest.last_run else None,
+        # Changes with every manifest, so the viewer refetches when capacity or a capture changes.
+        "scan_generation": f"{server_id}-{manifest.seq}-v2", "run_as_root": False,
+        "selected_roots": selected_roots, "mounts": mounts,
+        "users": sorted(users.values(), key=lambda user: (-user["bytes"], user["uid"])),
+        "top_files": sorted(top_files, key=lambda row: -row["bytes"]), "stale": stale, "blocked": [],
+        "config_digest": manifest.config_digest, "mount_table": manifest.mount_table,
+    }
+
+
+def _mount_id(volume: Volume, binding: str) -> str:
+    """The volume id; a volume with several roots adds the root's binding, as v1 gave each root its own id."""
+    return volume.volume_id if len(volume.roots) == 1 else f"{volume.volume_id}:{binding}"
+
+
+def _v1_root(volume: Volume, state: str, problems: Mapping[str, str], mount_id: str, path: str) -> dict:
+    return {
+        "mount_id": mount_id, "volume_id": volume.volume_id, "major_minor": None, "mount_source": None,
+        "mount_root": None, "mountpoint": volume.mountpoint, "scan_root": path, "fstype": volume.fstype,
+        "scanned_bytes": 0, "scanned_files": 0, "scanned_dirs": 0, "blocked_count": 0, "error_count": 0,
+        "error_code": None, "storage_media": volume.media, "storage_media_confidence": volume.media_confidence,
+        "cadence_sec": volume.cadence_sec, "identity": volume.identity, "diagnostic": volume.diagnostic,
+        "data_state": state, "data_error": problems.get(volume.volume_id),
+    }
+
+
+def _capacity(volume: Volume, written_unix: int) -> dict:
+    """The manifest's capacity sample, unless it failed or is older than v1 accepts a live sample.
+    Both times are host times (I20). A sample that is not current keeps its time and is not judged."""
+    capacity = volume.capacity
+    if capacity is None:
+        return {"df_total": None, "df_used": None, "df_avail": None, "df_use_pct": None, "capacity_observed_unix": None}
+    if capacity.status != "ok" or not judge.capacity_sample_current(capacity.observed_unix, written_unix):
+        return {"df_total": None, "df_used": None, "df_avail": None, "df_use_pct": None,
+                "capacity_observed_unix": capacity.observed_unix}
+    usable = capacity.used + capacity.avail
+    # df's Use%: used over what an unprivileged writer can reach, rounded up, as v1 agents reported it.
+    use_pct = -(-capacity.used * 100 // usable) if usable else None
+    return {"df_total": capacity.total, "df_used": capacity.used, "df_avail": capacity.avail, "df_use_pct": use_pct,
+            "capacity_observed_unix": capacity.observed_unix}
+
+
+def _kind(kind: str) -> str:
+    return "directory" if kind == "dir" else kind
+
+
+def _node(node: Mapping[str, Any]) -> dict:
+    """A v2 tree node in the v1 spelling: hstscan's ``directory`` for the design's ``dir``."""
+    result = {**node, "kind": _kind(node["kind"])}
+    if "children" in node:
+        result["children"] = [_node(child) for child in node["children"]]
+    return result
 
 
 def scan_result(payload: Mapping[str, Any]) -> str:
@@ -162,7 +269,7 @@ def latest_pull_status(view: ServerView) -> str:
 
 def latest_scan_result(view: ServerView) -> str:
     manifest = view.data.manifest
-    if manifest is not None and manifest.get("status") == "failed":
+    if manifest is not None and manifest.scan_failed():
         return "failed"
     return view.snapshot.scan_result if view.snapshot is not None else "failed"
 
@@ -171,7 +278,7 @@ def configuration_sync(view: ServerView) -> str:
     manifest = view.data.manifest
     if manifest is None:
         return "unknown"
-    return "in_sync" if manifest.get("config_digest") == view.server.scanner_digest else "drifted"
+    return "in_sync" if manifest.config_digest == view.server.scanner_digest else "drifted"
 
 
 def scan_status_v1(view: ServerView, now_monotonic: float) -> dict:
@@ -198,6 +305,15 @@ def scan_status_v1(view: ServerView, now_monotonic: float) -> dict:
     return result
 
 
+def freshness(view: ServerView, overview: Optional[Mapping[str, Any]], now_monotonic: float) -> str:
+    """The worst volume (§3.2): a v2 volume with no accepted capture is unknown."""
+    judged = judge.freshness(overview, host_now(view, now_monotonic), judge.FRESHNESS_SLACK_SECONDS)
+    manifest = view.data.manifest
+    if isinstance(manifest, HostManifest) and any(volume.volume_id not in view.data.accepted for volume in manifest.volumes):
+        return judge.worst_freshness(judged, "unknown")
+    return judged
+
+
 def summary_v1(view: ServerView, now_monotonic: float) -> dict:
     overview = view.snapshot.overview if view.snapshot is not None else None
     row = {
@@ -206,7 +322,7 @@ def summary_v1(view: ServerView, now_monotonic: float) -> dict:
         "order": view.server.order,
         "status": "error" if view.error else "ok",
         "snapshot_availability": "available" if view.snapshot is not None else "absent",
-        "freshness": judge.freshness(overview, host_now(view, now_monotonic), judge.FRESHNESS_SLACK_SECONDS),
+        "freshness": freshness(view, overview, now_monotonic),
         "latest_pull_status": latest_pull_status(view),
         "latest_scan_result": latest_scan_result(view),
         "configuration_sync": configuration_sync(view),

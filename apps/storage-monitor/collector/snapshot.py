@@ -280,7 +280,7 @@ def _validate_media_fields(
         raise ValueError(f"{label} media fields require storage_media and storage_media_confidence")
     if "capacity_id" in present:
         capacity_id = _bounded_string(record.get("capacity_id"), f"{label}.capacity_id", 31, budget)
-        if not CAPACITY_ID_RE.match(capacity_id) or capacity_id == "dev-0-0":
+        if not CAPACITY_ID_RE.fullmatch(capacity_id) or capacity_id == "dev-0-0":
             raise ValueError(f"{label}.capacity_id must match dev-major-minor")
         if canonical_capacity_id is not False and capacity_id != canonical_capacity_id:
             raise ValueError(f"{label}.capacity_id must match canonical major_minor")
@@ -404,13 +404,13 @@ def _validate_blocked(blocked: Any, all_roots: Set[str], budget: _Budget) -> Non
 
 
 def _generation_filename(value: Any) -> str:
-    if not isinstance(value, str) or "/" in value or "\\" in value or value in {".", ".."} or not GENERATION_RE.match(value):
+    if not isinstance(value, str) or "/" in value or "\\" in value or value in {".", ".."} or not GENERATION_RE.fullmatch(value):
         raise ValueError("generation must be a safe immutable basename")
     return value
 
 
 def _required_digest(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not HEX64_RE.match(value):
+    if not isinstance(value, str) or not HEX64_RE.fullmatch(value):
         raise ValueError(f"{label} must be lowercase 64-hex")
     return value
 

@@ -138,3 +138,43 @@ def test_an_unexpected_admission_failure_is_500_internal(collector_api, monkeypa
     code, body, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
     assert (code, body["error"]) == (500, "INTERNAL")
     assert host.summary()["active_job"] is None
+
+
+def test_v2_host_keeps_the_v1_route_shapes_with_one_mount_per_volume(collector_api):
+    from collector.test_volumes import BA, BB, VA, VB, V2Host, capture
+
+    host, request, _ = collector_api
+    code, before, _ = request("GET", "/api/servers")
+    v1_row = next(row for row in before["servers"] if row["id"] == "alpha-1")
+    v2 = V2Host(host, "alpha-1")
+    finished = host.clock.now - 600
+    v2.volume(VA, BA, "/a", capture(VA, BA, "/a", finished))
+    v2.volume(VB, BB, "/b", capture(VB, BB, "/b", finished), media="ssd", cadence=3600)
+    v2.publish()
+    host.tick()
+    code, fleet, _ = request("GET", "/api/servers")
+    row = next(row for row in fleet["servers"] if row["id"] == "alpha-1")
+    assert code == 200 and set(row) == set(v1_row), "the v1 fleet row changed shape for a v2 host"
+    assert (row["snapshot_availability"], row["latest_pull_status"], row["mount_count"]) == ("available", "succeeded", 2)
+    code, snapshot, _ = request("GET", "/api/servers/alpha-1/snapshot")
+    assert code == 200
+    assert {(mount["mount_id"], mount["path"], mount["df_total"], mount["severity"]) for mount in snapshot["mounts"]} == {
+        (VA, "/a", 1000, "critical"), (VB, "/b", 1000, "critical")}  # 600 free bytes is under the free floor
+    assert snapshot["hostname"] == "alpha-1" and snapshot["mount_table"]["status"] == "ok"
+    code, status, _ = request("GET", "/api/servers/alpha-1/scan-status")
+    assert code == 200 and status["snapshot_generation"] == snapshot["scan_generation"] and status["published_generation"] is None
+
+
+def test_v2_rescan_without_request_id_delivery_answers_503(collector_api):
+    from collector.test_volumes import BA, VA, V2Host, capture
+
+    host, request, origin = collector_api
+    auth = rescan_headers(request, origin)
+    v2 = V2Host(host, "alpha-1")
+    v2.volume(VA, BA, "/a", capture(VA, BA, "/a", host.clock.now - 600))
+    v2.publish()
+    host.tick()
+    host.host.delivers_request_ids = False
+    host.fleet.start()
+    code, body, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
+    assert (code, body["error"]) == (503, "RESCAN_UNAVAILABLE")

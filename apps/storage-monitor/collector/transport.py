@@ -22,6 +22,11 @@ from collector.inventory import Server
 
 STATUS_PATH = "/var/lib/storage-viz/scan-status.json"
 SNAPSHOT_DIR = "/var/lib/storage-viz/snapshots"
+MANIFEST_PATH = "/var/lib/storage-viz/manifest.json"
+CAPTURE_DIR = "/var/lib/storage-viz/captures"
+MAX_MANIFEST_BYTES = 64 * 1024
+VOLUME_ID_RE = re.compile(r"^[vx]-[0-9a-f]{16}$")
+MISSING_FILE_MARKERS = ("not found", "No such file")
 RESCAN_COMMAND = ("sudo", "-n", "/usr/bin/systemctl", "start", "storage-viz-scan.service")
 KNOWN_ACTIVE_STATES = frozenset({"active", "reloading", "inactive", "failed", "activating", "deactivating", "maintenance"})
 MAX_STATUS_BYTES = 64 * 1024
@@ -145,6 +150,35 @@ class OpenSshTransport:
         finally:
             _unlink_quiet(tmp_name)
 
+    def fetch_manifest(self, server: Server) -> bytes:
+        """manifest.json of a v2 host (SHIM(M2b..M3b) S2: the gate's get-manifest replaces it)."""
+        return self._get_file(server, MANIFEST_PATH, MAX_MANIFEST_BYTES, "MANIFEST_TOO_LARGE", "MANIFEST_MISSING",
+                              timeout=self._status_timeout)
+
+    def fetch_volume_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes:
+        """One immutable v2 capture, at most ``cap`` bytes (SHIM(M2b..M3b) S2: the gate's get-capture)."""
+        if not VOLUME_ID_RE.fullmatch(volume_id) or not HEX64_RE.fullmatch(sha256):
+            raise TransportError("BAD_PATH", "capture name is unsafe")
+        return self._get_file(server, f"{CAPTURE_DIR}/{volume_id}/{sha256}.json.gz", cap, "CAPTURE_TOO_LARGE",
+                              "CAPTURE_GONE", timeout=self._snapshot_timeout)
+
+    def _get_file(self, server: Server, remote: str, cap: int, limit_code: str, missing_code: str, *, timeout: int) -> bytes:
+        self._validate_server(server)
+        cap = _bounded_positive(cap, "file size limit", 1, self._max_snapshot_bytes)
+        tmp_name = self._mk_secure_temp(".v2")
+        try:
+            try:
+                self._run_sftp(server, _batch_get(remote, tmp_name), timeout=timeout, limit_bytes=cap,
+                               limit_code=limit_code, local_path=tmp_name)
+            except TransportError as exc:
+                stderr = getattr(exc, "stderr", b"")
+                if exc.code == "UNREACHABLE" and any(marker.encode() in stderr for marker in MISSING_FILE_MARKERS):
+                    raise TransportError(missing_code, "remote file is missing") from exc
+                raise
+            return _read_regular_bounded(tmp_name, cap, limit_code)
+        finally:
+            _unlink_quiet(tmp_name)
+
     def start_rescan(self, server: Server) -> None:
         self._validate_server(server)
         result = self._run_ssh(server, list(RESCAN_COMMAND), timeout=self._rescan_timeout)
@@ -175,7 +209,13 @@ class OpenSshTransport:
             raise TransportError("UNREACHABLE", "transport command failed") from exc
         if getattr(result, "returncode", 0) == SSH_ERROR_EXIT:
             raise TransportError(classify_ssh_failure(getattr(result, "stderr", b"")), "sftp connection failed")
-        _check_returncode(result, "UNREACHABLE", limit_code=limit_code, local_path=local_path, limit_bytes=limit_bytes)
+        try:
+            _check_returncode(result, "UNREACHABLE", limit_code=limit_code, local_path=local_path, limit_bytes=limit_bytes)
+        except TransportError as exc:
+            # Kept off the message, which stays bounded; callers read it to tell a missing file apart.
+            stderr = getattr(result, "stderr", b"")
+            exc.stderr = stderr if isinstance(stderr, bytes) else str(stderr or "").encode()
+            raise
         return result
 
     def _run_ssh(self, server: Server, command: list[str], *, timeout: int) -> Any:

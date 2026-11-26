@@ -16,7 +16,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from collector import jobs
 from collector.actor import STOP, Admit, Ask, Clock, Host, ServerActor, spawn_thread
-from collector.errors import ActiveJob, Cooldown, GlobalConcurrency, ServerBusy, StoreUnavailable, UnknownServer
+from collector.errors import (
+    ActiveJob, Cooldown, GlobalConcurrency, RescanUnavailable, ServerBusy, StoreUnavailable, UnknownServer,
+)
 from collector.ids import SERVER_ID_RE
 from collector.inventory import Server
 from collector.store import ServerStore
@@ -136,6 +138,8 @@ class Fleet:
             raise Cooldown(reply.retry_after, retry_after_seconds=reply.retry_after, audit=audit("COOLDOWN", None))
         if reply.error == StoreUnavailable.code:
             raise StoreUnavailable(audit=audit(reply.error, None))
+        if reply.error == RescanUnavailable.code:
+            raise RescanUnavailable(audit=audit(reply.error, None))
         if reply.error is not None:
             # The edge answers 500 INTERNAL and logs this under the request id (section 4.3).
             raise RuntimeError(f"rescan admission for {server.id} failed: {reply.error}")

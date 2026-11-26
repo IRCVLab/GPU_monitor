@@ -360,3 +360,51 @@ with open(destination, "wb", buffering=0) as output:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V2FileTests(unittest.TestCase):
+    """manifest.json and captures/<vid>/<sha>.json.gz over the same SFTP path (SHIM(M2b..M3b) S2)."""
+
+    class Runner(FakeRunner):
+        def run(self, argv, **kwargs):
+            if argv[0] != "ssh":
+                remote = shlex.split(kwargs["input"].decode())[1]
+                name = pathlib.PurePosixPath(remote).name
+                if name not in self.snapshots:
+                    self.calls.append({"argv": list(argv), "input": kwargs["input"], "remote": remote})
+                    return Completed(returncode=1, stderr=f'File "{remote}" not found.\n'.encode())
+                self.remote = remote
+            return super().run(argv, **kwargs)
+
+    def test_manifest_and_capture_are_read_from_their_fixed_paths_within_the_cap(self):
+        from collector.transport import OpenSshTransport
+        fake = self.Runner()
+        sha = "c" * 64
+        fake.snapshots = {"manifest.json": b'{"seq": 1}', f"{sha}.json.gz": b"gz"}
+        tx = OpenSshTransport(runner=fake)
+        self.assertEqual(tx.fetch_manifest(server()), b'{"seq": 1}')
+        self.assertEqual(fake.remote, "/var/lib/storage-viz/manifest.json")
+        self.assertEqual(fake.calls[-1]["limit_bytes"], 64 * 1024)
+        self.assertEqual(tx.fetch_volume_capture(server(), "v-000000000000000a", sha, 2), b"gz")
+        self.assertEqual(fake.remote, f"/var/lib/storage-viz/captures/v-000000000000000a/{sha}.json.gz")
+        self.assertEqual(fake.calls[-1]["limit_bytes"], 2)
+
+    def test_missing_files_and_unsafe_names_are_typed(self):
+        from collector.transport import OpenSshTransport, TransportError
+        tx = OpenSshTransport(runner=self.Runner())
+        for call, code in ((lambda: tx.fetch_manifest(server()), "MANIFEST_MISSING"),
+                           (lambda: tx.fetch_volume_capture(server(), "v-000000000000000a", "c" * 64, 10), "CAPTURE_GONE"),
+                           (lambda: tx.fetch_volume_capture(server(), "../../etc", "c" * 64, 10), "BAD_PATH"),
+                           (lambda: tx.fetch_volume_capture(server(), "v-000000000000000a", "c" * 63 + "/", 10), "BAD_PATH")):
+            with self.assertRaises(TransportError) as info:
+                call()
+            self.assertEqual(info.exception.code, code)
+
+    def test_a_capture_larger_than_its_declared_size_is_too_large(self):
+        from collector.transport import OpenSshTransport, TransportError
+        fake = self.Runner()
+        sha = "c" * 64
+        fake.snapshots = {f"{sha}.json.gz": b"0123456789"}
+        with self.assertRaises(TransportError) as info:
+            OpenSshTransport(runner=fake).fetch_volume_capture(server(), "v-000000000000000a", sha, 4)
+        self.assertEqual(info.exception.code, "CAPTURE_TOO_LARGE")

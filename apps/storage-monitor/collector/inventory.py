@@ -258,7 +258,7 @@ def _validate_host(value: str) -> str:
         return value
     except ValueError:
         pass
-    if not HOST_RE.match(value):
+    if not HOST_RE.fullmatch(value) or value.endswith("\n"):
         raise ValueError("host must be safe DNS or IPv4")
     return value
 
