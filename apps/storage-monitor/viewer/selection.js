@@ -345,29 +345,45 @@ function commandCardHtml(entry, copyLabel) {
   '</li>';
 }
 
-function cleanupRemovalScript(entries) {
+function cleanupEffectiveEntries(entries) {
   const source = (entries || []).filter(Boolean);
+  const planOf = entry => entry && entry.plan ? entry.plan : entry;
   const directoryPaths = source
-    .map(entry => entry && entry.plan ? entry.plan : entry)
+    .map(planOf)
     .filter(plan => plan && plan.kind === "directory" && isCanonicalCleanupPath(plan.path))
     .map(plan => plan.path);
   const seen = new Set();
-  const kept = source
-    .filter(entry => {
-      const plan = entry && entry.plan ? entry.plan : entry;
-      const path = plan && plan.path;
-      if (!path || seen.has(path)) return false;
-      seen.add(path);
-      return !directoryPaths.some(directoryPath => directoryPath !== path && cleanupPathWithinRoot(path, directoryPath));
-    })
-    .map(entry => entry && entry.plan ? entry.plan : entry)
-    .filter(plan => plan && plan.destructiveCommand && isCanonicalCleanupPath(plan.path));
+  let nested = 0;
+  const kept = source.filter(entry => {
+    const plan = planOf(entry);
+    const path = plan && plan.path;
+    if (!path || seen.has(path)) return false;
+    seen.add(path);
+    if (directoryPaths.some(directoryPath => directoryPath !== path && cleanupPathWithinRoot(path, directoryPath))) {
+      nested += 1;
+      return false;
+    }
+    return !!(plan.destructiveCommand && isCanonicalCleanupPath(plan.path));
+  });
+  return { kept, nested };
+}
+
+function cleanupRemovalScript(entries) {
+  const kept = cleanupEffectiveEntries(entries).kept.map(entry => entry && entry.plan ? entry.plan : entry);
   const quoted = kind => kept.filter(plan => plan.kind === kind).map(plan => shellQuote(plan.path)).join(" ");
   const commands = [];
   if (quoted("directory")) commands.push("sudo rm -rf --one-file-system --preserve-root=all -- " + quoted("directory"));
   if (quoted("file")) commands.push("sudo rm -f -- " + quoted("file"));
   if (!commands.length) return "";
-  const body = commands.join("; ");
+  let body = commands.join("; ");
+  if (quoted("directory")) {
+    const mountinfoQuoted = kept.filter(plan => plan.kind === "directory")
+      .map(plan => shellQuote(plan.path.replace(/[\\ \t\n]/g, c => "\\" + c.charCodeAt(0).toString(8).padStart(3, "0"))))
+      .join(" ");
+    body = "sv_ok=1; for sv_p in " + mountinfoQuoted + "; do while read -r _ _ _ _ sv_m _; do " +
+      "case \"$sv_m\" in \"$sv_p\"|\"$sv_p\"/*) echo \"storage-viz: $sv_p has a mount at $sv_m; nothing was removed\" >&2; sv_ok=0;; esac; " +
+      "done < /proc/self/mountinfo; done; [ \"$sv_ok\" = 1 ] && { " + body + "; }";
+  }
   const snapshot = currentCleanupSnapshot();
   const host = snapshot && typeof snapshot.hostname === "string" ? snapshot.hostname.split(".")[0] : "";
   if (!host || hasControlCharacters(host)) return body;
@@ -434,8 +450,10 @@ function renderCleanupPanel() {
   if (title) {
     if (entries.length === 1) title.textContent = cleanupSelectionSummary(entries[0].plan, entries[0].item);
     else {
-      const totalBytes = entries.reduce((sum, entry) => sum + (Number(entry.item.bytes) || 0), 0);
-      title.textContent = entries.length + " paths selected · " + cleanupBytesLabel(totalBytes);
+      const effective = cleanupEffectiveEntries(entries);
+      const totalBytes = effective.kept.reduce((sum, entry) => sum + (Number(entry.item && entry.item.bytes) || 0), 0);
+      title.textContent = entries.length + " paths selected · " +
+        (effective.nested ? effective.nested + " inside a selected folder · " : "") + cleanupBytesLabel(totalBytes);
     }
   }
   if (clear) clear.disabled = false;
@@ -537,6 +555,7 @@ if (typeof globalThis !== "undefined") {
   globalThis.cleanupCheckboxHtml = cleanupCheckboxHtml;
   globalThis.cleanupSelectionButtonHtml = cleanupSelectionButtonHtml;
   globalThis.cleanupItems = cleanupItems;
+  globalThis.cleanupEffectiveEntries = cleanupEffectiveEntries;
   globalThis.validateCleanupSelection = validateCleanupSelection;
   globalThis.buildCleanupCommandPlan = buildCleanupCommandPlan;
   globalThis.cleanupRemovalScript = cleanupRemovalScript;
