@@ -172,7 +172,7 @@ Each invariant names the test that checks it. Test ids refer to section 5.
 - `capacity` comes from a guarded `statvfs` on every tick, for every volume, including slow-only and not-due ticks (A9). The sampler checks that the mountpoint's `st_dev` still matches the volume before it attributes a sample. On failure it keeps the old sample and its old `observed_unix` and sets `status: "failed"`. It never puts a new timestamp on old values.
 - `mount_table.within_roots` lists every mountinfo entry at or below a scan root, including same-device bind mounts. `status: "unreadable"` means mountinfo could not be read. The removal module refuses in that case.
 - `cadence_sec` is the agent's schedule. Central freshness reads it and never copies the table (S1).
-- `requests` keeps the last 16 receipts. That covers far more than the job deadline at a 900 s cooldown.
+- `requests` keeps the last 16 receipts. The central parser caps this list at 16. Central admits one active job per server, retries the same request ID and enforces a 900 s cooldown, so even 16 successive admissions span four hours. The gate’s 128-file pending limit bounds on-disk admission, not central concurrency.
 - `hostname` is `hostname -s` at publish time, for the removal host check.
 
 **RunRecord** (`run.json`), written right after the lock is taken and removed as the last step before release:
@@ -185,7 +185,7 @@ Each invariant names the test that checks it. Test ids refer to section 5.
 
 `last_run.outcome` is one of `complete | partial | failed | nothing_due | interrupted`. No `publishing` string exists to forget (A8).
 
-**Progress** (`/run/storage-viz/progress.json`, written by hstscan every 2 s): `{run_id, group, updated_unix, bytes, files, dirs, roots_completed, roots_total}`. The runner passes `run_id` and `group` as arguments.
+**Progress** (`/run/storage-viz/progress.json`, written by hstscan every 2 s): `{run_id, group, updated_unix, bytes, files, dirs, roots_completed, roots_total}`. The runner passes `run_id` and `group` as arguments. The first pass uses the systemd invocation ID. Subsequent passes in that invocation derive a fresh 32-hex ID from the invocation and pass number, including after lock reacquisition.
 
 ### 2.3 Central store (`STATE_DIR/`)
 

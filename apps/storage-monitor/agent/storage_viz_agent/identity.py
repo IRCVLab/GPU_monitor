@@ -4,6 +4,12 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+from typing import Optional
+
+
+def display_path(path):
+    # mountinfo uses surrogateescape. Match hstscan's one U+FFFD per invalid byte.
+    return "".join("\ufffd" if 0xdc80 <= ord(ch) <= 0xdcff else ch for ch in path)
 
 
 def digest(prefix, *parts):
@@ -23,8 +29,10 @@ class Root:
     media: str
     media_confidence: str
 
+    diagnostic: Optional[str] = None
+
     def descriptor(self):
-        return dict(scan_root=self.path, binding=self.binding, prune_class=self.prune_class)
+        return dict(scan_root=display_path(self.path), binding=self.binding, prune_class=self.prune_class)
 
 
 def device_uuid(device, sysfs, devfs, udev):
@@ -62,27 +70,31 @@ def resolve(mounts, aliases, config_digest, media_resolver, sysfs=Path("/sys"),
         for path in (mount.mountpoint, mount.entry.mountpoint):
             if path in aliases:
                 labels[mount.entry.major_minor].add(aliases[path])
+    alias_devices = defaultdict(set)
+    for device, names in labels.items():
+        for name in names:
+            alias_devices[name].add(device)
     resolved = []
     for m in mounts:
         path, entry = m.mountpoint, m.entry
         dev = entry.major_minor
         subpath = os.path.normpath(os.path.join(entry.root, os.path.relpath(path, entry.mountpoint)))
-        if labels[dev]:
-            if len(labels[dev]) != 1:
-                raise ValueError("conflicting aliases for one filesystem")
+        diagnostic = None
+        if len(labels[dev]) > 1 or any(len(alias_devices[name]) > 1 for name in labels[dev]):
+            diagnostic = "VOLUME_ALIAS_CONFLICT"
+        if labels[dev] and not diagnostic:
             identity = "alias"
             vid = digest("v-", identity, next(iter(labels[dev])))
-        elif uuids[dev] and len(owners[uuids[dev]]) == 1:
+        elif not diagnostic and uuids[dev] and len(owners[uuids[dev]]) == 1:
             identity = "uuid"
             vid = digest("v-", identity, uuids[dev])
         else:
+            diagnostic = diagnostic or "VOLUME_IDENTITY_AMBIGUOUS"
             identity = "ambiguous"
             vid = digest("x-", boot_id, dev, subpath)
         prune = "home" if path == "/home" else "data"
         binding = digest("b-", vid, subpath, prune, config_digest, "storage-viz.capture/2")
         media = media_resolver.resolve(dev)
         resolved.append(Root(path, entry.mountpoint, dev, vid, identity, binding, prune, entry.fstype,
-                             media.media, media.confidence))
-    if len({r.volume_id for r in resolved}) != len({(r.volume_id, r.device) for r in resolved}):
-        raise ValueError("one volume alias refers to different devices")
+                             media.media, media.confidence, diagnostic))
     return resolved

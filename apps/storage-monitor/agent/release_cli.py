@@ -104,6 +104,11 @@ def check_config(config_path: str) -> Optional[str]:
     """Return an error when this release cannot run with the host config."""
     try:
         cfg = load_config(config_path)
+        if cfg.volume_aliases:
+            roots, _ = runner.discover(cfg, runner.mount_policy.read_mountinfo, runner.BlockMediaResolver())
+            conflicts = [r.path for r in roots if r.diagnostic == "VOLUME_ALIAS_CONFLICT"]
+            if conflicts:
+                return "conflicting volume aliases for " + ", ".join(conflicts)
     except (OSError, ValueError) as exc:
         return f"config: {exc}"
     if not os.access(cfg.scanner_path, os.X_OK):

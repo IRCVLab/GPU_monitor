@@ -250,7 +250,7 @@ def test_request_arrives_as_runner_removes_journal(tmp_path):
     assert host.manifest()["requests"][0]["outcome"] == "complete"
 
 
-def test_bad_scanner_rows_fail_group_and_preserve_capture(tmp_path):
+def test_bad_scanner_user_rows_do_not_prevent_publication(tmp_path):
     host = Host(tmp_path)
     host.run()
     prior = host.volumes()["/data"]["capture"]
@@ -265,6 +265,6 @@ def test_bad_scanner_rows_fail_group_and_preserve_capture(tmp_path):
         return result
     host.scan = malformed
     assert host.run() == 0
-    assert host.volumes()["/data"]["capture"] == prior
-    assert host.volumes()["/data"]["last_attempt"]["outcome"] == "failed"
+    assert host.volumes()["/data"]["capture"] != prior
+    assert host.volumes()["/data"]["last_attempt"]["outcome"] == "complete"
     assert host.volumes()["/home"]["last_attempt"]["outcome"] == "complete"

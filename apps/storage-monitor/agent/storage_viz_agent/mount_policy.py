@@ -13,6 +13,7 @@ import stat
 import re
 from typing import Callable, List, Optional, Sequence, Tuple
 
+from .identity import display_path
 from storage_fstypes import REMOTE_FSTYPES
 
 
@@ -411,5 +412,9 @@ def mounts_within_roots(entries, roots):
     for entry in entries:
         for root in roots:
             if entry.mountpoint == root.path or entry.mountpoint.startswith(root.path + "/"):
+                if display_path(entry.mountpoint) != entry.mountpoint:
+                    return None  # Display-only paths cannot authorize removal.
+                if entry.mountpoint not in rows and len(rows) >= 1024:
+                    return None
                 rows[entry.mountpoint] = rows.get(entry.mountpoint, False) or entry.major_minor == root.device
     return [dict(mountpoint=p, same_device=same) for p, same in sorted(rows.items())]

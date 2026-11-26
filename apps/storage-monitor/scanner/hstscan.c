@@ -574,7 +574,13 @@ static const char *errno_reason(int err) {
         return R_REPLACED;
     case EACCES:
     case EPERM:   return "EACCES";
-    default:      return "UNREPRESENTABLE";
+    case EIO:     return "EIO";
+    case EMFILE:  return "EMFILE";
+    case ENFILE:  return "ENFILE";
+    case ENOMEM:  return "ENOMEM";
+    case EOVERFLOW:
+    case ENAMETOOLONG: return "UNREPRESENTABLE";
+    default:      return "EIO";
     }
 }
 
@@ -748,7 +754,7 @@ static const char *g_progress_group = "";
 static int g_progress_roots_total = 0, g_progress_roots_done = 0;
 static uint64_t g_progress_bytes = 0, g_progress_files = 0, g_progress_dirs = 0;
 static pthread_mutex_t progress_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t progress_changed = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t progress_changed;
 static bool progress_finished;
 static void progress_write(void);
 
@@ -1381,7 +1387,7 @@ static void *progress_thread(void *unused) {
     while (!progress_finished) {
         progress_write();
         struct timespec until;
-        clock_gettime(CLOCK_REALTIME, &until);
+        clock_gettime(CLOCK_MONOTONIC, &until);
         until.tv_sec += 2;
         pthread_cond_timedwait(&progress_changed, &progress_lock, &until);
     }
@@ -1614,7 +1620,18 @@ int main(int argc, char **argv) {
     g_progress_roots_total = target_count;
     if (!g_progress_path && *g_progress_run_id) g_progress_path = "/run/storage-viz/progress.json";
     pthread_t reporter;
-    bool reporting = g_progress_path && pthread_create(&reporter, NULL, progress_thread, NULL) == 0;
+    bool reporting = false;
+    if (g_progress_path) {
+        pthread_condattr_t attr;
+        if (pthread_condattr_init(&attr) == 0) {
+            if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) == 0 &&
+                pthread_cond_init(&progress_changed, &attr) == 0) {
+                reporting = pthread_create(&reporter, NULL, progress_thread, NULL) == 0;
+                if (!reporting) pthread_cond_destroy(&progress_changed);
+            }
+            pthread_condattr_destroy(&attr);
+        }
+    }
 
     for (int i = 0; i < target_count; i++) {
         const char *tg = targets[i].path;
@@ -1659,6 +1676,7 @@ int main(int argc, char **argv) {
         pthread_cond_signal(&progress_changed);
         pthread_mutex_unlock(&progress_lock);
         pthread_join(reporter, NULL);
+        pthread_cond_destroy(&progress_changed);
     }
     double dur = now_monotonic() - t0;
 
@@ -1724,15 +1742,17 @@ int main(int argc, char **argv) {
                 json_escape(f, m->mount);
                 fprintf(f, ":%llu", (unsigned long long)m->bytes);
             }
-            fputs("},\"files_by_mount\":{", f);
+            fputs("},\"root_usage\":[", f);
             fm = true;
             for (struct user_mount *m = u->mounts; m; m = m->next) {
                 if (!fm) fputc(',', f);
                 fm = false;
-                json_escape(f, m->mount);
-                fprintf(f, ":%llu", (unsigned long long)m->files);
+                fputc('{', f);
+                json_text_field(f, "path", m->mount);
+                fprintf(f, ",\"bytes\":%llu,\"files\":%llu}", (unsigned long long)m->bytes,
+                        (unsigned long long)m->files);
             }
-            fputs("}}", f);
+            fputs("]}", f);
         }
     }
     fputs("\n],\n", f);

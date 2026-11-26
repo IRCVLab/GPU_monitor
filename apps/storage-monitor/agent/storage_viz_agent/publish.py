@@ -1,6 +1,10 @@
 import gzip
 import hashlib
 import json
+import logging
+import shutil
+
+from .ids import VOLUME_ID_RE
 import os
 from pathlib import Path
 import tempfile
@@ -48,16 +52,45 @@ def store_capture(data, capture):
 def commit_manifest(data, manifest, now):
     manifest.update(seq=manifest["seq"] + 1, written_unix=now)
     payload = encode(manifest)
-    if len(payload) > 65536:
-        raise ValueError("manifest exceeds 64 KiB")
+    limit = 64 * 1024
+    if len(payload) > limit:
+        # A partial list could authorize removal across an omitted mount.
+        manifest["mount_table"].update(status="unreadable", within_roots=[])
+        payload = encode(manifest)
+    if len(payload) > limit:
+        # Keep receipts and capture references ahead of optional telemetry.
+        wire = dict(manifest, volumes=[dict(v, capacity=None) for v in manifest["volumes"]])
+        payload = encode(wire)
+        if len(payload) > limit:
+            for volume in wire["volumes"]:
+                volume["last_attempt"] = None
+            payload = encode(wire)
+        if len(payload) > limit:
+            # Even the required root inventory can exceed the entire budget.
+            # Publish only whole volume records that fit and flag incomplete coverage.
+            candidates, wire["volumes"] = wire["volumes"], []
+            if wire["last_run"] and wire["last_run"]["outcome"] in ("complete", "nothing_due"):
+                wire["last_run"] = dict(wire["last_run"], outcome="partial")
+            size = len(encode(wire))
+            for volume in candidates:
+                extra = len(encode(volume)) + bool(wire["volumes"])
+                if size + extra <= limit:
+                    wire["volumes"].append(volume)
+                    size += extra
+            payload = encode(wire)
+        logging.warning("Degraded oversized host manifest to %d bytes", len(payload))
     atomic(data / "manifest.json", payload)
 
 
 def prune(data, manifest, now, previous):
     # SHIM(M5b..M5c) S8: limit collection to v2 capture and staging files.
     current = {v["volume_id"]: v["capture"]["sha256"] for v in manifest["volumes"] if v["capture"]}
+    present = {v["volume_id"] for v in manifest["volumes"]}
     for directory in (data / "captures").glob("*"):
-        if not directory.is_dir():
+        if directory.is_symlink() or not VOLUME_ID_RE.fullmatch(directory.name) or not directory.is_dir():
+            continue
+        if directory.name not in present:
+            shutil.rmtree(directory)
             continue
         files = sorted(directory.glob("*.json.gz"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
         others = [p for p in files if p.name.split(".")[0] != current.get(directory.name)]
