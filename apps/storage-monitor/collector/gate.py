@@ -65,9 +65,10 @@ def parse_observe(raw: bytes, server: Server) -> legacy.Observation:
     except Exception as exc:
         raise TransportError("BAD_TELEMETRY", "gate observe reply is malformed") from exc
     observation = legacy.parse_telemetry(probe, server, lambda unit_active: facts)
+    # The run facts come from the lock and run.json for a v1 agent too: the update track stages only on an idle host.
     return legacy.Observation(observation.host_now, observation.status, observation.publication,
                               observation.publication_error, observation.scan, observation.manifest,
-                              observation.run, transport="gate", agent=agent)
+                              facts[1], transport="gate", agent=agent)
 
 
 def _services(services: Any, units: Mapping[str, Any]) -> list:
@@ -83,12 +84,10 @@ def _services(services: Any, units: Mapping[str, Any]) -> list:
 
 
 def _v2_facts(obj: Mapping[str, Any]) -> Tuple[Optional[ManifestPointer], HostRun, Any]:
+    """The manifest pointer (None for a v1 host), the run facts from the lock and run.json, and progress.json."""
     manifest = obj["manifest"]
-    if manifest is None:
-        return None, HostRun(), None
-    if not isinstance(manifest.get("sha256"), str) or not SHA256_RE.fullmatch(manifest["sha256"]):
+    if manifest is not None and (not isinstance(manifest.get("sha256"), str) or not SHA256_RE.fullmatch(manifest["sha256"])):
         raise TransportError("BAD_TELEMETRY", "manifest pointer is invalid")
-    seq = manifest.get("seq")
     state = obj["scan"]["state"]
     if state not in SCAN_STATES:
         raise TransportError("BAD_TELEMETRY", "scan state is invalid")
@@ -99,7 +98,9 @@ def _v2_facts(obj: Mapping[str, Any]) -> Tuple[Optional[ManifestPointer], HostRu
     if not isinstance(ids, list) or not isinstance(pending, list) or len(pending) > MAX_PENDING or not all(
             isinstance(item, str) and REQUEST_ID_RE.fullmatch(item) for item in [*ids, *pending]):
         raise TransportError("BAD_TELEMETRY", "request ids are invalid")
-    return ManifestPointer(manifest["sha256"], seq if type(seq) is int else None), HostRun(
+    seq = manifest.get("seq") if manifest is not None else None
+    pointer = ManifestPointer(manifest["sha256"], seq if type(seq) is int else None) if manifest is not None else None
+    return pointer, HostRun(
         present=state != "idle", scanning=state == "running",
         run_id=run_id if isinstance(run_id, str) and RUN_ID_RE.fullmatch(run_id) else None,
         request_ids=frozenset(ids), pending=frozenset(pending)), obj["progress"]

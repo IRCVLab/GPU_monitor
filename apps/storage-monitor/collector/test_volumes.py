@@ -47,8 +47,8 @@ class V2Host:
                          **manifest_fields))
 
 
-def v2_collector(tmp_path, spawn=None):
-    collector = Collector(tmp_path, SID, publish=False, **({"spawn": spawn} if spawn else {}))
+def v2_collector(tmp_path, spawn=None, **fleet_options):
+    collector = Collector(tmp_path, SID, publish=False, **({"spawn": spawn} if spawn else {}), **fleet_options)
     host = V2Host(collector)
     finished = collector.clock.now - 600
     host.volume(VA, BA, "/a", capture(VA, BA, "/a", finished))

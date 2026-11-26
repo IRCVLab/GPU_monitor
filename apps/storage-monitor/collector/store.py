@@ -191,8 +191,15 @@ def _upgrade_v2(raw: Any) -> Any:
     return {**raw, **jobs_v3, "schema": RECORD_SCHEMA, "manifest_sha256": None}
 
 
+def _upgrade_update(raw: Any) -> Any:
+    """Records before M3b have no update.requested_host_unix: no update request was ever sent."""
+    if isinstance(raw, dict) and isinstance(raw.get("update"), dict) and "requested_host_unix" not in raw["update"]:
+        return {**raw, "update": {**raw["update"], "requested_host_unix": None}}
+    return raw
+
+
 def _parse_record(raw: Any, server_id: str) -> Record:
-    raw = _upgrade_v2(raw)
+    raw = _upgrade_update(_upgrade_v2(raw))
     if not isinstance(raw, dict) or set(raw) != RECORD_KEYS:
         raise ValueError("record keys differ from the schema")
     if raw["schema"] != RECORD_SCHEMA or raw["server_id"] != server_id:

@@ -114,6 +114,14 @@ class Expected:
 
 
 @dataclass(frozen=True)
+class VolumeAttempt:
+    """A volume's last scan attempt: the update track reads its error code for agent faults."""
+    run_id: str
+    outcome: str
+    error_code: Optional[str]
+
+
+@dataclass(frozen=True)
 class Volume:
     volume_id: str
     identity: str
@@ -127,6 +135,7 @@ class Volume:
     roots: Tuple[RootRef, ...]
     capacity: Optional[Capacity]
     capture: Optional[CaptureRef]
+    last_attempt: Optional[VolumeAttempt] = None
 
     def expected(self, sha256: str) -> Expected:
         return Expected(self.volume_id, sha256, frozenset((root.scan_root, root.binding) for root in self.roots))
@@ -149,6 +158,8 @@ class LastRun:
     started_unix: int
     finished_unix: int
     outcome: str
+    agent_sha: Optional[str] = None
+    """The release that ran it."""
 
 
 @dataclass(frozen=True)
@@ -296,13 +307,15 @@ def _volume(value: Any) -> Volume:
     roots = tuple(_root_ref(root) for root in _list(raw["roots"], "roots", MAX_ROOTS_PER_VOLUME))
     if not roots:
         raise ContractError(BAD_FIELD, "a volume has no roots")
+    last_attempt = None
     if raw["last_attempt"] is not None:
         attempt = _object(raw["last_attempt"], ("run_id", "started_unix", "finished_unix", "outcome", "error_code"), "last_attempt")
-        _id(attempt["run_id"], RUN_ID_RE, "last_attempt.run_id")
         _time(attempt["started_unix"], "last_attempt.started_unix")
         _optional(attempt["finished_unix"], lambda item: _time(item, "last_attempt.finished_unix"))
-        _choice(attempt["outcome"], RUN_OUTCOMES, "last_attempt.outcome")
-        _optional(attempt["error_code"], lambda item: _code(item, "last_attempt.error_code"))
+        last_attempt = VolumeAttempt(
+            _id(attempt["run_id"], RUN_ID_RE, "last_attempt.run_id"),
+            _choice(attempt["outcome"], RUN_OUTCOMES, "last_attempt.outcome"),
+            _optional(attempt["error_code"], lambda item: _code(item, "last_attempt.error_code")))
     return Volume(
         volume_id=volume_id,
         identity=identity,
@@ -316,6 +329,7 @@ def _volume(value: Any) -> Volume:
         roots=roots,
         capacity=_optional(raw["capacity"], _capacity),
         capture=_optional(raw["capture"], _capture_ref),
+        last_attempt=last_attempt,
     )
 
 
@@ -356,11 +370,11 @@ def _mount_table(value: Any) -> Mapping[str, Any]:
 
 def _last_run(value: Any) -> LastRun:
     raw = _object(value, ("run_id", "trigger", "plan", "started_unix", "finished_unix", "outcome", "agent_sha"), "last_run")
-    _optional(raw["agent_sha"], lambda item: _id(item, RELEASE_SHA_RE, "last_run.agent_sha"))
     return LastRun(_id(raw["run_id"], RUN_ID_RE, "last_run.run_id"), _text(raw["trigger"], "trigger", 32),
                    _text(raw["plan"], "plan", 32), _time(raw["started_unix"], "last_run.started_unix"),
                    _time(raw["finished_unix"], "last_run.finished_unix"),
-                   _choice(raw["outcome"], RUN_OUTCOMES, "last_run.outcome"))
+                   _choice(raw["outcome"], RUN_OUTCOMES, "last_run.outcome"),
+                   _optional(raw["agent_sha"], lambda item: _id(item, RELEASE_SHA_RE, "last_run.agent_sha")))
 
 
 def _receipt(value: Any) -> Receipt:

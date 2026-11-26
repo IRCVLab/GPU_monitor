@@ -15,7 +15,7 @@ import uuid
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from collector import jobs
-from collector.actor import STOP, Admit, Ask, Clock, Host, ServerActor, spawn_thread
+from collector.actor import STOP, Admit, Ask, Channel, Clock, Host, ServerActor, spawn_thread
 from collector.errors import (
     ActiveJob, Cooldown, GlobalConcurrency, RescanUnavailable, ServerBusy, StoreUnavailable, UnknownServer,
 )
@@ -35,7 +35,8 @@ class Fleet:
     def __init__(self, servers: Iterable[Server], state_root: str | os.PathLike, host: Host, *,
                  clock: Clock = time, cooldown_seconds: int = jobs.COOLDOWN_SECONDS,
                  max_active_jobs: int = jobs.MAX_ACTIVE_JOBS, reply_timeout: float = REPLY_TIMEOUT_SECONDS,
-                 spawn: Callable[[Callable[[], None], str], None] = spawn_thread) -> None:
+                 spawn: Callable[[Callable[[], None], str], None] = spawn_thread,
+                 channel: Optional[Channel] = None) -> None:
         if not 0 <= cooldown_seconds <= 24 * 3600 or not 1 <= max_active_jobs <= 16:
             raise ValueError("rescan cooldown or concurrency is out of range")
         self.servers: Tuple[Server, ...] = tuple(server for server in servers if server.enabled)
@@ -47,7 +48,7 @@ class Fleet:
         transfers = threading.BoundedSemaphore(MAX_PARALLEL_TRANSFERS)
         self.actors: Dict[str, ServerActor] = {
             server.id: ServerActor(server, ServerStore(self.state_root, server.id), host,
-                                   clock=clock, transfers=transfers, spawn=spawn)
+                                   clock=clock, transfers=transfers, spawn=spawn, channel=channel)
             for server in self.servers
         }
         self._lock = threading.Lock()
