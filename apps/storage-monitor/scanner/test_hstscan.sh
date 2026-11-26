@@ -77,7 +77,7 @@ for name in (b"bad-\xff.txt", b"short-\xf0", b"surrogate-\xed\xa0\x80"):
         fh.write(b"x")
 PYEOF
 UTF8_DEV="$($PY -c 'import os, sys; dev = os.stat(sys.argv[1]).st_dev; print(f"{os.major(dev)}:{os.minor(dev)}")' "$UTF8_DIR")"
-"$BIN" --threads 2 --top 20 --out "$TMP/utf8.json" --target "$UTF8_DIR" "$UTF8_DEV" \
+"$BIN" --threads 2 --top 20 --out "$TMP/utf8.json" --target "$UTF8_DIR" "$UTF8_DEV" data \
     || fail "UTF-8 fixture scan failed"
 $PY - "$TMP/utf8.json" "$UTF8_DIR" <<'PYEOF' || fail "JSON paths did not preserve UTF-8"
 import json, sys
@@ -119,7 +119,7 @@ EOF
 TREE_DEV="$TREE_MAJOR:$TREE_MINOR"
 
 GUARDED_OUT="$(mktemp "${TMPDIR:-/tmp}"/hstscan_guarded.XXXXXX.json)"
-"$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$GUARDED_OUT" --target "$TREE" "$TREE_DEV"
+"$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$GUARDED_OUT" --target "$TREE" "$TREE_DEV" data
 GRC=$?
 [ "$GRC" -eq 0 ] || fail "guarded --target scan exited non-zero ($GRC)"
 $PY - "$GUARDED_OUT" "$TREE" <<'PYEOF' || fail "guarded --target did not scan the exact requested root"
@@ -128,7 +128,7 @@ payload = json.load(open(sys.argv[1], encoding="utf-8"))
 assert [m["path"] for m in payload["mounts"]] == [sys.argv[2]]
 PYEOF
 rm -f "$GUARDED_OUT" "$GUARDED_OUT.tmp"
-pass "guarded --target PATH MAJOR:MINOR scans exact absolute target"
+pass "guarded --target PATH MAJOR:MINOR CLASS scans exact absolute target"
 
 # A mount's immediate child directories are navigation landmarks (for example
 # /data/alice and /data/project-a), not expendable detail. They, and one more
@@ -141,7 +141,7 @@ mkdir -p "$PRUNE_ROOT/alice/tiny-work" "$PRUNE_ROOT/bob"
 head -c 4096 /dev/zero > "$PRUNE_ROOT/alice/tiny-work/file.bin"
 PRUNE_OUT="$TMP/hstscan_prune_root.json"
 "$BIN" --threads 2 --prune-home 1 --prune-data 1 --top 10 \
-    --out "$PRUNE_OUT" --target "$PRUNE_ROOT" "$TREE_DEV"
+    --out "$PRUNE_OUT" --target "$PRUNE_ROOT" "$TREE_DEV" data
 PRC=$?
 [ "$PRC" -eq 0 ] || fail "top-level navigation pruning scan exited non-zero ($PRC)"
 $PY - "$PRUNE_OUT" <<'PYEOF' || fail "small immediate child directories were pruned from mount navigation"
@@ -167,7 +167,7 @@ mkdir -p "$DEPTH_ROOT/user/project/tiny"
 head -c 4096 /dev/zero > "$DEPTH_ROOT/user/project/tiny/file.bin"
 DEPTH_OUT="$TMP/hstscan_depth_root.json"
 "$BIN" --threads 2 --prune-home 1 --prune-data 1 --top 10 \
-    --out "$DEPTH_OUT" --target "$DEPTH_ROOT" "$TREE_DEV"
+    --out "$DEPTH_OUT" --target "$DEPTH_ROOT" "$TREE_DEV" data
 DRC=$?
 [ "$DRC" -eq 0 ] || fail "second-level navigation pruning scan exited non-zero ($DRC)"
 $PY - "$DEPTH_OUT" <<'PYEOF' || fail "second-level nested directories were pruned from mount navigation"
@@ -201,7 +201,7 @@ for index in range(16_385):
 PYEOF
 BOUNDED_OUT="$TMP/hstscan_bounded_root.json"
 "$BIN" --threads 4 --prune-home 1 --prune-data 1 --top 10 \
-    --out "$BOUNDED_OUT" --target "$BOUNDED_ROOT" "$TREE_DEV"
+    --out "$BOUNDED_OUT" --target "$BOUNDED_ROOT" "$TREE_DEV" data
 BRC=$?
 [ "$BRC" -eq 0 ] || fail "bounded top-level navigation scan exited non-zero ($BRC)"
 $PY - "$BOUNDED_OUT" "$BOUNDED_ROOT" <<'PYEOF' || fail "mount navigation exceeded or nondeterministically applied the child bound"
@@ -237,7 +237,7 @@ for index in range(16_385):
 PYEOF
 NESTED_OUT="$TMP/hstscan_nested_bounded_root.json"
 "$BIN" --threads 4 --prune-home 0 --prune-data 0 --top 10 \
-    --out "$NESTED_OUT" --target "$NESTED_ROOT" "$TREE_DEV"
+    --out "$NESTED_OUT" --target "$NESTED_ROOT" "$TREE_DEV" data
 NRC=$?
 [ "$NRC" -eq 0 ] || fail "nested bounded navigation scan exited non-zero ($NRC)"
 $PY - "$NESTED_OUT" "$NESTED_ROOT/workspace" <<'PYEOF' || fail "nested tree node exceeded or nondeterministically applied the child bound"
@@ -292,8 +292,8 @@ EOF
 SAMEDEV_DEV="$SAMEDEV_MAJOR:$SAMEDEV_MINOR"
 SAMEDEV_OUT="$TMP/hstscan_samedev_hardlink.json"
 "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 --out "$SAMEDEV_OUT" \
-    --target "$SAMEDEV_HOME" "$SAMEDEV_DEV" \
-    --target "$SAMEDEV_DATA" "$SAMEDEV_DEV"
+    --target "$SAMEDEV_HOME" "$SAMEDEV_DEV" home \
+    --target "$SAMEDEV_DATA" "$SAMEDEV_DEV" data
 SRC=$?
 [ "$SRC" -eq 0 ] || fail "same-device hardlink guarded scan exited non-zero ($SRC)"
 if ! $PY - "$SAMEDEV_OUT" "$SAMEDEV_HOME" "$SAMEDEV_DATA" \
@@ -366,7 +366,7 @@ pass "same-device hardlink across guarded /home then /data targets is counted on
 
 MISMATCH_OUT="$(mktemp "${TMPDIR:-/tmp}"/hstscan_mismatch.XXXXXX.json)"
 if [ "$TREE_DEV" = "0:0" ]; then WRONG_DEV="1:0"; else WRONG_DEV="0:0"; fi
-"$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$MISMATCH_OUT" --target "$TREE" "$WRONG_DEV"
+"$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$MISMATCH_OUT" --target "$TREE" "$WRONG_DEV" data
 MRC=$?
 [ "$MRC" -eq 0 ] || fail "mismatched guarded target exited non-zero ($MRC)"
 $PY - "$MISMATCH_OUT" <<'PYEOF' || fail "mismatched guarded target was not skipped safely"
@@ -379,17 +379,21 @@ pass "guarded target device mismatch skips without traversal"
 
 for args in \
     "--target" \
-    "--target relative 1:2" \
+    "--target relative 1:2 data" \
     "--target $TREE" \
-    "--target $TREE 1" \
-    "--target $TREE 1:" \
-    "--target $TREE :2" \
-    "--target $TREE +1:2" \
-    "--target $TREE -1:2" \
-    "--target $TREE 1:-2" \
-    "--target $TREE 1:2x" \
-    "--target $TREE 999999999999999999999999999999:0" \
-    "--target $TREE $TREE_DEV $TREE"; do
+    "--target $TREE 1 data" \
+    "--target $TREE 1: data" \
+    "--target $TREE :2 data" \
+    "--target $TREE +1:2 data" \
+    "--target $TREE -1:2 data" \
+    "--target $TREE 1:-2 data" \
+    "--target $TREE 1:2x data" \
+    "--target $TREE 999999999999999999999999999999:0 data" \
+    "--target $TREE $TREE_DEV" \
+    "--target $TREE $TREE_DEV root" \
+    "--target $TREE $TREE_DEV HOME" \
+    "--target $TREE $TREE_DEV $TREE" \
+    "--target $TREE $TREE_DEV data $TREE"; do
     # shellcheck disable=SC2086
     if "$BIN" --out "$TMP/invalid.json" $args >/dev/null 2>"$TMP/invalid.err"; then
         IRC=0
@@ -398,11 +402,11 @@ for args in \
     fi
     [ "$IRC" -eq 2 ] || fail "invalid guarded args [$args] exited $IRC, expected 2"
 done
-pass "guarded --target parser rejects malformed, non-absolute, and mixed positional targets"
+pass "guarded --target parser rejects malformed, non-absolute, classless and mixed positional targets"
 
 TOO_MANY_GUARDED=()
 for n in $(seq 1 65); do
-    TOO_MANY_GUARDED+=(--target "$TREE" "$TREE_DEV")
+    TOO_MANY_GUARDED+=(--target "$TREE" "$TREE_DEV" data)
 done
 if "$BIN" --out "$TMP/too-many-guarded.json" "${TOO_MANY_GUARDED[@]}" >/dev/null 2>"$TMP/too-many-guarded.err"; then
     TMRC=0
@@ -481,7 +485,7 @@ pass "root preflight source contract open+fstat before node creation is present"
 $PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "usage contract missing guarded --target documentation"
 import sys
 s = open(sys.argv[1], encoding="utf-8").read()
-if "--target PATH MAJOR:MINOR" not in s or "Do not mix" not in s:
+if "--target PATH MAJOR:MINOR CLASS" not in s or "Do not mix" not in s:
     raise SystemExit("usage must document repeated guarded --target and exclusivity")
 PYEOF
 pass "usage documents repeated guarded --target and positional exclusivity"
@@ -726,6 +730,16 @@ xfail_case() {
     echo "XFAIL: $name: $(grep -m1 "^BUG $bug: " "$log")"
 }
 
+required_case() {
+    local name="$1" log="$TMP/case-$1.log"
+    shift
+    if ! ( "$@" ) >"$log" 2>&1; then
+        cat "$log" >&2
+        fail "$name"
+    fi
+    pass "$name"
+}
+
 dev_of() {
     $PY -c 'import os, sys; d = os.lstat(sys.argv[1]).st_dev; print("%d:%d" % (os.major(d), os.minor(d)))' "$1"
 }
@@ -814,7 +828,7 @@ a1_during_scan() {
     env A1_VICTIM="$root/tree/victim" A1_MOVED_TO="$root/tree/moved" \
         A1_REPLACE="$replace" LD_PRELOAD="$A1_HOOK" \
         "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 \
-        --out "$root/out.json" --target "$root/tree" "$dev" \
+        --out "$root/out.json" --target "$root/tree" "$dev" data \
         || fail "A1 $mode scan exited non-zero"
     [ -d "$root/tree/moved" ] || fail "A1 hook never fired: victim was not opened by path"
     $PY - "$root/out.json" "$expected" "$mode" <<'PYEOF'
@@ -852,7 +866,7 @@ PYEOF
     expected="$(du_bytes "$root")"
     dev="$(dev_of "$root")"
     ( ulimit -n 64; "$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 \
-        --out "$TMP/a5.json" --target "$root" "$dev" ) || fail "A5 scan exited non-zero"
+        --out "$TMP/a5.json" --target "$root" "$dev" data ) || fail "A5 scan exited non-zero"
     $PY - "$TMP/a5.json" "$expected" <<'PYEOF'
 import json, sys
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -869,8 +883,7 @@ xfail_case a5_path_over_4096 A5 a5_path_over_4096
 
 # Same-shape home and data trees with different thresholds and no "/" target.
 # --prune-home 0 keeps every home directory; --prune-data 1 folds the data
-# tree's small third level. M4 adds an explicit prune class per target, and
-# this invocation gains that class when it does.
+# tree's small third level. Each target names its prune class.
 a6_prune_class() {
     local root="$TMP/a6" class
     for class in home data; do
@@ -880,25 +893,25 @@ a6_prune_class() {
     local dev
     dev="$(dev_of "$root")"
     "$BIN" --threads 1 --prune-home 0 --prune-data 1 --top 10 --out "$TMP/a6.json" \
-        --target "$root/home" "$dev" --target "$root/data" "$dev" || fail "A6 scan exited non-zero"
+        --target "$root/home" "$dev" home --target "$root/data" "$dev" data \
+        || fail "A6 scan exited non-zero"
     $PY - "$TMP/a6.json" "$root" <<'PYEOF'
 import json, sys
 mounts = {m["path"]: m for m in json.load(open(sys.argv[1], encoding="utf-8"))["mounts"]}
+def mount(cls):
+    return mounts[sys.argv[2] + "/" + cls]
 def project_children(cls):
-    tree = mounts[sys.argv[2] + "/" + cls]["tree"]
-    user = next(c for c in tree["children"] if c["name"] == "user")
+    user = next(c for c in mount(cls)["tree"]["children"] if c["name"] == "user")
     project = next(c for c in user["children"] if c["name"] == "project")
     return [c["name"] for c in project.get("children", [])]
-if project_children("data") != []:
-    raise SystemExit("setup: --prune-data 1 did not fold the data tree's third level")
-if project_children("home") == ["deep"]:
-    sys.exit(0)
-print("BUG A6: home target emitted %r under project with --prune-home 0; "
-      "it was pruned with the --prune-data threshold" % project_children("home"))
-sys.exit(1)
+assert mount("home")["prune_class"] == "home" and mount("data")["prune_class"] == "data"
+assert project_children("data") == [], "--prune-data 1 did not fold the data tree's third level"
+assert project_children("home") == ["deep"], (
+    "home target emitted %r under project with --prune-home 0" % project_children("home"))
+assert mount("home")["tree"]["bytes"] == mount("data")["tree"]["bytes"], "pruning changed rollup bytes"
 PYEOF
 }
-xfail_case a6_prune_class A6 a6_prune_class
+required_case a6_prune_class a6_prune_class
 
 a7_non_utf8_siblings_distinct() {
     local root="$TMP/a7"
@@ -912,7 +925,7 @@ for name in (b"run-\xff", b"run-\xfe"):
         fh.write(b"x" * 8192)
 PYEOF
     "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 --out "$TMP/a7.json" \
-        --target "$root" "$(dev_of "$root")" || fail "A7 scan exited non-zero"
+        --target "$root" "$(dev_of "$root")" data || fail "A7 scan exited non-zero"
     $PY - "$TMP/a7.json" <<'PYEOF'
 import json, sys
 children = json.load(open(sys.argv[1], encoding="utf-8"))["mounts"][0]["tree"]["children"]
@@ -929,7 +942,7 @@ PYEOF
 xfail_case a7_non_utf8_siblings_distinct A7 a7_non_utf8_siblings_distinct
 
 echo "  expected failures = $XFAIL_COUNT"
-[ "$XFAIL_COUNT" -eq 5 ] || fail "expected 5 XFAIL cases, got $XFAIL_COUNT"
+[ "$XFAIL_COUNT" -eq 4 ] || fail "expected 4 XFAIL cases, got $XFAIL_COUNT"
 
 echo
 echo "ALL TESTS PASSED"

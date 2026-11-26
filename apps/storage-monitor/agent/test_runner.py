@@ -1,7 +1,7 @@
-"""Agent bug repros A3, A4, A8 and A9 from docs/redesign/bug-catalog.md.
+"""Agent bug repros A3, A4, A6, A8 and A9 from docs/redesign/bug-catalog.md.
 
-Each test asserts the behaviour the redesign promises and is a strict
-expected failure until the unit that fixes it (M5) removes the marker.
+Each test asserts the behaviour the redesign promises. A3, A4, A8 and A9 are
+strict expected failures until the unit that fixes them (M5) removes the marker.
 """
 import json
 import os
@@ -79,14 +79,16 @@ class FakeScanner:
 
     def __init__(self, errors=None, exit_codes=None, capacity_from_statvfs=False):
         self.calls = []
+        self.prune_classes = []
         self.errors = errors or {}
         self.exit_codes = exit_codes or {}
         self.capacity_from_statvfs = capacity_from_statvfs
         self.started_unix = 0
 
     def __call__(self, argv, **kwargs):
-        paths = argv[argv.index("--out") + 3::3]
+        paths = argv[argv.index("--out") + 3::4]
         self.calls.append(tuple(paths))
+        self.prune_classes.append(tuple(argv[argv.index("--out") + 5::4]))
         for path in paths:
             if self.exit_codes.get(path):
                 return scan_runner.CompletedScan(self.exit_codes[path], stderr="hstscan: out of memory")
@@ -118,6 +120,23 @@ def published_snapshot(tmp):
         return json.loads((tmp / "data" / "snapshots" / status["generation"]).read_text())
     except FileNotFoundError:
         return None
+
+
+def test_a6_home_mount_gets_home_class(tmp_path):
+    config = write_config(tmp_path)
+    separate_home = "\n".join((
+        mountinfo_line(1, 0, SSD, "/", "ext4", "/dev/sda1"),
+        mountinfo_line(2, 1, HDD, "/home", "xfs", "/dev/sdb1"),
+    ))
+
+    root_backed = FakeScanner()
+    run(config, ssd_root_hdd_data(), root_backed, now=5 * HOUR + 30)
+    mounted = FakeScanner()
+    run(config, separate_home, mounted, now=5 * HOUR + 30)
+
+    assert list(zip(root_backed.calls, root_backed.prune_classes)) == [
+        (("/home",), ("home",)), (("/data",), ("data",))]
+    assert list(zip(mounted.calls, mounted.prune_classes)) == [(("/home",), ("home",))]
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError,

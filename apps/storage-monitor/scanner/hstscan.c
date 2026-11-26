@@ -586,10 +586,13 @@ struct mount_info {
     char  *fstype;
 };
 
+enum prune_class { PRUNE_DATA, PRUNE_HOME };
+
 struct target_spec {
-    const char *path;
-    bool        guarded;
-    dev_t       expected_dev;
+    const char      *path;
+    bool             guarded;
+    dev_t            expected_dev;
+    enum prune_class prune_class;
 };
 
 struct scan_ctx {
@@ -1163,6 +1166,7 @@ static void emit_node(FILE *f, struct node *n, int indent) {
 struct mount_result {
     char    *path;
     char    *fstype;
+    enum prune_class prune_class;
     struct node *tree;
     uint64_t scanned_bytes, scanned_files, scanned_dirs, errors;
     /* df */
@@ -1187,8 +1191,10 @@ static void usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [--threads N] [--prune-home MB] [--prune-data MB]\n"
         "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR] [--progress PATH]\n"
-        "          [--target PATH MAJOR:MINOR ...] [PATH ...]\n"
-        "       --target may be repeated; each consumes PATH and MAJOR:MINOR.\n"
+        "          [--target PATH MAJOR:MINOR CLASS ...] [PATH ...]\n"
+        "       --target may be repeated; each consumes PATH, MAJOR:MINOR and a\n"
+        "       prune CLASS: home (pruned with --prune-home) or data (--prune-data).\n"
+        "       Positional PATH targets use the data class.\n"
         "       Do not mix guarded --target arguments with positional PATH targets.\n"
         "       default output: data/<hostname>.json relative to the current directory\n",
         prog);
@@ -1203,6 +1209,12 @@ static bool parse_u32_decimal(const char *s, const char **endp, unsigned *out) {
     *endp = end;
     *out = (unsigned)v;
     return true;
+}
+
+static bool parse_prune_class(const char *s, enum prune_class *out) {
+    if (strcmp(s, "home") == 0) { *out = PRUNE_HOME; return true; }
+    if (strcmp(s, "data") == 0) { *out = PRUNE_DATA; return true; }
+    return false;
 }
 
 static bool parse_major_minor_dev(const char *s, dev_t *out) {
@@ -1273,13 +1285,16 @@ int main(int argc, char **argv) {
         } else if (strcmp(a, "--out-dir") == 0 && i+1 < argc) {
             out_dir = argv[++i];
         } else if (strcmp(a, "--target") == 0) {
-            if (positional_mode || i + 2 >= argc) {
+            if (positional_mode || i + 3 >= argc) {
                 usage(argv[0]); return 2;
             }
             const char *path = argv[++i];
             const char *major_minor = argv[++i];
+            const char *class_name = argv[++i];
             dev_t expected_dev;
-            if (path[0] != '/' || !parse_major_minor_dev(major_minor, &expected_dev)) {
+            enum prune_class prune_class;
+            if (path[0] != '/' || !parse_major_minor_dev(major_minor, &expected_dev) ||
+                !parse_prune_class(class_name, &prune_class)) {
                 usage(argv[0]); return 2;
             }
             guarded_mode = true;
@@ -1289,6 +1304,7 @@ int main(int argc, char **argv) {
             targets_buf[ntargets].path = path;
             targets_buf[ntargets].guarded = true;
             targets_buf[ntargets].expected_dev = expected_dev;
+            targets_buf[ntargets].prune_class = prune_class;
             ntargets++;
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
             usage(argv[0]); return 0;
@@ -1306,13 +1322,14 @@ int main(int argc, char **argv) {
             targets_buf[ntargets].path = a;
             targets_buf[ntargets].guarded = false;
             targets_buf[ntargets].expected_dev = 0;
+            targets_buf[ntargets].prune_class = PRUNE_DATA;
             ntargets++;
         }
     }
 
     const struct target_spec default_targets[] = {
-        { "/", false, 0 }, { "/data", false, 0 },
-        { "/data1", false, 0 }, { "/data3", false, 0 }
+        { "/", false, 0, PRUNE_HOME }, { "/data", false, 0, PRUNE_DATA },
+        { "/data1", false, 0, PRUNE_DATA }, { "/data3", false, 0, PRUNE_DATA }
     };
     const struct target_spec *targets;
     int target_count;
@@ -1366,14 +1383,15 @@ int main(int argc, char **argv) {
         uint64_t rb=0, rf=0;
         node_rollup(tree, &rb, &rf);
 
-        /* Prune threshold: "/" target uses prune-home, others prune-data. */
-        int prune_mb = (strcmp(tg, "/") == 0) ? prune_home_mb : prune_data_mb;
+        /* Prune with the target's class. */
+        int prune_mb = targets[i].prune_class == PRUNE_HOME ? prune_home_mb : prune_data_mb;
         uint64_t threshold = (uint64_t)prune_mb * 1024 * 1024;
         node_prune_below_root(tree, threshold);
 
         struct mount_result *mr = &results[nresults++];
         mr->path = xstrdup(tg);
         mr->fstype = xstrdup(fstype ? fstype : "unknown");
+        mr->prune_class = targets[i].prune_class;
         mr->tree = tree;
         mr->scanned_bytes = rb;
         mr->scanned_files = rf;
@@ -1420,6 +1438,7 @@ int main(int argc, char **argv) {
         fputs("\n{", f);
         fputs("\"path\":", f); json_escape(f, mr->path);
         fputs(",\"fstype\":", f); json_escape(f, mr->fstype);
+        fprintf(f, ",\"prune_class\":\"%s\"", mr->prune_class == PRUNE_HOME ? "home" : "data");
         fprintf(f, ",\"df_total\":%llu", (unsigned long long)mr->df_total);
         fprintf(f, ",\"df_used\":%llu", (unsigned long long)mr->df_used);
         fprintf(f, ",\"df_avail\":%llu", (unsigned long long)mr->df_avail);
