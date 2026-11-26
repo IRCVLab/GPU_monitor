@@ -1,0 +1,35 @@
+[Unit]
+Description=storage-viz full filesystem scan
+After=local-fs.target
+RequiresMountsFor=/var/lib/storage-viz /run/storage-viz
+ConditionPathExists=/opt/storage-viz/current/bin/storage-viz-agent
+
+[Service]
+Type=oneshot
+ExecStart=/opt/storage-viz/current/bin/storage-viz-agent run --config /etc/storage-viz/agent.yaml
+WorkingDirectory=/opt/storage-viz/current
+RuntimeDirectory=storage-viz
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+Nice=19
+CPUWeight=1
+IOWeight=1
+IOSchedulingClass=idle
+User=root
+Group=storage-viz-collector
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/storage-viz /run/storage-viz
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native

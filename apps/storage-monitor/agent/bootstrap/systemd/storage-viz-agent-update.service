@@ -1,0 +1,30 @@
+[Unit]
+Description=storage-viz agent release update (verify, self-test, activate)
+After=local-fs.target
+RequiresMountsFor=/opt/storage-viz /var/lib/storage-viz
+
+[Service]
+Type=oneshot
+# 75: a scan holds the lock; the request stays for the next start.
+SuccessExitStatus=75
+ExecStart=/usr/local/lib/storage-viz/storage-viz-update
+# Same runtime directory, owner and mode as the scan units, so an update never
+# takes the gate's read access to scan.lock away.
+RuntimeDirectory=storage-viz
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+User=root
+Group=storage-viz-collector
+UMask=0022
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/storage-viz /var/lib/storage-viz/update /run/storage-viz
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
