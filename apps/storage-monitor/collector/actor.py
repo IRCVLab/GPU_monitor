@@ -225,11 +225,15 @@ class ServerActor:
     # ------------------------------------------------------------ state
 
     def load(self) -> None:
+        """Read the record and its capture. A read error leaves both untouched and is retried on the next tick.
+
+        Load deletes no file: a capture it finds corrupt goes with the next regular commit.
+        """
         self._next_contact = self.clock.monotonic() + judge.IDLE_TELEMETRY_INTERVAL_SECONDS
         stored = self.store.load()
         if stored is None:
             stored, capture = self.store.import_legacy() or (Record(), None)
-            self.store.commit(stored, capture)
+            self.store.commit(stored, capture, prune=False)
         self._snapshot = self._load_snapshot(stored)
         record = stored
         if self._snapshot is None and record.data.accepted is not None:
@@ -237,7 +241,7 @@ class ServerActor:
         if record.job is not None:
             record = self._with_job(record, jobs.reduce(record.job, jobs.Restarted(int(self.clock.time())))[0])
         if record != stored:
-            self.store.commit(record)
+            self.store.commit(record, prune=False)
         self._record = record
         self._seq = record.link.seq
         self._error = None
@@ -248,10 +252,11 @@ class ServerActor:
         sha = record.data.accepted
         if sha is None:
             return None
+        stored = self.store.read_capture(sha)
         try:
-            return render_snapshot(json.loads(self.store.read_capture(sha)))
-        except (StoreUnavailable, ValueError):
-            _LOG.warning("stored capture for %s is unreadable; it will be fetched again", self.server.id)
+            return render_snapshot(json.loads(stored))
+        except ValueError:
+            _LOG.warning("stored capture for %s is corrupt; it will be fetched again", self.server.id)
             return None
 
     def _commit(self, record: Record, capture: Optional[tuple] = None) -> bool:

@@ -72,7 +72,8 @@ class ServerStore:
         except OSError as exc:
             raise StoreUnavailable("capture unreadable") from exc
 
-    def commit(self, record: Record, capture: Optional[Tuple[str, bytes]] = None) -> None:
+    def commit(self, record: Record, capture: Optional[Tuple[str, bytes]] = None, *, prune: bool = True) -> None:
+        """Write the capture if any, then the record; with ``prune``, then delete captures the record does not name."""
         try:
             for directory in (self.state_root / "servers", self.directory, self.captures):
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -80,7 +81,8 @@ class ServerStore:
             if capture is not None:
                 _write_atomic(self._capture_path(capture[0]), capture[1])
             _write_atomic(self.record_path, _encode_record(record, self.server_id))
-            self._prune(record)
+            if prune:
+                self._prune(record)
         except (OSError, ValueError) as exc:
             raise StoreUnavailable(f"record not writable: {type(exc).__name__}") from exc
 

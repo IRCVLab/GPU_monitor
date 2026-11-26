@@ -287,6 +287,50 @@ def test_unreadable_store_isolates_one_server(tmp_path):
     assert {key: after[key] for key in healthy if key != "scan_status"} == {key: healthy[key] for key in healthy if key != "scan_status"}
 
 
+def test_a_transient_capture_read_error_at_startup_keeps_the_record_and_the_capture(tmp_path, monkeypatch):
+    # M2b review: a read error was treated like corrupt data, so startup dropped and deleted the last good capture.
+    from collector.errors import StoreUnavailable
+
+    host = Collector(tmp_path, "alpha-1")
+    directory = host.state_dir / "servers" / "alpha-1"
+    files = {path.name: path.read_bytes() for path in (directory / "captures").iterdir()}
+    record = (directory / "record.json").read_bytes()
+    read = ServerStore.read_capture
+    failures = [StoreUnavailable("capture unreadable")]
+
+    def flaky(store, sha):
+        if failures:
+            raise failures.pop()
+        return read(store, sha)
+
+    monkeypatch.setattr(ServerStore, "read_capture", flaky)
+    host.host.observe_errors["alpha-1"] = transport_error("UNREACHABLE")
+    host.restart()
+    assert host.fleet.view("alpha-1").error == "STORE_UNAVAILABLE"
+    assert {path.name: path.read_bytes() for path in (directory / "captures").iterdir()} == files
+    assert (directory / "record.json").read_bytes() == record
+    host.host.observe_errors.clear()
+    host.tick()
+    assert host.summary()["snapshot_availability"] == "available"
+    assert host.fleet.view("alpha-1").error is None
+    assert host.host.fetch_calls == [("alpha-1", host.host.publications["alpha-1"]["sha256"])], "the stored capture was downloaded again"
+
+
+def test_a_corrupt_stored_capture_is_fetched_again_and_not_deleted_on_discovery(tmp_path):
+    host = Collector(tmp_path, "alpha-1")
+    sha = host.host.publications["alpha-1"]["sha256"]
+    capture = host.state_dir / "servers" / "alpha-1" / "captures" / f"{sha}.json"
+    capture.write_bytes(b"{not json")
+    host.host.observe_errors["alpha-1"] = transport_error("UNREACHABLE")
+    host.restart()
+    assert capture.exists(), "the capture was deleted in the step that found it corrupt"
+    assert host.summary()["snapshot_availability"] == "absent"
+    host.host.observe_errors.clear()
+    host.tick()
+    assert host.summary()["snapshot_availability"] == "available"
+    assert host.host.fetches_of(sha) == 2
+
+
 def test_reducer_failure_keeps_last_good_view_and_other_servers_run(tmp_path, monkeypatch):
     host = Collector(tmp_path, "alpha-1", "beta-2")
     before = host.summary("alpha-1")["overview_snapshot"]
