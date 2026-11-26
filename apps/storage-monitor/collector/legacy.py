@@ -11,13 +11,14 @@ from datetime import datetime, timezone
 import json
 import math
 import re
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from collector import judge
 from collector.inventory import Server
 from collector.contract import HostRun, ManifestPointer
 from collector.ids import REQUEST_ID_RE, SHA256_RE as HEX64_RE, RUN_ID_RE
 from collector.jobs import RescanReply, Scan
+from collector.update import Attempt
 from collector.transport import KNOWN_ACTIVE_STATES, OpenSshTransport, TransportError, validate_status_envelope
 
 MANUAL_UNIT = "storage-viz-scan.service"
@@ -192,6 +193,17 @@ print(json.dumps({'lifecycle':life,'published':published,'progress':progress,'se
 
 
 @dataclass(frozen=True)
+class AgentFacts:
+    """What the gate reports of the agent release and its updater. Empty over S2."""
+    release_sha: Optional[str] = None
+    """The release ``/opt/storage-viz/current`` points at."""
+    broken: bool = False
+    """The release's ``check-config`` fails on the host."""
+    attempt: Optional[Attempt] = None
+    """The updater's last attempt, from ``update/state.json``."""
+
+
+@dataclass(frozen=True)
 class Observation:
     host_now: int
     """The host's clock when it answered."""
@@ -205,6 +217,9 @@ class Observation:
     manifest: Optional[ManifestPointer] = None
     """Set for a v2 host: one with manifest.json. Its v1 files are then left over for rollback (S8)."""
     run: HostRun = HostRun()
+    transport: str = "legacy"
+    """Which transport answered: ``gate`` or ``legacy`` (S2). Only the gate delivers request ids and updates."""
+    agent: AgentFacts = AgentFacts()
 
 
 @dataclass(frozen=True)
@@ -280,6 +295,18 @@ def parse_probe(raw: Any, server: Server) -> Observation:
         raise TransportError("BAD_TELEMETRY", "telemetry exceeds maximum size")
     try:
         obj = json.loads(raw)
+    except Exception as exc:
+        raise TransportError("BAD_TELEMETRY", "telemetry is malformed") from exc
+    return parse_telemetry(obj, server, lambda unit_active: _v2_facts(obj.get("v2"), unit_active))
+
+
+def parse_telemetry(obj: Any, server: Server, v2_facts: Callable[[bool], tuple]) -> Observation:
+    """The v1 telemetry the probe prints, which the gate's ``observe`` also carries as ``legacy`` (S7).
+
+    ``v2_facts(unit_active)`` gives a v2 host's (manifest pointer, HostRun, progress.json), or
+    (None, HostRun(), None) for a v1 host. The probe and the gate each read them their own way.
+    """
+    try:
         for key in ("remote_unix", "remote_monotonic"):
             if isinstance(obj[key], bool) or not isinstance(obj[key], (float, int)) or not math.isfinite(obj[key]) or not 0 <= obj[key] < 10**12:
                 raise ValueError("clock")
@@ -293,9 +320,9 @@ def parse_probe(raw: Any, server: Server) -> Observation:
         active, started = _service_state(obj, units)
         timer = parse_timer(obj["timer"], remote_unix=obj["remote_unix"], remote_monotonic=obj["remote_monotonic"])
         publication, publication_error = _publication(obj.get("published"), server)
-        pointer, run = _v2_facts(obj.get("v2"), any(unit.active for unit in units))
+        pointer, run, progress = v2_facts(any(unit.active for unit in units))
         if pointer is not None:
-            status = _v2_status(obj["v2"], run, active, timer, int(obj["remote_unix"]), started)
+            status = _v2_status(progress, run, active, timer, int(obj["remote_unix"]), started)
             return Observation(int(obj["remote_unix"]), status, publication, publication_error, Scan(), pointer, run)
         status = merge_status(obj["lifecycle"], obj["progress"], active, timer, int(obj["remote_unix"]), service_started=started)
         if publication is not None and publication["status"] in {"complete", "partial"}:
@@ -309,9 +336,9 @@ def parse_probe(raw: Any, server: Server) -> Observation:
 
 
 def _v2_facts(v2: Any, unit_active: bool) -> tuple:
-    """The manifest pointer and run facts of a v2 host, or (None, HostRun()) for a v1 host."""
+    """The manifest pointer, run facts and progress of a v2 host as the probe reports them, or (None, HostRun(), None)."""
     if v2 is None or v2.get("manifest") is None:
-        return None, HostRun()
+        return None, HostRun(), None
     manifest, run = v2["manifest"], v2["run"]
     if manifest.get("invalid") or not HEX64_RE.fullmatch(manifest["sha256"]) or (
             manifest["seq"] is not None and type(manifest["seq"]) is not int):
@@ -327,16 +354,15 @@ def _v2_facts(v2: Any, unit_active: bool) -> tuple:
     return ManifestPointer(manifest["sha256"], manifest["seq"]), HostRun(
         present=present, scanning=present and unit_active,
         run_id=run_id if isinstance(run_id, str) and RUN_ID_RE.fullmatch(run_id) else None,
-        request_ids=frozenset(ids), pending=frozenset(pending))
+        request_ids=frozenset(ids), pending=frozenset(pending)), v2.get("progress")
 
 
-def _v2_status(v2: Mapping[str, Any], run: HostRun, active: str, timer: Mapping[str, Any], now: int,
+def _v2_status(progress: Any, run: HostRun, active: str, timer: Mapping[str, Any], now: int,
                started: Optional[int]) -> dict:
     """The v1 scan-status fields for a v2 host, from run.json and progress.json (S5 consumers)."""
     status = merge_status({}, {}, active, timer, now, service_started=started)
     if run.present and not run.scanning:
         status.update(state="unknown", error_code="SCAN_INTERRUPTED")
-    progress = v2.get("progress")
     if run.scanning and isinstance(progress, dict) and run.run_id is not None and progress.get("run_id") == run.run_id:
         counters = validate_lifecycle({
             "scanned_bytes": progress.get("bytes"), "scanned_files": progress.get("files"),
@@ -361,7 +387,7 @@ def _publication(published: Any, server: Server) -> tuple:
 
 
 class LegacyHost:
-    """SHIM(M2b..M3b) S2: today's protocol, as the calls the actor makes. M3b adds the gate's implementation."""
+    """SHIM(M2b..M3b) S2: today's protocol, as the calls the actor makes, for hosts not bootstrapped yet."""
 
     def __init__(self, transport: OpenSshTransport) -> None:
         self.transport = transport
@@ -378,10 +404,8 @@ class LegacyHost:
     def get_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes:
         return self.transport.fetch_volume_capture(server, volume_id, sha256, cap)
 
-    delivers_request_ids = False
-    """A request id needs a write into requests/, which only the gate makes for this account (M3b).
-    The actor refuses a v2 rescan at admission, so ``rescan`` is never reached through it."""
-
+    # A request id needs a write into requests/, which only the gate makes for this account.
+    # The actor refuses a v2 rescan at admission on this transport, so this is never reached.
     def rescan(self, server: Server, request_id: str) -> RescanReply:
         return RescanReply("rejected", "REQUEST_UNSUPPORTED")
 

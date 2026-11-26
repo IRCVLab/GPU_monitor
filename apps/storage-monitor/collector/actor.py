@@ -51,14 +51,13 @@ class Clock(Protocol):
 
 
 class Host(Protocol):
-    """What the actor asks of a storage server. ``legacy.LegacyHost`` speaks today's protocol (S2);
-    M3b adds the gate's implementation of the same calls."""
-    def observe(self, server: Server) -> Any: ...
+    """What the actor asks of a storage server: ``gate.HostRouter`` sends each call over the
+    server's transport, the gate (``gate.GateHost``) or S2 (``legacy.LegacyHost``)."""
+    def observe(self, server: Server) -> Any:
+        """An Observation whose ``transport`` names who answered. Only the gate delivers request ids."""
     def get_manifest(self, server: Server) -> bytes: ...
     def get_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes: ...
     def rescan(self, server: Server, request_id: str) -> jobs.RescanReply: ...
-    delivers_request_ids: bool
-    """Whether ``rescan`` can hand the host a request id. False for the legacy adapter (S2)."""
     def fetch_capture(self, server: Server, publication: Mapping[str, Any]) -> bytes:
         """SHIM(M2b..M5c) S3: the v1 snapshot named by a scan-status envelope."""
     def start_rescan(self, server: Server) -> None:
@@ -232,6 +231,8 @@ class ServerActor:
         """No seq above this was issued: the link.seq record.json holds."""
         self._next_contact = 0.0
         self._failed_ticks = 0
+        self._transport = server.transport
+        """Who answered the last observe: ``gate`` or ``legacy`` (S2). The inventory's choice until then."""
 
     # ------------------------------------------------------------ driving
 
@@ -368,7 +369,8 @@ class ServerActor:
         return True
 
     def _publish(self) -> None:
-        self.view = build_view(self.server, self._record, self._snapshot, self._observation, self._host_clock, self._error)
+        self.view = build_view(self.server, self._record, self._snapshot, self._observation, self._host_clock, self._error,
+                               self._transport)
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -448,6 +450,7 @@ class ServerActor:
             self._commit(replace(self._record, link=health.reduce_link(self._record.link, ExchangeFailed(seq, at, exc.code))))
             return
         received = self.clock.monotonic()
+        self._transport = observation.transport
         self._host_clock = (observation.host_now, received)
         self._observation = ObservationView({**observation.status, "observed_unix": at}, received)
         self._scan = observation.scan
@@ -539,8 +542,8 @@ class ServerActor:
         if last is not None and message.at - last < message.cooldown_seconds:
             return Admitted(error="COOLDOWN", retry_after=message.cooldown_seconds - (message.at - last))
         protocol = "receipt" if isinstance(record.data.manifest, HostManifest) else "invocation"
-        if protocol == "receipt" and not self.host.delivers_request_ids:
-            # Refused before any job or cooldown exists: a 202 here could only end failed (M3b lifts it).
+        if protocol == "receipt" and self._transport != "gate":
+            # Refused before any job or cooldown exists: only the gate writes the request mailbox (S2 cannot).
             return Admitted(error=RescanUnavailable.code)
         job = jobs.admit(message.request_id, message.actor, message.at, protocol)
         if not self._commit(replace(record, job=job)):
@@ -611,7 +614,8 @@ class ServerActor:
                     data = host.get_capture(server, volume_id, sha, declared)
             except TransportError as exc:
                 post("gone" if exc.code in _GONE_CODES else "transport" if exc.code in health.TRANSPORT_CODES | health.AUTH_CODES
-                     else "rejected" if exc.code in _REJECT_CODES else "retry", exc.code)
+                     else "rejected" if exc.code in _REJECT_CODES else "mismatch" if exc.code in _MISMATCH_CODES
+                     else "retry", exc.code)
                 return
             except Exception:
                 _LOG.exception("capture transfer failed for %s", server.id)

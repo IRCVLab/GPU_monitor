@@ -26,6 +26,19 @@ class Update:
 
 
 @dataclass(frozen=True)
+class Attempt:
+    """The host updater's last attempt (``update/state.json`` ``last_attempt``), as the gate reports it."""
+    action: Optional[str]
+    """activate or rollback; None when the request itself was unreadable."""
+    sha: Optional[str]
+    outcome: str
+    """activated, already_active, rolled_back, busy, refused or failed."""
+    code: Optional[str]
+    finished_unix: int
+    """Host time."""
+
+
+@dataclass(frozen=True)
 class Observed:
     at: int
     release_sha: Optional[str]

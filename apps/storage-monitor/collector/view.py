@@ -70,14 +70,16 @@ class ServerView:
     host_clock: Optional[Tuple[int, float]] = None
     """(host unix time, central monotonic time of receipt) from the last successful observe."""
     error: Optional[str] = None
+    transport: Optional[str] = None
+    """``gate`` or ``legacy`` (S2): who answered the last observe, else the inventory's choice."""
 
 
 def build_view(server: Server, record, snapshot: Optional[Snapshot], observation: Optional[ObservationView],
-               host_clock: Optional[Tuple[int, float]], error: Optional[str]) -> ServerView:
+               host_clock: Optional[Tuple[int, float]], error: Optional[str], transport: Optional[str] = None) -> ServerView:
     return ServerView(
         server=server, link=record.link, data=record.data, snapshot=snapshot,
         job=record.job or record.last_job, durations=record.durations,
-        observation=observation, host_clock=host_clock, error=error,
+        observation=observation, host_clock=host_clock, error=error, transport=transport,
     )
 
 

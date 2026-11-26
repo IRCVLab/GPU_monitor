@@ -15,6 +15,7 @@ from collector.ids import SERVER_ID_RE
 
 HOST_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^localhost$")
 MAX_INT = 10**18
+TRANSPORTS = ("gate", "legacy")
 
 SCANNER_ALLOWED_KEYS = frozenset({
     "server_id",
@@ -55,6 +56,7 @@ SERVER_ALLOWED_KEYS = frozenset({
     "identity_file",
     "known_hosts_file",
     "scanner",
+    "transport",
 })
 SECURITY_FORBIDDEN_KEYS = frozenset({
     "password", "passphrase", "token", "secret", "private_key", "private_key_data",
@@ -116,6 +118,8 @@ class Server:
     known_hosts_file: pathlib.PurePosixPath
     scanner: Mapping[str, Any]
     scanner_digest: str
+    transport: str = "gate"
+    """``gate``, or ``legacy`` for a host not bootstrapped yet: S2 until its gate answers (collector/gate.py)."""
 
 
 @dataclass(frozen=True)
@@ -184,7 +188,11 @@ def _parse_server(raw: Any, idx: int) -> Server:
     known_hosts_file = _safe_absolute_external_path(_string(raw.get("known_hosts_file"), "known_hosts_file"), "known_hosts_file")
     scanner = _parse_scanner(raw.get("scanner", {}), sid)
     digest = scanner_digest(scanner)
-    return Server(sid, display_name, order, host, port, enabled, username, identity_file, known_hosts_file, scanner, digest)
+    transport = raw.get("transport", "gate")
+    if transport not in TRANSPORTS:
+        raise ValueError(f"transport must be one of {', '.join(TRANSPORTS)}")
+    return Server(sid, display_name, order, host, port, enabled, username, identity_file, known_hosts_file, scanner, digest,
+                  transport)
 
 
 def scanner_digest(scanner: Mapping[str, Any]) -> str:

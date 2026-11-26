@@ -15,9 +15,10 @@ from api.errors import http_error
 from api.fixtures import FixtureFleet
 from collector.fleet import Fleet
 from collector.inventory import CapacityThresholds, load_inventory
+from collector.gate import GateHost, HostRouter
 from collector.legacy import LegacyHost
 from collector.live_capacity import POLL_SECONDS, LiveCapacity
-from collector.transport import OpenSshTransport
+from collector.transport import GateTransport, OpenSshTransport
 
 
 @dataclass
@@ -40,7 +41,7 @@ def configure(fixtures=None):
     inventory = load_inventory(auth.INVENTORY_PATH)
     project = Path(os.environ.get("STORAGE_VIZ_ROOT", routes.VIEWER_DIR.parent))
     state = Path(os.environ.get("STORAGE_VIZ_STATE_DIR", project / ".storage-viz-state")).resolve()
-    fleet = Fleet(inventory.servers, state, LegacyHost(OpenSshTransport()),
+    fleet = Fleet(inventory.servers, state, HostRouter(GateHost(GateTransport()), LegacyHost(OpenSshTransport())),
                   cooldown_seconds=int(os.environ.get("STORAGE_VIZ_RESCAN_COOLDOWN_SECONDS", "900")),
                   max_active_jobs=int(os.environ.get("STORAGE_VIZ_RESCAN_MAX_CONCURRENT", "2")))
     port = os.environ.get("STORAGE_VIZ_CAPACITY_PORT", "").strip()

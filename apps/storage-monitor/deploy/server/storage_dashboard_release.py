@@ -56,6 +56,7 @@ REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | froz
         "collector/__init__.py",
         "collector/actor.py",
         "collector/fleet.py",
+        "collector/gate.py",
         "collector/inventory.py",
         "collector/jobs.py",
         "collector/legacy.py",

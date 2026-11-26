@@ -187,3 +187,14 @@ class InventoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_transport_defaults_to_the_gate_and_legacy_must_be_explicit(self):
+        cfg = self.valid_config()
+        parsed = inventory.parse_inventory(cfg)
+        self.assertEqual({server.transport for server in parsed.servers}, {"gate"})
+        cfg["servers"][0]["transport"] = "legacy"
+        self.assertEqual(inventory.parse_inventory(cfg).servers[0].transport, "legacy")
+        for bad in ("sftp", "", ["gate"], True):
+            cfg["servers"][0]["transport"] = bad
+            with self.assertRaisesRegex(ValueError, "transport"):
+                inventory.parse_inventory(cfg)

@@ -173,8 +173,8 @@ def test_v2_rescan_without_request_id_delivery_answers_503(collector_api):
     v2 = V2Host(host, "alpha-1")
     v2.volume(VA, BA, "/a", capture(VA, BA, "/a", host.clock.now - 600))
     v2.publish()
+    host.host.delivers_request_ids = False  # observed over S2
     host.tick()
-    host.host.delivers_request_ids = False
     host.fleet.start()
     code, body, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
     assert (code, body["error"]) == (503, "RESCAN_UNAVAILABLE")

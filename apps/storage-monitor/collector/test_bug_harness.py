@@ -122,6 +122,7 @@ class FakeHost:
         self.manifest_errors = {}
         self.rescan_requests = []
         self.delivers_request_ids = True
+        """Observations come over the gate; False makes them S2 observations, which deliver no request id."""
         self.rescan_replies = {}
 
     def publish(self, server_id, started=1719200000, **kwargs):
@@ -144,7 +145,8 @@ class FakeHost:
         if manifest is not None:
             pointer = ManifestPointer(hashlib.sha256(manifest).hexdigest(), json.loads(manifest).get("seq"))
         return Observation(int(self.clock.time()), status, copy.deepcopy(publication), None, self.scans.get(server.id, Scan()),
-                           pointer, self.runs.get(server.id, HostRun()))
+                           pointer, self.runs.get(server.id, HostRun()),
+                           transport="gate" if self.delivers_request_ids else "legacy")
 
     def get_manifest(self, server):
         self.manifest_calls.append(server.id)
