@@ -1,4 +1,5 @@
 """Exercise the immutable files through the unmodified bootstrap gate."""
+import gzip
 import hashlib
 import io
 import json
@@ -16,7 +17,7 @@ from agent.storage_viz_agent import runner
 from agent.test_runner import line
 
 
-def real_run(root, binary):
+def real_run(root, binary, filename="sample"):
     paths = gate.Paths(root)
     with tempfile.TemporaryDirectory(dir="/dev/shm") as second:
         roots = [root / "disk", Path(second)]
@@ -26,7 +27,7 @@ def real_run(root, binary):
             pytest.skip("two distinct temporary filesystems required")
         for r in roots:
             (r / "project").mkdir()
-            (r / "project" / "sample").write_bytes(b"allocated" * 1024)
+            (r / "project" / filename).write_bytes(b"allocated" * 1024)
         text = "\n".join(line("%d:%d" % (os.major(d), os.minor(d)), str(r), n+1)
                          for n, (d, r) in enumerate(zip(devices, roots)))
         config = root / "agent.yaml"
@@ -37,13 +38,14 @@ def real_run(root, binary):
     return paths
 
 
-def test_gate_reads_real_runner_files(tmp_path):
+def test_gate_reads_real_runner_files_with_tab_in_filename(tmp_path):
     if not shutil.which("cc"):
         pytest.skip("a C compiler is required for the real scanner")
     binary = tmp_path / "hstscan"
     subprocess.run(["cc", "-std=gnu11", "-O2", "-pthread", str(Path(__file__).resolve().parents[1] /
                     "scanner/hstscan.c"), "-o", str(binary)], check=True)
-    paths = real_run(tmp_path, binary)
+    filename = "sample\tdata"
+    paths = real_run(tmp_path, binary, filename=filename)
     def serve(command):
         stream = io.BytesIO()
         assert gate.serve(command, paths, FakeHost(), io.BytesIO(), stream) == 0
@@ -61,7 +63,11 @@ def test_gate_reads_real_runner_files(tmp_path):
     assert len(manifest["volumes"]) == 2
     for volume in manifest["volumes"]:
         sha = volume["capture"]["sha256"]
-        assert hashlib.sha256(serve("get-capture %s %s" % (volume["volume_id"], sha))).hexdigest() == sha
+        payload = serve("get-capture %s %s" % (volume["volume_id"], sha))
+        assert hashlib.sha256(payload).hexdigest() == sha
+        row, = json.loads(gzip.decompress(payload))["roots"][0]["top_files"]
+        assert row["path"] == volume["mountpoint"] + "/project/" + filename
+        assert "path_b64" not in row
 
 
 def assert_central_reads_captures(data):
