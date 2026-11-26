@@ -394,9 +394,9 @@ class StorageReleasePullerTest(unittest.TestCase):
             self.assertEqual(len({runtime for _, runtime in validated[:3]}), 1)
             self.assertEqual(len({runtime for _, runtime in validated[2:]}), 3)
 
-            missing_file = "collector/scan_telemetry.py"
+            missing_file = "collector/actor.py"
             github.sha = commit("candidate with incomplete artifact")
-            with self.assertRaisesRegex(puller.PullError, "missing required runtime files: collector/scan_telemetry.py"):
+            with self.assertRaisesRegex(puller.PullError, "missing required runtime files: collector/actor.py"):
                 puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
             self.assertEqual(len(activation_calls), 3)
 
