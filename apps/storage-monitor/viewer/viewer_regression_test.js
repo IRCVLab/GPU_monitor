@@ -2700,6 +2700,7 @@ function testCleanupPanelResponsiveCssAndDangerListSemantics() {
   assert(/#cleanupPanel\b[\s\S]*max-height:\s*calc\(100dvh\s*-/.test(css), 'cleanup panel must keep a modern dynamic-viewport max-height');
   assert(/#cleanupPanel\b[\s\S]*overflow-y:\s*auto/.test(css), 'cleanup panel must scroll internally when taller than the viewport');
   assert(/#cleanupPanel\b[\s\S]*overscroll-behavior:\s*contain/.test(css), 'cleanup panel must contain overscroll inside the panel');
+  assert(/:has\(#cleanupPanel\.show\)\s+main\s*\{[^}]*padding-right:\s*calc\(400px/.test(css) && /\.cleanup-panel\s*\{\s*width:\s*400px/.test(css), 'on wide screens an open cleanup panel must reserve its own column so it never covers the treemap');
   const commandCodeRule = (css.match(/\.cleanup-command-code\s*\{([^}]*)\}/) || [])[1] || '';
   const commandLines = Number((commandCodeRule.match(/max-height:\s*calc\(1\.5em\s*\*\s*(\d+)\)/) || [])[1]);
   assert(commandLines > 0 && commandLines <= 12 && /overflow-y:\s*auto/.test(commandCodeRule), 'a long removal command must scroll inside a block of at most 12 lines so many selections never grow the panel over the treemap');

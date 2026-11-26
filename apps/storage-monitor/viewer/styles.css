@@ -722,6 +722,10 @@
   .cleanup-command-code { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); color: var(--text);
     max-height: calc(1.5em * 8); overflow-y: auto; overscroll-behavior: contain; }
   .cleanup-safe { color: var(--text2); font-size: 12px; margin-top: 8px; }
+  @media (min-width: 1041px) {
+    body[data-shell-mode='detail'] .cleanup-panel { width: 400px; }
+    body[data-shell-mode='detail']:has(#cleanupPanel.show) main { padding-right: calc(400px + 48px + env(safe-area-inset-right)); }
+  }
 
   .empty { color: var(--text2); padding: 48px; text-align: center; }
   .err { color: var(--crit); padding: 48px; text-align: center; }
