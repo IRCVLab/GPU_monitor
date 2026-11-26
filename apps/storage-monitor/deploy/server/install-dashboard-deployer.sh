@@ -545,6 +545,8 @@ install_file "$SERVER/health-check-dashboard.py" "$LIBEXEC_DIR/storage-dashboard
 install_file "$SERVER/storage-viz-proxy-launcher.py" "$LIBEXEC_DIR/storage-viz-proxy-launcher.py" 0755 root:root
 install_file "$SERVER/storage-monitor-release-puller.py" "$LIBEXEC_DIR/storage-monitor-release-puller.py" 0755 root:root
 install_file "$MONOREPO_ROOT/scripts/authorize_gpu_release.py" "$LIBEXEC_DIR/storage-release-authorizer.py" 0755 root:root
+# The release key that storage hosts pin; the puller refuses agent bundles it does not verify.
+install_file "$ROOT/agent/bootstrap/allowed_signers" "$CONFIG_DIR/agent-allowed-signers" 0644 root:root
 install_file "$SERVER/systemd/storage-monitor-release-puller.service" "/etc/systemd/system/storage-monitor-release-puller.service" 0644 root:root
 install_file "$SERVER/systemd/storage-monitor-release-puller.timer" "/etc/systemd/system/storage-monitor-release-puller.timer" 0644 root:root
 render_proxy_service "/etc/systemd/system/storage-viz-proxy.service"

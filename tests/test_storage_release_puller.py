@@ -7,6 +7,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from subprocess import CompletedProcess, run
 from unittest import mock
@@ -19,6 +20,43 @@ SHA2 = "2" * 40
 DIGEST = "a" * 64
 REPOSITORY = "IRCVLab/GPU_monitor"
 REPO_URL = "https://github.com/IRCVLab/GPU_monitor.git"
+AGENT_SHA = "3" * 40
+STORAGE_APP = REPO_ROOT / "apps/storage-monitor"
+AGENT_RUN_ID = 777
+AGENT_ARTIFACT_ID = 4242
+
+
+def load_agent_fixtures():
+    with mock.patch.object(sys, "path", [str(STORAGE_APP), *sys.path]):
+        from agent.bootstrap import fixtures
+    return fixtures
+
+
+def agent_files(bundle_bytes=None, signature=b"-----BEGIN SSH SIGNATURE-----\nfake\n", **metadata_overrides):
+    """The three files agent-bundle.yml uploads, keyed by artifact file name."""
+    bundle_bytes = bundle_bytes if bundle_bytes is not None else load_agent_fixtures().bundle(AGENT_SHA, release_seq=120, floor=100)
+    metadata = {
+        "application": "storage-viz-agent", "archive": "storage-viz-agent.tar.gz", "bootstrap_version": 1,
+        "release_seq": 120, "rollback_floor_seq": 100, "source_sha": AGENT_SHA,
+        "sha256": hashlib.sha256(bundle_bytes).hexdigest(), "size": len(bundle_bytes),
+    }
+    metadata.update(metadata_overrides)
+    return {
+        "storage-viz-agent.tar.gz": bundle_bytes,
+        "storage-viz-agent.tar.gz.sig": signature,
+        "storage-viz-agent.json": json.dumps(metadata, sort_keys=True).encode(),
+    }
+
+
+def zip_bytes(files):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+AGENT_FILES = agent_files()
 
 
 def load_puller():
@@ -31,10 +69,18 @@ def load_puller():
 
 
 class FakeGitHub:
-    def __init__(self, sha=SHA1, conclusion="success"):
+    def __init__(self, sha=SHA1, conclusion="success", agent_files=None, agent_runs=None):
         self.sha = sha
         self.conclusion = conclusion
         self.calls = []
+        self.agent_files = AGENT_FILES if agent_files is None else agent_files
+        self.agent_runs = agent_runs
+        self.downloads = []
+
+    def download(self, path):
+        self.downloads.append(path)
+        assert path == f"/repos/{REPOSITORY}/actions/artifacts/{AGENT_ARTIFACT_ID}/zip", path
+        return zip_bytes(self.agent_files)
 
     def get_json(self, path):
         self.calls.append(path)
@@ -61,6 +107,15 @@ class FakeGitHub:
                 "conclusion": self.conclusion,
                 "completed_at": "2026-07-25T01:02:03Z",
             }]}
+        if path.startswith(f"/repos/{REPOSITORY}/actions/workflows/agent-bundle.yml/runs?"):
+            assert f"head_sha={self.sha}" in path, path
+            runs = self.agent_runs if self.agent_runs is not None else [{
+                "id": AGENT_RUN_ID, "event": "workflow_run", "head_branch": "main", "head_sha": self.sha,
+                "status": "completed", "conclusion": "success",
+            }]
+            return {"workflow_runs": runs}
+        if path == f"/repos/{REPOSITORY}/actions/runs/{AGENT_RUN_ID}/artifacts?per_page=100":
+            return {"artifacts": [{"id": AGENT_ARTIFACT_ID, "name": f"viz-agent-bundle-{self.sha}", "expired": False}]}
         raise AssertionError(f"unexpected GitHub API path: {path}")
 
 
@@ -83,13 +138,20 @@ class StorageReleasePullerTest(unittest.TestCase):
             timeout_seconds=30,
         )
 
-    def write_artifact(self, outdir, sha=SHA1, *, missing=None):
+    def write_build_output(self, argv, sha=SHA1):
+        """What build-dashboard-release.py writes for this argv, agent bundle included."""
+        agent_dir = Path(argv[argv.index("--agent-bundle-dir") + 1]) if "--agent-bundle-dir" in argv else None
+        agent = {f"agent/{p.name}": p.read_bytes() for p in agent_dir.iterdir()} if agent_dir else {}
+        return self.write_artifact(Path(argv[argv.index("--output-dir") + 1]), sha, agent=agent)
+
+    def write_artifact(self, outdir, sha=SHA1, *, missing=None, agent=None):
         outdir.mkdir(parents=True, exist_ok=True)
         archive = outdir / f"storage-monitor-dashboard-{sha}.tar.gz"
         with mock.patch.object(sys, "path", [str(PULLER_PATH.parent), *sys.path]):
             from storage_dashboard_release import REQUIRED_RELEASE_FILES
 
         files = {path: path.encode() for path in REQUIRED_RELEASE_FILES if path != missing}
+        files.update({f"agent/{name}": data for name, data in AGENT_FILES.items()} if agent is None else agent)
         manifest = {
             "application_name": "storage-monitor",
             "archive": archive.name,
@@ -175,10 +237,10 @@ class StorageReleasePullerTest(unittest.TestCase):
                     return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}) + "\n", "")
                 if any(str(part).endswith("build-dashboard-release.py") for part in argv):
                     outdir = Path(argv[argv.index("--output-dir") + 1])
-                    self.write_artifact(outdir)
+                    self.write_build_output(argv)
                 return CompletedProcess(argv, 0, "", "")
 
-            result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
+            result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command, download=github.download)
             deployed_state = (cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip()
 
         rendered = [" ".join(str(x) for x in c[0]) for c in commands]
@@ -299,10 +361,10 @@ class StorageReleasePullerTest(unittest.TestCase):
                     events.append("checkout")
                 if any(str(part).endswith("build-dashboard-release.py") for part in argv):
                     events.append("build")
-                    self.write_artifact(Path(argv[argv.index("--output-dir") + 1]))
+                    self.write_build_output(argv)
                 return CompletedProcess(argv, 0, "", "")
 
-            result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
+            result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command, download=github.download)
             self.assertEqual(result, "unchanged-runtime")
             self.assertEqual((cfg.state_dir / "current-live-sha").read_text(encoding="utf-8").strip(), SHA1)
             self.assertFalse((cfg.state_dir / "failed-release.json").exists())
@@ -363,8 +425,9 @@ class StorageReleasePullerTest(unittest.TestCase):
                     if missing_file:
                         self.write_artifact(output, github.sha, missing=missing_file)
                     else:
+                        agent_dir = argv[argv.index("--agent-bundle-dir") + 1]
                         result = run(
-                            [sys.executable, str(builder), "--sha", github.sha, "--output-dir", str(output)],
+                            [sys.executable, str(builder), "--sha", github.sha, "--output-dir", str(output), "--agent-bundle-dir", agent_dir],
                             cwd=repo, check=True, capture_output=True, text=True, timeout=30,
                         )
                         self.assertIn(github.sha, result.stdout)
@@ -375,7 +438,7 @@ class StorageReleasePullerTest(unittest.TestCase):
             def pull(message, expected, activations):
                 github.sha = commit(message)
                 before = len(activation_calls)
-                self.assertEqual(puller.run_once(cfg, get_json=github.get_json, run_command=run_command), expected)
+                self.assertEqual(puller.run_once(cfg, get_json=github.get_json, run_command=run_command, download=github.download), expected)
                 self.assertEqual(len(activation_calls) - before, activations)
                 self.assertEqual(puller.read_state_sha(cfg), github.sha)
 
@@ -397,7 +460,7 @@ class StorageReleasePullerTest(unittest.TestCase):
             missing_file = "collector/scan_telemetry.py"
             github.sha = commit("candidate with incomplete artifact")
             with self.assertRaisesRegex(puller.PullError, "missing required runtime files: collector/scan_telemetry.py"):
-                puller.run_once(cfg, get_json=github.get_json, run_command=run_command)
+                puller.run_once(cfg, get_json=github.get_json, run_command=run_command, download=github.download)
             self.assertEqual(len(activation_calls), 3)
 
     def test_aborts_without_activation_if_main_advances_before_final_authorization(self):
@@ -422,11 +485,11 @@ class StorageReleasePullerTest(unittest.TestCase):
                 if argv[0] == "python3" and str(cfg.authorizer) in argv:
                     return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}) + "\n", "")
                 if any(str(part).endswith("build-dashboard-release.py") for part in argv):
-                    self.write_artifact(Path(argv[argv.index("--output-dir") + 1]))
+                    self.write_build_output(argv)
                 return CompletedProcess(argv, 0, "", "")
 
             with self.assertRaisesRegex(puller.PullError, "current main changed"):
-                puller.run_once(cfg, get_json=get_json, run_command=run_command)
+                puller.run_once(cfg, get_json=get_json, run_command=run_command, download=github.download)
         self.assertFalse(any(str(cfg.activate) in " ".join(str(x) for x in c) for c in commands))
 
     def test_clean_checkout_uses_unprivileged_storage_builder_and_exact_sha_without_reset(self):
@@ -582,23 +645,23 @@ class StorageReleasePullerTest(unittest.TestCase):
                 return CompletedProcess(argv, 0, "", "")
 
             with self.assertRaises(puller.PullError):
-                puller.run_once(cfg, get_json=github.get_json, run_command=run_command, now_fn=iter((1_000.0, 2_200.0)).__next__)
+                puller.run_once(cfg, get_json=github.get_json, run_command=run_command, download=github.download, now_fn=iter((1_000.0, 2_200.0)).__next__)
             failure = json.loads((cfg.state_dir / "failed-release.json").read_text(encoding="utf-8"))
             self.assertEqual((failure["sha"], failure["failures"], failure["retry_after"]), (SHA1, 1, 3_100.0))
             command_count = len(commands)
             api_count = len(github.calls)
-            result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command, now_fn=lambda: 2_300.0)
+            result = puller.run_once(cfg, get_json=github.get_json, run_command=run_command, download=github.download, now_fn=lambda: 2_300.0)
             self.assertEqual(result, "backoff")
             self.assertEqual(len(commands), command_count)
             self.assertEqual(github.calls[api_count:], [f"/repos/{REPOSITORY}/git/ref/heads/main"])
             with self.assertRaises(puller.PullError):
-                puller.run_once(cfg, get_json=github.get_json, run_command=run_command, now_fn=iter((3_100.0, 4_300.0)).__next__)
+                puller.run_once(cfg, get_json=github.get_json, run_command=run_command, download=github.download, now_fn=iter((3_100.0, 4_300.0)).__next__)
             second = json.loads((cfg.state_dir / "failed-release.json").read_text(encoding="utf-8"))
             self.assertEqual(second["failures"], 2)
             self.assertEqual(second["retry_after"], 6_100.0)
             github.sha = SHA2
             with self.assertRaises(puller.PullError):
-                puller.run_once(cfg, get_json=github.get_json, run_command=run_command, now_fn=iter((4_400.0, 5_600.0)).__next__)
+                puller.run_once(cfg, get_json=github.get_json, run_command=run_command, download=github.download, now_fn=iter((4_400.0, 5_600.0)).__next__)
             advanced = json.loads((cfg.state_dir / "failed-release.json").read_text(encoding="utf-8"))
             self.assertEqual((advanced["sha"], advanced["failures"]), (SHA2, 1))
 
@@ -695,6 +758,137 @@ class StorageReleasePullerTest(unittest.TestCase):
         self.assertIn("fcntl.flock", source)
         self.assertIn("storage-viz-builder", source)
         self.assertNotIn("shell=True", source)
+
+
+@unittest.skipUnless(shutil.which("ssh-keygen"), "ssh-keygen is required")
+class AgentBundleFetchTest(unittest.TestCase):
+    """fetch_agent_artifact: the puller passes on only a bundle the hosts would accept."""
+
+    def setUp(self):
+        self.puller = load_puller()
+        self.tmp = Path(tempfile.mkdtemp(prefix="storage-agent-fetch."))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        fixtures = load_agent_fixtures()
+        self.key = fixtures.SigningKey(self.tmp)
+        self.signers = self.key.write_allowed_signers(self.tmp / "agent-allowed-signers")
+        self.bundle = fixtures.bundle(AGENT_SHA, release_seq=120, floor=100)
+        self.cfg = self.puller.Config(
+            repository=REPOSITORY, state_dir=self.tmp / "state", work_dir=self.tmp / "builder",
+            authorizer=self.tmp / "authorizer.py", activate=self.tmp / "activate.py",
+            activation_state_path=self.tmp / "activation-state.json", agent_allowed_signers=self.signers,
+        )
+        self.cfg.state_dir.mkdir()
+
+    def fetch(self, files):
+        github = FakeGitHub(SHA1, agent_files=files)
+        artifact = self.puller.find_agent_artifact(self.cfg, SHA1, github.get_json)
+        return self.puller.fetch_agent_artifact(self.cfg, SHA1, artifact, github.download, self.puller.default_run_command)
+
+    def test_signed_bundle_is_staged_for_the_builder(self):
+        files = agent_files(self.bundle, self.key.sign(self.bundle))
+        staged = self.fetch(files)
+        self.assertEqual(staged, self.cfg.work_dir / "agent-bundle" / SHA1)
+        self.assertEqual({p.name: p.read_bytes() for p in staged.iterdir()}, files)
+        self.assertTrue(all(p.stat().st_mode & 0o777 == 0o644 for p in staged.iterdir()))
+
+    def test_tampered_or_foreign_bundles_are_refused(self):
+        stranger = load_agent_fixtures().SigningKey(self.tmp, "stranger")
+        tampered = bytearray(self.bundle)
+        tampered[len(tampered) // 2] ^= 1
+        cases = {
+            "tampered": agent_files(bytes(tampered), self.key.sign(self.bundle)),
+            "stranger key": agent_files(self.bundle, stranger.sign(self.bundle)),
+            "other namespace": agent_files(self.bundle, self.key.sign(self.bundle, namespace="file")),
+        }
+        for label, files in cases.items():
+            with self.subTest(label):
+                with self.assertRaisesRegex(self.puller.PullError, "signature|does not match|unreadable"):
+                    self.fetch(files)
+                self.assertFalse((self.cfg.work_dir / "agent-bundle").exists())
+
+    def test_metadata_must_match_the_signed_manifest(self):
+        signature = self.key.sign(self.bundle)
+        for override in ({"source_sha": "4" * 40}, {"release_seq": 999}, {"rollback_floor_seq": 1}, {"size": 1}, {"sha256": "0" * 64}):
+            with self.subTest(override):
+                with self.assertRaisesRegex(self.puller.PullError, "does not match"):
+                    self.fetch(agent_files(self.bundle, signature, **override))
+
+    def test_artifact_with_unexpected_files_is_refused(self):
+        files = dict(agent_files(self.bundle, self.key.sign(self.bundle)), **{"../escape": b"x"})
+        with self.assertRaisesRegex(self.puller.PullError, "unexpected files"):
+            self.fetch(files)
+
+    def test_missing_signing_run_waits_without_backoff_or_build(self):
+        github = FakeGitHub(SHA1, agent_runs=[{"id": 1, "event": "workflow_run", "head_branch": "main",
+                                               "head_sha": SHA1, "status": "in_progress", "conclusion": None}])
+        commands = []
+
+        def run_command(argv, **kwargs):
+            commands.append(argv)
+            return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}), "")
+
+        with self.assertRaisesRegex(self.puller.PullError, "missing successful agent-bundle run"):
+            self.puller.run_once(self.cfg, get_json=github.get_json, run_command=run_command, download=github.download)
+        self.assertFalse((self.cfg.state_dir / "failed-release.json").exists())
+        self.assertEqual([c[0] for c in commands], ["python3"], "only the authorizer ran")
+        self.assertEqual(github.downloads, [])
+
+    def test_release_without_the_verified_bundle_is_not_activated(self):
+        github = FakeGitHub(SHA1, agent_files=agent_files(self.bundle, self.key.sign(self.bundle)))
+        harness = StorageReleasePullerTest()
+        builds = []
+
+        def run_command(argv, **kwargs):
+            if argv[0] == "ssh-keygen":
+                return self.puller.default_run_command(argv, **kwargs)
+            if argv[0] == "python3" and str(self.cfg.authorizer) in argv:
+                return CompletedProcess(argv, 0, json.dumps({"authorized": True, "reason": "authorized", "sha": SHA1}), "")
+            if argv[0] == str(self.cfg.activate):
+                self.fail("a release without the verified agent bundle must not activate")
+            if any(str(part).endswith("build-dashboard-release.py") for part in argv):
+                builds.append(argv)
+                harness.write_artifact(Path(argv[argv.index("--output-dir") + 1]), SHA1)  # carries other agent files
+            return CompletedProcess(argv, 0, "", "")
+
+        with self.assertRaisesRegex(self.puller.PullError, "does not carry the verified agent bundle"):
+            self.puller.run_once(self.cfg, get_json=github.get_json, run_command=run_command, download=github.download)
+        self.assertIn("--agent-bundle-dir", builds[0])
+        self.assertTrue((self.cfg.state_dir / "failed-release.json").exists(), "a bad build backs off")
+
+    def test_default_download_sends_the_token_only_to_the_api(self):
+        token_file = self.tmp / "token"
+        token_file.write_text("ghs_test_token\n")
+        seen = []
+
+        class Opener:
+            def open(self, request, timeout):
+                seen.append(("api", request.full_url, request.get_header("Authorization")))
+                raise self_error(request.full_url)
+
+        def self_error(url):
+            return self.puller.urllib.error.HTTPError(url, 302, "Found", {"Location": "https://blob.example.invalid/x?sig=1"}, None)
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def urlopen(request, timeout):
+            seen.append(("blob", request.full_url, request.get_header("Authorization")))
+            return Response(b"zip-bytes")
+
+        with mock.patch.object(self.puller.urllib.request, "build_opener", lambda *handlers: Opener()), \
+                mock.patch.object(self.puller.urllib.request, "urlopen", urlopen):
+            data = self.puller.default_download(f"/repos/{REPOSITORY}/actions/artifacts/1/zip", token_file)
+        self.assertEqual(data, b"zip-bytes")
+        self.assertEqual(seen, [
+            ("api", f"https://api.github.com/repos/{REPOSITORY}/actions/artifacts/1/zip", "Bearer ghs_test_token"),
+            ("blob", "https://blob.example.invalid/x?sig=1", None),
+        ])
+        with self.assertRaisesRegex(self.puller.PullError, "token file"):
+            self.puller.default_download("/x", self.tmp / "absent")
 
 
 if __name__ == "__main__":
