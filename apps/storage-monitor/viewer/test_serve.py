@@ -807,14 +807,17 @@ def test_c7_every_data_spelling_requires_read_auth(tmp_path):
                     pytest.fail("serve.py did not start")
                 time.sleep(0.05)
         leaked = []
-        for path in ("/data/hosts.json", "/./data/hosts.json", "/data/", "/x/../data/hosts.json", "//data/hosts.json"):
+        for path in ("/data/hosts.json", "/./data/hosts.json", "/data/", "/x/../data/hosts.json", "//data/hosts.json",
+                     "../data/hosts.json", "..//data/hosts.json", "./../data/hosts.json", "x/../../data/hosts.json",
+                     "..%2fdata/hosts.json", "%2e%2e/data/hosts.json", "*/../../data/hosts.json", "../data/",
+                     "/data%00/hosts.json"):
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             conn.putrequest("GET", path, skip_accept_encoding=True)
             conn.endheaders()
             response = conn.getresponse()
             body = response.read()
             conn.close()
-            if response.status not in (401, 403, 404) or b"sample_data" in body or b"<title>Directory listing" in body:
+            if response.status not in (400, 401, 403, 404) or b"sample_data" in body or b"<title>Directory listing" in body:
                 leaked.append(f"{path} -> {response.status}")
         assert not leaked, "C7 private data served without read auth: " + ", ".join(leaked)
     finally:

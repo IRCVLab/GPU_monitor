@@ -596,7 +596,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def send_head(self):
         # GET and HEAD both call send_head before opening a static file.
-        normalized = "/" + posixpath.normpath(unquote(urlsplit(self.path).path)).lstrip("/")
+        raw = unquote(urlsplit(self.path).path)
+        if "\x00" in raw:
+            self.send_error(400, "bad path")
+            return None
+        normalized = "/" + posixpath.normpath("/" + raw).lstrip("/")
         if normalized == "/data" or normalized.startswith("/data/"):
             return self._data_file(normalized)
         if self.command == "GET":
@@ -610,6 +614,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._json({"rescan": False, "message": "Manual rescan only: use the bounded per-server API behind a trusted proxy."})
             if route == "/rescan-status":
                 return self._json({"supported": False, "scanning": False, "message": "Legacy local rescan endpoint is disabled."})
+        static_target = Path(self.translate_path(self.path)).resolve()
+        if static_target == DATA_DIR or static_target.is_relative_to(DATA_DIR):
+            return self._data_file("/data/" + str(static_target.relative_to(DATA_DIR)))
         return super().send_head()
 
     def do_POST(self) -> None:
