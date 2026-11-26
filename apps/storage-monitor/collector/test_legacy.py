@@ -3,6 +3,7 @@ import io
 import json
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -148,3 +149,67 @@ class ProbeTests(unittest.TestCase):
                 self.assertEqual(parse_timer(obs['timer'], remote_unix=10000, remote_monotonic=5356800)['next_run_unix'], expected)
         self.assertTrue(any('/org/freedesktop/systemd1/unit/storage_2dviz_2dscan_2etimer' in call for call in calls))
         self.assertTrue(any('--property=Id,ActiveState,InvocationID' in " ".join(call) for call in calls))
+
+
+class V2ProbeTests(unittest.TestCase):
+    """The fixed probe on a v2 host: it reports the manifest's sha and seq, run.json and the mailbox."""
+
+    def run_probe(self, files, unit_state="inactive"):
+        import hashlib, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            (root / "requests").mkdir()
+            for name, data in files.items():
+                (root / name).write_bytes(data)
+            script = legacy.REMOTE_OBSERVATION_SCRIPT
+            for remote, local in (("/var/lib/storage-viz/manifest.json", "manifest.json"), ("/var/lib/storage-viz/run.json", "run.json"),
+                                  ("/var/lib/storage-viz/requests", "requests"), ("/run/storage-viz/progress.json", "progress.json"),
+                                  ("/var/lib/storage-viz/scan-lifecycle.json", "life"), ("/run/storage-viz/scan-progress.json", "progress"),
+                                  ("/var/lib/storage-viz/scan-status.json", "status")):
+                script = script.replace(remote, str(root / local))
+
+            def run(argv, **kwargs):
+                if "storage-viz-scan.timer" in argv:
+                    return subprocess.CompletedProcess(argv, 0, stdout="ActiveState=active\n")
+                return subprocess.CompletedProcess(argv, 0, stdout=f"Id={legacy.MANUAL_UNIT}\nActiveState={unit_state}\n")
+
+            output = io.StringIO()
+            with patch("subprocess.run", side_effect=run), contextlib.redirect_stdout(output):
+                exec(script, {})
+            manifest = files.get("manifest.json")
+            return parse_probe(output.getvalue(), server()), hashlib.sha256(manifest).hexdigest() if manifest else None
+
+    def test_v2_host_reports_manifest_pointer_run_and_pending_requests(self):
+        manifest = json.dumps({"schema": "storage-viz.manifest/2", "seq": 1842}).encode()
+        run = json.dumps({"run_id": RUN, "request_ids": ["a" * 32]}).encode()
+        progress = json.dumps({"run_id": RUN, "updated_unix": int(time.time()), "bytes": 7, "files": 3, "dirs": 1,
+                               "roots_completed": 1, "roots_total": 2}).encode()
+        obs, digest = self.run_probe({"manifest.json": manifest, "run.json": run, "progress.json": progress,
+                                      "requests/" + "b" * 32: b"x"}, unit_state="active")
+        self.assertEqual((obs.manifest.sha256, obs.manifest.seq), (digest, 1842))
+        self.assertEqual((obs.run.scanning, obs.run.run_id, obs.run.request_ids, obs.run.pending),
+                         (True, RUN, frozenset({"a" * 32}), frozenset({"b" * 32})))
+        self.assertEqual((obs.status["state"], obs.status["scanned_bytes"], obs.status["progress_available"]), ("running", 7, True))
+
+    def test_v2_run_left_behind_without_a_unit_is_interrupted(self):
+        obs, _ = self.run_probe({"manifest.json": b'{"seq": 1}', "run.json": json.dumps({"run_id": RUN, "request_ids": []}).encode()})
+        self.assertEqual((obs.run.present, obs.run.scanning), (True, False))
+        self.assertEqual((obs.status["state"], obs.status["error_code"]), ("unknown", "SCAN_INTERRUPTED"))
+
+    def test_v1_files_left_on_a_v2_host_do_not_claim_a_newer_scan(self):
+        status, _ = status_data(payload_for(started=1719201000))
+        obs, _ = self.run_probe({"manifest.json": b'{"seq": 1}', "status": json.dumps(status).encode()})
+        self.assertIsNone(obs.status["published_generation"])
+        self.assertEqual(obs.status["state"], "idle")
+
+    def test_v1_host_has_no_manifest_pointer(self):
+        obs, _ = self.run_probe({})
+        self.assertIsNone(obs.manifest)
+
+    def test_malformed_v2_facts_are_bad_telemetry(self):
+        for v2 in ({"manifest": {"invalid": True}, "run": {}, "requests_pending": []},
+                   {"manifest": {"sha256": "x", "seq": 1}, "run": {}, "requests_pending": []},
+                   {"manifest": {"sha256": "a" * 64, "seq": 1}, "run": {}, "requests_pending": ["../x"]}):
+            with self.assertRaises(TransportError) as info:
+                parse_probe(probe(v2=v2), server())
+            self.assertEqual(info.exception.code, "BAD_TELEMETRY")

@@ -18,6 +18,8 @@ SCHEDULED_TIMER_DELAY_SECONDS = 360
 ACTIVE_TELEMETRY_INTERVAL_SECONDS = 5
 IDLE_TELEMETRY_INTERVAL_SECONDS = 60
 MAX_CAPACITY_AGE_SECONDS = 900
+# Design §3.2: two missed idle observes plus the timer's randomized delay.
+VOLUME_GRACE_SECONDS = 2 * IDLE_TELEMETRY_INTERVAL_SECONDS + SCHEDULED_TIMER_DELAY_SECONDS
 # The v1 freshness grace, sized for the old 15-minute status poll. Kept so the v1 badge does not move.
 FRESHNESS_SLACK_SECONDS = 900
 
@@ -33,6 +35,11 @@ def freshness(payload: Optional[Mapping[str, Any]], now: Optional[int], polling_
     finished = payload.get("scan_finished_unix") if payload else None
     if type(finished) is not int or now is None:
         return "unknown"
+    roots = payload.get("selected_roots", ())
+    if roots and all(type(root.get("cadence_sec")) is int for root in roots):
+        # v2 volumes carry the agent's own schedule (S1). The worst volume decides; capacity never renews a tree.
+        return "stale" if any(now - root["scan_finished_unix"] > root["cadence_sec"] + VOLUME_GRACE_SECONDS
+                              for root in roots) else "fresh"
     deadline = finished + FRESH_SNAPSHOT_SECONDS
     for root in payload.get("selected_roots", ()):
         root_finished = root.get("scan_finished_unix")

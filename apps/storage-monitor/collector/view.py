@@ -12,7 +12,7 @@ from typing import Any, List, Mapping, Optional, Tuple
 
 from storage_fstypes import REMOTE_FSTYPES
 from collector import judge
-from collector.contract import snapshot_response
+from collector.contract import CAPTURE_SCHEMA, HostManifest, Volume, VolumeCapture, snapshot_response
 from collector.health import Data, Link, data_state
 from collector.inventory import CapacityThresholds, Server
 from collector.jobs import TERMINAL, Job
@@ -23,6 +23,7 @@ ETA_PLANS = ("full", "ssd")
 OVERVIEW_ROOT_FIELDS = (
     "mount_id", "capacity_id", "major_minor", "mount_source", "fstype", "storage_media", "block_media",
     "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
+    "cadence_sec", "identity", "diagnostic", "data_state",
 )
 OVERVIEW_MOUNT_FIELDS = (
     "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
@@ -87,6 +88,109 @@ def render_snapshot(payload: Mapping[str, Any]) -> Snapshot:
         base = {"mounts": payload["mounts"], "selected_roots": payload.get("selected_roots", []),
                 "scan_finished_unix": payload.get("scan_finished_unix")}
     return Snapshot(overview_snapshot(payload), scan_result(payload), rest, base)
+
+
+def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[str, VolumeCapture],
+                    states: Mapping[str, str]) -> dict:
+    """SHIM(M5a..M8) S5: a v2 host as one v1 snapshot, so today's viewer reads it as a v1 host.
+
+    One v1 mount per volume, with the manifest's live capacity in place of scan-time df (A9).
+    Each volume keeps its own ``mount_id`` (the volume id) and scan root, so an ambiguous
+    volume is never merged with another. A volume without an accepted capture is a skipped
+    root with its ``data_state`` and ``diagnostic``.
+    """
+    held = [captures[volume.volume_id] for volume in manifest.volumes if volume.volume_id in captures]
+    started = min(capture.scan_started_unix for capture in held)
+    finished = max(capture.scan_finished_unix for capture in held)
+    selected_roots, mounts, top_files, stale = [], [], [], []
+    users: dict = {}
+    for volume in manifest.volumes:
+        capture = captures.get(volume.volume_id)
+        state = states.get(volume.volume_id, "none")
+        if capture is None:
+            selected_roots.append({**_volume_root(volume, state, volume.roots[0].scan_root), "status": "skipped"})
+            continue
+        path, tree = _volume_tree(volume, capture)
+        names = {row["uid"]: row["name"] for root in capture.roots for row in root.users}
+        totals = {key: sum(root.counts[key] for root in capture.roots) for key in ("bytes", "files", "dirs", "errors")}
+        selected_roots.append({
+            **_volume_root(volume, state, path), "status": capture.outcome,
+            "scanned_bytes": totals["bytes"], "scanned_files": totals["files"], "scanned_dirs": totals["dirs"],
+            "error_count": totals["errors"], "scan_finished_unix": capture.scan_finished_unix,
+        })
+        mounts.append({
+            "path": path, "mount_id": volume.volume_id, "scan_root": path, "fstype": volume.fstype,
+            **_capacity(volume),
+            "scanned_bytes": totals["bytes"], "scanned_files": totals["files"], "scanned_dirs": totals["dirs"],
+            "errors": totals["errors"], "tree": tree, "storage_media": volume.media,
+            "storage_media_confidence": volume.media_confidence, "diagnostic": volume.diagnostic, "data_state": state,
+        })
+        for root in capture.roots:
+            for row in root.users:
+                user = users.setdefault(row["uid"], {"uid": row["uid"], "name": row["name"], "bytes": 0, "files": 0, "by_mount": {}})
+                user["bytes"] += row["bytes"]
+                user["files"] += row["files"]
+                user["by_mount"][path] = user["by_mount"].get(path, 0) + row["bytes"]
+            top_files.extend({**row, "kind": "file", "owner": names.get(row["uid"], str(row["uid"]))} for row in root.top_files)
+            stale.extend({**row, "kind": _kind(row["kind"]), "owner": names.get(row["uid"], str(row["uid"]))} for row in root.stale)
+    return {
+        "schema_version": 1, "hostname": manifest.hostname, "server_id": server_id, "scanner_version": CAPTURE_SCHEMA,
+        "scan_started_unix": started, "scan_finished_unix": finished, "scan_duration_sec": finished - started,
+        # Changes with every manifest, so the viewer refetches when capacity or a capture changes.
+        "scan_generation": f"{server_id}-{manifest.seq}-v2", "run_as_root": False,
+        "selected_roots": selected_roots, "mounts": mounts,
+        "users": sorted(users.values(), key=lambda user: (-user["bytes"], user["uid"])),
+        "top_files": sorted(top_files, key=lambda row: -row["bytes"]), "stale": stale, "blocked": [],
+        "config_digest": manifest.config_digest, "mount_table": manifest.mount_table,
+    }
+
+
+def _volume_root(volume: Volume, state: str, path: str) -> dict:
+    return {
+        "mount_id": volume.volume_id, "major_minor": None, "mount_source": None, "mount_root": None,
+        "mountpoint": volume.mountpoint, "scan_root": path, "fstype": volume.fstype,
+        "scanned_bytes": 0, "scanned_files": 0, "scanned_dirs": 0, "blocked_count": 0, "error_count": 0,
+        "error_code": None, "storage_media": volume.media, "storage_media_confidence": volume.media_confidence,
+        "cadence_sec": volume.cadence_sec, "identity": volume.identity, "diagnostic": volume.diagnostic,
+        "data_state": state,
+    }
+
+
+def _capacity(volume: Volume) -> dict:
+    capacity = volume.capacity
+    if capacity is None:
+        return {"df_total": None, "df_used": None, "df_avail": None, "df_use_pct": None, "capacity_observed_unix": None}
+    return {"df_total": capacity.total, "df_used": capacity.used, "df_avail": capacity.avail, "df_use_pct": None,
+            "capacity_observed_unix": capacity.observed_unix}
+
+
+def _kind(kind: str) -> str:
+    return "directory" if kind == "dir" else kind
+
+
+def _node(node: Mapping[str, Any]) -> dict:
+    """A v2 tree node in the v1 spelling: hstscan's ``directory`` for the design's ``dir``."""
+    result = {**node, "kind": _kind(node["kind"])}
+    if "children" in node:
+        result["children"] = [_node(child) for child in node["children"]]
+    return result
+
+
+def _volume_tree(volume: Volume, capture: VolumeCapture) -> Tuple[str, dict]:
+    """The volume's one v1 tree: its root's tree, or a node over several roots named by their paths."""
+    if len(capture.roots) == 1:
+        root = capture.roots[0]
+        return root.scan_root, {**_node(root.tree), "name": root.scan_root}
+    base = volume.mountpoint.rstrip("/")
+    children = []
+    for root in capture.roots:
+        name = root.scan_root[len(base) + 1:] if root.scan_root.startswith(base + "/") else root.scan_root
+        children.append({**_node(root.tree), "name": name})
+    return volume.mountpoint, {
+        "name": volume.mountpoint, "kind": "directory", "bytes": sum(child["bytes"] for child in children),
+        "files": sum(child["files"] for child in children), "uid": 0,
+        "mtime": max(child["mtime"] for child in children), "other_bytes": 0, "children": children,
+    }
 
 
 def scan_result(payload: Mapping[str, Any]) -> str:

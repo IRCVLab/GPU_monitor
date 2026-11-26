@@ -7,9 +7,12 @@ time and ordering exactly.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import pathlib
 import threading
 
+from collector.contract import HostRun, ManifestPointer
 from collector.fleet import Fleet
 from collector.inventory import Server
 from collector.jobs import Scan
@@ -108,6 +111,15 @@ class FakeHost:
         self.lock = threading.Lock()
         self.active_fetches = 0
         self.max_active_fetches = 0
+        # v2 hosts
+        self.manifests = {}
+        """server_id -> manifest.json bytes. A server with one is a v2 host."""
+        self.volume_captures = {}
+        """(volume_id, sha256) -> gzip bytes under captures/."""
+        self.runs = {}
+        self.manifest_calls = []
+        self.capture_calls = []
+        self.manifest_errors = {}
 
     def publish(self, server_id, started=1719200000, **kwargs):
         status, data = status_data(payload_for(server_id, started=started, **kwargs))
@@ -124,7 +136,42 @@ class FakeHost:
             raise error
         status = {**empty_status(), "state": "idle", **self.statuses.get(server.id, {})}
         publication = self.publications.get(server.id)
-        return Observation(int(self.clock.time()), status, copy.deepcopy(publication), None, self.scans.get(server.id, Scan()))
+        manifest = self.manifests.get(server.id)
+        pointer = None
+        if manifest is not None:
+            pointer = ManifestPointer(hashlib.sha256(manifest).hexdigest(), json.loads(manifest).get("seq"))
+        return Observation(int(self.clock.time()), status, copy.deepcopy(publication), None, self.scans.get(server.id, Scan()),
+                           pointer, self.runs.get(server.id, HostRun()))
+
+    def get_manifest(self, server):
+        self.manifest_calls.append(server.id)
+        error = self.manifest_errors.get(server.id)
+        if error is not None:
+            raise error
+        if server.id not in self.manifests:
+            raise TransportError("MANIFEST_MISSING", "missing")
+        return self.manifests[server.id]
+
+    def get_capture(self, server, volume_id, sha256, cap):
+        with self.lock:
+            self.capture_calls.append((server.id, volume_id, sha256))
+            self.active_fetches += 1
+            self.max_active_fetches = max(self.max_active_fetches, self.active_fetches)
+        try:
+            if self.fetch_gate is not None:
+                self.fetch_gate(server)
+            data = self.volume_captures.get((volume_id, sha256))
+            if data is None:
+                raise TransportError("CAPTURE_GONE", "missing")
+            if len(data) > cap:
+                raise TransportError("CAPTURE_TOO_LARGE", "too large")
+            return data
+        finally:
+            with self.lock:
+                self.active_fetches -= 1
+
+    def captures_of(self, sha):
+        return sum(1 for _, _, fetched in self.capture_calls if fetched == sha)
 
     def fetch_capture(self, server, publication):
         with self.lock:
