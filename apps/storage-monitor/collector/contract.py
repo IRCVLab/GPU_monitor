@@ -231,6 +231,21 @@ _VOLUME_KEYS = ("volume_id", "identity", "diagnostic", "mountpoint", "fstype", "
                 "cadence_sec", "roots", "capacity", "capture", "last_attempt")
 
 
+def _typed(parse: Callable[..., Any]) -> Callable[..., Any]:
+    """A parser raises ContractError and nothing else on host data. A lookup or type slip in a
+    field reader is a malformed field, never an exception that escapes the boundary."""
+    def guarded(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return parse(*args, **kwargs)
+        except ContractError:
+            raise
+        except (TypeError, KeyError, IndexError, AttributeError, ValueError) as exc:
+            raise ContractError(BAD_FIELD, f"{type(exc).__name__} while parsing") from exc
+    guarded.__name__, guarded.__doc__ = parse.__name__, parse.__doc__
+    return guarded
+
+
+@_typed
 def parse_manifest(data: bytes) -> HostManifest:
     if not isinstance(data, (bytes, bytearray)):
         raise ContractError(MALFORMED, "manifest is not bytes")
@@ -239,6 +254,7 @@ def parse_manifest(data: bytes) -> HostManifest:
     return parse_manifest_object(_json(bytes(data)), hashlib.sha256(data).hexdigest())
 
 
+@_typed
 def parse_manifest_object(raw: Any, sha256: str) -> HostManifest:
     """Parse a manifest object whose bytes hashed to ``sha256``. The store calls this on load."""
     if not isinstance(raw, dict):
@@ -363,6 +379,7 @@ _NODE_KEYS = ("name", "kind", "bytes", "files", "uid", "mtime")
 _NODE_OPTIONAL = ("name_b64", "other_bytes", "children")
 
 
+@_typed
 def parse_capture(data: bytes, expected: Expected, *, max_json_bytes: int = MAX_CAPTURE_JSON_BYTES) -> VolumeCapture:
     """Check the gzip bytes against the manifest's sha, then the capture against the volume."""
     if not isinstance(data, (bytes, bytearray)):
@@ -562,7 +579,8 @@ def _id(value: Any, pattern: Pattern[str], label: str) -> str:
 
 
 def _choice(value: Any, allowed: FrozenSet[str], label: str) -> str:
-    if value not in allowed:
+    # The type first: a list or dict is unhashable and would raise TypeError on the set lookup.
+    if not isinstance(value, str) or value not in allowed:
         raise ContractError(BAD_FIELD, f"{label} is not one of the allowed values")
     return value
 

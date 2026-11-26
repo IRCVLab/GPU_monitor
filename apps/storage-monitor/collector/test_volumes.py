@@ -362,3 +362,77 @@ def test_legacy_adapter_refuses_a_request_id_it_cannot_deliver(tmp_path):
     from collector.test_bug_harness import make_server
     reply = LegacyHost(transport=None).rescan(make_server(), "e" * 32)
     assert (reply.outcome, reply.code) == ("rejected", "REQUEST_UNSUPPORTED")
+
+
+# ------------------------------------------------------------------ M5a review F1: failures inside a transfer or a manifest read
+
+
+def thread_like_spawn(work, name):
+    """What spawn_thread does: an exception ends the thread and is only logged."""
+    try:
+        work()
+    except Exception as exc:  # noqa: BLE001
+        thread_like_spawn.died.append((name, type(exc).__name__))
+
+
+thread_like_spawn.died = []
+
+
+def test_a_capture_with_an_unhashable_field_is_rejected_once(tmp_path):
+    thread_like_spawn.died.clear()
+    collector = Collector(tmp_path, SID, publish=False, spawn=thread_like_spawn)
+    host = V2Host(collector)
+    doc = capture_doc(VA, BA, "/a", started=collector.clock.now - 700, finished=collector.clock.now - 600)
+    doc["roots"][0]["tree"]["kind"] = ["dir"]
+    bad = host.volume(VA, BA, "/a", gz(doc))
+    host.publish()
+    for _ in range(20):
+        collector.tick()
+    data = record(collector).data
+    assert thread_like_spawn.died == [], "the transfer thread died"
+    assert collector.host.captures_of(sha(bad)) == 1
+    assert sha(bad) not in data.fetching and data.rejected[sha(bad)]["reason"] == "BAD_FIELD"
+
+
+def test_an_unexpected_error_while_checking_a_capture_is_retried(tmp_path, monkeypatch):
+    import collector.actor as actor_module
+    thread_like_spawn.died.clear()
+    collector = Collector(tmp_path, SID, publish=False, spawn=thread_like_spawn)
+    host = V2Host(collector)
+    data = host.volume(VA, BA, "/a", capture(VA, BA, "/a", collector.clock.now - 600))
+    host.publish()
+    real = actor_module.contract.parse_capture
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise MemoryError("transient")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(actor_module.contract, "parse_capture", flaky)
+    collector.tick()
+    assert thread_like_spawn.died == [] and sha(data) not in record(collector).data.fetching
+    collector.tick()
+    assert record(collector).data.accepted == {VA: sha(data)}, "the capture was not fetched again"
+
+
+def test_an_unparsable_manifest_keeps_the_data_and_job_deadlines_still_run(tmp_path):
+    collector, host = v2_collector(tmp_path)
+    ask = Ask()
+    collector.actor().post(Admit("e" * 32, "operator", collector.clock.now, 900, ask))
+    collector.actor().step()
+    collector.settle()
+    assert record(collector).job.state == "pending"
+    doc = json.loads(collector.host.manifests[SID])
+    doc["seq"] += 1
+    doc["volumes"][0]["media"] = {"x": 1}
+    collector.host.manifests[SID] = encode(doc)
+    collector.tick()
+    link = record(collector).link
+    assert (link.state, link.error) == ("protocol_error", "BAD_FIELD")
+    assert set(mounts(collector)) == {VA, VB} and collector.actor().view.error is None
+    for _ in range(6 * 60):
+        collector.tick(61)
+    job = record(collector).last_job
+    assert job is not None and job.request_id == "e" * 32 and job.state in ("failed", "unconfirmed"), record(collector).job

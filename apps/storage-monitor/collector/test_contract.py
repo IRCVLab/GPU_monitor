@@ -248,3 +248,64 @@ def test_an_ambiguous_volume_parses_with_its_diagnostic():
     manifest = parse_manifest(encode(manifest_doc(volumes=[volume])))
     assert (manifest.volumes[0].identity, manifest.volumes[0].diagnostic) == ("ambiguous", "VOLUME_IDENTITY_AMBIGUOUS")
 
+
+
+# ------------------------------------------------------------------ robustness (M5a review F1)
+
+
+def test_unhashable_values_are_a_typed_rejection_not_a_crash():
+    doc = capture_doc()
+    doc["outcome"] = []
+    data = gz(doc)
+    want = contract.Expected(VID, sha(data), frozenset({("/data", BINDING)}))
+    assert reason_of(lambda: parse_capture(data, want)) == contract.BAD_FIELD
+    doc = manifest_doc()
+    doc["volumes"][0]["identity"] = []
+    assert reason_of(lambda: parse_manifest(encode(doc))) == contract.BAD_FIELD
+
+
+def _paths(value, prefix=()):
+    yield prefix
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _paths(item, prefix + (key,))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _paths(item, prefix + (index,))
+
+
+def _set(doc, path, value):
+    target = doc
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+
+SWAPS = ([], {}, [1, "x"], {"a": []}, None, True, 1.5, -1, 10**40, "", "x" * 5000, "\x00", "/")
+
+
+@pytest.mark.parametrize("kind", ["manifest", "capture"])
+def test_parsers_raise_only_contract_errors_on_any_mutation(kind):
+    base_capture = capture_doc()
+    data = gz(base_capture)
+    base = manifest_doc() if kind == "manifest" else base_capture
+    want = contract.Expected(VID, "0" * 64, frozenset({("/data", BINDING)}))
+    for path in list(_paths(base))[1:]:
+        for swap in SWAPS:
+            doc = json.loads(json.dumps(base))
+            _set(doc, path, swap)
+            try:
+                if kind == "manifest":
+                    parse_manifest(encode(doc))
+                else:
+                    raw = gz(doc)
+                    parse_capture(raw, contract.Expected(want.volume_id, sha(raw), want.roots))
+            except ContractError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                raise AssertionError(f"{kind} {path} = {swap!r:.40} raised {type(exc).__name__}: {exc}") from None
+    for junk in (b"", b"\xff\xfe", b"null", b"1e999999", b'{"schema": "storage-viz.manifest/2"}', data):
+        try:
+            parse_manifest(junk) if kind == "manifest" else parse_capture(junk, contract.Expected(VID, sha(junk), want.roots))
+        except ContractError:
+            pass

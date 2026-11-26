@@ -498,6 +498,10 @@ class ServerActor:
                     code = _manifest_problem(manifest, held, self.server.id)
                 except ContractError as exc:
                     code = exc.reason
+                except Exception:
+                    # The observe must still finish, so job deadlines keep running.
+                    _LOG.exception("manifest check failed for %s", self.server.id)
+                    code = "MANIFEST_UNREADABLE"
             if code is not None:
                 self._bad_manifest = (hashlib.sha256(raw).hexdigest() if raw is not None else pointer.sha256, code)
                 return replace(record, link=health.reduce_link(link, ExchangeFailed(read_seq, at, code))), ()
@@ -609,6 +613,11 @@ class ServerActor:
                 capture = contract.parse_capture(data, expected)
             except ContractError as exc:
                 post("mismatch" if exc.reason == contract.SHA_MISMATCH else "rejected", exc.reason)
+                return
+            except Exception:
+                # Not the capture's fault (memory, a bug): never leave the sha in flight.
+                _LOG.exception("capture validation failed for %s", server.id)
+                post("retry", "TRANSFER_FAILED")
                 return
             post("accepted", payload=capture, data=data)
 
