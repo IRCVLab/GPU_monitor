@@ -22,8 +22,8 @@ pass() { echo "PASS: $*"; }
 
 [ -x "$BIN" ] || fail "binary not built: $BIN (run make)"
 
-TMP="$(mktemp -d /tmp/hstscan_test.XXXXXX)"
-OUT="$(mktemp /tmp/hstscan_out.XXXXXX.json)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}"/hstscan_test.XXXXXX)"
+OUT="$(mktemp "${TMPDIR:-/tmp}"/hstscan_out.XXXXXX.json)"
 cleanup() {
     # restore perms so rm can recurse
     chmod -R u+rwx "$TMP" 2>/dev/null || true
@@ -118,7 +118,7 @@ PYEOF
 EOF
 TREE_DEV="$TREE_MAJOR:$TREE_MINOR"
 
-GUARDED_OUT="$(mktemp /tmp/hstscan_guarded.XXXXXX.json)"
+GUARDED_OUT="$(mktemp "${TMPDIR:-/tmp}"/hstscan_guarded.XXXXXX.json)"
 "$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$GUARDED_OUT" --target "$TREE" "$TREE_DEV"
 GRC=$?
 [ "$GRC" -eq 0 ] || fail "guarded --target scan exited non-zero ($GRC)"
@@ -364,7 +364,7 @@ fi
 rm -f "$SAMEDEV_OUT" "$SAMEDEV_OUT.tmp"
 pass "same-device hardlink across guarded /home then /data targets is counted once and attributed to /home"
 
-MISMATCH_OUT="$(mktemp /tmp/hstscan_mismatch.XXXXXX.json)"
+MISMATCH_OUT="$(mktemp "${TMPDIR:-/tmp}"/hstscan_mismatch.XXXXXX.json)"
 if [ "$TREE_DEV" = "0:0" ]; then WRONG_DEV="1:0"; else WRONG_DEV="0:0"; fi
 "$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 --out "$MISMATCH_OUT" --target "$TREE" "$WRONG_DEV"
 MRC=$?
@@ -677,7 +677,7 @@ for a in range(30):
                 pass
 PYEOF
 WIDE_DU="$(du -sx --block-size=1 "$WIDE" | cut -f1)"
-WIDE_OUT="$(mktemp /tmp/hstscan_wide.XXXXXX.json)"
+WIDE_OUT="$(mktemp "${TMPDIR:-/tmp}"/hstscan_wide.XXXXXX.json)"
 # Hard-cap fds to 128 in a subshell; 16 threads. If fds grew with queue depth
 # this would hit EMFILE and undercount.
 ( ulimit -n 128 2>/dev/null; "$BIN" --threads 16 --prune-home 0 --prune-data 0 \
@@ -705,6 +705,231 @@ if [ "$WIDE_DU" = "$WIDE_SCAN" ]; then
 else
     fail "wide-tree byte mismatch: du=$WIDE_DU scanner=$WIDE_SCAN"
 fi
+
+# Catalogued scanner bugs (docs/redesign/bug-catalog.md) as strict expected
+# failures. While a bug is present its case exits non-zero and prints
+# "BUG <id>: ...". A case that passes, or fails without that line, fails the
+# suite: when the fixing unit (M4) lands, drop the xfail_case wrapper.
+XFAIL_COUNT=0
+xfail_case() {
+    local name="$1" bug="$2" log="$TMP/xfail-$1.log"
+    shift 2
+    if ( "$@" ) >"$log" 2>&1; then
+        cat "$log" >&2
+        fail "XPASS(strict) $name: $bug no longer reproduces; remove its xfail_case wrapper"
+    fi
+    if ! grep -q "^BUG $bug: " "$log"; then
+        cat "$log" >&2
+        fail "$name failed without the BUG $bug line (setup error or a different failure)"
+    fi
+    XFAIL_COUNT=$((XFAIL_COUNT + 1))
+    echo "XFAIL: $name: $(grep -m1 "^BUG $bug: " "$log")"
+}
+
+dev_of() {
+    $PY -c 'import os, sys; d = os.lstat(sys.argv[1]).st_dev; print("%d:%d" % (os.major(d), os.minor(d)))' "$1"
+}
+
+du_bytes() {
+    du -x --block-size=1 -s "$1" | cut -f1
+}
+
+# A1 needs the rename to land between the parent's enumeration and the child's
+# open. An LD_PRELOAD hook makes that deterministic: the first open/openat of
+# $A1_VICTIM renames it to $A1_MOVED_TO (and with A1_REPLACE=1 recreates an empty
+# directory in its place) before the real call. --threads 1 guarantees the
+# parent's enumeration has finished, so the new name is never listed.
+A1_HOOK="$TMP/a1_rename_hook.so"
+cat > "$TMP/a1_rename_hook.c" <<'CEOF'
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+typedef int (*open_fn)(const char *, int, ...);
+typedef int (*openat_fn)(int, const char *, int, ...);
+static int fired;
+
+static void maybe_fire(const char *path) {
+    const char *victim = getenv("A1_VICTIM");
+    if (fired || !victim || strcmp(path, victim) != 0) return;
+    fired = 1;
+    if (rename(victim, getenv("A1_MOVED_TO")) != 0) _exit(97);
+    const char *replace = getenv("A1_REPLACE");
+    if (replace && strcmp(replace, "1") == 0 && mkdir(victim, 0755) != 0) _exit(98);
+}
+
+static mode_t mode_arg(int flags, va_list ap) {
+    return (flags & (O_CREAT | O_TMPFILE)) ? (mode_t)va_arg(ap, int) : 0;
+}
+
+int open(const char *path, int flags, ...) {
+    va_list ap; va_start(ap, flags); mode_t mode = mode_arg(flags, ap); va_end(ap);
+    maybe_fire(path);
+    return ((open_fn)dlsym(RTLD_NEXT, "open"))(path, flags, mode);
+}
+
+int open64(const char *path, int flags, ...) {
+    va_list ap; va_start(ap, flags); mode_t mode = mode_arg(flags, ap); va_end(ap);
+    maybe_fire(path);
+    return ((open_fn)dlsym(RTLD_NEXT, "open64"))(path, flags, mode);
+}
+
+int openat(int dirfd, const char *name, int flags, ...) {
+    va_list ap; va_start(ap, flags); mode_t mode = mode_arg(flags, ap); va_end(ap);
+    char link[64], dir[PATH_MAX], full[PATH_MAX * 2];
+    snprintf(link, sizeof link, "/proc/self/fd/%d", dirfd);
+    ssize_t n = name[0] == '/' ? -1 : readlink(link, dir, sizeof dir - 1);
+    if (n > 0) {
+        dir[n] = '\0';
+        snprintf(full, sizeof full, "%s/%s", dir, name);
+        maybe_fire(full);
+    } else {
+        maybe_fire(name);
+    }
+    return ((openat_fn)dlsym(RTLD_NEXT, "openat"))(dirfd, name, flags, mode);
+}
+CEOF
+cc -shared -fPIC -O2 -Wall -Wextra -o "$A1_HOOK" "$TMP/a1_rename_hook.c" -ldl \
+    || fail "could not build the A1 rename hook"
+
+# $1 = rename | replace. The totals must include the subtree as it stood when
+# the scan started, or the root must report an error (partial, not complete).
+a1_during_scan() {
+    local mode="$1" root="$TMP/a1-$1"
+    mkdir -p "$root/tree/victim/inner" "$root/tree/other"
+    head -c 1048576 /dev/zero > "$root/tree/victim/inner/f.bin"
+    head -c 65536 /dev/zero > "$root/tree/other/g.bin"
+    local expected dev
+    expected="$(du_bytes "$root/tree")"
+    dev="$(dev_of "$root/tree")"
+    local replace=0
+    [ "$mode" = replace ] && replace=1
+    env A1_VICTIM="$root/tree/victim" A1_MOVED_TO="$root/tree/moved" \
+        A1_REPLACE="$replace" LD_PRELOAD="$A1_HOOK" \
+        "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 \
+        --out "$root/out.json" --target "$root/tree" "$dev" \
+        || fail "A1 $mode scan exited non-zero"
+    [ -d "$root/tree/moved" ] || fail "A1 hook never fired: victim was not opened by path"
+    $PY - "$root/out.json" "$expected" "$mode" <<'PYEOF'
+import json, sys
+mount = json.load(open(sys.argv[1], encoding="utf-8"))["mounts"][0]
+expected, mode = int(sys.argv[2]), sys.argv[3]
+if mount["scanned_bytes"] == expected or mount["errors"] > 0:
+    sys.exit(0)
+print("BUG A1: %s during scan dropped %d of %d bytes and the root still reports errors=0"
+      % (mode, expected - mount["scanned_bytes"], expected))
+sys.exit(1)
+PYEOF
+}
+xfail_case a1_rename_during_scan A1 a1_during_scan rename
+xfail_case a1_replace_during_scan A1 a1_during_scan replace
+
+a5_path_over_4096() {
+    local root="$TMP/a5"
+    $PY - "$root" <<'PYEOF'
+import os, sys
+os.mkdir(sys.argv[1])
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY)
+for level in range(24):  # 24 x 201 bytes: the leaf path is over 4096 bytes long
+    name = "d%02d" % level + "n" * 197
+    os.mkdir(name, dir_fd=fd)
+    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+    os.close(fd)
+    fd = child
+leaf = os.open("deep.bin", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd)
+os.write(leaf, b"\1" * 1048576)
+os.close(leaf)
+os.close(fd)
+PYEOF
+    local expected dev
+    expected="$(du_bytes "$root")"
+    dev="$(dev_of "$root")"
+    ( ulimit -n 64; "$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 \
+        --out "$TMP/a5.json" --target "$root" "$dev" ) || fail "A5 scan exited non-zero"
+    $PY - "$TMP/a5.json" "$expected" <<'PYEOF'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+mount, expected = payload["mounts"][0], int(sys.argv[2])
+if mount["scanned_bytes"] == expected and mount["errors"] == 0:
+    sys.exit(0)
+reasons = sorted({row["reason"] for row in payload["blocked"]})
+print("BUG A5: scanner=%d du=%d errors=%d blocked reasons=%s"
+      % (mount["scanned_bytes"], expected, mount["errors"], reasons))
+sys.exit(1)
+PYEOF
+}
+xfail_case a5_path_over_4096 A5 a5_path_over_4096
+
+# Same-shape home and data trees with different thresholds and no "/" target.
+# --prune-home 0 keeps every home directory; --prune-data 1 folds the data
+# tree's small third level. M4 adds an explicit prune class per target, and
+# this invocation gains that class when it does.
+a6_prune_class() {
+    local root="$TMP/a6" class
+    for class in home data; do
+        mkdir -p "$root/$class/user/project/deep"
+        head -c 4096 /dev/zero > "$root/$class/user/project/deep/f.bin"
+    done
+    local dev
+    dev="$(dev_of "$root")"
+    "$BIN" --threads 1 --prune-home 0 --prune-data 1 --top 10 --out "$TMP/a6.json" \
+        --target "$root/home" "$dev" --target "$root/data" "$dev" || fail "A6 scan exited non-zero"
+    $PY - "$TMP/a6.json" "$root" <<'PYEOF'
+import json, sys
+mounts = {m["path"]: m for m in json.load(open(sys.argv[1], encoding="utf-8"))["mounts"]}
+def project_children(cls):
+    tree = mounts[sys.argv[2] + "/" + cls]["tree"]
+    user = next(c for c in tree["children"] if c["name"] == "user")
+    project = next(c for c in user["children"] if c["name"] == "project")
+    return [c["name"] for c in project.get("children", [])]
+if project_children("data") != []:
+    raise SystemExit("setup: --prune-data 1 did not fold the data tree's third level")
+if project_children("home") == ["deep"]:
+    sys.exit(0)
+print("BUG A6: home target emitted %r under project with --prune-home 0; "
+      "it was pruned with the --prune-data threshold" % project_children("home"))
+sys.exit(1)
+PYEOF
+}
+xfail_case a6_prune_class A6 a6_prune_class
+
+a7_non_utf8_siblings_distinct() {
+    local root="$TMP/a7"
+    mkdir -p "$root"
+    $PY - "$root" <<'PYEOF'
+import os, sys
+root = os.fsencode(sys.argv[1])
+for name in (b"run-\xff", b"run-\xfe"):
+    os.mkdir(os.path.join(root, name))
+    with open(os.path.join(root, name, b"f.bin"), "wb") as fh:
+        fh.write(b"x" * 8192)
+PYEOF
+    "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 --out "$TMP/a7.json" \
+        --target "$root" "$(dev_of "$root")" || fail "A7 scan exited non-zero"
+    $PY - "$TMP/a7.json" <<'PYEOF'
+import json, sys
+children = json.load(open(sys.argv[1], encoding="utf-8"))["mounts"][0]["tree"]["children"]
+if len(children) != 2:
+    raise SystemExit("setup: expected 2 child directories, got %d" % len(children))
+identities = {(c["name"], c.get("name_b64")) for c in children}
+if len(identities) == 2:
+    sys.exit(0)
+print("BUG A7: sibling names b'run-\\xff' and b'run-\\xfe' both emitted as %r with no raw-name field"
+      % children[0]["name"])
+sys.exit(1)
+PYEOF
+}
+xfail_case a7_non_utf8_siblings_distinct A7 a7_non_utf8_siblings_distinct
+
+echo "  expected failures = $XFAIL_COUNT"
+[ "$XFAIL_COUNT" -eq 5 ] || fail "expected 5 XFAIL cases, got $XFAIL_COUNT"
 
 echo
 echo "ALL TESTS PASSED"
