@@ -66,6 +66,59 @@ def test_records_with_derived_unknown_or_foreign_fields_are_unavailable(tmp_path
         store.load()
 
 
+ACTIVE_JOB = {"request_id": "q" * 32, "actor": "operator", "requested_unix": 10, "since_unix": 10, "state": "running",
+              "dispatches": 1, "baseline_run": None, "invocation": "i" * 32, "agent_run": None, "generation": None,
+              "finished_unix": None, "result_code": None}
+
+
+@pytest.mark.parametrize("change", [
+    lambda raw: raw.update(job={**ACTIVE_JOB, "requested_unix": "10"}),
+    lambda raw: raw.update(job={**ACTIVE_JOB, "dispatches": True}),
+    lambda raw: raw.update(job={**ACTIVE_JOB, "state": "queued"}),
+    lambda raw: raw.update(job={**ACTIVE_JOB, "state": "succeeded"}),
+    lambda raw: raw.update(job={**ACTIVE_JOB, "invocation": 7}),
+    lambda raw: raw["last_job"].update(state="running"),
+    lambda raw: raw["last_job"].update(finished_unix=[20]),
+    lambda raw: raw["link"].update(seq="7"),
+    lambda raw: raw["link"].update(state="sideways"),
+    lambda raw: raw["update"].update(attempts=None),
+])
+def test_records_with_malformed_job_link_or_update_fields_are_unavailable(tmp_path, change):
+    # M2b review: field types and states were not checked, so a bad record raised on every request instead.
+    store = ServerStore(tmp_path, "alpha-1")
+    store.commit(record(), (SHA, CAPTURE))
+    raw = json.loads(store.record_path.read_text())
+    change(raw)
+    store.record_path.write_text(json.dumps(raw))
+    with pytest.raises(StoreUnavailable):
+        store.load()
+
+
+def test_a_well_formed_active_job_round_trips(tmp_path):
+    store = ServerStore(tmp_path, "alpha-1")
+    active = Record(job=Job(**ACTIVE_JOB))
+    store.commit(active)
+    assert store.load() == active
+
+
+@pytest.mark.parametrize("job", [
+    {"id": "rescan-alpha-1-1-1", "actor": "op", "requested_unix": "soon", "state": "succeeded"},
+    {"id": "rescan-alpha-1-1-1", "actor": "op", "requested_unix": 1719200000, "state": "queued"},
+    {"id": "rescan-alpha-1-1-1", "actor": "op", "requested_unix": 1719200000, "state": "failed", "result_code": 3},
+])
+def test_a_malformed_old_job_is_not_imported_into_the_record(tmp_path, job):
+    old = tmp_path / "alpha-1"
+    old.mkdir()
+    state = "state-v2-" + "0" * 32 + ".json"
+    (old / state).write_text(json.dumps({"active_job": job}))
+    (old / "current.json").write_text(json.dumps({"snapshot": None, "state": state}))
+    store = ServerStore(tmp_path, "alpha-1")
+    imported = store.import_legacy()
+    if imported is not None:
+        store.commit(*imported)
+        assert store.load().last_job is None
+
+
 def test_truncated_or_symlinked_record_is_unavailable(tmp_path):
     store = ServerStore(tmp_path, "alpha-1")
     store.commit(record(), (SHA, CAPTURE))
