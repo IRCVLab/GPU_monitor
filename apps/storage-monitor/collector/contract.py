@@ -251,7 +251,7 @@ def parse_manifest(data: bytes) -> HostManifest:
         raise ContractError(MALFORMED, "manifest is not bytes")
     if len(data) > MAX_MANIFEST_BYTES:
         raise ContractError(MANIFEST_TOO_LARGE)
-    return parse_manifest_object(_json(bytes(data)), hashlib.sha256(data).hexdigest())
+    return parse_manifest_object(decode_json(bytes(data)), hashlib.sha256(data).hexdigest())
 
 
 @_typed
@@ -388,7 +388,7 @@ def parse_capture(data: bytes, expected: Expected, *, max_json_bytes: int = MAX_
         raise ContractError(CAPTURE_TOO_LARGE)
     if hashlib.sha256(data).hexdigest() != expected.sha256:
         raise ContractError(SHA_MISMATCH)
-    raw = _json(_gunzip(bytes(data), max_json_bytes))
+    raw = decode_json(_gunzip(bytes(data), max_json_bytes))
     if not isinstance(raw, dict):
         raise ContractError(MALFORMED, "capture is not an object")
     if raw.get("schema") != CAPTURE_SCHEMA:
@@ -515,7 +515,7 @@ def _gunzip(data: bytes, limit: int) -> bytes:
     return out
 
 
-def _json(data: bytes) -> Any:
+def decode_json(data: bytes) -> Any:
     try:
         return json.loads(data)
     except RecursionError as exc:

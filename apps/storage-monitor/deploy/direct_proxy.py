@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import http.client
 import http.server
-import json
 import os
 import re
 import runpy
@@ -155,11 +154,9 @@ def is_allowed_rescan_request(
 
 
 def is_empty_rescan_body(body: bytes) -> bool:
-    try:
-        value = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return False
-    return isinstance(value, dict) and not value
+    # An empty JSON object permits only RFC 8259 whitespace around its braces.
+    return re.fullmatch(rb"[ \t\n\r]*\{[ \t\n\r]*\}[ \t\n\r]*", body) is not None
+
 
 
 class ResponseTooLarge(Exception):

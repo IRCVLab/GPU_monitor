@@ -12,6 +12,7 @@ import time
 from typing import Any, Callable, Iterable, Mapping
 
 from collector import judge
+from collector.contract import decode_json
 from collector.inventory import Server
 
 
@@ -98,7 +99,7 @@ class LiveCapacity:
                 data = response.read(MAX_RESPONSE_BYTES + 1)
             if len(data) > MAX_RESPONSE_BYTES:
                 return
-            payload = json.loads(data)
+            payload = decode_json(data)
         except (HTTPException, OSError, UnicodeError, ValueError):
             return
         finally:
