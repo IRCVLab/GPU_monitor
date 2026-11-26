@@ -436,3 +436,76 @@ def test_an_unparsable_manifest_keeps_the_data_and_job_deadlines_still_run(tmp_p
         collector.tick(61)
     job = record(collector).last_job
     assert job is not None and job.request_id == "e" * 32 and job.state in ("failed", "unconfirmed"), record(collector).job
+
+
+# ------------------------------------------------------------------ M5a review F3: a volume with several roots
+
+
+def multi_root_payload(roots, mountpoint):
+    from collector import contract
+    from collector.view import volumes_payload
+    volume = volume_doc(VA, BA, mountpoint)
+    volume["roots"] = [{"scan_root": root, "binding": f"b-{index:016x}", "prune_class": "data"} for index, root in enumerate(roots)]
+    doc = capture_doc(VA, BA, roots[0])
+    doc["outcome"], doc["roots"] = "complete", []
+    for index, path in enumerate(roots):
+        root = capture_doc(VA, f"b-{index:016x}", path)["roots"][0]
+        root.update(outcome="complete", errors=[], counts={"bytes": 7, "files": 1, "dirs": 1, "errors": 0, "vanished_dirs": 0})
+        root["tree"] = {"name": path.rsplit("/", 1)[-1], "kind": "dir", "bytes": 7, "files": 1, "uid": 0, "mtime": 0,
+                        "children": [{"name": "proj", "kind": "dir", "bytes": 7, "files": 1, "uid": 0, "mtime": 0}]}
+        doc["roots"].append(root)
+    data = gz(doc)
+    volume["capture"] = {"sha256": sha(data), "bytes": len(data), "scan_started_unix": 1764100000,
+                         "scan_finished_unix": 1764103400, "outcome": "complete"}
+    manifest = contract.parse_manifest(encode(manifest_doc(volumes=[volume])))
+    parsed = contract.parse_capture(data, manifest.volume(VA).expected(sha(data)))
+    return volumes_payload(SID, manifest, {VA: parsed}, {VA: "current"})
+
+
+VIEWER_PROBE = r"""
+import fs from 'node:fs';
+const removal = await import(process.argv[1] + '/removal.js');
+const overview = await import(process.argv[1] + '/views/overview.js');
+const {payload, overview: summary, paths} = JSON.parse(fs.readFileSync(0, 'utf8'));
+const verdicts = Object.fromEntries(paths.map(path => {
+  const result = removal.validateCleanupSelection(payload, {path, kind: 'directory', owner: 'kim', bytes: 1});
+  return [path, result.accepted ? 'accepted' : result.reason.code];
+}));
+const total = overview.aggregateMountCapacity(overview.summarizeMounts(summary));
+console.log(JSON.stringify({verdicts, totalBytes: total.totalBytes, groups: total.capacityEntries.length}));
+"""
+
+
+def viewer_verdicts(payload, paths):
+    import pathlib
+    import subprocess
+    from collector.contract import snapshot_response
+    from collector.view import render_snapshot
+    summary = snapshot_response(render_snapshot(payload).overview)
+    viewer = str(pathlib.Path(__file__).resolve().parents[1] / "viewer")
+    out = subprocess.run(["node", "--input-type=module", "-e", VIEWER_PROBE, viewer], check=True, capture_output=True,
+                         input=json.dumps({"payload": payload, "overview": summary, "paths": paths}).encode())
+    return json.loads(out.stdout)
+
+
+def test_each_root_of_a_volume_keeps_its_real_scan_root_and_paths():
+    for roots in (["/data/a", "/data/b"], ["/data", "/srv/share"]):
+        payload = multi_root_payload(roots, "/data")
+        assert [root["scan_root"] for root in payload["selected_roots"]] == roots
+        assert [(mount["path"], mount["tree"]["name"], mount["df_total"]) for mount in payload["mounts"]] == [
+            (root, root, 1000) for root in roots], "capacity is the volume's, repeated per root"
+        assert len({mount["mount_id"] for mount in payload["mounts"]}) == 2
+        assert {user["uid"]: user["by_mount"] for user in payload["users"]} == {1001: {root: 0 for root in roots}}
+
+
+def test_the_real_viewer_refuses_scan_roots_and_counts_the_volume_capacity_once():
+    payload = multi_root_payload(["/data/a", "/data/b"], "/data")
+    result = viewer_verdicts(payload, ["/data/a", "/data/b", "/data/a/proj", "/data/b/proj"])
+    assert result["verdicts"] == {"/data/a": "scan_root", "/data/b": "scan_root",
+                                  "/data/a/proj": "accepted", "/data/b/proj": "accepted"}
+    assert (result["totalBytes"], result["groups"]) == (1000, 1), "the volume's capacity was counted per root"
+    payload = multi_root_payload(["/data", "/srv/share"], "/data")
+    result = viewer_verdicts(payload, ["/srv/share", "/srv/share/proj", "/data/proj", "/data/srv/share/proj"])
+    assert result["verdicts"] == {"/srv/share": "scan_root", "/srv/share/proj": "accepted", "/data/proj": "accepted",
+                                  "/data/srv/share/proj": "accepted"}
+    assert (result["totalBytes"], result["groups"]) == (1000, 1)

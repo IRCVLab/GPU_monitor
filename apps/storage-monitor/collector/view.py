@@ -23,7 +23,7 @@ ETA_PLANS = ("full", "ssd")
 OVERVIEW_ROOT_FIELDS = (
     "mount_id", "capacity_id", "major_minor", "mount_source", "fstype", "storage_media", "block_media",
     "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
-    "cadence_sec", "identity", "diagnostic", "data_state",
+    "cadence_sec", "identity", "diagnostic", "data_state", "volume_id",
 )
 OVERVIEW_MOUNT_FIELDS = (
     "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
@@ -94,10 +94,12 @@ def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[st
                     states: Mapping[str, str]) -> dict:
     """SHIM(M5a..M8) S5: a v2 host as one v1 snapshot, so today's viewer reads it as a v1 host.
 
-    One v1 mount per volume, with the manifest's live capacity in place of scan-time df (A9).
-    Each volume keeps its own ``mount_id`` (the volume id) and scan root, so an ambiguous
-    volume is never merged with another. A volume without an accepted capture is a skipped
-    root with its ``data_state`` and ``diagnostic``.
+    One v1 selected root and mount per scan root, at its real path, as the v1 agent wrote
+    several roots on one filesystem. Each carries the volume's live capacity from the
+    manifest in place of scan-time df (A9) and the ``volume_id``, which groups a volume's
+    roots into one capacity entry. An ambiguous volume keeps its own id, so it is never
+    merged with another. A volume without an accepted capture shows its roots as skipped,
+    with ``data_state`` and ``diagnostic``.
     """
     held = [captures[volume.volume_id] for volume in manifest.volumes if volume.volume_id in captures]
     started = min(capture.scan_started_unix for capture in held)
@@ -108,24 +110,25 @@ def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[st
         capture = captures.get(volume.volume_id)
         state = states.get(volume.volume_id, "none")
         if capture is None:
-            selected_roots.append({**_volume_root(volume, state, volume.roots[0].scan_root), "status": "skipped"})
+            for ref in volume.roots:
+                selected_roots.append({**_v1_root(volume, state, _mount_id(volume, ref.binding), ref.scan_root),
+                                       "status": "skipped"})
             continue
-        path, tree = _volume_tree(volume, capture)
         names = {row["uid"]: row["name"] for root in capture.roots for row in root.users}
-        totals = {key: sum(root.counts[key] for root in capture.roots) for key in ("bytes", "files", "dirs", "errors")}
-        selected_roots.append({
-            **_volume_root(volume, state, path), "status": capture.outcome,
-            "scanned_bytes": totals["bytes"], "scanned_files": totals["files"], "scanned_dirs": totals["dirs"],
-            "error_count": totals["errors"], "scan_finished_unix": capture.scan_finished_unix,
-        })
-        mounts.append({
-            "path": path, "mount_id": volume.volume_id, "scan_root": path, "fstype": volume.fstype,
-            **_capacity(volume),
-            "scanned_bytes": totals["bytes"], "scanned_files": totals["files"], "scanned_dirs": totals["dirs"],
-            "errors": totals["errors"], "tree": tree, "storage_media": volume.media,
-            "storage_media_confidence": volume.media_confidence, "diagnostic": volume.diagnostic, "data_state": state,
-        })
         for root in capture.roots:
+            mount_id, path, counts = _mount_id(volume, root.binding), root.scan_root, root.counts
+            selected_roots.append({
+                **_v1_root(volume, state, mount_id, path), "status": root.outcome,
+                "scanned_bytes": counts["bytes"], "scanned_files": counts["files"], "scanned_dirs": counts["dirs"],
+                "error_count": counts["errors"], "scan_finished_unix": capture.scan_finished_unix,
+            })
+            mounts.append({
+                "path": path, "mount_id": mount_id, "scan_root": path, "fstype": volume.fstype, **_capacity(volume),
+                "scanned_bytes": counts["bytes"], "scanned_files": counts["files"], "scanned_dirs": counts["dirs"],
+                "errors": counts["errors"], "tree": {**_node(root.tree), "name": path},
+                "storage_media": volume.media, "storage_media_confidence": volume.media_confidence,
+                "volume_id": volume.volume_id, "diagnostic": volume.diagnostic, "data_state": state,
+            })
             for row in root.users:
                 user = users.setdefault(row["uid"], {"uid": row["uid"], "name": row["name"], "bytes": 0, "files": 0, "by_mount": {}})
                 user["bytes"] += row["bytes"]
@@ -145,10 +148,15 @@ def volumes_payload(server_id: str, manifest: HostManifest, captures: Mapping[st
     }
 
 
-def _volume_root(volume: Volume, state: str, path: str) -> dict:
+def _mount_id(volume: Volume, binding: str) -> str:
+    """The volume id; a volume with several roots adds the root's binding, as v1 gave each root its own id."""
+    return volume.volume_id if len(volume.roots) == 1 else f"{volume.volume_id}:{binding}"
+
+
+def _v1_root(volume: Volume, state: str, mount_id: str, path: str) -> dict:
     return {
-        "mount_id": volume.volume_id, "major_minor": None, "mount_source": None, "mount_root": None,
-        "mountpoint": volume.mountpoint, "scan_root": path, "fstype": volume.fstype,
+        "mount_id": mount_id, "volume_id": volume.volume_id, "major_minor": None, "mount_source": None,
+        "mount_root": None, "mountpoint": volume.mountpoint, "scan_root": path, "fstype": volume.fstype,
         "scanned_bytes": 0, "scanned_files": 0, "scanned_dirs": 0, "blocked_count": 0, "error_count": 0,
         "error_code": None, "storage_media": volume.media, "storage_media_confidence": volume.media_confidence,
         "cadence_sec": volume.cadence_sec, "identity": volume.identity, "diagnostic": volume.diagnostic,
@@ -160,7 +168,10 @@ def _capacity(volume: Volume) -> dict:
     capacity = volume.capacity
     if capacity is None:
         return {"df_total": None, "df_used": None, "df_avail": None, "df_use_pct": None, "capacity_observed_unix": None}
-    return {"df_total": capacity.total, "df_used": capacity.used, "df_avail": capacity.avail, "df_use_pct": None,
+    usable = capacity.used + capacity.avail
+    # df's Use%: used over what an unprivileged writer can reach, rounded up, as v1 agents reported it.
+    use_pct = -(-capacity.used * 100 // usable) if usable else None
+    return {"df_total": capacity.total, "df_used": capacity.used, "df_avail": capacity.avail, "df_use_pct": use_pct,
             "capacity_observed_unix": capacity.observed_unix}
 
 
@@ -174,23 +185,6 @@ def _node(node: Mapping[str, Any]) -> dict:
     if "children" in node:
         result["children"] = [_node(child) for child in node["children"]]
     return result
-
-
-def _volume_tree(volume: Volume, capture: VolumeCapture) -> Tuple[str, dict]:
-    """The volume's one v1 tree: its root's tree, or a node over several roots named by their paths."""
-    if len(capture.roots) == 1:
-        root = capture.roots[0]
-        return root.scan_root, {**_node(root.tree), "name": root.scan_root}
-    base = volume.mountpoint.rstrip("/")
-    children = []
-    for root in capture.roots:
-        name = root.scan_root[len(base) + 1:] if root.scan_root.startswith(base + "/") else root.scan_root
-        children.append({**_node(root.tree), "name": name})
-    return volume.mountpoint, {
-        "name": volume.mountpoint, "kind": "directory", "bytes": sum(child["bytes"] for child in children),
-        "files": sum(child["files"] for child in children), "uid": 0,
-        "mtime": max(child["mtime"] for child in children), "other_bytes": 0, "children": children,
-    }
 
 
 def scan_result(payload: Mapping[str, Any]) -> str:
