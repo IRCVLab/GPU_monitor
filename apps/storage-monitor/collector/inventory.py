@@ -243,8 +243,8 @@ def _bounded_int(value: Any, name: str, lo: int, hi: int) -> int:
 
 
 def _safe_id(value: str, name: str) -> str:
-    if not SERVER_ID_RE.fullmatch(value) or value in {".", ".."}:
-        raise ValueError(f"{name} must match ^[A-Za-z0-9_.-]+$")
+    if not SERVER_ID_RE.fullmatch(value):
+        raise ValueError(f"{name} must match {SERVER_ID_RE.pattern}")
     return value
 
 

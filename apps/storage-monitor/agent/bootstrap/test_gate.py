@@ -12,9 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent import scan_runner
 from agent.bootstrap import gate
-from agent.test_scan_runner import raw_payload_many
 
 REQUEST = "0123456789abcdef0123456789abcdef"
 SHA = "d" * 40
@@ -188,27 +186,12 @@ class GateTest(unittest.TestCase):
         report = json.loads(self.serve("observe")[2])
         self.assertEqual(report["legacy"]["lifecycle"], {"invalid": True})
 
-    # -- S7: the files today's unchanged scan_runner writes -----------------
-
-    def test_status_and_snapshot_served_from_the_current_scan_runner(self):
-        config = self.root / "scanner.yaml"
-        config.write_text(json.dumps({
-            "server_id": "host-a", "scanner_path": "/bin/hstscan",
-            "data_dir": str(self.paths.data), "run_dir": str(self.paths.run),
-        }))
-
-        def fake_hstscan(argv, **kwargs):
-            out = argv[argv.index("--out") + 1]
-            roots = argv[argv.index("--out") + 2:][1::4]
-            Path(out).write_text(json.dumps(raw_payload_many(roots)))
-            return scan_runner.CompletedScan(0, "", "")
-
-        result = scan_runner.run_once(
-            config, mountinfo_reader=lambda: "1 0 8:1 / / rw - ext4 /dev/sda1 rw",
-            scanner_runner=fake_hstscan, clock=lambda: 200,
-        )
-        self.assertEqual(result.status, "complete")
-        status_bytes = (self.paths.data / "scan-status.json").read_bytes()
+    def test_rollback_status_and_snapshot_served_byte_exact(self):
+        generation = "host-a-200-v1.json"
+        status_bytes = json.dumps({"schema_version": 1, "generation": generation}).encode()
+        (self.paths.data / "scan-status.json").write_bytes(status_bytes)
+        (self.paths.data / "snapshots").mkdir(exist_ok=True)
+        (self.paths.data / "snapshots" / generation).write_bytes(b'{"schema_version":1}')
         code, header, body = self.serve("get-status")
         self.assertEqual((code, header, body), (0, f"storage-viz-gate/1 ok {len(status_bytes)}", status_bytes))
         generation = json.loads(status_bytes)["generation"]

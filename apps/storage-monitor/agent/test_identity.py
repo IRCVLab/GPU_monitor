@@ -1,25 +1,77 @@
-"""Agent bug repro A2 from docs/redesign/bug-catalog.md.
+from pathlib import Path
+import shutil
+import subprocess
 
-Strict expected failure until M5 keys slow-capture reuse on volume identity.
-"""
-import pytest
-
-from agent.test_runner import HOUR, FakeScanner, run, ssd_root_hdd_data, write_config
+from agent.storage_viz_agent import identity, mount_policy, plan
+from agent.test_runner import Host, Resolver, line
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="A2: a mount id change alone breaks slow-capture reuse and forces an HDD rescan")
+def selected(text):
+    return mount_policy.select_scan_roots(mount_policy.parse_mountinfo(text)).selected
+
+
 def test_a2_same_id_across_mount_namespaces(tmp_path):
-    # Mount ids are local to a mount namespace: the same /dev/sda1 and
-    # /dev/sdb1 mounts show different ids to a systemd unit with its own
-    # namespace. Device, source, root, fstype and mountpoint are unchanged.
-    config = write_config(tmp_path)
-    scanner = FakeScanner()
-    run(config, ssd_root_hdd_data(root_id=1, data_id=2), scanner, now=5 * HOUR + 30, scheduled=True)
+    # Compare the actual namespace-local IDs when user namespaces are enabled.
+    outside, inside = 1, 2801
+    if shutil.which("unshare"):
+        ns = subprocess.run(["unshare", "-rm", "cat", "/proc/self/mountinfo"], capture_output=True)
+        if ns.returncode == 0:
+            inside = int(ns.stdout.split()[0])
+            outside = int(Path("/proc/self/mountinfo").read_bytes().split()[0])
+    host = Host(tmp_path)
+    host.mounts = line("8:2", "/data", outside)
+    host.run(scheduled=True)
+    old = host.volumes()
+    host.mounts = line("8:2", "/data", inside)
+    host.now += 3600
+    host.run(scheduled=True)
+    assert len(host.calls) == 1
+    assert host.volumes()["/data"]["capture"] == old["/data"]["capture"]
 
-    run(config, ssd_root_hdd_data(root_id=2801, data_id=2802), scanner, now=6 * HOUR + 30, scheduled=True)
 
-    assert scanner.calls[:2] == [("/home",), ("/data",)]
-    assert scanner.calls[2:] == [("/home",)], (
-        "A2: only the mount ids changed, yet the hourly tick rescanned %r instead of reusing the HDD capture"
-        % (scanner.calls[2:],))
+def test_a2_changed_bind_root_forces_rescan(tmp_path):
+    host = Host(tmp_path)
+    host.mounts = line("8:2", "/data", subtree="/a").replace("ext4", "btrfs")
+    host.run(scheduled=True)
+    old = host.volumes()["/data"]
+    host.mounts = host.mounts.replace(" /a ", " /b ")
+    host.run(scheduled=True)
+    new = host.volumes()["/data"]
+    assert new["volume_id"] == old["volume_id"] and new["roots"] != old["roots"]
+    assert len(host.calls) == 2
+
+
+def test_a2_duplicate_uuid_is_ambiguous(tmp_path):
+    sysfs, devfs, udev = (tmp_path / n for n in ("sys","dev","udev"))
+    udev.mkdir()
+    links = devfs / "disk/by-uuid"
+    links.mkdir(parents=True)
+    (sysfs / "dev/block").mkdir(parents=True)
+    text = line("8:1", "/a") + "\n" + line("8:2", "/b", 2)
+    for device, name in (("8:1","sda"), ("8:2","sdb")):
+        node = sysfs / "block" / name
+        node.mkdir(parents=True)
+        (sysfs/"dev/block"/device).symlink_to(node)
+        (devfs/name).touch()
+    (links/"shared").symlink_to(devfs/"sda")
+    def resolve(aliases):
+        return identity.resolve(selected(text), aliases, "config", Resolver(), sysfs, devfs, udev, "boot")
+    a, b = resolve({})
+    assert a.identity == "uuid" and b.identity == "ambiguous"
+    (udev/"b8:2").write_text("E:ID_FS_UUID=shared\n")
+    a, b = resolve({})
+    assert a.identity == b.identity == "ambiguous" and a.volume_id != b.volume_id
+    assert len(plan.validate_partition([a,b])) == 2
+    assert resolve({"/a":"unique"})[0].identity == "alias"
+
+
+def test_server_id_matches_deployed_collector_grammar():
+    from agent.storage_viz_agent import ids as agent_ids
+    from collector import ids as collector_ids
+
+    accepted = ("Poseidon", "LAB_GPU.01", "s13", "lab-1", ".host", "_", "-", "...", "A" * 128)
+    rejected = ("", ".", "..", "A" * 129, "../host", "lab/1", "lab 1", "host\n", "한글")
+    for expected, samples in ((True, accepted), (False, rejected)):
+        for sample in samples:
+            assert bool(agent_ids.SERVER_ID_RE.fullmatch(sample)) == expected, repr(sample)
+            assert bool(collector_ids.SERVER_ID_RE.fullmatch(sample)) == expected, repr(sample)

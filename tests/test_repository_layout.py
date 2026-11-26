@@ -160,7 +160,7 @@ class RepositoryLayoutTest(unittest.TestCase):
         assert Path("apps/gpu-monitor/frontend/package.json").is_file()
         assert Path("apps/gpu-monitor/backend/main.py").is_file()
         assert Path("apps/storage-monitor/viewer/serve.py").is_file()
-        assert Path("apps/storage-monitor/agent/scan_runner.py").is_file()
+        assert Path("apps/storage-monitor/agent/storage_viz_agent/runner.py").is_file()
         assert not Path("frontend").exists()
         assert not Path("backend").exists()
 

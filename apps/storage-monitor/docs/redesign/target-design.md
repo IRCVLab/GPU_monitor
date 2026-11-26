@@ -80,7 +80,7 @@ Each invariant names the test that checks it. Test ids refer to section 5.
 
 | Type | Form | Defined in | Notes |
 |---|---|---|---|
-| `ServerId` | `^[a-z0-9][a-z0-9-]{0,62}$` | `collector/ids.py` (the six copies are deleted) and `agent/storage_viz_agent/ids.py`, checked equal by a test | Set once in `/etc/storage-viz/agent.yaml` at bootstrap. A mismatch with the inventory gives `link.state = identity_mismatch`. |
+| `ServerId` | `\A(?!\.{1,2}\Z)[A-Za-z0-9_.-]{1,128}\Z` | `collector/ids.py` (the six copies are deleted) and `agent/storage_viz_agent/ids.py`, checked equal by a test | Bootstrap preserves IDs from deployed scanner configs, including uppercase letters, dots and underscores. The 128-character limit matches the collector store. The names `.` and `..` are reserved path components. A mismatch with the inventory gives `link.state = identity_mismatch`. |
 | `VolumeId` | `v-` + 16 hex of `sha256("uuid\0" + fs_uuid)` or `sha256("alias\0" + alias)` | `agent/storage_viz_agent/identity.py` | Identifies the filesystem only. A bind alias or a second subvolume mount of the same filesystem has the same `volume_id`. Stable across reboots and mount namespaces (A2). |
 | `RootBinding` | `b-` + 16 hex of `sha256(volume_id, fs_root_bytes, prune_class, config_digest, capture_schema)` | `identity.py` | Identifies what one root covers. `fs_root_bytes` is the root's path inside the filesystem: the mountinfo root field (the bind or subvolume root) joined with the path below the mountpoint. A changed bind subtree, prune class or config gives a new binding. |
 | `CaptureSha` | 64 hex, sha256 of the gzip bytes on disk | agent and central | The content address. One spelling: `capture_sha256`. |
@@ -172,7 +172,7 @@ Each invariant names the test that checks it. Test ids refer to section 5.
 - `capacity` comes from a guarded `statvfs` on every tick, for every volume, including slow-only and not-due ticks (A9). The sampler checks that the mountpoint's `st_dev` still matches the volume before it attributes a sample. On failure it keeps the old sample and its old `observed_unix` and sets `status: "failed"`. It never puts a new timestamp on old values.
 - `mount_table.within_roots` lists every mountinfo entry at or below a scan root, including same-device bind mounts. `status: "unreadable"` means mountinfo could not be read. The removal module refuses in that case.
 - `cadence_sec` is the agent's schedule. Central freshness reads it and never copies the table (S1).
-- `requests` keeps the last 16 receipts. That covers far more than the job deadline at a 900 s cooldown.
+- `requests` keeps the last 16 receipts. The central parser caps this list at 16. Central admits one active job per server, retries the same request ID and enforces a 900 s cooldown, so even 16 successive admissions span four hours. The gate’s 128-file pending limit bounds on-disk admission, not central concurrency.
 - `hostname` is `hostname -s` at publish time, for the removal host check.
 
 **RunRecord** (`run.json`), written right after the lock is taken and removed as the last step before release:
@@ -185,7 +185,7 @@ Each invariant names the test that checks it. Test ids refer to section 5.
 
 `last_run.outcome` is one of `complete | partial | failed | nothing_due | interrupted`. No `publishing` string exists to forget (A8).
 
-**Progress** (`/run/storage-viz/progress.json`, written by hstscan every 2 s): `{run_id, group, updated_unix, bytes, files, dirs, roots_completed, roots_total}`. The runner passes `run_id` and `group` as arguments.
+**Progress** (`/run/storage-viz/progress.json`, written by hstscan every 2 s): `{run_id, group, updated_unix, bytes, files, dirs, roots_completed, roots_total}`. The runner passes `run_id` and `group` as arguments. The first pass uses the systemd invocation ID. Subsequent passes in that invocation derive a fresh 32-hex ID from the invocation and pass number, including after lock reacquisition.
 
 ### 2.3 Central store (`STATE_DIR/`)
 

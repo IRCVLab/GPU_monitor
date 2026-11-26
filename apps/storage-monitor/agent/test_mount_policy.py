@@ -1,6 +1,6 @@
 import unittest
 
-from agent.mount_policy import (
+from agent.storage_viz_agent.mount_policy import (
     classify_mount,
     parse_mountinfo,
     read_mountinfo,

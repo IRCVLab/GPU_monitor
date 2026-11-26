@@ -1092,15 +1092,19 @@ def depth(node, level=0):
     return max([level] + [depth(child, level + 1) for child in kids])
 data = json.load(open(sys.argv[1]))
 deepest = max(depth(tree) for mount in data["mounts"] for tree in [mount.get("tree") or {}])
+node = data["mounts"][0]["tree"]
+for _ in range(128):
+    node = node["children"][0]
+assert node["other_bytes"] == node["bytes"] >= 2097152
 if deepest > 128:
     print(f"BUG A10: emitted tree depth {deepest} exceeds the collector's 128-level cap, so the whole snapshot would be rejected")
     sys.exit(1)
 PYEOF
 }
-xfail_case a10_tree_depth_within_collector_cap A10 a10_tree_depth_within_collector_cap
+required_case a10_tree_depth_within_collector_cap a10_tree_depth_within_collector_cap
 
 echo "  expected failures = $XFAIL_COUNT"
-[ "$XFAIL_COUNT" -eq 1 ] || fail "expected 1 XFAIL case (A10, fixed in M5), got $XFAIL_COUNT"
+[ "$XFAIL_COUNT" -eq 0 ] || fail "expected 0 XFAIL cases, got $XFAIL_COUNT"
 
 echo
 echo "ALL TESTS PASSED"

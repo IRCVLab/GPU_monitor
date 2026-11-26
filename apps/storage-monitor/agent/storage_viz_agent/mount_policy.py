@@ -8,9 +8,12 @@ only live filesystem adapter is ``read_mountinfo``; callers pass its text into
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+import stat
 import re
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
+from .identity import display_path
 from storage_fstypes import REMOTE_FSTYPES
 
 
@@ -115,7 +118,7 @@ def read_mountinfo(path: str = "/proc/self/mountinfo") -> str:
     are pure and deterministic over text/entry inputs.
     """
 
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, "r", encoding="utf-8", errors="surrogateescape") as handle:
         return handle.read()
 
 
@@ -353,3 +356,65 @@ def _normalize_mountpoint(path: str) -> str:
 def _choice_key(entry: MountEntry, scan_root: str) -> Tuple[int, int, str]:
     normalized = _normalize_mountpoint(scan_root)
     return (entry.mount_id, len(normalized), normalized)
+
+
+def verified_root_directory_paths(
+    entries: Sequence[MountEntry],
+    *,
+    lstat: Callable[[str], os.stat_result] = os.lstat,
+) -> Tuple[str, ...]:
+    """Return verified root-backed directories eligible for policy synthesis.
+
+    The only synthesized path
+    is exact /data, and it is eligible only when no exact /data mountinfo entry
+    exists and lstat proves /data is a real directory on the root mount device.
+    """
+
+    candidate = "/data"
+    if any(entry.mountpoint == candidate for entry in entries):
+        return ()
+    root_entry = next((entry for entry in entries if entry.mountpoint == "/"), None)
+    if root_entry is None:
+        return ()
+    root_device = _parse_major_minor(root_entry.major_minor)
+    if root_device is None:
+        return ()
+    try:
+        candidate_stat = lstat(candidate)
+    except OSError:
+        return ()
+    mode = getattr(candidate_stat, "st_mode", 0)
+    if not stat.S_ISDIR(mode):
+        return ()
+    try:
+        candidate_device = (os.major(candidate_stat.st_dev), os.minor(candidate_stat.st_dev))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return ()
+    if candidate_device != root_device:
+        return ()
+    return (candidate,)
+
+
+def _parse_major_minor(value: str) -> Optional[Tuple[int, int]]:
+    try:
+        major_s, minor_s = value.split(":", 1)
+        major = int(major_s, 10)
+        minor = int(minor_s, 10)
+    except (AttributeError, ValueError):
+        return None
+    if major < 0 or minor < 0:
+        return None
+    return major, minor
+
+
+def mounts_within_roots(entries, roots):
+    rows = {}
+    for entry in entries:
+        for root in roots:
+            if entry.mountpoint == root.path or entry.mountpoint.startswith(root.path + "/"):
+                if display_path(entry.mountpoint) != entry.mountpoint:
+                    return None  # Display-only paths cannot authorize removal.
+                if entry.mountpoint not in rows and len(rows) >= 1024:
+                    return None
+                rows[entry.mountpoint] = rows.get(entry.mountpoint, False) or entry.major_minor == root.device
+    return [dict(mountpoint=p, same_device=same) for p, same in sorted(rows.items())]

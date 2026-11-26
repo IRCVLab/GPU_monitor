@@ -119,7 +119,7 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "deploy/direct_proxy.py": "print('proxy')\n",
         }
         excluded_files = {
-            "agent/scan_runner.py": "print('remote agent')\n",
+            "agent/storage_viz_agent/runner.py": "print('remote agent')\n",
             "scanner/hstscan.c": "int main(void){return 0;}\n",
             "deploy/install-agent.sh": "#!/bin/sh\n",
             "deploy/deploy-agent.sh": "#!/bin/sh\n",
