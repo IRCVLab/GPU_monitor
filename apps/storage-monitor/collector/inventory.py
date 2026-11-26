@@ -10,7 +10,8 @@ import pathlib
 import re
 from typing import Any, Dict, Mapping, Tuple
 
-SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+from collector.ids import SERVER_ID_RE
+
 HOST_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^localhost$")
 MAX_INT = 10**18
 
@@ -245,7 +246,7 @@ def _bounded_int(value: Any, name: str, lo: int, hi: int) -> int:
 
 
 def _safe_id(value: str, name: str) -> str:
-    if not SERVER_ID_RE.match(value) or value in {".", ".."}:
+    if not SERVER_ID_RE.fullmatch(value) or value in {".", ".."}:
         raise ValueError(f"{name} must match ^[A-Za-z0-9_.-]+$")
     return value
 

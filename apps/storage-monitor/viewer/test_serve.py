@@ -133,14 +133,15 @@ class SnapshotResponseCacheTest(unittest.TestCase):
         self.addCleanup(self.server.shutdown)
 
     def publish(self, started=1719200000):
-        from collector.snapshot import DesiredServer
+        from collector.snapshot import DesiredServer, validate_download
         from collector.test_service import payload_for, status_data
 
         payload = payload_for(self.host.id, started=started)
         for row in (payload["selected_roots"][0], payload["mounts"][0]):
             row.update(capacity_id="dev-8-1", storage_media="ssd", storage_media_confidence="resolved")
         status, data = status_data(payload)
-        self.assertTrue(self.store.apply_download(self.host.id, status, data, DesiredServer(self.host.id, self.host.scanner_digest)).accepted)
+        valid = validate_download(status, data, DesiredServer(self.host.id, self.host.scanner_digest))
+        self.assertTrue(self.store.commit_snapshot(valid).accepted)
         return payload
 
     def get(self, server_id="hinton", *, authenticated=True):
@@ -781,10 +782,6 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C7: in trusted-proxy mode, /./data/..., /data/ and /x/../data/... bypass the read check",
-)
 def test_c7_every_data_spelling_requires_read_auth(tmp_path):
     port = free_port()
     env = os.environ.copy()

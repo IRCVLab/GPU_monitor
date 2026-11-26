@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import re
 from typing import List, Optional, Sequence, Tuple
 
+from storage_fstypes import REMOTE_FSTYPES
+
 
 @dataclass(frozen=True)
 class MountEntry:
@@ -72,26 +74,6 @@ LOCAL_FSTYPES = frozenset(
         "exfat",
         "ntfs",
         "ntfs3",
-    }
-)
-
-REMOTE_FSTYPES = frozenset(
-    {
-        "nfs",
-        "nfs4",
-        "cifs",
-        "smb3",
-        "smbfs",
-        "sshfs",
-        "fuse.sshfs",
-        "ceph",
-        "fuse.ceph",
-        "fuse.rclone",
-        "fuse.davfs",
-        "glusterfs",
-        "lustre",
-        "gpfs",
-        "9p",
     }
 )
 

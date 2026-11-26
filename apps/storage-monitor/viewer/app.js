@@ -6,7 +6,6 @@ let currentServerSummary = null;
 let currentSession = { authenticated: false, can_rescan: false, csrf_token: "" };
 let currentOverviewSummaries = [];
 let currentOverviewSnapshotEntries = [];
-let currentOverviewRows = [];
 let currentDataSource = "static";
 let currentDataMode = "inventory";
 let staticHostById = new Map();
@@ -500,9 +499,9 @@ function renderOverview() {
     renderFleetUserUsage(fleetUsage, buildFleetUserUsage(currentOverviewSummaries, currentOverviewSnapshotEntries));
     return;
   }
-  currentOverviewRows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries, DEFAULT_CAPACITY_THRESHOLDS);
+  const rows = buildOverviewRows(currentOverviewSummaries, currentOverviewSnapshotEntries, DEFAULT_CAPACITY_THRESHOLDS);
   const list = document.getElementById("overviewList");
-  renderOverviewList(list, currentOverviewRows, { onOpenServer: (serverId) => navigateToServer(serverId) });
+  renderOverviewList(list, rows, { onOpenServer: (serverId) => navigateToServer(serverId) });
   updateOverviewStatus();
 }
 
@@ -795,7 +794,7 @@ function setRescanUnsupported(btn, message) {
 
 function setRescanActivityState(btn, state) {
   if (!btn) return;
-  const active = state === "starting" || state === "requested" || state === "running" || state === "reconnecting" || state === "refreshing";
+  const active = state === "starting" || state === "running" || state === "reconnecting" || state === "refreshing";
   if (active) btn.dataset.rescanState = state;
   else delete btn.dataset.rescanState;
   btn.setAttribute("aria-busy", active ? "true" : "false");
@@ -1045,12 +1044,12 @@ async function pollRescanJob(serverId, generation) {
       return;
     }
     rescanPollFailures = 0;
-    if (state === "requested" || state === "running") {
+    if (state === "running") {
       rescanSawActive = true;
       setRescanActivityState(btn, state);
       btn.disabled = true;
       btn.textContent = "Rescan";
-      btn.title = state === "requested" ? "Scan is queued" : "Scan is running";
+      btn.title = "Scan is running";
       scheduleRescanPoll(targetServerId, 2000, trackingGeneration);
       return;
     }

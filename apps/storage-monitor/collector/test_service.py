@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 
+from collector.snapshot import DesiredServer, validate_download
 from collector.inventory import Server
 from collector.store import CentralStore
 from collector.test_snapshot import base_payload, status_for
@@ -127,7 +128,8 @@ class PollServiceTests(unittest.TestCase):
     def seed(self, server, started=1719200000, **kwargs):
         payload = payload_for(server.id, started=started, digest=server.scanner_digest, **kwargs)
         st, data = status_data(payload)
-        self.assertTrue(self.store.apply_download(server.id, st, data, __import__("collector.snapshot").snapshot.DesiredServer(server.id, server.scanner_digest)).accepted)
+        valid = validate_download(st, data, DesiredServer(server.id, server.scanner_digest))
+        self.assertTrue(self.store.commit_snapshot(valid).accepted)
         return st, data
 
     def test_unchanged_generation_skips_snapshot_transfer_and_marks_fresh(self):
@@ -140,7 +142,7 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(len(self.tx.fetch_snapshot_calls), 1)
         self.assertEqual(result[s.id]["latest_pull_status"], "succeeded")
         state = self.store.load_state(s.id)
-        self.assertEqual(state["freshness"], "fresh")
+        self.assertEqual(svc.server_summaries()[0]["freshness"], "fresh")
         self.assertEqual(state["snapshot_availability"], "available")
 
     def test_slow_first_host_does_not_delay_healthy_host_background_poll(self):
@@ -357,7 +359,7 @@ class PollServiceTests(unittest.TestCase):
         from collector import store
 
         alpha, beta = make_server(), make_server("beta-2")
-        self.store.update_state(alpha.id, freshness="unknown")
+        self.store.update_state(alpha.id, configuration_sync="unknown")
         for server in (alpha, beta):
             payload = payload_for(server.id, digest=server.scanner_digest)
             status, data = status_data(payload)
@@ -577,7 +579,7 @@ class PollServiceTests(unittest.TestCase):
             "scan_finished_unix",
         })
         self.assertEqual(set(overview["mounts"][0]), {
-            "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct", "df_observed_unix",
+            "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
             "storage_media", "block_media", "storage_media_confidence", "block_media_confidence",
         })
         self.assertNotIn("tree", overview["mounts"][0], "overview payload must omit the heavyweight directory tree")
@@ -731,8 +733,8 @@ class PollServiceTests(unittest.TestCase):
         ):
             self.assertEqual(service.poll_server(server.id)["latest_pull_status"], "succeeded")
             self.clock.now += 24 * 3600
-            state = service.poll_server(server.id)
-            self.assertEqual(state["freshness"], "stale")
+            service.poll_server(server.id)
+            self.assertEqual(service.server_summaries()[0]["freshness"], "stale")
             self.assertEqual(len(self.tx.fetch_snapshot_calls), 1)
             self.assertEqual(validate.call_count, 1)
             self.assertEqual(read_tree.call_count, 0)
@@ -879,15 +881,16 @@ class PollServiceTests(unittest.TestCase):
         s = make_server(); old_status, _ = self.seed(s)
         self.clock.now = old_status["scan_finished_unix"] + 2 * 60 * 60
         self.tx.status_errors[s.id] = TransportError("UNREACHABLE", "down")
-        self.service([s]).poll_once()
-        self.assertEqual(self.store.load_state(s.id)["freshness"], "fresh")
+        service = self.service([s])
+        service.poll_once()
+        self.assertEqual(service.server_summaries()[0]["freshness"], "fresh")
         self.clock.now = old_status["scan_finished_unix"] + 8 * 60 * 60
-        self.service([s]).poll_once()
-        self.assertEqual(self.store.load_state(s.id)["freshness"], "stale")
+        service.poll_once()
+        self.assertEqual(service.server_summaries()[0]["freshness"], "stale")
         self.tx.status_errors = {}
         self.tx.status[s.id] = dict(old_status, generation="alpha-1-1719210000-v1.json", status="failed", scan_finished_unix=1719210042)
-        self.service([s]).poll_once()
-        state = self.store.load_state(s.id)
+        service.poll_once()
+        state = service.server_summaries()[0]
         self.assertEqual(state["latest_pull_status"], "succeeded")
         self.assertEqual(state["latest_scan_result"], "failed")
         self.assertEqual(state["freshness"], "stale")

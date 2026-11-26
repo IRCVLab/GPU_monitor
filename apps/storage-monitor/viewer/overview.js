@@ -192,7 +192,7 @@ function summarizeMounts(snapshot, thresholds = DEFAULT_CAPACITY_THRESHOLDS) {
       totalBytes,
       availableBytes,
       capacityPct: explicitPct,
-      capacityObservedUnix: mount.capacity_observed_unix ?? mount.df_observed_unix,
+      capacityObservedUnix: mount.capacity_observed_unix,
       usedPct,
       freeBytes,
       media,

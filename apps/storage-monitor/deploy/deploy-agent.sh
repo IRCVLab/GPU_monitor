@@ -233,7 +233,7 @@ tar -C "$REPO_ROOT" \
   --exclude .git \
   --exclude 'data/*.json' \
   --exclude 'scanner/hstscan' \
-  -czf "$ARCHIVE" agent scanner deploy config
+  -czf "$ARCHIVE" agent scanner deploy config storage_fstypes.py
 
 remote_mktemp
 trap cleanup_all EXIT

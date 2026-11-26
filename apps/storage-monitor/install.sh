@@ -186,7 +186,7 @@ mkdir -p "$APP_DEST" "$CONFIG_DEST" "$KEY_DEST" "$(dirname "$KNOWN_HOSTS_DEST")"
 chmod 0750 "$KEY_DEST"
 
 if [[ "$SOURCE_ROOT" != "$APP_DEST" ]]; then
-  for item in collector config docs viewer README.md; do
+  for item in collector config docs viewer storage_fstypes.py README.md; do
     if [[ -e "$SOURCE_ROOT/$item" ]]; then
       rm -rf "$APP_DEST/$item"
       cp -R "$SOURCE_ROOT/$item" "$APP_DEST/$item"

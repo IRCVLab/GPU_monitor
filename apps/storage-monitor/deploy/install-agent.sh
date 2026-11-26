@@ -64,6 +64,7 @@ require_source() {
 
 require_source "$REPO_ROOT/agent/scan_runner.py"
 require_source "$REPO_ROOT/agent/mount_policy.py"
+require_source "$REPO_ROOT/storage_fstypes.py"
 require_source "$REPO_ROOT/scanner/hstscan.c"
 require_source "$SCRIPT_DIR/systemd/storage-viz-scan.service.in"
 require_source "$SCRIPT_DIR/systemd/storage-viz-scan.timer"
@@ -154,6 +155,7 @@ if [[ "$DRY_RUN" != "1" ]]; then
 fi
 
 mkdir -p "$OPT_DIR/agent" "$OPT_DIR/scanner" "$CONFIG_DIR" "$DATA_DIR" "$SNAPSHOT_DIR" "$RUN_DIR" "$UNIT_DIR" "$SUDOERS_DIR"
+install -m 0644 "$REPO_ROOT/storage_fstypes.py" "$OPT_DIR/storage_fstypes.py"
 copy_tree "$REPO_ROOT/agent" "$OPT_DIR/agent" 0644
 install -m 0644 "$REPO_ROOT/scanner/hstscan.c" "$OPT_DIR/scanner/hstscan.c"
 if [[ "$DRY_RUN" == "1" ]]; then

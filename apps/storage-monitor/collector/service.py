@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import time
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Mapping, Protocol
 
+from storage_fstypes import REMOTE_FSTYPES
+from collector.ids import SERVER_ID_RE
 from collector.inventory import Server
 from collector import snapshot
 from collector.scan_telemetry import empty_status
@@ -28,20 +29,14 @@ FRESHNESS_GRACE_SECONDS = 60 * 60
 FRESH_SNAPSHOT_SECONDS = LOCAL_SCAN_CADENCE_SECONDS + FRESHNESS_GRACE_SECONDS
 SCHEDULED_TIMER_DELAY_SECONDS = 6 * 60
 ROOT_SCAN_CADENCE_SECONDS = {"ssd": 3600, "hdd": 3 * 3600, "mixed": 3 * 3600, "unknown": 3 * 3600}
-SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 OVERVIEW_ROOT_FIELDS = (
     "mount_id", "capacity_id", "major_minor", "mount_source", "fstype", "storage_media", "block_media",
     "storage_media_confidence", "block_media_confidence", "scan_finished_unix",
 )
 OVERVIEW_MOUNT_FIELDS = (
-    "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct", "df_observed_unix",
+    "mount_id", "path", "mountpoint", "df_total", "df_used", "df_avail", "df_use_pct",
     "storage_media", "block_media", "storage_media_confidence", "block_media_confidence",
 )
-# Central release artifacts do not package agent.mount_policy.
-REMOTE_FSTYPES = frozenset({
-    "nfs", "nfs4", "cifs", "smb3", "smbfs", "sshfs", "fuse.sshfs", "ceph",
-    "fuse.ceph", "fuse.rclone", "fuse.davfs", "glusterfs", "lustre", "gpfs", "9p",
-})
 
 
 def _overview_rows(value: Any, fields: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -144,12 +139,6 @@ class ScanObservation:
 
 
 @dataclass(frozen=True)
-class VerifiedPublication:
-    status: tuple[Any, ...]
-    freshness_deadline: int | None
-
-
-@dataclass(frozen=True)
 class _DeferredSnapshotPull:
     status: Mapping[str, Any]
 
@@ -206,7 +195,7 @@ class PollService:
         self.store = central_store
         self.transport = transport
         self.clock = clock or time
-        self._verified_publications: dict[str, VerifiedPublication] = {}
+        self._verified_publications: dict[str, tuple[Any, ...]] = {}
         self._last_observed_status: dict[str, tuple[Any, ...]] = {}
         self._locks = {s.id: threading.RLock() for s in self.servers}
         self._summary_lock = threading.RLock()
@@ -287,19 +276,16 @@ class PollService:
             self._verified_publications.pop(server.id, None)
             return self._mark_failed_status(server, status)
 
-        verified = self._matching_publication(server.id, status)
-        if verified:
-            return self._mark_unchanged(server, status, verified.freshness_deadline)
+        if self._matching_publication(server.id, status):
+            return self._mark_unchanged(server, status)
 
         if defer_snapshot:
             return _DeferredSnapshotPull(status)
         return self._transfer_publication(server, status, recheck_stale=observed_publication is not None)
 
-    def _matching_publication(self, server_id: str, status: Mapping[str, Any]) -> VerifiedPublication | None:
+    def _matching_publication(self, server_id: str, status: Mapping[str, Any]) -> bool:
         verified = self._verified_publications.get(server_id)
-        if verified and verified.status == status_tuple(status) and self.store.has_snapshot_digest(server_id, status["sha256"]):
-            return verified
-        return None
+        return verified == status_tuple(status) and self.store.has_snapshot_digest(server_id, status["sha256"])
 
     def _finish_deferred_pull(self, server: Server, status: Mapping[str, Any]) -> None:
         with self._locks[server.id]:
@@ -339,14 +325,13 @@ class PollService:
         except Exception as exc:
             return self._mark_invalid(server.id, TransportError("INVALID", str(exc)))
 
-        deadline = _snapshot_freshness_deadline(validated.payload, self.poll_interval_seconds)
         overview = _overview_snapshot(validated.payload)
         with self._summary_lock:
-            result = self.store.commit_snapshot(validated, freshness=_freshness_at(deadline, int(self.clock.time())))
+            result = self.store.commit_snapshot(validated)
             if not result.accepted:
                 return self._mark_invalid(server.id, TransportError(result.error_code or "WRITE_ERROR", result.message or "download apply failed"))
             self._overview_cache[server.id] = overview
-            self._verified_publications[server.id] = VerifiedPublication(status_tuple(fetched_status), deadline)
+            self._verified_publications[server.id] = status_tuple(fetched_status)
             return self.store.load_state(server.id)
 
     def manual_rescan(self, server_id: str) -> dict[str, Any]:
@@ -436,7 +421,7 @@ class PollService:
                     continue
                 if 0 <= elapsed < IDLE_TELEMETRY_INTERVAL_SECONDS:
                     job = self.store.load_state(server.id).get("active_job") or {}
-                    if observation.status.get("state") != "running" and job.get("state") not in {"requested", "running"}:
+                    if observation.status.get("state") != "running" and job.get("state") != "running":
                         continue
             worker = threading.Thread(target=self._collect_scan_status, args=(server, now), daemon=True)
             self._telemetry_threads[server.id] = worker
@@ -526,7 +511,6 @@ class PollService:
         current = self.store.load_snapshot(server_id)
         return {
             "snapshot_availability": "available" if current is not None else "absent",
-            "freshness": _snapshot_freshness(current, int(self.clock.time()), self.poll_interval_seconds),
         }
 
     def _mark_unreachable(self, server_id: str, exc: TransportError) -> dict[str, Any]:
@@ -572,11 +556,10 @@ class PollService:
             last_error_unix=int(self.clock.time()),
         )
 
-    def _mark_unchanged(self, server: Server, status: Mapping[str, Any], deadline: int | None) -> dict[str, Any]:
+    def _mark_unchanged(self, server: Server, status: Mapping[str, Any]) -> dict[str, Any]:
         return self.store.update_state(
             server.id,
             snapshot_availability="available",
-            freshness=_freshness_at(deadline, int(self.clock.time())),
             latest_pull_status="succeeded",
             latest_scan_result=status["status"],
             configuration_sync=_config_sync(status, server),
