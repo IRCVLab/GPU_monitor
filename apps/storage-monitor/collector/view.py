@@ -16,6 +16,7 @@ from collector.contract import CAPTURE_SCHEMA, HostManifest, Volume, VolumeCaptu
 from collector.health import Data, Link, data_state
 from collector.inventory import CapacityThresholds, Server
 from collector.jobs import TERMINAL, Job
+from collector.update import Update
 from collector.live_capacity import CapacitySample, LiveCapacity
 from collector.legacy import empty_status
 
@@ -72,14 +73,22 @@ class ServerView:
     error: Optional[str] = None
     transport: Optional[str] = None
     """``gate`` or ``legacy`` (S2): who answered the last observe, else the inventory's choice."""
+    update: Update = Update()
+    release_sha: Optional[str] = None
+    """The agent release the host runs: the gate's report, else the accepted manifest's."""
 
 
 def build_view(server: Server, record, snapshot: Optional[Snapshot], observation: Optional[ObservationView],
-               host_clock: Optional[Tuple[int, float]], error: Optional[str], transport: Optional[str] = None) -> ServerView:
+               host_clock: Optional[Tuple[int, float]], error: Optional[str], transport: Optional[str] = None,
+               release_sha: Optional[str] = None) -> ServerView:
+    manifest = record.data.manifest
+    if release_sha is None and isinstance(manifest, HostManifest):
+        release_sha = manifest.raw["agent"]["release_sha"]
     return ServerView(
         server=server, link=record.link, data=record.data, snapshot=snapshot,
         job=record.job or record.last_job, durations=record.durations,
         observation=observation, host_clock=host_clock, error=error, transport=transport,
+        update=record.update, release_sha=release_sha,
     )
 
 
@@ -332,6 +341,11 @@ def summary_v1(view: ServerView, now_monotonic: float) -> dict:
         "overview_snapshot": overview,
         "active_job": job_v1(view.job, view.server.id),
         "scan_status": scan_status_v1(view, now_monotonic),
+        # Additive under S5: the transport and the agent update track (M3b).
+        "link": {"state": view.link.state, "transport": view.transport or view.server.transport,
+                 "error": view.link.error, "last_ok_unix": view.link.last_ok_unix},
+        "agent": {"release_sha": view.release_sha, "desired": view.update.desired,
+                  "update_state": view.update.state, "last_error": view.update.last_error},
     }
     if view.error:
         row["error"] = {"code": view.error}

@@ -306,7 +306,9 @@ def test_unreadable_store_isolates_one_server(tmp_path):
     assert host.summary("beta-2")["status"] == "error"
     assert "beta-2" not in host.host.observe_calls[-1:], "a server without a readable record contacted its host"
     after = host.summary("alpha-1")
-    assert {key: after[key] for key in healthy if key != "scan_status"} == {key: healthy[key] for key in healthy if key != "scan_status"}
+    volatile = {"scan_status", "link"}  # the tick is a newer contact: last_ok_unix moves on
+    assert {key: after[key] for key in healthy if key not in volatile} == {key: healthy[key] for key in healthy if key not in volatile}
+    assert after["link"]["state"] == "ok"
 
 
 def test_a_transient_capture_read_error_at_startup_keeps_the_record_and_the_capture(tmp_path, monkeypatch):

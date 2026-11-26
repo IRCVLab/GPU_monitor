@@ -26,7 +26,9 @@ def test_c3_fleet_isolates_unreadable_server(collector_api, monkeypatch):
         raise AssertionError("C3 unreadable server disconnected the fleet request") from None
     assert code == 200
     alpha = next(row for row in fleet["servers"] if row["id"] == "alpha-1")
-    assert {k: v for k, v in alpha.items() if k != "scan_status"} == {k: v for k, v in healthy.items() if k != "scan_status"}
+    volatile = {"scan_status", "link"}  # the observe after the restart is a newer contact
+    assert {k: v for k, v in alpha.items() if k not in volatile} == {k: v for k, v in healthy.items() if k not in volatile}
+    assert alpha["link"]["state"] == healthy["link"]["state"] == "ok"
     broken = next(row for row in fleet["servers"] if row.get("id", row.get("server_id")) == "beta-2")
     assert broken["error"]["code"] == "STORE_UNAVAILABLE", "C3 broken server row is not a typed error"
 
@@ -178,3 +180,28 @@ def test_v2_rescan_without_request_id_delivery_answers_503(collector_api):
     host.fleet.start()
     code, body, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
     assert (code, body["error"]) == (503, "RESCAN_UNAVAILABLE")
+
+
+def test_servers_show_each_transport_the_agent_update_track_and_the_rollout(collector_api, tmp_path):
+    import dataclasses
+
+    from collector.test_bug_harness import FakeUpdater
+    from collector.test_rollout import write_agent
+
+    host, request, _ = collector_api
+    host.servers = [dataclasses.replace(host.servers[0], canary=True), dataclasses.replace(host.servers[1], transport="legacy")]
+    host.host.agents["alpha-1"] = FakeUpdater("1" * 40)
+    write_agent(tmp_path / "agent", "2" * 40)
+    host.restart(desired_path=tmp_path / "agent" / "storage-viz-agent.json")
+    host.use_fleet()
+    host.tick()  # stage and activate
+    host.tick()  # the gate reports the new release
+    code, fleet, _ = request("GET", "/api/servers")
+    assert code == 200
+    rows = {row["id"]: row for row in fleet["servers"]}
+    assert rows["alpha-1"]["link"]["transport"] == "gate" and rows["alpha-1"]["link"]["state"] == "ok"
+    assert rows["alpha-1"]["agent"] == {"release_sha": "2" * 40, "desired": "2" * 40, "update_state": "probation",
+                                         "last_error": None}
+    assert rows["beta-2"]["agent"]["update_state"] == "in_sync" and rows["beta-2"]["agent"]["release_sha"] is None
+    assert fleet["rollout"] == {"phase": "canary", "reason": None, "desired_sha": "2" * 40, "release_seq": 7,
+                                "canary": "alpha-1", "passed": []}

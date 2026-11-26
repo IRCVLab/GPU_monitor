@@ -92,7 +92,8 @@ def session(handler):
 def servers(handler):
     runtime = handler.server.runtime
     now = runtime.fleet.clock.monotonic()
-    return json_response({"data_mode": runtime.data_mode, "servers": [summary(runtime, v, now) for v in runtime.fleet.views()]})
+    return json_response({"data_mode": runtime.data_mode, "rollout": runtime.fleet.rollout_view(),
+                          "servers": [summary(runtime, v, now) for v in runtime.fleet.views()]})
 
 
 def scan_status(handler, server_id):

@@ -16,6 +16,8 @@
       "username": "monitoring",
       "identity_file": "/etc/storage-viz/keys/lab-alpha_ed25519",
       "known_hosts_file": "/etc/storage-viz/known_hosts",
+      "transport": "gate",
+      "canary": true,
       "scanner": {
         "server_id": "lab-alpha",
         "scanner_path": "/opt/storage-viz/scanner/hstscan",
@@ -38,6 +40,7 @@
       "username": "monitoring",
       "identity_file": "/etc/storage-viz/keys/lab-beta_ed25519",
       "known_hosts_file": "/etc/storage-viz/known_hosts",
+      "transport": "legacy",
       "scanner": {
         "server_id": "lab-beta",
         "scanner_path": "/opt/storage-viz/scanner/hstscan",

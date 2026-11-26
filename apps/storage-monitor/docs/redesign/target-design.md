@@ -755,6 +755,17 @@ Host requirements become python3, systemd, sudo and OpenSSH 8.1 or later. `cc`, 
 - A self-test failure backs the sha off (6 h doubling, 7 days at most) instead of marking it bad. Only a signed bundle with broken content or below the floor, and a rolled-back release, are marked bad for good. A bundle staged under a sha other than the one CI signed is refused as `SHA_MISMATCH` and marks nothing; an unsafe archive marks only its digest.
 - `rollback-update` is refused (`FLOOR`) when the previous release is below `floor_high_water`. A broken release that raised the floor is fixed forward, not rolled back.
 
+**As built in M3b (2026-11-27).** Central speaks the gate. These points add to or differ from §3.4 and the text above:
+
+- Transport per host, shown as `link.transport`. Inventory `transport: gate` (the default) uses only the gate. `transport: legacy` uses S2 until the gate answers an `observe` with its header, then the gate. Central tries the gate on the first contact and after each failed S2 observe, because a bootstrap turns S2 off. A reply without the header (`NOT_GATE`) sends a reverted host back to S2. Every host that is not bootstrapped at deploy time must be marked `legacy`.
+- `activate-update` and `rollback-update` only queue the updater, so the track reads the answer from `observe` (`update.last_attempt`). An answer counts only when the host finished it at or after the host time of the request (I20). A BUSY answer, or 300 host seconds without one, resends the request to an idle host.
+- Terminal answers: FLOOR, BOOTSTRAP_TOO_OLD, BAD_RELEASE and the host's SELFTEST_BACKOFF go to `refused`. Other failures (signature, digest, a first self-test failure) go to `backoff`.
+- `rolling_back` sends `rollback-update <previous>`, not `activate-update`. A refused rollback (FLOOR) ends `refused`, an edge the diagram lacks.
+- Probation passes on the first `complete` or `partial` run whose `last_run.agent_sha` is the desired release and that started after the activation, once central holds every capture the manifest names. An `INTERNAL_*` volume error on that run, a refused manifest or capture (CONTRACT_REJECTED), `agent.health = broken`, or no such run within the longest volume cadence + 1 h rolls back. The agent reports a scanner killed by a signal as SCANNER_FAILED, which is not a fault, so the run deadline covers it.
+- The rollout halts when a host leaves probation for `rolling_back`, before the host confirms the rollback. Staging slots count hosts in `staging` and `activating`.
+- `fleet.desired_agent()` re-reads `agent/storage-viz-agent.json` when a stat shows it changed. No SIGHUP handler: a dashboard release change restarts the service anyway. A lost `rollout.json` restarts in the canary phase.
+- S2 stays until every host reports the gate transport. `REMOTE_OBSERVATION_SCRIPT` stays with it, because the S2 probe runs it.
+
 **Limits found in M4 (accepted 2026-11-27).** Row paths in `top_files`, `stale` and error rows are capped at 4096 bytes, because the agent and collector reject longer strings. Longer rows are skipped from those lists, but their bytes still count in totals. An error row deeper than that is reported at its deepest ancestor that fits. Tree depth is capped at 128 levels by folding deeper levels into `other_bytes` at the cap (A10, fixed in M5). `vanished_dirs` counts VANISHED, REPLACED and FD_BUDGET_REOPEN_FAILED rows, not EACCES.
 
 ## 5. Bug coverage

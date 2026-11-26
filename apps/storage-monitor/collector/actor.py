@@ -464,7 +464,7 @@ class ServerActor:
 
     def _publish(self) -> None:
         self.view = build_view(self.server, self._record, self._snapshot, self._observation, self._host_clock, self._error,
-                               self._transport)
+                               self._transport, self._agent.release_sha)
 
     def _next_seq(self) -> int:
         self._seq += 1

@@ -98,6 +98,10 @@ class FixtureFleet:
     def views(self) -> list[ServerView]:
         return [self._views[server.id] for server in self.servers]
 
+    def rollout_view(self) -> None:
+        """Fixtures carry no agent release."""
+        return None
+
     def request_rescan(self, server_id: Any, actor_name: str) -> dict[str, Any]:
         self.lookup(server_id)
         raise RescanDisabled()
