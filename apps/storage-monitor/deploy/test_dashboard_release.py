@@ -19,6 +19,19 @@ BUILDER = REPO_ROOT / "apps/storage-monitor/deploy/build-dashboard-release.py"
 APP_ROOT = Path("apps/storage-monitor")
 
 
+class DashboardReleaseManifestTest(unittest.TestCase):
+    def test_every_collector_module_ships_in_the_release(self):
+        sys.path.insert(0, str(REPO_ROOT / "apps/storage-monitor/deploy/server"))
+        try:
+            import storage_dashboard_release as release
+        finally:
+            sys.path.pop(0)
+        collector = REPO_ROOT / "apps/storage-monitor/collector"
+        modules = {f"collector/{p.name}" for p in collector.glob("*.py") if not p.name.startswith("test_")}
+        self.assertEqual(modules - set(release.BUILD_RELEASE_FILES), set(),
+                         "a collector module missing from the release manifest crashes the packaged dashboard on import")
+
+
 class DashboardReleaseBuilderTest(unittest.TestCase):
     maxDiff = None
 
@@ -67,6 +80,7 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "viewer/treemap.js": "export const treemap = {};\n",
             "viewer/users-chart.js": "export const users = {};\n",
             "collector/__init__.py": "",
+            "collector/duration_history.py": "PLANS = ()\n",
             "collector/inventory.py": "SERVER_ID_RE = None\ndef load_inventory(): pass\n",
             "collector/jobs.py": "class RescanJobManager: pass\n",
             "collector/live_capacity.py": "class LiveCapacity: pass\n",
@@ -382,6 +396,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "viewer/treemap.js": b"export const treemap = {};\n",
             "viewer/users-chart.js": b"export const users = {};\n",
             "collector/__init__.py": b"",
+            "collector/duration_history.py": b"PLANS = ()\n",
             "collector/inventory.py": b"def load_inventory(): pass\n",
             "collector/jobs.py": b"class RescanJobManager: pass\n",
             "collector/service.py": b"class PollService: pass\n",

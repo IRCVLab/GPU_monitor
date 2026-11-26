@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping, Protocol
 from collector.inventory import Server
 from collector import snapshot
 from collector.scan_telemetry import empty_status
+from collector import duration_history
 from collector.store import CentralStore, STATE_DEFAULTS, StoreLockedError
 from collector.transport import ACTIVE_SCAN_STATES, TransportError, status_tuple, validate_status_envelope
 
@@ -91,6 +92,34 @@ def _overview_snapshot(payload: Mapping[str, Any] | None) -> dict[str, Any] | No
         "mounts": mounts,
         "users": users,
     }
+
+
+def _count(value: Any) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def record_completed_duration(history: Mapping[str, Any], status: Mapping[str, Any]) -> dict[str, Any] | None:
+    plan = status.get("scan_plan")
+    duration = _count(status.get("last_duration_sec"))
+    finished = status.get("finished_unix")
+    if finished is None:
+        finished = status.get("last_finished_unix")
+    if status.get("state") != "complete" or plan not in duration_history.PLANS or duration is None or not _count(finished):
+        return None
+    entries = history.get(plan, [])
+    if any(recorded == finished for recorded, _ in entries):
+        return None
+    updated = sorted([*entries, [finished, duration]])[-duration_history.LIMIT:]
+    if updated == sorted(entries):
+        return None
+    return {**history, plan: [list(entry) for entry in updated]}
+
+
+def conservative_estimate(history: Mapping[str, Any], plan: str, agent_estimate: Any) -> int | None:
+    candidates = [duration for _, duration in history.get(plan, [])]
+    if _count(agent_estimate) is not None:
+        candidates.append(agent_estimate)
+    return max(candidates, default=None)
 
 
 class Clock(Protocol):
@@ -183,6 +212,7 @@ class PollService:
         self._telemetry_cache: dict[str, ScanObservation] = {}
         self._telemetry_threads: dict[str, threading.Thread] = {}
         self._refresh_threads: dict[str, threading.Thread] = {}
+        self._duration_history = {server.id: self._load_duration_history(server.id) for server in self.servers}
         self._overview_cache = {
             server.id: _overview_snapshot(self.store.load_snapshot(server.id))
             for server in self.servers
@@ -346,6 +376,24 @@ class PollService:
         return self._poll_server_locked(server)
 
 
+    def _load_duration_history(self, server_id: str) -> dict[str, Any]:
+        try:
+            return duration_history.load(duration_history.path_for(self.store.root, server_id))
+        except ValueError:
+            logger.exception("scan duration history unavailable for %s", server_id)
+            return {}
+
+    def _record_duration(self, server_id: str, status: Mapping[str, Any]) -> None:
+        updated = record_completed_duration(self._duration_history[server_id], status)
+        if updated is None:
+            return
+        try:
+            duration_history.save(duration_history.path_for(self.store.root, server_id), updated)
+        except (OSError, ValueError):
+            logger.exception("could not persist scan duration history for %s", server_id)
+            return
+        self._duration_history[server_id] = updated
+
     def _status_with_history(self, server_id: str, status: Mapping[str, Any] | None) -> dict[str, Any]:
         result = empty_status()
         overview = self._overview_cache.get(server_id) or {}
@@ -357,6 +405,11 @@ class PollService:
             result.update({k: v for k, v in status.items() if v is not None})
             if status.get("scan_plan") and "estimate_duration_sec" in status:
                 result["estimate_duration_sec"] = status["estimate_duration_sec"]
+        plan = result["scan_plan"]
+        if plan in duration_history.PLANS:
+            result["estimate_duration_sec"] = conservative_estimate(
+                self._duration_history.get(server_id, {}), plan, result["estimate_duration_sec"],
+            )
         result["snapshot_generation"] = overview.get("scan_generation")
         result["snapshot_finished_unix"] = overview.get("scan_finished_unix")
         return result
@@ -400,6 +453,7 @@ class PollService:
         except Exception as exc:
             status = {"state": "unknown", "error_code": getattr(exc, "code", "TELEMETRY_UNAVAILABLE"), "progress_available": False}
         self._telemetry_cache[server.id] = ScanObservation(started_at, status)
+        self._record_duration(server.id, status)
         published = status.get("published_generation")
         if not published and status.get("state") in {"complete", "partial"}:
             published = status.get("generation")

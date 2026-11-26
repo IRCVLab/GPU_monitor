@@ -36,6 +36,7 @@ REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | froz
         "viewer/treemap.js",
         "viewer/users-chart.js",
         "collector/__init__.py",
+        "collector/duration_history.py",
         "collector/inventory.py",
         "collector/jobs.py",
         "collector/service.py",

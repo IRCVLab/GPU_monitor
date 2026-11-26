@@ -1,3 +1,4 @@
+import pathlib
 import tempfile
 import threading
 import unittest
@@ -357,6 +358,68 @@ class TelemetryTests(unittest.TestCase):
             self.assertIsNone(scoped["estimate_duration_sec"])
             complete["selected_roots"][0]["scan_finished_unix"] = complete["scan_finished_unix"]
             self.assertIsNone(_overview_snapshot(complete)["estimate_duration_sec"])
+
+    def test_estimate_is_longest_recent_completion_and_survives_restart(self):
+        def complete(started, duration):
+            finished = started + duration
+            return {"state": "complete", "scan_plan": "full", "started_unix": started, "finished_unix": finished,
+                    "last_finished_unix": finished, "last_duration_sec": duration, "estimate_duration_sec": duration}
+        running = {"state": "running", "phase": "scanning", "scan_plan": "full", "started_unix": 1795683862,
+                   "last_finished_unix": 1795604525, "last_duration_sec": 24, "estimate_duration_sec": 24}
+        with tempfile.TemporaryDirectory() as td:
+            store = CentralStore(td)
+            clock = FakeClock(1795600000)
+            tx = FakeTransport()
+            svc = PollService([make_server("hinton")], store, tx, clock=clock)
+            # A cold full run, then a warm one: the agent's own estimate drops to the warm 24 s.
+            for observed in (complete(1795500000, 900), complete(1795500000, 900), complete(1795604501, 24), running):
+                tx.fetch_scan_status = lambda server, observed=observed: transport.RemoteScanObservation(dict(observed))
+                clock.now += 60
+                self.poll_status(svc)
+            self.assertEqual(svc.scan_status_for_api("hinton")["estimate_duration_sec"], 900)
+
+            restarted = PollService([make_server("hinton")], store, tx, clock=clock)
+            clock.now += 60
+            self.poll_status(restarted)
+            status = restarted.scan_status_for_api("hinton")
+            self.assertEqual(status["state"], "running")
+            self.assertEqual(status["estimate_duration_sec"], 900)
+            self.assertNotIn("scan_duration_history", store.load_state("hinton"),
+                             "history stays outside the validated state so an older collector can still load it")
+
+    def test_history_write_failure_is_retried_without_breaking_telemetry(self):
+        with tempfile.TemporaryDirectory() as td:
+            store = CentralStore(td)
+            tx = FakeTransport()
+            tx.fetch_scan_status = lambda server: transport.RemoteScanObservation({
+                "state": "complete", "scan_plan": "full", "finished_unix": 1795500900,
+                "last_finished_unix": 1795500900, "last_duration_sec": 900,
+            })
+            clock = FakeClock(1795600000)
+            svc = PollService([make_server()], store, tx, clock=clock)
+            history_dir = pathlib.Path(td) / "scan-duration-history"
+            history_dir.write_text("not a directory")
+            clock.now += 3600
+            self.poll_status(svc)
+            status = svc.scan_status_for_api("alpha-1")
+            self.assertEqual(status["state"], "complete")
+            history_dir.unlink()
+            tx.fetch_scan_status = lambda server: transport.RemoteScanObservation({"state": "running", "scan_plan": "full"})
+            clock.now += 3600
+            self.poll_status(svc)
+            self.assertIsNone(svc.scan_status_for_api("alpha-1")["estimate_duration_sec"])
+            tx.fetch_scan_status = lambda server: transport.RemoteScanObservation({
+                "state": "complete", "scan_plan": "full", "finished_unix": 1795500900,
+                "last_finished_unix": 1795500900, "last_duration_sec": 900,
+            })
+            clock.now += 3600
+            self.poll_status(svc)
+            restarted = PollService([make_server()], store, tx, clock=clock)
+            tx.fetch_scan_status = lambda server: transport.RemoteScanObservation({"state": "running", "scan_plan": "full"})
+            clock.now += 3600
+            self.poll_status(restarted)
+            self.assertEqual(restarted.scan_status_for_api("alpha-1")["estimate_duration_sec"], 900,
+                             "a completion whose write failed is retried and kept across a restart")
 
     def test_missing_run_identity_does_not_validate_uncorrelated_progress(self):
         from collector.scan_telemetry import merge_status

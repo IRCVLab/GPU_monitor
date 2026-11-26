@@ -910,5 +910,61 @@ class PollServiceTests(unittest.TestCase):
         self.assertEqual(state["latest_pull_status"], "unreachable")
 
 
+class ScanDurationHistoryTests(unittest.TestCase):
+    @staticmethod
+    def complete(finished, duration, plan="full", **extra):
+        return {"state": "complete", "scan_plan": plan, "finished_unix": finished,
+                "last_finished_unix": finished, "last_duration_sec": duration, **extra}
+
+    def test_repeated_observations_of_one_completion_are_recorded_once(self):
+        from collector.service import record_completed_duration
+        history = record_completed_duration({}, self.complete(1000, 24))
+        self.assertEqual(history, {"full": [[1000, 24]]})
+        self.assertIsNone(record_completed_duration(history, self.complete(1000, 24)))
+        legacy = {"state": "complete", "scan_plan": "full", "last_finished_unix": 1000, "last_duration_sec": 24}
+        self.assertIsNone(record_completed_duration(history, legacy))
+        self.assertEqual(record_completed_duration(history, self.complete(1000, 7, plan="ssd")),
+                         {"full": [[1000, 24]], "ssd": [[1000, 7]]})
+
+    def test_window_keeps_the_five_latest_completions_without_mutating_input(self):
+        from collector.service import record_completed_duration
+        history = {}
+        for finished, duration in ((1000, 900), (2000, 24), (3000, 30), (4000, 40), (5000, 50)):
+            history = record_completed_duration(history, self.complete(finished, duration))
+        before = copy.deepcopy(history)
+        updated = record_completed_duration(history, self.complete(6000, 60))
+        self.assertEqual(updated["full"], [[2000, 24], [3000, 30], [4000, 40], [5000, 50], [6000, 60]])
+        self.assertEqual(history, before)
+        self.assertIsNone(record_completed_duration(updated, self.complete(1500, 15)),
+                          "a completion older than the whole window changes nothing and is not rewritten")
+        late = record_completed_duration(updated, self.complete(2500, 25))
+        self.assertEqual(late["full"], [[2500, 25], [3000, 30], [4000, 40], [5000, 50], [6000, 60]])
+
+    def test_only_successful_plan_scoped_completions_are_recorded(self):
+        from collector.service import record_completed_duration
+        ignored = [
+            dict(self.complete(1000, 24), state=state) for state in ("running", "partial", "failed", "idle", "unknown")
+        ] + [
+            self.complete(1000, 24, plan=None),
+            self.complete(1000, -1),
+            self.complete(1000, True),
+            self.complete(1000, 24.5),
+            {"state": "complete", "scan_plan": "full", "last_duration_sec": 24},
+        ]
+        for status in ignored:
+            with self.subTest(status=status):
+                self.assertIsNone(record_completed_duration({}, status))
+
+    def test_estimate_is_the_longest_known_duration(self):
+        from collector.service import conservative_estimate
+        history = {"full": [[1000, 900], [2000, 24]], "ssd": [[1500, 18]]}
+        self.assertEqual(conservative_estimate(history, "full", 24), 900)
+        self.assertEqual(conservative_estimate(history, "full", 1200), 1200)
+        self.assertEqual(conservative_estimate(history, "ssd", None), 18)
+        self.assertEqual(conservative_estimate({}, "full", 24), 24)
+        self.assertIsNone(conservative_estimate({}, "full", None))
+        self.assertIsNone(conservative_estimate({}, "full", True))
+
+
 if __name__ == "__main__":
     unittest.main()
