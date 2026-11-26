@@ -6,7 +6,7 @@ import time
 from typing import Any, Mapping
 
 from collector.errors import RescanDisabled, UnknownServer
-from collector.health import Data
+from collector.health import Data, LegacyPublication
 from collector.ids import SERVER_ID_RE
 from collector.inventory import Server as InventoryServer
 from collector.store import Record
@@ -84,7 +84,7 @@ class FixtureFleet:
     def _build_view(self, server: InventoryServer) -> ServerView:
         snapshot = render_snapshot(self._read(self._files[server.id]))
         manifest = {"status": snapshot.scan_result, "config_digest": server.scanner_digest}
-        return build_view(server, Record(data=Data(manifest=manifest)), snapshot, None, None, None)
+        return build_view(server, Record(data=Data(manifest=LegacyPublication(manifest))), snapshot, None, None, None)
 
     def lookup(self, server_id: Any) -> InventoryServer:
         if server_id not in self._views:

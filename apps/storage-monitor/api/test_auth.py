@@ -172,7 +172,7 @@ class SnapshotRouteTest(unittest.TestCase):
             self.assertEqual(view["mounts"][0]["severity"], "warning")
         self.assertEqual(detail["top_files"][0]["age_days"], 1)
         self.assertEqual(detail["stale"][0]["age_days"], 1)
-        stored = json.loads(self.host.actor("hinton").store.read_capture(self.host.fleet.view("hinton").data.accepted))
+        stored = json.loads(self.host.actor("hinton").store.read_capture("legacy", self.host.fleet.view("hinton").data.accepted["legacy"]))
         self.assertEqual(stored["stale"][0]["age_days"], 999)
         self.assertNotIn("severity", stored["mounts"][0])
 

@@ -17,17 +17,18 @@ import types
 import typing
 from typing import Any, Collection, Mapping, Optional, Tuple
 
-from collector import jobs, update
+from collector import contract, jobs, update
 from collector.errors import StoreUnavailable
-from collector.health import LEGACY_VOLUME, LINK_STATES, Data, Link
-from collector.ids import SERVER_ID_RE
+from collector.health import LEGACY_VOLUME, LINK_STATES, Data, LegacyPublication, Link
+from collector.ids import SERVER_ID_RE, VOLUME_ID_RE
 from collector.jobs import Job
 from collector.update import Update
 
 _LOG = logging.getLogger(__name__)
 
 RECORD_SCHEMA = "storage-viz.server-record/2"
-RECORD_KEYS = frozenset({"schema", "server_id", "manifest", "accepted", "rejected", "link", "job", "last_job", "update", "durations"})
+RECORD_KEYS = frozenset({"schema", "server_id", "manifest", "manifest_sha256", "accepted", "rejected", "link", "job",
+                         "last_job", "update", "durations"})
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 DURATION_PLANS = ("full", "ssd")
 DURATION_LIMIT = 5
@@ -67,41 +68,42 @@ class ServerStore:
         except (OSError, ValueError, TypeError, KeyError) as exc:
             raise StoreUnavailable(f"record unreadable: {type(exc).__name__}") from exc
 
-    def read_capture(self, sha: str) -> bytes:
-        path = self._capture_path(sha)
+    def read_capture(self, volume_id: str, sha: str) -> bytes:
+        path = self._capture_path(volume_id, sha)
         try:
             _reject_symlinks(path)
             return path.read_bytes()
         except OSError as exc:
             raise StoreUnavailable("capture unreadable") from exc
 
-    def commit(self, record: Record, capture: Optional[Tuple[str, bytes]] = None, *, prune: bool = True) -> None:
-        """Write the capture if any, then the record; with ``prune``, then delete captures the record does not name."""
+    def commit(self, record: Record, capture: Optional[Tuple[str, str, bytes]] = None, *, prune: bool = True) -> None:
+        """Write the capture if any, then the record; with ``prune``, then delete captures the record does not name.
+        ``capture`` is (volume_id, sha256, bytes exactly as fetched)."""
         try:
             for directory in (self.state_root / "servers", self.directory, self.captures):
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 _reject_symlinks(directory)
             if capture is not None:
-                _write_atomic(self._capture_path(capture[0]), capture[1])
+                _write_atomic(self._capture_path(capture[0], capture[1]), capture[2])
             _write_atomic(self.record_path, _encode_record(record, self.server_id))
             if prune:
                 self._prune(record)
         except (OSError, ValueError) as exc:
             raise StoreUnavailable(f"record not writable: {type(exc).__name__}") from exc
 
-    def _capture_path(self, sha: str) -> pathlib.Path:
+    def _capture_path(self, volume_id: str, sha: str) -> pathlib.Path:
         if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
             raise ValueError("capture name is not a sha256")
         # SHIM(M2b..M5c) S3: a v1 snapshot is plain JSON, so it keeps a .json name.
-        return self.captures / f"{sha}.json"
+        return self.captures / (f"{sha}.json" if volume_id == LEGACY_VOLUME else f"{sha}.json.gz")
 
     def _prune(self, record: Record) -> None:
-        keep = {self._capture_path(record.data.accepted).name} if record.data.accepted else set()
+        keep = {self._capture_path(volume_id, sha).name for volume_id, sha in record.data.accepted.items()}
         for path in self.captures.iterdir():
             if path.name not in keep:
                 path.unlink(missing_ok=True)
 
-    def import_legacy(self) -> Optional[Tuple[Record, Optional[Tuple[str, bytes]]]]:
+    def import_legacy(self) -> Optional[Tuple[Record, Optional[Tuple[str, str, bytes]]]]:
         """SHIM(M2b..M9) R1, S6: seed a new record from the old store, read only.
 
         Takes the old store's current snapshot with its verified digest, its last job and
@@ -161,11 +163,14 @@ def _write_atomic(path: pathlib.Path, data: bytes) -> None:
 
 def _encode_record(record: Record, server_id: str) -> bytes:
     data = record.data
+    manifest = data.manifest
     value = {
         "schema": RECORD_SCHEMA,
         "server_id": server_id,
-        "manifest": data.manifest,
-        "accepted": {LEGACY_VOLUME: data.accepted} if data.accepted else {},
+        "manifest": manifest.envelope if isinstance(manifest, LegacyPublication) else (manifest.raw if manifest else None),
+        # The sha of the manifest bytes the host wrote; the verbatim object no longer hashes to it.
+        "manifest_sha256": manifest.sha256 if isinstance(manifest, contract.HostManifest) else None,
+        "accepted": dict(data.accepted),
         "rejected": data.rejected,
         "link": asdict(record.link),
         "job": asdict(record.job) if record.job else None,
@@ -182,20 +187,23 @@ def _parse_record(raw: Any, server_id: str) -> Record:
     if raw["schema"] != RECORD_SCHEMA or raw["server_id"] != server_id:
         raise ValueError("record belongs to another schema or server")
     accepted = raw["accepted"]
-    if not isinstance(accepted, dict) or not set(accepted) <= {LEGACY_VOLUME}:
+    if not isinstance(accepted, dict) or not all(
+            (key == LEGACY_VOLUME or VOLUME_ID_RE.fullmatch(key)) and isinstance(sha, str) and SHA_RE.fullmatch(sha)
+            for key, sha in accepted.items()):
         raise ValueError("record accepted is malformed")
-    sha = accepted.get(LEGACY_VOLUME)
-    if sha is not None and not SHA_RE.fullmatch(sha):
-        raise ValueError("record accepted sha is malformed")
     rejected = raw["rejected"]
     if not isinstance(rejected, dict) or not all(SHA_RE.fullmatch(key) and isinstance(value, dict) for key, value in rejected.items()):
         raise ValueError("record rejected is malformed")
     if raw["manifest"] is not None and not isinstance(raw["manifest"], dict):
         raise ValueError("record manifest is malformed")
+    if raw["manifest_sha256"] is not None:
+        manifest = contract.parse_manifest_object(raw["manifest"], raw["manifest_sha256"])
+    else:
+        manifest = LegacyPublication(raw["manifest"]) if raw["manifest"] is not None else None
     active_states = frozenset(jobs.STATES) - jobs.TERMINAL
     return Record(
         link=_dataclass(Link, raw["link"], LINK_STATES),
-        data=Data(manifest=raw["manifest"], accepted=sha, rejected=rejected),
+        data=Data(manifest=manifest, accepted=accepted, rejected=rejected),
         job=_dataclass(Job, raw["job"], active_states) if raw["job"] is not None else None,
         last_job=_dataclass(Job, raw["last_job"], jobs.TERMINAL) if raw["last_job"] is not None else None,
         update=_dataclass(Update, raw["update"], update.STATES),
@@ -278,7 +286,7 @@ def _old_manifest(old: pathlib.Path) -> Optional[dict]:
     return None
 
 
-def _old_capture(path: pathlib.Path, server_id: str) -> Tuple[Tuple[str, bytes], Data]:
+def _old_capture(path: pathlib.Path, server_id: str) -> Tuple[Tuple[str, str, bytes], Data]:
     sha = _OLD_SNAPSHOT_RE.fullmatch(path.name).group(1)
     data = path.read_bytes()
     payload = json.loads(data)
@@ -296,7 +304,7 @@ def _old_capture(path: pathlib.Path, server_id: str) -> Tuple[Tuple[str, bytes],
         "scan_finished_unix": payload["scan_finished_unix"],
         "config_digest": payload["config_digest"],
     }
-    return (sha, data), Data(manifest=manifest, accepted=sha)
+    return (LEGACY_VOLUME, sha, data), Data(manifest=LegacyPublication(manifest), accepted={LEGACY_VOLUME: sha})
 
 
 def _old_job(active: Any) -> Optional[Job]:

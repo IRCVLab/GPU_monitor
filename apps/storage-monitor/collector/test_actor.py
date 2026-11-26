@@ -320,10 +320,10 @@ def test_a_transient_capture_read_error_at_startup_keeps_the_record_and_the_capt
     read = ServerStore.read_capture
     failures = [StoreUnavailable("capture unreadable")]
 
-    def flaky(store, sha):
+    def flaky(store, volume_id, sha):
         if failures:
             raise failures.pop()
-        return read(store, sha)
+        return read(store, volume_id, sha)
 
     monkeypatch.setattr(ServerStore, "read_capture", flaky)
     host.host.observe_errors["alpha-1"] = transport_error("UNREACHABLE")
@@ -712,7 +712,7 @@ def test_idle_observes_do_not_rewrite_the_record(tmp_path, monkeypatch):
     assert writes == [], f"{len(writes)} observes that changed nothing durable rewrote the record"
     host.host.publish("alpha-1", started=1719203000)
     host.tick()
-    assert writes and ServerStore(host.state_dir, "alpha-1").load().data.accepted == host.host.publications["alpha-1"]["sha256"]
+    assert writes and ServerStore(host.state_dir, "alpha-1").load().data.accepted == {"legacy": host.host.publications["alpha-1"]["sha256"]}
 
 
 def test_contact_sequence_numbers_keep_increasing_across_a_restart(tmp_path, monkeypatch):

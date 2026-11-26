@@ -162,7 +162,7 @@ def latest_pull_status(view: ServerView) -> str:
 
 def latest_scan_result(view: ServerView) -> str:
     manifest = view.data.manifest
-    if manifest is not None and manifest.get("status") == "failed":
+    if manifest is not None and manifest.scan_failed():
         return "failed"
     return view.snapshot.scan_result if view.snapshot is not None else "failed"
 
@@ -171,7 +171,7 @@ def configuration_sync(view: ServerView) -> str:
     manifest = view.data.manifest
     if manifest is None:
         return "unknown"
-    return "in_sync" if manifest.get("config_digest") == view.server.scanner_digest else "drifted"
+    return "in_sync" if manifest.config_digest == view.server.scanner_digest else "drifted"
 
 
 def scan_status_v1(view: ServerView, now_monotonic: float) -> dict:

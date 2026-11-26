@@ -1,15 +1,29 @@
 from collector import health
+from collector.contract import parse_manifest
 from collector.health import (
-    CaptureAccepted, CaptureMismatch, CaptureRejected, Data, ExchangeFailed, ExchangeOk, Fetch, Link,
-    PublicationObserved, TransferFailed, data_state, reduce_data, reduce_link,
+    LEGACY_VOLUME as LEGACY, CaptureAccepted, CaptureMismatch, CaptureRejected, Data, ExchangeFailed, ExchangeOk,
+    Fetch, LegacyPublication, Link, PublicationObserved, TransferFailed, data_state, reduce_data, reduce_link,
+    volume_state,
 )
+from collector.test_contract import encode, manifest_doc, volume_doc
 from tests.machine_check import assert_table_total, run_random_events
 
 SHA_A, SHA_B, SHA_C = "a" * 64, "b" * 64, "c" * 64
 
 
 def envelope(sha, status="complete"):
-    return {"generation": f"alpha-1-{ord((sha or 'x')[0])}-v1.json", "sha256": sha, "status": status}
+    return LegacyPublication({"generation": f"alpha-1-{ord((sha or 'x')[0])}-v1.json", "sha256": sha, "status": status})
+
+
+VA, VB = "v-000000000000000a", "v-000000000000000b"
+
+
+def manifest(a=None, b=None, seq=1):
+    """A v2 manifest naming volumes VA and VB with the given capture shas."""
+    return parse_manifest(encode(manifest_doc(seq=seq, volumes=[
+        volume_doc(VA, "b-000000000000000a", "/a", capture=(a, 10) if a else None),
+        volume_doc(VB, "b-000000000000000b", "/b", capture=(b, 10) if b else None),
+    ])))
 
 
 def test_c1_observe_success_clears_unreachable():
@@ -61,38 +75,74 @@ def test_link_random_events():
 
 def test_data_fetches_a_new_publication_once_and_accepts_it():
     data, effects = reduce_data(Data(), PublicationObserved(envelope(SHA_A)))
-    assert effects == (Fetch(envelope(SHA_A)),) and data_state(data) == "none"
+    assert effects == (Fetch(LEGACY, SHA_A, envelope(SHA_A)),) and data_state(data) == "none"
     again, effects = reduce_data(data, PublicationObserved(envelope(SHA_A)))
     assert effects == (), "a capture already in flight was fetched twice"
-    data, _ = reduce_data(again, CaptureAccepted(SHA_A))
-    assert (data.accepted, data_state(data)) == (SHA_A, "current")
+    data, _ = reduce_data(again, CaptureAccepted(LEGACY, SHA_A))
+    assert (data.accepted, data_state(data)) == ({LEGACY: SHA_A}, "current")
     assert reduce_data(data, PublicationObserved(envelope(SHA_A))) == (data, ())
 
 
 def test_data_rejected_capture_is_never_fetched_again_and_keeps_last_good():
-    data, _ = reduce_data(Data(accepted=SHA_A), PublicationObserved(envelope(SHA_B)))
-    data, _ = reduce_data(data, CaptureRejected(SHA_B, "alpha-1-98-v1", "INVALID", at=5))
-    assert (data.accepted, data_state(data)) == (SHA_A, "stale_rejected")
+    data, _ = reduce_data(Data(accepted={LEGACY: SHA_A}), PublicationObserved(envelope(SHA_B)))
+    data, _ = reduce_data(data, CaptureRejected(LEGACY, SHA_B, "alpha-1-98-v1", "INVALID", at=5))
+    assert (data.accepted, data_state(data)) == ({LEGACY: SHA_A}, "stale_rejected")
     for _ in range(100):
         data, effects = reduce_data(data, PublicationObserved(envelope(SHA_B)))
         assert effects == ()
     data, effects = reduce_data(data, PublicationObserved(envelope(SHA_C)))
-    assert effects == (Fetch(envelope(SHA_C)),) and SHA_B not in data.rejected
+    assert effects == (Fetch(LEGACY, SHA_C, envelope(SHA_C)),) and SHA_B not in data.rejected
 
 
 def test_data_mismatch_gets_one_clean_retry_then_is_rejected():
     data, _ = reduce_data(Data(), PublicationObserved(envelope(SHA_A)))
-    data, _ = reduce_data(data, CaptureMismatch(SHA_A, None, at=1))
+    data, _ = reduce_data(data, CaptureMismatch(LEGACY, SHA_A, None, at=1))
     data, effects = reduce_data(data, PublicationObserved(envelope(SHA_A)))
-    assert effects == (Fetch(envelope(SHA_A)),)
-    data, _ = reduce_data(data, CaptureMismatch(SHA_A, None, at=2))
+    assert effects == (Fetch(LEGACY, SHA_A, envelope(SHA_A)),)
+    data, _ = reduce_data(data, CaptureMismatch(LEGACY, SHA_A, None, at=2))
     assert data.rejected[SHA_A]["reason"] == "SHA_MISMATCH"
     assert reduce_data(data, PublicationObserved(envelope(SHA_A)))[1] == ()
 
 
 def test_data_failed_status_keeps_capture_and_fetches_nothing():
-    data, effects = reduce_data(Data(accepted=SHA_A), PublicationObserved(envelope(None, "failed")))
-    assert effects == () and data_state(data) == "current" and data.manifest["status"] == "failed"
+    data, effects = reduce_data(Data(accepted={LEGACY: SHA_A}), PublicationObserved(envelope(None, "failed")))
+    assert effects == () and data_state(data) == "current" and data.manifest.scan_failed()
+
+
+def test_data_fetches_each_volume_and_one_rejection_does_not_block_another():
+    m = manifest(SHA_A, SHA_B)
+    data, effects = reduce_data(Data(), PublicationObserved(m))
+    assert {(f.volume_id, f.sha) for f in effects} == {(VA, SHA_A), (VB, SHA_B)}
+    data, _ = reduce_data(data, CaptureRejected(VA, SHA_A, None, "TREE_SUM_MISMATCH", at=1))
+    data, _ = reduce_data(data, CaptureAccepted(VB, SHA_B))
+    assert data.accepted == {VB: SHA_B}
+    assert (volume_state(data, VA), volume_state(data, VB)) == ("none", "current")
+    assert data.rejected[SHA_A] == {"volume_id": VA, "reason": "TREE_SUM_MISMATCH", "at": 1}
+    assert reduce_data(data, PublicationObserved(m))[1] == (), "a rejected capture was fetched again"
+
+
+def test_data_volume_with_a_rejected_new_capture_keeps_its_last_accepted_sha():
+    data = Data(manifest=manifest(SHA_A, SHA_B), accepted={VA: SHA_A, VB: SHA_B})
+    data, effects = reduce_data(data, PublicationObserved(manifest(SHA_C, SHA_B, seq=2)))
+    assert [(f.volume_id, f.sha) for f in effects] == [(VA, SHA_C)]
+    data, _ = reduce_data(data, CaptureRejected(VA, SHA_C, None, "BINDING_MISMATCH", at=3))
+    assert data.accepted == {VA: SHA_A, VB: SHA_B}
+    assert (volume_state(data, VA), volume_state(data, VB), data_state(data)) == ("stale_rejected", "current", "stale_rejected")
+
+
+def test_data_drops_volumes_and_rejections_the_manifest_no_longer_names():
+    data = Data(manifest=manifest(SHA_A, SHA_B), accepted={VA: SHA_A, LEGACY: SHA_C},
+                rejected={SHA_B: {"volume_id": VB, "reason": "X", "at": 0}, SHA_C: {"volume_id": VB, "reason": "X", "at": 0}})
+    data, _ = reduce_data(data, PublicationObserved(manifest(SHA_A, SHA_B)))
+    assert data.accepted == {VA: SHA_A}, "the v1 capture outlived the switch to v2"
+    assert set(data.rejected) == {SHA_B}
+
+
+def test_data_capture_for_a_superseded_sha_is_not_accepted():
+    data, _ = reduce_data(Data(), PublicationObserved(manifest(SHA_A)))
+    data, _ = reduce_data(data, PublicationObserved(manifest(SHA_B, seq=2)))
+    data, _ = reduce_data(data, CaptureAccepted(VA, SHA_A))
+    assert data.accepted == {} and SHA_A not in data.fetching
 
 
 def test_data_table_total():
@@ -101,30 +151,40 @@ def test_data_table_total():
 
 def test_data_random_events():
     shas = (SHA_A, SHA_B, SHA_C, None)
+    volumes = (VA, VB, LEGACY)
+    manifests = {(a, b): manifest(a, b) for a in shas for b in shas}
 
     def event(rng, data, index):
         sha = rng.choice(shas[:3])
+        volume = rng.choice(volumes)
+        if data.fetching and rng.random() < 0.7:
+            sha = rng.choice(sorted(data.fetching))
         kind = rng.randrange(5)
         if kind == 0:
-            pick = rng.choice(shas)
-            return PublicationObserved(envelope(pick, rng.choice(("complete", "partial", "failed"))) if pick else None)
+            if rng.random() < 0.5:
+                pick = rng.choice(shas)
+                return PublicationObserved(envelope(pick, rng.choice(("complete", "partial", "failed"))) if pick else LegacyPublication())
+            return PublicationObserved(manifests[(rng.choice(shas), rng.choice(shas))])
         if kind == 1:
-            return CaptureAccepted(data.fetching if rng.random() < 0.7 and data.fetching else sha)
+            return CaptureAccepted(volume, sha)
         if kind == 2:
-            return CaptureRejected(sha, None, "INVALID", at=index)
+            return CaptureRejected(volume, sha, None, "INVALID", at=index)
         if kind == 3:
-            return CaptureMismatch(data.fetching or sha, None, at=index)
-        return TransferFailed(data.fetching or sha)
+            return CaptureMismatch(volume, sha, None, at=index)
+        return TransferFailed(volume, sha)
 
     def check(before, event, after, effects):
-        assert after.accepted not in after.rejected, "a sha is both accepted and rejected"
+        assert not set(after.accepted.values()) & set(after.rejected), "a sha is both accepted and rejected"
         assert len(after.rejected) <= health.MAX_REJECTED
-        assert len(effects) <= 1
         for fetch in effects:
-            sha = fetch.manifest["sha256"]
-            assert sha not in before.rejected and sha != before.accepted, "fetched a rejected or held capture"
-            assert before.fetching is None, "two transfers in flight"
-            assert after.fetching == sha
+            assert fetch.sha not in before.rejected, "fetched a rejected capture"
+            assert fetch.sha != before.accepted.get(fetch.volume_id), "fetched a held capture"
+            assert fetch.sha not in before.fetching, "two transfers of one capture"
+            assert fetch.sha in after.fetching
+        if isinstance(event, CaptureAccepted) and after.accepted != before.accepted:
+            assert event.sha in before.fetching and health.targets(after)[event.volume_id] == event.sha
+        if after.manifest is not None:
+            assert set(after.accepted) <= set(after.manifest.targets()), "held a volume the manifest does not name"
         assert data_state(after) in health.DATA_STATES
 
     run_random_events(lambda rng: Data(), event, reduce_data, check)

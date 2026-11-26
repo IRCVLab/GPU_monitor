@@ -19,7 +19,8 @@ from typing import Any, Callable, Mapping, Optional, Protocol
 from collector import health, jobs, judge, snapshot
 from collector.errors import StoreUnavailable
 from collector.health import (
-    CaptureAccepted, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, PublicationObserved, TransferFailed,
+    LEGACY_VOLUME, CaptureAccepted, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
+    LegacyPublication, PublicationObserved, TransferFailed,
 )
 from collector.inventory import Server
 from collector.store import DURATION_LIMIT, DURATION_PLANS, Record, ServerStore
@@ -114,6 +115,7 @@ class Admitted:
 @dataclass(frozen=True)
 class Fetched:
     seq: int
+    volume_id: str
     sha: str
     generation: Optional[str]
     outcome: str
@@ -135,18 +137,18 @@ STOP = object()
 
 def _capture_event(message: Fetched, at: int) -> health.DataEvent:
     if message.outcome == "accepted":
-        return CaptureAccepted(message.sha)
+        return CaptureAccepted(message.volume_id, message.sha)
     if message.outcome == "rejected":
-        return CaptureRejected(message.sha, message.generation, message.code, at)
+        return CaptureRejected(message.volume_id, message.sha, message.generation, message.code, at)
     if message.outcome == "mismatch":
-        return CaptureMismatch(message.sha, message.generation, at)
-    return TransferFailed(message.sha)
+        return CaptureMismatch(message.volume_id, message.sha, message.generation, at)
+    return TransferFailed(message.volume_id, message.sha)
 
 
 def _durable(record: Record) -> Record:
     """The record less what changes on every exchange or lives only in memory; a change here needs a write."""
     return replace(record, link=replace(record.link, seq=0, last_ok_unix=None),
-                   data=replace(record.data, fetching=None, retried=frozenset()))
+                   data=replace(record.data, fetching=frozenset(), retried=frozenset()))
 
 
 def record_duration(durations: Mapping[str, Any], status: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -248,8 +250,8 @@ class ServerActor:
             self.store.commit(stored, capture, prune=False)
         self._snapshot = self._load_snapshot(stored)
         record = stored
-        if self._snapshot is None and record.data.accepted is not None:
-            record = replace(record, data=replace(record.data, accepted=None))
+        if self._snapshot is None and record.data.accepted:
+            record = replace(record, data=replace(record.data, accepted={}))
         if record.job is not None:
             record = self._with_job(record, jobs.reduce(record.job, jobs.Restarted(int(self.clock.time())))[0])
         if record != stored:
@@ -261,10 +263,10 @@ class ServerActor:
         self._next_contact = 0.0
 
     def _load_snapshot(self, record: Record) -> Optional[Snapshot]:
-        sha = record.data.accepted
+        sha = record.data.accepted.get(LEGACY_VOLUME)
         if sha is None:
             return None
-        stored = self.store.read_capture(sha)
+        stored = self.store.read_capture(LEGACY_VOLUME, sha)
         try:
             return render_snapshot(json.loads(stored))
         except ValueError:
@@ -367,7 +369,7 @@ class ServerActor:
         record = self._record
         if observation.publication_error is None:
             link_event = ExchangeOk(seq, at)
-            data, fetches = health.reduce_data(record.data, PublicationObserved(observation.publication))
+            data, fetches = health.reduce_data(record.data, PublicationObserved(LegacyPublication(observation.publication)))
         else:
             link_event = ExchangeFailed(seq, at, observation.publication_error)
             data, fetches = record.data, ()
@@ -381,7 +383,7 @@ class ServerActor:
         if not self._commit(record):
             return
         for fetch in fetches:
-            self._start_transfer(fetch.manifest)
+            self._start_transfer(fetch)
         for _ in dispatches:
             self._start_rescan()
 
@@ -417,9 +419,10 @@ class ServerActor:
 
     # ------------------------------------------------------------ transfers
 
-    def _start_transfer(self, manifest: Mapping[str, Any]) -> None:
+    def _start_transfer(self, fetch: Fetch) -> None:
         seq = self._next_seq()
-        sha = manifest["sha256"]
+        manifest = fetch.publication.envelope
+        volume_id, sha = fetch.volume_id, fetch.sha
         generation = manifest["generation"].removesuffix(".json")
         server, host, transfers = self.server, self.host, self.transfers
 
@@ -431,25 +434,25 @@ class ServerActor:
                 outcome = "mismatch" if exc.code in _MISMATCH_CODES else (
                     "transport" if exc.code in health.TRANSPORT_CODES | health.AUTH_CODES else (
                         "rejected" if exc.code in _REJECT_CODES else "retry"))
-                self.post(Fetched(seq, sha, generation, outcome, exc.code))
+                self.post(Fetched(seq, volume_id, sha, generation, outcome, exc.code))
                 return
             except Exception:
                 _LOG.exception("capture transfer failed for %s", server.id)
-                self.post(Fetched(seq, sha, generation, "retry", "TRANSFER_FAILED"))
+                self.post(Fetched(seq, volume_id, sha, generation, "retry", "TRANSFER_FAILED"))
                 return
             desired = snapshot.DesiredServer(server_id=server.id, config_digest=server.scanner_digest)
             try:
                 valid = snapshot.validate_download(manifest, data, desired)
             except _CONTENT_ERRORS as exc:
                 mismatch = str(exc) in _MISMATCH_MESSAGES
-                self.post(Fetched(seq, sha, generation, "mismatch" if mismatch else "rejected",
+                self.post(Fetched(seq, volume_id, sha, generation, "mismatch" if mismatch else "rejected",
                                   "SHA_MISMATCH" if mismatch else "INVALID_SNAPSHOT"))
                 return
             except Exception:
                 _LOG.exception("capture validation failed for %s", server.id)
-                self.post(Fetched(seq, sha, generation, "retry", "TRANSFER_FAILED"))
+                self.post(Fetched(seq, volume_id, sha, generation, "retry", "TRANSFER_FAILED"))
                 return
-            self.post(Fetched(seq, sha, generation, "accepted", payload=valid.payload, data=data))
+            self.post(Fetched(seq, volume_id, sha, generation, "accepted", payload=valid.payload, data=data))
 
         self.spawn(work, f"storage-viz-transfer-{server.id}")
 
@@ -460,22 +463,22 @@ class ServerActor:
             link_event = ExchangeFailed(message.seq, at, message.code) if message.outcome == "transport" else ExchangeOk(message.seq, at)
             data, _ = health.reduce_data(record.data, _capture_event(message, at))
             record = replace(record, link=health.reduce_link(record.link, link_event), data=data)
-            accepted = message.outcome == "accepted" and data.accepted == message.sha != self._record.data.accepted
+            accepted = data.accepted.get(message.volume_id) == message.sha != self._record.data.accepted.get(message.volume_id)
             held = render_snapshot(message.payload) if accepted else self._snapshot
             if record.job is not None and record.job.state == "collecting":
                 job, _ = self._job_observed(record, held)
                 record = self._with_job(record, job)
         except Exception:
-            self._drop_fetch(message.sha)
+            self._drop_fetch(message.volume_id, message.sha)
             raise
-        if not self._commit(record, (message.sha, message.data) if accepted else None):
-            self._drop_fetch(message.sha)
+        if not self._commit(record, (message.volume_id, message.sha, message.data) if accepted else None):
+            self._drop_fetch(message.volume_id, message.sha)
             return
         self._snapshot = held
 
-    def _drop_fetch(self, sha: str) -> None:
+    def _drop_fetch(self, volume_id: str, sha: str) -> None:
         """The transfer's result was not applied, so the next observe fetches the capture again."""
-        data, _ = health.reduce_data(self._record.data, TransferFailed(sha))
+        data, _ = health.reduce_data(self._record.data, TransferFailed(volume_id, sha))
         self._record = replace(self._record, data=data)
 
     # ------------------------------------------------------------ rescan
