@@ -70,19 +70,17 @@ function findChrome() {
   return null;
 }
 
-// Stops a child this script started, by its PID. Chrome runs detached, so its PID
-// leads a process group and signalling the group stops its helper processes too.
-async function stop(child, { group = false } = {}) {
+// Only children returned by spawn reach this function. An existing CDP browser
+// receives a tab close and is never signalled.
+async function stop(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise(resolve => child.once('exit', resolve));
-  const signal = sig => { try { process.kill(group ? -child.pid : child.pid, sig); } catch {} };
-  signal('SIGTERM');
-  const done = await Promise.race([exited.then(() => true), new Promise(resolve => setTimeout(resolve, 5000, false))]);
-  if (!done) signal('SIGKILL');
-  if (group) {
-    await waitFor('Chrome helper processes to exit', () => {
-      try { process.kill(-child.pid, 0); return false; } catch { return true; }
-    }, 5000).catch(() => signal('SIGKILL'));
+  const exited = new Promise(resolve => child.once('exit',resolve));
+  const timeout = setTimeout(() => child.kill('SIGKILL'),5000);
+  try {
+    child.kill('SIGTERM');
+    await exited;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -101,7 +99,8 @@ async function openBrowser(tmp) {
     `--user-data-dir=${path.join(tmp, 'chrome')}`, 'about:blank',
   ], { stdio: 'ignore', detached: true });
   const cdpUrl = `http://127.0.0.1:${port}`;
-  await waitFor('Chrome DevTools endpoint', () => getJson(cdpUrl + '/json/version'));
+  try { await waitFor('Chrome DevTools endpoint', () => getJson(cdpUrl + '/json/version')); }
+  catch (error) { await stop(chrome); throw error; }
   return { cdpUrl, chrome };
 }
 
@@ -119,7 +118,8 @@ async function startSampleServer(tmp) {
     },
   });
   const origin = `http://127.0.0.1:${port}`;
-  await waitFor('sample serve.py', () => getJson(origin + '/api/servers'));
+  try { await waitFor('sample serve.py', () => getJson(origin + '/api/servers')); }
+  catch (error) { await stop(server); throw error; }
   return { server, origin };
 }
 
@@ -325,7 +325,7 @@ async function main() {
   } finally {
     if (tab) await tab.close();
     if (sample) await stop(sample.server);
-    if (browser) await stop(browser.chrome, { group: true });
+    if (browser) await stop(browser.chrome);
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }

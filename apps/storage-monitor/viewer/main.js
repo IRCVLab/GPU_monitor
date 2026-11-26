@@ -1,6 +1,6 @@
 import {removal} from './removal.js';
 import {createStore} from './store.js';
-import {initialState,reducer,detailKey,drillStack} from './state.js';
+import {initialState,reducer,detailKey,drillStack,serverSelection} from './state.js';
 import {bindRouter,parseUrl} from './router.js';
 import {bindEffects} from './effects.js';
 import {renderServer} from './views/server.js';
@@ -83,9 +83,9 @@ document.addEventListener('click', async event => {
     const path = target.dataset.cleanupPath;
     const data = state.resources[detailKey(route.serverId)].data;
     const item = (route.tab === 'stale' ? data.stale : data.top_files).find(row => row.path === path);
-    store.dispatch((state.selection[route.serverId] || []).some(e => e.path === path) ? {type:'Unselect',path} : {type:'Select',item});
+    store.dispatch(serverSelection(state,route.serverId).some(e => e.path === path) ? {type:'Unselect',path} : {type:'Select',item});
   } else if (target.dataset.copy || target.dataset.copyCommand) {
-    const text = target.dataset.copy ?? removal(state.resources[detailKey(route.serverId)]?.data,state.selection[route.serverId] || []).command;
+    const text = target.dataset.copy ?? removal(state.resources[detailKey(route.serverId)]?.data,serverSelection(state,route.serverId)).command;
     if (!text || target.dataset.copyCommand && text !== target.dataset.copyCommand) return;
     const label = target.dataset.label ||= target.textContent;
     try {

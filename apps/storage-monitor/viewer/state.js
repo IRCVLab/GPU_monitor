@@ -4,6 +4,7 @@ import {validateCleanupSelection} from './removal.js';
 export function initialState(route = {page:'overview'}) {
   return {route, resources:{}, selection:Object.create(null), rescans:{}, ui:{expandedUsers:{}, sorts:{}, selectionBarExpanded:false, theme:'light', selectMode:false, modifier:false}};
 }
+export const serverSelection = (state,id) => Object.hasOwn(state.selection,id) ? state.selection[id] : [];
 export const detailKey = id => 'detail/' + id;
 export const mountId = mount => mount.volume_id ?? mount.mount_id ?? mount.path;
 export function selectedMount(detail, route) {
@@ -50,7 +51,7 @@ function lookup(detail, entry) {
 export function reducer(state, event) {
   const {type,key,requestId,data} = event;
   const remote = state.resources[key];
-  const id = state.route.serverId, entries = Object.hasOwn(state.selection,id) ? state.selection[id] : [];
+  const id = state.route.serverId, entries = serverSelection(state,id);
   const selection = next => ({...state,selection:{...state.selection,[id]:next}});
   switch (type) {
     case 'Navigate': case 'PopState': return {...state,route:event.route};
