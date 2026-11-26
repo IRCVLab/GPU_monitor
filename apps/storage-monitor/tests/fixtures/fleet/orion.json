@@ -1,371 +1,93 @@
 {
-  "schema_version": 1,
-  "hostname": "orion",
+  "schema": "storage-viz.manifest/2",
   "server_id": "orion",
-  "scanner_version": "0.1.0",
-  "scan_started_unix": 1719200200,
-  "scan_finished_unix": 1719200242,
-  "scan_duration_sec": 42,
-  "scan_generation": "orion-1719200200-v1",
-  "run_as_root": true,
-  "selected_roots": [
+  "hostname": "orion",
+  "seq": 1,
+  "written_unix": 1719200245,
+  "agent": {
+    "release_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_seq": 1,
+    "config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "volumes": [
     {
-      "mount_id": "vol1",
-      "major_minor": "9:201",
-      "storage_media": "hdd",
-      "storage_media_confidence": "resolved",
-      "mount_source": "/dev/storage-viz/orion-vol1",
-      "mount_root": "/",
+      "volume_id": "v-3e92616e0252b85e",
+      "identity": "uuid",
+      "diagnostic": null,
       "mountpoint": "/srv/orion/vol1",
-      "scan_root": "/srv/orion/vol1",
       "fstype": "xfs",
-      "status": "complete",
-      "scanned_bytes": 830002429952,
-      "scanned_files": 10230,
-      "scanned_dirs": 31844,
-      "blocked_count": 0,
-      "error_count": 0,
-      "error_code": null,
-      "capacity_id": "dev-9-201"
+      "media": "hdd",
+      "media_confidence": "resolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/srv/orion/vol1",
+          "binding": "b-87a7e383e97f6f27",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 928174760376,
+        "used": 863202527150,
+        "avail": 64972233226,
+        "observed_unix": 1719200242,
+        "status": "ok"
+      },
+      "capture": {
+        "sha256": "d04fd9b91b5bc87623b69c07b6e6dbccdd4a2d937d731dd2ab02636abfaec6fc",
+        "bytes": 729,
+        "scan_started_unix": 1719200200,
+        "scan_finished_unix": 1719200242,
+        "outcome": "complete"
+      },
+      "last_attempt": {
+        "run_id": "ffffffffffffffffffffffffffffffff",
+        "started_unix": 1719200243,
+        "finished_unix": 1719200244,
+        "outcome": "failed",
+        "error_code": "SCANNER_FAILED"
+      }
     },
     {
-      "mount_id": "vol2",
-      "major_minor": "9:202",
-      "storage_media": "hdd",
-      "storage_media_confidence": "resolved",
-      "mount_source": "/dev/storage-viz/orion-vol2",
-      "mount_root": "/",
+      "volume_id": "v-bc98c91fa3ee0eea",
+      "identity": "uuid",
+      "diagnostic": null,
       "mountpoint": "/srv/orion/vol2",
-      "scan_root": "/srv/orion/vol2",
       "fstype": "xfs",
-      "status": "complete",
-      "scanned_bytes": 1015759765504,
-      "scanned_files": 20460,
-      "scanned_dirs": 22831,
-      "blocked_count": 0,
-      "error_count": 0,
-      "error_code": null,
-      "capacity_id": "dev-9-202"
-    }
-  ],
-  "mounts": [
-    {
-      "path": "/srv/orion/vol1",
-      "mount_id": "vol1",
-      "scan_root": "/srv/orion/vol1",
-      "fstype": "xfs",
-      "storage_media": "hdd",
-      "storage_media_confidence": "resolved",
-      "df_total": 928174760376,
-      "df_used": 863202527150,
-      "df_avail": 64972233226,
-      "df_use_pct": 93,
-      "scanned_bytes": 830002429952,
-      "scanned_files": 10230,
-      "scanned_dirs": 31844,
-      "errors": 0,
-      "tree": {
-        "name": "/srv/orion/vol1",
-        "kind": "directory",
-        "bytes": 830002429952,
-        "files": 10230,
-        "uid": 0,
-        "mtime": 1719200200,
-        "other_bytes": 1073741824,
-        "children": [
-          {
-            "name": "projects",
-            "kind": "directory",
-            "bytes": 598074195968,
-            "files": 8990,
-            "uid": 1101,
-            "mtime": 1719113800,
-            "other_bytes": 2147483648,
-            "children": [
-              {
-                "name": "dataset",
-                "kind": "directory",
-                "bytes": 343597383680,
-                "files": 8000,
-                "uid": 1101,
-                "mtime": 1717904200,
-                "other_bytes": 0
-              },
-              {
-                "name": "models",
-                "kind": "directory",
-                "bytes": 252329328640,
-                "files": 900,
-                "uid": 1102,
-                "mtime": 1718768200,
-                "other_bytes": 0
-              }
-            ]
-          },
-          {
-            "name": "scratch",
-            "kind": "directory",
-            "bytes": 230854492160,
-            "files": 1200,
-            "uid": 1103,
-            "mtime": 1719027400,
-            "other_bytes": 0
-          }
-        ]
+      "media": "hdd",
+      "media_confidence": "resolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/srv/orion/vol2",
+          "binding": "b-116cdb3d87984f98",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 1509128794462,
+        "used": 1056390156124,
+        "avail": 452738638338,
+        "observed_unix": 1719200242,
+        "status": "ok"
       },
-      "capacity_id": "dev-9-201",
-      "used_pct": 93,
-      "severity": "critical"
-    },
-    {
-      "path": "/srv/orion/vol2",
-      "mount_id": "vol2",
-      "scan_root": "/srv/orion/vol2",
-      "fstype": "xfs",
-      "storage_media": "hdd",
-      "storage_media_confidence": "resolved",
-      "df_total": 1509128794462,
-      "df_used": 1056390156124,
-      "df_avail": 452738638338,
-      "df_use_pct": 70,
-      "scanned_bytes": 1015759765504,
-      "scanned_files": 20460,
-      "scanned_dirs": 22831,
-      "errors": 0,
-      "tree": {
-        "name": "/srv/orion/vol2",
-        "kind": "directory",
-        "bytes": 1015759765504,
-        "files": 20460,
-        "uid": 0,
-        "mtime": 1719200200,
-        "other_bytes": 2147483648,
-        "children": [
-          {
-            "name": "projects",
-            "kind": "directory",
-            "bytes": 766651662336,
-            "files": 17980,
-            "uid": 1101,
-            "mtime": 1719113800,
-            "other_bytes": 4294967296,
-            "children": [
-              {
-                "name": "dataset",
-                "kind": "directory",
-                "bytes": 472446402560,
-                "files": 16000,
-                "uid": 1101,
-                "mtime": 1717817800,
-                "other_bytes": 0
-              },
-              {
-                "name": "models",
-                "kind": "directory",
-                "bytes": 289910292480,
-                "files": 1800,
-                "uid": 1102,
-                "mtime": 1718681800,
-                "other_bytes": 0
-              }
-            ]
-          },
-          {
-            "name": "scratch",
-            "kind": "directory",
-            "bytes": 246960619520,
-            "files": 2400,
-            "uid": 1103,
-            "mtime": 1719027400,
-            "other_bytes": 0
-          }
-        ]
+      "capture": {
+        "sha256": "915afa1e2668644c8e6deabf572a3935c85b4dfcccc7aa8cd821f13ab1fdc3e7",
+        "bytes": 718,
+        "scan_started_unix": 1719200200,
+        "scan_finished_unix": 1719200242,
+        "outcome": "complete"
       },
-      "capacity_id": "dev-9-202",
-      "used_pct": 70,
-      "severity": "warning"
+      "last_attempt": null
     }
   ],
-  "users": [
-    {
-      "uid": 1101,
-      "name": "avery",
-      "bytes": 822486237184,
-      "files": 266370,
-      "by_mount": {
-        "/srv/orion/vol1": 345744867328,
-        "/srv/orion/vol2": 476741369856
-      }
-    },
-    {
-      "uid": 1102,
-      "name": "blake",
-      "bytes": 542239621120,
-      "files": 175056,
-      "by_mount": {
-        "/srv/orion/vol1": 252329328640,
-        "/srv/orion/vol2": 289910292480
-      }
-    },
-    {
-      "uid": 1103,
-      "name": "casey",
-      "bytes": 477815111680,
-      "files": 155807,
-      "by_mount": {
-        "/srv/orion/vol1": 230854492160,
-        "/srv/orion/vol2": 246960619520
-      }
-    },
-    {
-      "uid": 0,
-      "name": "root",
-      "bytes": 3221225472,
-      "files": 1626,
-      "by_mount": {
-        "/srv/orion/vol1": 1073741824,
-        "/srv/orion/vol2": 2147483648
-      }
-    }
-  ],
-  "top_files": [
-    {
-      "path": "/srv/orion/vol1/projects/dataset/orion-00.bin",
-      "kind": "file",
-      "bytes": 263781875712,
-      "uid": 1101,
-      "owner": "avery",
-      "mtime": 1717472200,
-      "age_days": 20
-    },
-    {
-      "path": "/srv/orion/vol2/projects/models/orion-01.bin",
-      "kind": "file",
-      "bytes": 259882221568,
-      "uid": 1102,
-      "owner": "blake",
-      "mtime": 1716521800,
-      "age_days": 31
-    },
-    {
-      "path": "/srv/orion/vol1/projects/scratch/orion-02.bin",
-      "kind": "file",
-      "bytes": 257051066368,
-      "uid": 1103,
-      "owner": "casey",
-      "mtime": 1715571400,
-      "age_days": 42
-    },
-    {
-      "path": "/srv/orion/vol2/projects/reports/orion-03.bin",
-      "kind": "file",
-      "bytes": 253506879488,
-      "uid": 1104,
-      "owner": "devon",
-      "mtime": 1714621000,
-      "age_days": 53
-    },
-    {
-      "path": "/srv/orion/vol1/projects/dataset/orion-04.bin",
-      "kind": "file",
-      "bytes": 250667335680,
-      "uid": 1101,
-      "owner": "avery",
-      "mtime": 1713670600,
-      "age_days": 64
-    },
-    {
-      "path": "/srv/orion/vol2/projects/models/orion-05.bin",
-      "kind": "file",
-      "bytes": 247766974464,
-      "uid": 1102,
-      "owner": "blake",
-      "mtime": 1712720200,
-      "age_days": 75
-    },
-    {
-      "path": "/srv/orion/vol1/projects/scratch/orion-06.bin",
-      "kind": "file",
-      "bytes": 244630683648,
-      "uid": 1103,
-      "owner": "casey",
-      "mtime": 1711769800,
-      "age_days": 86
-    },
-    {
-      "path": "/srv/orion/vol2/projects/reports/orion-07.bin",
-      "kind": "file",
-      "bytes": 241037213696,
-      "uid": 1104,
-      "owner": "devon",
-      "mtime": 1710819400,
-      "age_days": 97
-    },
-    {
-      "path": "/srv/orion/vol1/projects/dataset/orion-08.bin",
-      "kind": "file",
-      "bytes": 237327351808,
-      "uid": 1101,
-      "owner": "avery",
-      "mtime": 1709869000,
-      "age_days": 108
-    },
-    {
-      "path": "/srv/orion/vol2/projects/models/orion-09.bin",
-      "kind": "file",
-      "bytes": 234692280320,
-      "uid": 1102,
-      "owner": "blake",
-      "mtime": 1708918600,
-      "age_days": 119
-    }
-  ],
-  "stale": [
-    {
-      "path": "/srv/orion/vol1/projects/archive/old-orion-00.tar",
-      "kind": "file",
-      "bytes": 254144413696,
-      "uid": 1101,
-      "owner": "avery",
-      "mtime": 1703648200,
-      "age_days": 180
-    },
-    {
-      "path": "/srv/orion/vol2/projects/archive/old-orion-01.tar",
-      "kind": "file",
-      "bytes": 249295798272,
-      "uid": 1102,
-      "owner": "blake",
-      "mtime": 1700624200,
-      "age_days": 215
-    },
-    {
-      "path": "/srv/orion/vol1/projects/archive/old-orion-02.tar",
-      "kind": "file",
-      "bytes": 245276606464,
-      "uid": 1103,
-      "owner": "casey",
-      "mtime": 1697600200,
-      "age_days": 250
-    },
-    {
-      "path": "/srv/orion/vol2/projects/archive/old-orion-03.tar",
-      "kind": "file",
-      "bytes": 241007853568,
-      "uid": 1104,
-      "owner": "devon",
-      "mtime": 1694576200,
-      "age_days": 285
-    },
-    {
-      "path": "/srv/orion/vol1/projects/archive/old-orion-04.tar",
-      "kind": "file",
-      "bytes": 236444450816,
-      "uid": 1101,
-      "owner": "avery",
-      "mtime": 1691552200,
-      "age_days": 320
-    }
-  ],
-  "blocked": []
+  "mount_table": {
+    "status": "ok",
+    "observed_unix": 1719200242,
+    "within_roots": []
+  },
+  "last_run": null,
+  "requests": []
 }

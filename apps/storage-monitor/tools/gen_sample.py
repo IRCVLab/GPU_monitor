@@ -7,6 +7,9 @@ sum(child.bytes) + other_bytes.
 """
 from __future__ import annotations
 
+import base64
+import gzip
+import hashlib
 import json
 from pathlib import Path
 import random
@@ -368,22 +371,74 @@ def check_tree(node: dict[str, Any], path: str = "/") -> None:
         assert node.get("other_bytes", 0) == 0, f"leaf has other_bytes at {path}{node['name']}"
 
 
-def main() -> None:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from collector.contract import snapshot_response
+def capture_tree(node):
+    tree = {k: v for k, v in node.items() if k in {"name", "bytes", "files", "mtime", "uid", "other_bytes", "kind"}}
+    if tree["kind"] == "directory":
+        tree["kind"] = "dir"
+    if node.get("children"):
+        tree["children"] = [capture_tree(child) for child in node["children"]]
+    return tree
 
-    out_dir = Path(__file__).resolve().parents[1] / "tests/fixtures/fleet"
-    docs = []
+
+def write_server(directory, doc):
+    sid = doc["server_id"]
+    groups = [[m] for m in doc["mounts"]]
+    if sid == "hinton":
+        groups[1].extend(groups.pop(2))
+    finished = doc["scan_finished_unix"]
+    volumes = []
+    for index, group in enumerate(groups):
+        ambiguous = sid == "zeus" and index == 1
+        vid = ("x-" if ambiguous else "v-") + hashlib.sha256(f"{sid}/{index}".encode()).hexdigest()[:16]
+        roots = []
+        for mount in group:
+            path = mount["path"]
+            tree = capture_tree(mount["tree"])
+            binding = "b-" + hashlib.sha256(path.encode()).hexdigest()[:16]
+            files = [{k: row[k] for k in ("path", "mtime", "bytes", "uid")} for row in doc["top_files"]
+                     if row["path"].startswith(path + "/")]
+            if sid == "hinton" and index == 1:
+                for name, raw in (("bad�", b"bad\xff"), ("tab\tfile", None)):
+                    node = dict(name=name, kind="file", bytes=0, files=0, uid=0, mtime=finished)
+                    row = dict(path=path + "/" + name, bytes=0, uid=0, mtime=finished)
+                    if raw:
+                        node["name_b64"] = base64.b64encode(raw).decode()
+                        row["path_b64"] = base64.b64encode(path.encode() + b"/" + raw).decode()
+                    tree.setdefault("children", []).append(node)
+                    files.append(row)
+            roots.append(dict(scan_root=path, binding=binding, prune_class="data", tree=tree, outcome="complete",
+                counts=dict(bytes=tree["bytes"], files=tree["files"], dirs=mount["scanned_dirs"], errors=0, vanished_dirs=0),
+                users=[dict(uid=u["uid"], name=u["name"], bytes=u["by_mount"][path], files=0)
+                       for u in doc["users"] if path in u["by_mount"]],
+                top_files=files, stale=[{k:r[k] for k in ("kind","path","bytes","uid","mtime")} for r in doc["stale"]
+                                       if r["path"].startswith(path + "/")], errors=[]))
+        run = f"{index+1:032x}"
+        capture = dict(schema="storage-viz.capture/2", volume_id=vid, run_id=run, group="slow",
+                       scan_started_unix=doc["scan_started_unix"], scan_finished_unix=finished, outcome="complete", roots=roots)
+        raw = gzip.compress(json.dumps(capture, sort_keys=True).encode(), mtime=0)
+        sha = hashlib.sha256(raw).hexdigest()
+        (directory / (sha + ".json.gz")).write_bytes(raw)
+        m = group[0]
+        volumes.append(dict(volume_id=vid, identity="ambiguous" if ambiguous else "uuid",
+            diagnostic="AMBIGUOUS" if ambiguous else None, mountpoint=m["path"], fstype=m["fstype"],
+            media=m["storage_media"], media_confidence=m["storage_media_confidence"], group="slow", cadence_sec=10800,
+            roots=[{k:r[k] for k in ("scan_root","binding","prune_class")} for r in roots],
+            capacity=dict(total=m["df_total"], used=m["df_used"], avail=m["df_avail"], observed_unix=finished,
+                          status="failed" if ambiguous else "ok"),
+            capture=dict(sha256=sha, bytes=len(raw), scan_started_unix=doc["scan_started_unix"],
+                         scan_finished_unix=finished, outcome="complete"),
+            last_attempt=dict(run_id="f"*32, started_unix=finished+1, finished_unix=finished+2, outcome="failed",
+                              error_code="SCANNER_FAILED") if sid=="orion" and index==0 else None))
+    manifest = dict(schema="storage-viz.manifest/2", server_id=sid, hostname=sid, seq=1, written_unix=finished+3,
+                    agent=dict(release_sha="a"*40, release_seq=1, config_digest="a"*64), volumes=volumes,
+                    mount_table=dict(status="ok", observed_unix=finished, within_roots=[]), last_run=None, requests=[])
+    (directory / (sid + ".json")).write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def main():
+    directory = Path(__file__).resolve().parents[1] / "tests/fixtures/fleet"
     for sid, factory in SNAPSHOTS:
-        doc = snapshot_response(factory())
-        for mount in doc["mounts"]:
-            check_tree(mount["tree"])
-        out = out_dir / f"{sid}.json"
-        out.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-        docs.append(doc)
-        print(f"Wrote {out}")
-    print("mounts=" + ",".join(f"{d['server_id']}:{len(d['mounts'])}" for d in docs))
-    print("tree byte-consistency: OK")
+        write_server(directory, factory())
 
 
 if __name__ == "__main__":
