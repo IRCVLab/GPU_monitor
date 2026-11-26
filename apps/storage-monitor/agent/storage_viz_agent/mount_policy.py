@@ -406,3 +406,10 @@ def _parse_major_minor(value: str) -> Optional[Tuple[int, int]]:
     return major, minor
 
 
+def mounts_within_roots(entries, roots):
+    rows = {}
+    for entry in entries:
+        for root in roots:
+            if entry.mountpoint == root.path or entry.mountpoint.startswith(root.path + "/"):
+                rows[entry.mountpoint] = rows.get(entry.mountpoint, False) or entry.major_minor == root.device
+    return [dict(mountpoint=p, same_device=same) for p, same in sorted(rows.items())]
