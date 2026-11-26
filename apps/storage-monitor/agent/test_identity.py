@@ -63,3 +63,15 @@ def test_a2_duplicate_uuid_is_ambiguous(tmp_path):
     assert a.identity == b.identity == "ambiguous" and a.volume_id != b.volume_id
     assert len(plan.validate_partition([a,b])) == 2
     assert resolve({"/a":"unique"})[0].identity == "alias"
+
+
+def test_server_id_matches_deployed_collector_grammar():
+    from agent.storage_viz_agent import ids as agent_ids
+    from collector import ids as collector_ids
+
+    accepted = ("Poseidon", "LAB_GPU.01", "s13", "lab-1", ".host", "_", "-", "...", "A" * 128)
+    rejected = ("", ".", "..", "A" * 129, "../host", "lab/1", "lab 1", "host\n", "한글")
+    for expected, samples in ((True, accepted), (False, rejected)):
+        for sample in samples:
+            assert bool(agent_ids.SERVER_ID_RE.fullmatch(sample)) == expected, repr(sample)
+            assert bool(collector_ids.SERVER_ID_RE.fullmatch(sample)) == expected, repr(sample)

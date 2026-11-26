@@ -80,7 +80,7 @@ Each invariant names the test that checks it. Test ids refer to section 5.
 
 | Type | Form | Defined in | Notes |
 |---|---|---|---|
-| `ServerId` | `^[a-z0-9][a-z0-9-]{0,62}$` | `collector/ids.py` (the six copies are deleted) and `agent/storage_viz_agent/ids.py`, checked equal by a test | Set once in `/etc/storage-viz/agent.yaml` at bootstrap. A mismatch with the inventory gives `link.state = identity_mismatch`. |
+| `ServerId` | `\A(?!\.{1,2}\Z)[A-Za-z0-9_.-]{1,128}\Z` | `collector/ids.py` (the six copies are deleted) and `agent/storage_viz_agent/ids.py`, checked equal by a test | Bootstrap preserves IDs from deployed scanner configs, including uppercase letters, dots and underscores. The 128-character limit matches the collector store. The names `.` and `..` are reserved path components. A mismatch with the inventory gives `link.state = identity_mismatch`. |
 | `VolumeId` | `v-` + 16 hex of `sha256("uuid\0" + fs_uuid)` or `sha256("alias\0" + alias)` | `agent/storage_viz_agent/identity.py` | Identifies the filesystem only. A bind alias or a second subvolume mount of the same filesystem has the same `volume_id`. Stable across reboots and mount namespaces (A2). |
 | `RootBinding` | `b-` + 16 hex of `sha256(volume_id, fs_root_bytes, prune_class, config_digest, capture_schema)` | `identity.py` | Identifies what one root covers. `fs_root_bytes` is the root's path inside the filesystem: the mountinfo root field (the bind or subvolume root) joined with the path below the mountpoint. A changed bind subtree, prune class or config gives a new binding. |
 | `CaptureSha` | 64 hex, sha256 of the gzip bytes on disk | agent and central | The content address. One spelling: `capture_sha256`. |
