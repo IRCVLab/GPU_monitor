@@ -928,11 +928,10 @@ function testCleanupCommandSafetyContracts() {
   const plan = buildCleanupCommandPlan(snapshot, candidate, {});
   assert.strictEqual(plan.inspectionCommands, undefined, "selection must produce removal output only");
   assert.strictEqual(plan.destructiveVisible, undefined, "removal output must not depend on reveal state");
-  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -ri --one-file-system -- '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s'");
-  assert.ok(!plan.destructiveCommand.command.includes(" -f"), "destructive commands must never use force");
+  assert.strictEqual(plan.destructiveCommand.command, "sudo rm -rf --one-file-system --preserve-root=all -- '/data/projects/-dash * glob \"quotes\" 유니코드'\"'\"'s'");
 
   const stalePlan = buildCleanupCommandPlan(snapshot, { path: "/data/old.bin", kind: "file", source: "stale" }, {});
-  assert.strictEqual(stalePlan.destructiveCommand.command, "sudo rm -i -- '/data/old.bin'");
+  assert.strictEqual(stalePlan.destructiveCommand.command, "sudo rm -f -- '/data/old.bin'");
 
   const rejectedCases = [
     [{ path: "/data/link", kind: "symlink" }, "unsupported_kind"],

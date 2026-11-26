@@ -284,7 +284,7 @@ Users may select a path from treemap or tables. The dashboard creates copyable c
 The panel separates:
 
 - inspection commands, shown first,
-- destructive cleanup commands, hidden behind an explicit reveal and warning.
+- one guarded removal line for the selected paths, collapsed into a small bar with Copy and Show.
 
 Every path comes from a validated snapshot selection, is treated as an opaque string, and is POSIX-shell-quoted. Commands are rejected for `/`, selected scan roots, mount roots, one-segment system roots, relative paths, control-character-containing paths, or paths outside the selected snapshot's scanned roots. Globs, leading dashes, whitespace, quotes, and Unicode are preserved only through quoting and `--` argument termination. A snapshot path is never re-resolved by the web service and the UI warns that the live path may have changed since the scan.
 
@@ -293,10 +293,10 @@ The first release has a fixed command allowlist:
 - size inspection: `sudo du -shx -- <path>`;
 - largest descendants: a fixed `sudo find <path> -xdev ...` template with no user-supplied flags; selected paths are absolute, so they cannot be parsed as options;
 - metadata inspection: fixed `sudo stat -- <path>` and modification-time listing templates;
-- file removal: `sudo rm -i -- <path>` only for a snapshot node typed as a file;
-- directory removal: `sudo rm -ri --one-file-system -- <path>` only for a snapshot node typed as a directory.
+- file removal: `sudo rm -f -- <path>` only for a snapshot node typed as a file;
+- directory removal: `sudo rm -rf --one-file-system --preserve-root=all -- <path>` only for a snapshot node typed as a directory.
 
-Destructive templates are never shown by default. They require a separate explicit reveal after inspection commands, retain interactive confirmation, never use `-f`, and cannot be combined into multi-path or shell-pipeline commands. The browser offers copy only; the backend has no command-execution endpoint.
+Removal commands do not prompt. The person who selected the paths has already decided, and per-file prompts both block bulk removal and swallow the next pasted line as an answer (decided 2026-11-26). The copied text is one line that runs only when `hostname -s` matches the snapshot's host, so a paste on the wrong server removes nothing. Path validation, `--`, `--one-file-system` and `--preserve-root=all` remain the other safety rails. The browser offers copy only; the backend has no command-execution endpoint.
 
 Example command groups may include:
 
