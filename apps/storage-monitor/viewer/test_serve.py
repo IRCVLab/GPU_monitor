@@ -779,3 +779,47 @@ def test_c9_fleet_p99_during_large_commit(tmp_path, monkeypatch):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="C7: in trusted-proxy mode, /./data/..., /data/ and /x/../data/... bypass the read check",
+)
+def test_c7_every_data_spelling_requires_read_auth(tmp_path):
+    port = free_port()
+    env = os.environ.copy()
+    env.pop("STORAGE_VIZ_DEV_SAMPLE_DIR", None)
+    env.update(
+        STORAGE_VIZ_BIND="127.0.0.1",
+        STORAGE_VIZ_PORT=str(port),
+        STORAGE_VIZ_TRUSTED_PROXY="1",
+        STORAGE_VIZ_STATE_DIR=str(tmp_path / "state"),
+        STORAGE_VIZ_ALLOWED_ORIGINS="http://storage.test",
+        STORAGE_VIZ_OPERATOR_ALLOWLIST="operator-1",
+    )
+    proc = subprocess.Popen([sys.executable, str(SERVE)], cwd=str(ROOT), env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.time() + 5
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                break
+            except OSError:
+                if time.time() > deadline or proc.poll() is not None:
+                    pytest.fail("serve.py did not start")
+                time.sleep(0.05)
+        leaked = []
+        for path in ("/data/hosts.json", "/./data/hosts.json", "/data/", "/x/../data/hosts.json", "//data/hosts.json"):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.putrequest("GET", path, skip_accept_encoding=True)
+            conn.endheaders()
+            response = conn.getresponse()
+            body = response.read()
+            conn.close()
+            if response.status not in (401, 403, 404) or b"sample_data" in body or b"<title>Directory listing" in body:
+                leaked.append(f"{path} -> {response.status}")
+        assert not leaked, "C7 private data served without read auth: " + ", ".join(leaked)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
