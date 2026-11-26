@@ -2418,12 +2418,12 @@ function testCleanupSelectionKeepsMultipleTreemapPaths() {
     item,
     plan: viewer.buildCleanupCommandPlan(viewer.DATA, item, {}),
   }));
-  assert.strictEqual(viewer.cleanupRemovalScript(plans), "sudo rm -rf --one-file-system --preserve-root=all -- '/data/one'; sudo rm -f -- '/data/two'", 'the removal script is one line so a paste cannot feed later lines to a prompt');
+  assert.strictEqual(viewer.cleanupRemovalScript(plans), "sv_ok=1; for sv_p in '/data/one'; do while read -r _ _ _ _ sv_m _; do case \"$sv_m\" in \"$sv_p\"|\"$sv_p\"/*) echo \"storage-viz: $sv_p has a mount at $sv_m; nothing was removed\" >&2; sv_ok=0;; esac; done < /proc/self/mountinfo; done; [ \"$sv_ok\" = 1 ] && { sudo rm -rf --one-file-system --preserve-root=all -- '/data/one'; sudo rm -f -- '/data/two'; }", 'the removal script is one line so a paste cannot feed later lines to a prompt');
   const nestedPlans = plans.concat({
     item: { path: '/data/one/model.bin', kind: 'file', bytes: 5 },
     plan: viewer.buildCleanupCommandPlan(viewer.DATA, { path: '/data/one/model.bin', kind: 'file', bytes: 5 }, {}),
   });
-  assert.strictEqual(viewer.cleanupRemovalScript(nestedPlans), "sudo rm -rf --one-file-system --preserve-root=all -- '/data/one'; sudo rm -f -- '/data/two'", 'a selected directory command must subsume selected descendants instead of emitting redundant rm commands');
+  assert.strictEqual(viewer.cleanupRemovalScript(nestedPlans), "sv_ok=1; for sv_p in '/data/one'; do while read -r _ _ _ _ sv_m _; do case \"$sv_m\" in \"$sv_p\"|\"$sv_p\"/*) echo \"storage-viz: $sv_p has a mount at $sv_m; nothing was removed\" >&2; sv_ok=0;; esac; done < /proc/self/mountinfo; done; [ \"$sv_ok\" = 1 ] && { sudo rm -rf --one-file-system --preserve-root=all -- '/data/one'; sudo rm -f -- '/data/two'; }", 'a selected directory command must subsume selected descendants instead of emitting redundant rm commands');
   const removalHtml = viewer.document.getElementById('cleanupDangerCommand').innerHTML;
   assert.strictEqual((removalHtml.match(/<li\b/g) || []).length, 1, 'multi-selection must render one compact command card');
   assert.doesNotMatch(removalHtml, /sudo (?:du|find|stat)\b/, 'the panel must not include unrelated inspection commands');
@@ -2742,6 +2742,49 @@ function testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts() {
     assert.strictEqual(plan.destructiveCommand, null, 'paths with bidi, lone surrogate or C1 characters must not get a removal command');
   }
   fs.rmSync(root, { recursive: true, force: true });
+}
+
+function testRemovalScriptRefusesDirectoriesThatContainMounts() {
+  const { execFileSync } = require('child_process');
+  const os = require('os');
+  try { execFileSync('unshare', ['-rm', 'true'], { stdio: 'ignore' }); } catch (_) { return; }
+  const viewer = loadViewer();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rm-mount-'));
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'hostname'), '#!/bin/sh\necho hinton\n', { mode: 0o755 });
+  const data = path.join(root, 'data');
+  const source = path.join(root, 'elsewhere');
+  fs.mkdirSync(path.join(data, 'proj', 'bound'), { recursive: true });
+  fs.mkdirSync(path.join(data, 'plain'), { recursive: true });
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, 'keep.bin'), 'x');
+  viewer.DATA = { hostname: 'hinton', server_id: 'hinton', selected_roots: [{ mount_id: 'data', mount_root: data, mountpoint: data, scan_root: data, status: 'complete' }], mounts: [{ mount_id: 'data', path: data, scan_root: data }] };
+  const items = [{ path: data + '/proj', kind: 'directory', bytes: 1 }, { path: data + '/plain', kind: 'directory', bytes: 1 }];
+  const script = viewer.cleanupRemovalScript(items.map(item => ({ item, plan: viewer.buildCleanupCommandPlan(viewer.DATA, item, {}) })));
+  const inNamespace = 'mount --bind "$1" "$2" && ' + script;
+  let stderr = '';
+  try {
+    execFileSync('unshare', ['-rm', 'bash', '-c', inNamespace, 'bash', source, path.join(data, 'proj', 'bound')], { env: { PATH: bin + ':' + process.env.PATH }, stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch (error) { stderr = String(error.stderr || ''); }
+  assert.ok(fs.existsSync(path.join(source, 'keep.bin')), 'a bind mount inside a selected folder must keep its source data');
+  assert.ok(fs.existsSync(path.join(data, 'plain')), 'when any selected folder holds a mount, nothing is removed');
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+function testSummaryCountsNestedSelectionsOnce() {
+  const viewer = loadViewer();
+  viewer.currentServerId = 'alpha-1';
+  viewer.currentServerSummary = { freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete' };
+  viewer.DATA = { server_id: 'alpha-1', selected_roots: [{ mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' }], mounts: [{ mount_id: 'data', path: '/data', scan_root: '/data' }] };
+  viewer.setCleanupSelectedItem({ path: '/data/proj', kind: 'directory', bytes: 1000, source: 'treemap' }, true);
+  viewer.setCleanupSelectedItem({ path: '/data/proj/a', kind: 'directory', bytes: 400, source: 'treemap' }, true);
+  viewer.setCleanupSelectedItem({ path: '/data/proj/b.bin', kind: 'file', bytes: 100, source: 'treemap' }, true);
+  viewer.renderCleanupPanel();
+  const summary = viewer.document.getElementById('cleanupSummary').textContent;
+  assert.match(summary, /^3 paths selected · 2 inside a selected folder · /, 'selecting a parent must say how many picks it already contains');
+  assert.strictEqual(summary, '3 paths selected · 2 inside a selected folder · ' + viewer.cleanupBytesLabel(1000), 'nested picks must not be counted twice in the total size');
 }
 
 function testCleanupPanelRendersRemovalCommandWithoutReveal() {
@@ -3274,6 +3317,8 @@ async function main() {
   testTreemapScaleNoteStaysInLegendWithoutCoveringTiles();
   testCleanupPanelResponsiveCssAndDangerListSemantics();
   testCleanupPanelRendersRemovalCommandWithoutReveal();
+  testRemovalScriptRefusesDirectoriesThatContainMounts();
+  testSummaryCountsNestedSelectionsOnce();
   testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts();
   testCleanupPanelStartsCollapsedWithFullCopy();
   testCleanupCopyFeedbackRestoresLabelAfterRepeatedClicks();
