@@ -51,7 +51,7 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
+
 #include <sys/syscall.h>
 #include <sys/resource.h>
 #if defined(__linux__)
@@ -432,7 +432,7 @@ static char *node_path(const struct node *dir, const char *leaf, bool trim) {
 
 struct user_mount {
     char    *mount;       /* mount path (not owned; points into mounts array) */
-    uint64_t bytes;
+    uint64_t bytes, files;
     struct user_mount *next;
 };
 
@@ -470,6 +470,7 @@ static void user_add(uid_t uid, const char *mount, uint64_t bytes, uint64_t file
         u->mounts = m;
     }
     m->bytes += bytes;
+    m->files += files;
     pthread_mutex_unlock(&g_users_lock);
 }
 
@@ -744,12 +745,13 @@ struct scan_ctx {
 /* Progress writes are optional, throttled and independent of the snapshot. */
 static const char *g_progress_path = NULL;
 static const char *g_progress_run_id = "";
-static const char *g_progress_root = "";
+static const char *g_progress_group = "";
 static int g_progress_roots_total = 0, g_progress_roots_done = 0;
 static uint64_t g_progress_bytes = 0, g_progress_files = 0, g_progress_dirs = 0;
-static double g_progress_last = -10;
-static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
-                           uint64_t dirs, bool force);
+static pthread_mutex_t progress_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t progress_changed = PTHREAD_COND_INITIALIZER;
+static bool progress_finished;
+static void progress_write(void);
 
 struct worker_arg {
     struct scan_ctx  *ctx;
@@ -792,7 +794,11 @@ static void ctx_flush_stats(struct scan_ctx *c, struct worker_arg *w) {
     c->errors        += w->errs;
     c->vanished_dirs += w->vanished;
     c->reopened_dirs += w->reopened;
-    progress_write("scanning", c->scanned_bytes, c->scanned_files, c->scanned_dirs, false);
+    pthread_mutex_lock(&progress_lock);
+    g_progress_bytes += w->bytes;
+    g_progress_files += w->files;
+    g_progress_dirs += w->dirs;
+    pthread_mutex_unlock(&progress_lock);
     pthread_mutex_unlock(&c->stat_lock);
     w->bytes = w->files = w->dirs = w->errs = w->vanished = w->reopened = 0;
 }
@@ -1346,12 +1352,7 @@ static void json_text_field(FILE *f, const char *key, const char *s) {
     }
 }
 
-static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
-                           uint64_t dirs, bool force) {
-    if (!g_progress_path) return;
-    double now = now_monotonic();
-    if (!force && now - g_progress_last < 2.0) return;
-    g_progress_last = now;
+static void progress_write(void) {
     char tmp[PATH_MAX];
     if (snprintf(tmp, sizeof tmp, "%s.XXXXXX", g_progress_path) >= (int)sizeof tmp) return;
     int fd = mkstemp(tmp);
@@ -1359,12 +1360,11 @@ static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
     fchmod(fd, 0640);
     FILE *f = fdopen(fd, "w");
     if (!f) { close(fd); unlink(tmp); return; }
-    fputs("{\"phase\":", f); json_escape(f, phase);
-    fputs(",\"run_id\":", f); json_escape(f, g_progress_run_id);
-    fputs(",\"current_root\":", f); json_escape(f, g_progress_root);
-    fprintf(f, ",\"updated_unix\":%lld,\"scanned_bytes\":%llu,\"scanned_files\":%llu,\"scanned_dirs\":%llu,\"roots_completed\":%d,\"roots_total\":%d}\n",
-            (long long)time(NULL), (unsigned long long)(g_progress_bytes + bytes),
-            (unsigned long long)(g_progress_files + files), (unsigned long long)(g_progress_dirs + dirs),
+    fputs("{\"run_id\":", f); json_escape(f, g_progress_run_id);
+    fputs(",\"group\":", f); json_escape(f, g_progress_group);
+    fprintf(f, ",\"updated_unix\":%lld,\"bytes\":%llu,\"files\":%llu,\"dirs\":%llu,\"roots_completed\":%d,\"roots_total\":%d}\n",
+            (long long)time(NULL), (unsigned long long)g_progress_bytes,
+            (unsigned long long)g_progress_files, (unsigned long long)g_progress_dirs,
             g_progress_roots_done, g_progress_roots_total);
     bool ok = !ferror(f);
     if (fclose(f) != 0) ok = false;
@@ -1372,8 +1372,23 @@ static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
     unlink(tmp);
 }
 
+static void *progress_thread(void *unused) {
+    (void)unused;
+    pthread_mutex_lock(&progress_lock);
+    while (!progress_finished) {
+        progress_write();
+        struct timespec until;
+        clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_sec += 2;
+        pthread_cond_timedwait(&progress_changed, &progress_lock, &until);
+    }
+    progress_write();
+    pthread_mutex_unlock(&progress_lock);
+    return NULL;
+}
+
 /* Writes a node's fields and, when it has children, opens its array. */
-static void emit_node_head(FILE *f, const struct node *n) {
+static void emit_node_head(FILE *f, const struct node *n, bool capped) {
     fputc('{', f);
     json_text_field(f, "name", n->name);
     fputs(",\"kind\":\"directory\"", f);
@@ -1381,24 +1396,24 @@ static void emit_node_head(FILE *f, const struct node *n) {
     fprintf(f, ",\"files\":%llu", (unsigned long long)n->files);
     fprintf(f, ",\"uid\":%u", (unsigned)n->uid);
     fprintf(f, ",\"mtime\":%lld", (long long)n->mtime);
-    fprintf(f, ",\"other_bytes\":%llu", (unsigned long long)n->other_bytes);
-    if (n->nchildren > 0) fputs(",\"children\":[", f);
+    fprintf(f, ",\"other_bytes\":%llu", (unsigned long long)(capped && n->nchildren ? n->bytes : n->other_bytes));
+    if (!capped && n->nchildren > 0) fputs(",\"children\":[", f);
 }
 
 static void emit_tree(FILE *f, struct node *root) {
     struct frames s = {0};
-    emit_node_head(f, root);
+    emit_node_head(f, root, false);
     frames_push(&s, root, 0);
     while (s.n) {
         struct frame *top = &s.a[s.n - 1];
-        if (top->next < top->n->nchildren) {
+        if (s.n <= 128 && top->next < top->n->nchildren) {
             if (top->next) fputc(',', f);
             struct node *c = top->n->children[top->next++];
-            emit_node_head(f, c);
+            emit_node_head(f, c, s.n == 128);
             frames_push(&s, c, 0);
             continue;
         }
-        if (top->n->nchildren > 0) fputc(']', f);
+        if (s.n <= 128 && top->n->nchildren > 0) fputc(']', f);
         fputc('}', f);
         s.n--;
     }
@@ -1415,23 +1430,7 @@ struct mount_result {
     enum prune_class prune_class;
     struct node *tree;
     uint64_t scanned_bytes, scanned_files, scanned_dirs, errors, vanished_dirs;
-    /* df */
-    uint64_t df_total, df_used, df_avail;
-    int      df_use_pct;
 };
-
-static void fill_df(const char *path, struct mount_result *mr) {
-    struct statvfs vfs;
-    if (statvfs(path, &vfs) == 0) {
-        uint64_t bs = vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize;
-        mr->df_total = (uint64_t)vfs.f_blocks * bs;
-        mr->df_avail = (uint64_t)vfs.f_bavail * bs;
-        uint64_t free_all = (uint64_t)vfs.f_bfree * bs;
-        mr->df_used  = mr->df_total - free_all;
-        uint64_t denom = mr->df_used + mr->df_avail;
-        mr->df_use_pct = denom ? (int)((mr->df_used * 100 + denom - 1) / denom) : 0;
-    }
-}
 
 static void usage(const char *prog) {
     fprintf(stderr,
@@ -1525,8 +1524,10 @@ int main(int argc, char **argv) {
             stale_days = atoi(argv[++i]);
         } else if (strcmp(a, "--progress") == 0 && i+1 < argc) {
             g_progress_path = argv[++i];
-        } else if (strcmp(a, "--progress-run-id") == 0 && i+1 < argc) {
+        } else if (strcmp(a, "--run-id") == 0 && i+1 < argc) {
             g_progress_run_id = argv[++i];
+        } else if (strcmp(a, "--group") == 0 && i+1 < argc) {
+            g_progress_group = argv[++i];
         } else if (strcmp(a, "--out") == 0 && i+1 < argc) {
             out_path = argv[++i];
         } else if (strcmp(a, "--out-dir") == 0 && i+1 < argc) {
@@ -1608,12 +1609,15 @@ int main(int argc, char **argv) {
     int nresults = 0;
     uint64_t reopened_dirs = 0;
     g_progress_roots_total = target_count;
+    if (!g_progress_path && *g_progress_run_id) g_progress_path = "/run/storage-viz/progress.json";
+    pthread_t reporter;
+    bool reporting = g_progress_path && pthread_create(&reporter, NULL, progress_thread, NULL) == 0;
 
     for (int i = 0; i < target_count; i++) {
         const char *tg = targets[i].path;
-        g_progress_root = tg;
+        pthread_mutex_lock(&progress_lock);
         g_progress_roots_done = i;
-        progress_write("scanning", 0, 0, 0, true);
+        pthread_mutex_unlock(&progress_lock);
         struct stat tst;
         if (lstat(tg, &tst) != 0) {
             continue;  /* target absent (e.g. /data not present): skip silently */
@@ -1644,14 +1648,15 @@ int main(int argc, char **argv) {
         mr->errors        = counts.errors;
         mr->vanished_dirs = counts.vanished_dirs;
         reopened_dirs += counts.reopened_dirs;
-        fill_df(tg, mr);
-        g_progress_bytes += counts.bytes;
-        g_progress_files += counts.files;
-        g_progress_dirs += counts.dirs;
     }
-
-    g_progress_roots_done = target_count;
-    progress_write("publishing", 0, 0, 0, true);
+    if (reporting) {
+        pthread_mutex_lock(&progress_lock);
+        g_progress_roots_done = target_count;
+        progress_finished = true;
+        pthread_cond_signal(&progress_changed);
+        pthread_mutex_unlock(&progress_lock);
+        pthread_join(reporter, NULL);
+    }
     double dur = now_monotonic() - t0;
 
     /* ---- Build output path ---- */
@@ -1686,10 +1691,6 @@ int main(int argc, char **argv) {
         json_text_field(f, "path", mr->path);
         fputs(",\"fstype\":", f); json_escape(f, mr->fstype);
         fprintf(f, ",\"prune_class\":\"%s\"", mr->prune_class == PRUNE_HOME ? "home" : "data");
-        fprintf(f, ",\"df_total\":%llu", (unsigned long long)mr->df_total);
-        fprintf(f, ",\"df_used\":%llu", (unsigned long long)mr->df_used);
-        fprintf(f, ",\"df_avail\":%llu", (unsigned long long)mr->df_avail);
-        fprintf(f, ",\"df_use_pct\":%d", mr->df_use_pct);
         fprintf(f, ",\"scanned_bytes\":%llu", (unsigned long long)mr->scanned_bytes);
         fprintf(f, ",\"scanned_files\":%llu", (unsigned long long)mr->scanned_files);
         fprintf(f, ",\"scanned_dirs\":%llu", (unsigned long long)mr->scanned_dirs);
@@ -1720,6 +1721,14 @@ int main(int argc, char **argv) {
                 fm = false;
                 json_escape(f, m->mount);
                 fprintf(f, ":%llu", (unsigned long long)m->bytes);
+            }
+            fputs("},\"files_by_mount\":{", f);
+            fm = true;
+            for (struct user_mount *m = u->mounts; m; m = m->next) {
+                if (!fm) fputc(',', f);
+                fm = false;
+                json_escape(f, m->mount);
+                fprintf(f, ":%llu", (unsigned long long)m->files);
             }
             fputs("}}", f);
         }
