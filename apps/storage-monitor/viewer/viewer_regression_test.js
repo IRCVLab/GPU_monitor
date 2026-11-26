@@ -2691,7 +2691,7 @@ function testCleanupPanelResponsiveCssAndDangerListSemantics() {
   const css = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   assert(/<(ol|ul)\s+id="cleanupDangerCommand"/.test(html), 'destructive cleanup command container must be a real list to avoid orphan list items');
   assert(!/id="cleanupInspectList"/.test(html), 'cleanup UI must not include unrelated inspection commands');
-  assert(!/id="cleanupReveal"/.test(html), 'removal commands must not be hidden behind a reveal button');
+  assert(/id="cleanupCopyAll"[^>]*class="cleanup-copy-btn"/.test(html) && /id="cleanupToggle"[^>]*aria-controls="cleanupDetails"/.test(html), 'the collapsed cleanup bar must copy the full command and expand the command list in place, so it never covers the treemap');
   assert(!/id="cleanupWarnings"|id="cleanupDangerWarning"/.test(html), 'the compact removal UI must not be dominated by warning blocks');
   assert(!/>Inspect first</.test(html), 'the cleanup panel must focus only on removal');
   assert(!/treemapCleanupMode[^>]*inspect|Ctrl\/⌘ click: inspect/i.test(html), 'treemap selection controls must describe removal rather than inspection');
@@ -2723,6 +2723,36 @@ function testCleanupPanelRendersRemovalCommandWithoutReveal() {
   assert.ok(danger, 'destructive command list must exist');
   viewer.renderCleanupPanel();
   assert.match(danger.innerHTML, /sudo rm -ri --one-file-system -- &#39;\/data\/project&#39;/, 'directory removal command must render immediately');
+}
+
+function testCleanupPanelStartsCollapsedWithFullCopy() {
+  const viewer = loadViewer();
+  viewer.currentServerId = 'alpha-1';
+  viewer.currentServerSummary = { freshness: 'fresh', latest_pull_status: 'succeeded', latest_scan_result: 'complete' };
+  viewer.DATA = {
+    server_id: 'alpha-1',
+    selected_roots: [{ mount_id: 'data', mount_root: '/', mountpoint: '/data', scan_root: '/data', status: 'complete' }],
+    mounts: [{ mount_id: 'data', path: '/data', scan_root: '/data' }],
+  };
+  const details = viewer.document.getElementById('cleanupDetails');
+  const toggle = viewer.document.getElementById('cleanupToggle');
+  const copyAll = viewer.document.getElementById('cleanupCopyAll');
+  viewer.setCleanupSelectedItem({ path: '/data/a', kind: 'directory', bytes: 100, source: 'treemap' }, true);
+  viewer.setCleanupSelectedItem({ path: '/data/b', kind: 'directory', bytes: 100, source: 'treemap' }, true);
+  viewer.renderCleanupPanel();
+  assert.strictEqual(details.hidden, true, 'a new selection starts with the command list collapsed');
+  assert.strictEqual(toggle.getAttribute('aria-expanded'), 'false');
+  const copied = copyAll.getAttribute('data-copy-command');
+  assert.match(copied, /'\/data\/a'/, 'collapsed copy must include every selected path');
+  assert.match(copied, /'\/data\/b'/, 'collapsed copy must include every selected path');
+  viewer.cleanupPanelExpanded = true;
+  viewer.syncCleanupPanelExpanded();
+  viewer.renderCleanupPanel();
+  assert.strictEqual(details.hidden, false, 'an expanded list stays open while the selection changes');
+  viewer.setCleanupSelectedItem({ path: '/data/a', kind: 'directory', bytes: 100, source: 'treemap' }, false);
+  viewer.setCleanupSelectedItem({ path: '/data/b', kind: 'directory', bytes: 100, source: 'treemap' }, false);
+  viewer.renderCleanupPanel();
+  assert.strictEqual(details.hidden, true, 'clearing the selection collapses the list again');
 }
 
 
@@ -3195,6 +3225,7 @@ async function main() {
   testTreemapScaleNoteStaysInLegendWithoutCoveringTiles();
   testCleanupPanelResponsiveCssAndDangerListSemantics();
   testCleanupPanelRendersRemovalCommandWithoutReveal();
+  testCleanupPanelStartsCollapsedWithFullCopy();
   console.log('viewer regression tests passed');
 }
 

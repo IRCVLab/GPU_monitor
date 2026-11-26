@@ -209,15 +209,21 @@
       <div class="cleanup-title">Removal commands</div>
       <div class="cleanup-summary" id="cleanupSummary">No path selected</div>
     </div>
-    <button type="button" id="cleanupClear">Clear</button>
-  </div>
-  <section class="cleanup-section cleanup-danger" aria-labelledby="cleanupDangerHeading">
-    <div class="cleanup-section-head">
-      <h2 class="cleanup-section-title" id="cleanupDangerHeading">Removal command</h2>
+    <div class="cleanup-head-actions">
+      <button type="button" id="cleanupCopyAll" class="cleanup-copy-btn" data-copy-command="" title="Copy the full removal command. Review it before pasting into a shell.">Copy</button>
+      <button type="button" id="cleanupToggle" aria-expanded="false" aria-controls="cleanupDetails">Show</button>
+      <button type="button" id="cleanupClear">Clear</button>
     </div>
-    <ol id="cleanupDangerCommand" class="cleanup-command-list"></ol>
-  </section>
-  <div class="cleanup-safe">Copy-only safety rail: storage-viz never runs these commands. Review ownership and paths before pasting into a shell.</div>
+  </div>
+  <div id="cleanupDetails" hidden>
+    <section class="cleanup-section cleanup-danger" aria-labelledby="cleanupDangerHeading">
+      <div class="cleanup-section-head">
+        <h2 class="cleanup-section-title" id="cleanupDangerHeading">Removal command</h2>
+      </div>
+      <ol id="cleanupDangerCommand" class="cleanup-command-list"></ol>
+    </section>
+    <div class="cleanup-safe">Copy-only safety rail: storage-viz never runs these commands. Review ownership and paths before pasting into a shell.</div>
+  </div>
 </div>
 <script src="data-client.js"></script>
 <script src="selection.js"></script>

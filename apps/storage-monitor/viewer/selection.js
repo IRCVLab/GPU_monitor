@@ -375,6 +375,20 @@ function syncCleanupSelectionControls() {
   });
 }
 
+var cleanupPanelExpanded = false;
+
+function syncCleanupPanelExpanded() {
+  const panel = document.getElementById("cleanupPanel");
+  const details = document.getElementById("cleanupDetails");
+  const toggle = document.getElementById("cleanupToggle");
+  if (panel) panel.classList.toggle("expanded", cleanupPanelExpanded);
+  if (details) details.hidden = !cleanupPanelExpanded;
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", cleanupPanelExpanded ? "true" : "false");
+    toggle.textContent = cleanupPanelExpanded ? "Hide" : "Show";
+  }
+}
+
 function renderCleanupPanel() {
   const panel = typeof document !== "undefined" ? document.getElementById("cleanupPanel") : null;
   const entries = currentCleanupPlans();
@@ -389,15 +403,19 @@ function renderCleanupPanel() {
   const title = document.getElementById("cleanupSummary");
   const dangerCommand = document.getElementById("cleanupDangerCommand");
   const clear = document.getElementById("cleanupClear");
+  const copyAll = document.getElementById("cleanupCopyAll");
 
   const hasSelection = entries.length > 0;
+  if (!hasSelection) cleanupPanelExpanded = false;
   panel.classList.toggle("show", hasSelection);
   panel.setAttribute("aria-hidden", hasSelection ? "false" : "true");
+  syncCleanupPanelExpanded();
   syncCleanupSelectionControls();
 
   if (!hasSelection) {
     if (title) title.textContent = "No path selected";
     if (dangerCommand) dangerCommand.innerHTML = "";
+    if (copyAll) copyAll.setAttribute("data-copy-command", "");
     if (clear) clear.disabled = true;
     return result;
   }
@@ -410,6 +428,7 @@ function renderCleanupPanel() {
     }
   }
   if (clear) clear.disabled = false;
+  if (copyAll) copyAll.setAttribute("data-copy-command", cleanupRemovalScript(entries));
   if (dangerCommand) {
     dangerCommand.innerHTML = commandCardHtml({
       label: entries.length === 1 ? entries[0].plan.destructiveCommand.label : "Remove selected paths",
@@ -466,6 +485,14 @@ function bindCleanupSelection() {
       if (selectBtn) {
         e.preventDefault();
         toggleCleanupSelectedItem(cleanupItemFromControl(selectBtn));
+        return;
+      }
+
+      const toggle = e.target && e.target.closest ? e.target.closest("#cleanupToggle") : null;
+      if (toggle) {
+        e.preventDefault();
+        cleanupPanelExpanded = !cleanupPanelExpanded;
+        syncCleanupPanelExpanded();
         return;
       }
 
