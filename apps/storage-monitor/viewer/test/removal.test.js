@@ -83,3 +83,11 @@ function testRemovalScriptRefusesDirectoriesThatContainMounts() {
 
 test('own host and quoting', testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts);
 test('mount guard', testRemovalScriptRefusesDirectoriesThatContainMounts);
+
+test('unreadable tables, same-device bind mounts and mismatched raw bytes refuse copy', () => {
+  const dir = {kind:'directory',path:'/data/folder'};
+  for (const table of [{status:'unreadable'}, {status:'ok',within_roots:[{path:'/data/folder/bind',same_device:true}]}]) {
+    assert.equal(removal({...detail,mount_table:table},[dir]).command,'');
+  }
+  assert.equal(buildCleanupCommandPlan(detail,{...dir,path_b64:btoa('/data/different')}).accepted,false);
+});
