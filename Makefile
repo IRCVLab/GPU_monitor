@@ -71,10 +71,8 @@ test-storage:
 	  "$$storage_verify/repo/apps/storage-monitor/"; \
 	cd "$$storage_verify/repo/apps/storage-monitor"; \
 	PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \
-	find viewer -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check; \
-	node viewer/viewer.test.js; \
-	node viewer/viewer_regression_test.js; \
-	node viewer/scan-status.test.js; \
+	find viewer -name '*.js' -print0 | xargs -0 -n1 node --check; \
+	node --test viewer/test/*.test.js; \
 	node viewer/browser/stale-select-hit.test.js; \
 	python3 tools/check_bug_coverage.py; \
 	bash deploy/test_deploy_scripts.sh; \

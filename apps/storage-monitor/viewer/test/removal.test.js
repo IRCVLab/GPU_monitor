@@ -16,9 +16,9 @@ test('classic removal output is byte-identical and nested picks count once', () 
   }
 });
 function testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts() {
-  
-  
-  
+
+
+
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rm-script-'));
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
@@ -51,10 +51,10 @@ function testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts() {
 }
 
 function testRemovalScriptRefusesDirectoriesThatContainMounts() {
-  
-  
+
+
   try { execFileSync('unshare', ['-rm', 'true'], { stdio: 'ignore' }); } catch (_) { return; }
-  
+
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rm-mount-'));
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);

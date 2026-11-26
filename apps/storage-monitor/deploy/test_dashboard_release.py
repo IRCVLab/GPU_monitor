@@ -67,17 +67,28 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
     def _write_fixture(self) -> None:
         runtime_files = {
             "viewer/serve.py": "from collector.inventory import load_inventory\nfrom collector.jobs import RescanJobManager\nfrom collector.service import PollService\nfrom collector.store import CentralStore\nfrom collector.transport import OpenSshTransport\n",
-            "viewer/app.js": "console.log('app');\n",
-            "viewer/data-client.js": "export const dataClient = {};\n",
-            "viewer/debug.html": "<html>debug</html>\n",
+            "viewer/main.js": "console.log('app');\n",
+            "viewer/api.js": "export const dataClient = {};\n",
+            "viewer/effects.js": "export {};\n",
+            "viewer/format.js": "export {};\n",
+            "viewer/router.js": "export {};\n",
+            "viewer/state.js": "export {};\n",
+            "viewer/store.js": "export {};\n",
+            "viewer/views/files.js": "export {};\n",
+            "viewer/views/header.js": "export {};\n",
+            "viewer/views/selection-bar.js": "export {};\n",
+            "viewer/views/server.js": "export {};\n",
+            "viewer/views/theme.js": "export {};\n",
+            "viewer/views/notices.js": "export {};\n",
+            "viewer/views/users.js": "export {};\n",
             "viewer/echarts.min.js": "/*! echarts */\n",
-            "viewer/index.html": "<html><script src='app.js'></script></html>\n",
-            "viewer/overview.js": "export const overview = {};\n",
-            "viewer/scan-status.js": "export const scanStatus = {};\n",
-            "viewer/selection.js": "export const selection = {};\n",
+            "viewer/index.html": "<html><script type='module' src='main.js'></script></html>\n",
+            "viewer/views/overview.js": "export const overview = {};\n",
+            "viewer/views/scan-status.js": "export const scanStatus = {};\n",
+            "viewer/removal.js": "export const selection = {};\n",
             "viewer/styles.css": "body { color: black; }\n",
-            "viewer/tables.js": "export const tables = {};\n",
-            "viewer/treemap.js": "export const treemap = {};\n",
+            "viewer/columns.js": "export const tables = {};\n",
+            "viewer/views/treemap.js": "export const treemap = {};\n",
             "viewer/users-chart.js": "export const users = {};\n",
             "collector/__init__.py": "",
             "collector/duration_history.py": "PLANS = ()\n",
@@ -161,7 +172,7 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertIn("storage-monitor/viewer/serve.py", member_names)
         self.assertIn("storage-monitor/collector/store.py", member_names)
         self.assertIn("storage-monitor/collector/scan_telemetry.py", member_names)
-        self.assertIn("storage-monitor/viewer/scan-status.js", member_names)
+        self.assertIn("storage-monitor/viewer/views/scan-status.js", member_names)
         self.assertIn("storage-monitor/deploy/direct_proxy.py", member_names)
         self.assertIn("storage-monitor/config/servers.example.yaml", member_names)
         self.assertIn("storage-monitor/docs/schema-v1.md", member_names)
@@ -220,12 +231,12 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn("HEAD", mismatch.stderr)
 
-        self._write(str(APP_ROOT / "viewer/app.js"), "dirty\n")
+        self._write(str(APP_ROOT / "viewer/main.js"), "dirty\n")
         dirty = self._run_builder()
         self.assertNotEqual(dirty.returncode, 0)
         self.assertIn("clean", dirty.stderr.lower())
 
-        self._git("checkout", "--", str(APP_ROOT / "viewer/app.js"))
+        self._git("checkout", "--", str(APP_ROOT / "viewer/main.js"))
         self._write(str(APP_ROOT / "untracked.txt"), "untracked\n")
         untracked = self._run_builder()
         self.assertNotEqual(untracked.returncode, 0)
@@ -244,9 +255,9 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertIn(f"required tracked release file is missing: {schema}", failed.stderr)
 
     def test_rejects_required_tracked_symlinks_and_unsafe_paths(self) -> None:
-        (self.repo / APP_ROOT / "viewer/app.js").unlink()
-        os.symlink("serve.py", self.repo / APP_ROOT / "viewer/app.js")
-        self._git("add", str(APP_ROOT / "viewer/app.js"))
+        (self.repo / APP_ROOT / "viewer/main.js").unlink()
+        os.symlink("serve.py", self.repo / APP_ROOT / "viewer/main.js")
+        self._git("add", str(APP_ROOT / "viewer/main.js"))
         self._git("commit", "-q", "-m", "make required file symlink")
         self.sha = self._git("rev-parse", "HEAD").stdout.strip()
 
@@ -254,9 +265,9 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertNotEqual(symlink.returncode, 0)
         self.assertIn("symlink", symlink.stderr.lower())
 
-        self._git("rm", "-q", str(APP_ROOT / "viewer/app.js"))
-        self._write(str(APP_ROOT / "viewer/app.js"), "console.log('restored');\n")
-        self._git("add", str(APP_ROOT / "viewer/app.js"))
+        self._git("rm", "-q", str(APP_ROOT / "viewer/main.js"))
+        self._write(str(APP_ROOT / "viewer/main.js"), "console.log('restored');\n")
+        self._git("add", str(APP_ROOT / "viewer/main.js"))
         self._git("commit", "-q", "-m", "restore app")
         self._write(str(APP_ROOT / "viewer/../evil.txt"), "evil\n")
         self._git("add", str(APP_ROOT / "evil.txt"))
@@ -387,17 +398,28 @@ class DashboardReleaseActivationTest(unittest.TestCase):
     def _runtime_files(self) -> dict[str, bytes]:
         return {
             "viewer/serve.py": b"print('serve')\n",
-            "viewer/app.js": b"console.log('ok');\n",
-            "viewer/data-client.js": b"export const dataClient = {};\n",
-            "viewer/debug.html": b"<html>debug</html>\n",
+            "viewer/main.js": b"console.log('ok');\n",
+            "viewer/api.js": b"export const dataClient = {};\n",
+            "viewer/effects.js": b"export {};\n",
+            "viewer/format.js": b"export {};\n",
+            "viewer/router.js": b"export {};\n",
+            "viewer/state.js": b"export {};\n",
+            "viewer/store.js": b"export {};\n",
+            "viewer/views/files.js": b"export {};\n",
+            "viewer/views/header.js": b"export {};\n",
+            "viewer/views/selection-bar.js": b"export {};\n",
+            "viewer/views/server.js": b"export {};\n",
+            "viewer/views/theme.js": b"export {};\n",
+            "viewer/views/notices.js": b"export {};\n",
+            "viewer/views/users.js": b"export {};\n",
             "viewer/echarts.min.js": b"/*! echarts */\n",
             "viewer/index.html": b"<html></html>\n",
-            "viewer/overview.js": b"export const overview = {};\n",
-            "viewer/scan-status.js": b"export const scanStatus = {};\n",
-            "viewer/selection.js": b"export const selection = {};\n",
+            "viewer/views/overview.js": b"export const overview = {};\n",
+            "viewer/views/scan-status.js": b"export const scanStatus = {};\n",
+            "viewer/removal.js": b"export const selection = {};\n",
             "viewer/styles.css": b"body { color: black; }\n",
-            "viewer/tables.js": b"export const tables = {};\n",
-            "viewer/treemap.js": b"export const treemap = {};\n",
+            "viewer/columns.js": b"export const tables = {};\n",
+            "viewer/views/treemap.js": b"export const treemap = {};\n",
             "viewer/users-chart.js": b"export const users = {};\n",
             "collector/__init__.py": b"",
             "collector/duration_history.py": b"PLANS = ()\n",
@@ -551,7 +573,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             metadata_path=metadata,
         )
         release = Path(status["candidate_release"])
-        target = release / "viewer/app.js"
+        target = release / "viewer/main.js"
         external = self.root / "external-app.js"
         external.write_bytes(target.read_bytes())
         external.chmod(0o644)
@@ -649,7 +671,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)
         replacement_files = dict(original_files)
-        replacement_files["viewer/app.js"] = b"console.log('pw');\n"
+        replacement_files["viewer/main.js"] = b"console.log('pw');\n"
         replacement, _, _ = self._archive(files=replacement_files, directory=self.incoming / "replacement")
         original_start_state = self.module._current_start_state
 
@@ -660,8 +682,8 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         with mock.patch.object(self.module, "_current_start_state", side_effect=swap_source_after_validation):
             self._activate(archive, metadata, digest)
 
-        extracted = self.release_root / self.sha / "storage-monitor/viewer/app.js"
-        self.assertEqual(extracted.read_bytes(), original_files["viewer/app.js"])
+        extracted = self.release_root / self.sha / "storage-monitor/viewer/main.js"
+        self.assertEqual(extracted.read_bytes(), original_files["viewer/main.js"])
         unexpected_stages = {
             path for path in self.incoming.iterdir()
             if path.is_file() and path not in {archive, metadata}
@@ -672,7 +694,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)
         replacement_files = dict(original_files)
-        replacement_files["viewer/app.js"] = b"console.log('pw');\n"
+        replacement_files["viewer/main.js"] = b"console.log('pw');\n"
         replacement, _, _ = self._archive(files=replacement_files, directory=self.incoming / "replacement")
         original_extract = self.module._extract_private
         observed_stage_modes: list[int] = []
@@ -689,23 +711,23 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         with mock.patch.object(self.module, "_extract_private", side_effect=replace_staged_entry):
             self._activate(archive, metadata, digest)
 
-        extracted = self.release_root / self.sha / "storage-monitor/viewer/app.js"
-        self.assertEqual(extracted.read_bytes(), original_files["viewer/app.js"])
+        extracted = self.release_root / self.sha / "storage-monitor/viewer/main.js"
+        self.assertEqual(extracted.read_bytes(), original_files["viewer/main.js"])
         self.assertEqual(observed_stage_modes, [0o600])
 
     def test_rejects_unsafe_archive_members_before_extraction(self) -> None:
         cases: list[tuple[str, tarfile.TarInfo]] = []
-        for name in ["storage-monitor/../evil", "/storage-monitor/viewer/app.js", "other-root/file"]:
+        for name in ["storage-monitor/../evil", "/storage-monitor/viewer/main.js", "other-root/file"]:
             info = tarfile.TarInfo(name)
             info.size = 1
             cases.append((name, info))
         link = tarfile.TarInfo("storage-monitor/viewer/link")
         link.type = tarfile.SYMTYPE
-        link.linkname = "app.js"
+        link.linkname = "main.js"
         cases.append(("symlink", link))
         hardlink = tarfile.TarInfo("storage-monitor/viewer/hard")
         hardlink.type = tarfile.LNKTYPE
-        hardlink.linkname = "storage-monitor/viewer/app.js"
+        hardlink.linkname = "storage-monitor/viewer/main.js"
         cases.append(("hardlink", hardlink))
         fifo = tarfile.TarInfo("storage-monitor/viewer/fifo")
         fifo.type = tarfile.FIFOTYPE
@@ -727,9 +749,9 @@ class DashboardReleaseActivationTest(unittest.TestCase):
                     self.fail("unsafe archive mutated app path")
 
     def test_rejects_duplicate_member_count_and_expanded_size_limits(self) -> None:
-        duplicate_a = tarfile.TarInfo("storage-monitor/viewer/app.js")
+        duplicate_a = tarfile.TarInfo("storage-monitor/viewer/main.js")
         duplicate_a.size = 1
-        duplicate_b = tarfile.TarInfo("storage-monitor/viewer/app.js")
+        duplicate_b = tarfile.TarInfo("storage-monitor/viewer/main.js")
         duplicate_b.size = 1
         archive, metadata, digest = self._archive(members=[duplicate_a, duplicate_b])
         with self.assertRaises(self.module.ActivationError):
@@ -772,7 +794,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(staged, set())
 
     def test_rejects_missing_runtime_file_and_manifest_file_hash_mismatch(self) -> None:
-        for missing in ["deploy/direct_proxy.py", "viewer/styles.css", "viewer/scan-status.js", "collector/scan_telemetry.py"]:
+        for missing in ["deploy/direct_proxy.py", "viewer/styles.css", "viewer/views/scan-status.js", "collector/scan_telemetry.py"]:
             with self.subTest(missing=missing):
                 files = self._runtime_files()
                 files.pop(missing)
@@ -788,7 +810,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
 
         files = self._runtime_files()
         manifest = self._manifest(files)
-        manifest["files"]["viewer/app.js"] = "0" * 64
+        manifest["files"]["viewer/main.js"] = "0" * 64
         archive, metadata, digest = self._archive(files=files, manifest=manifest)
         with self.assertRaises(self.module.ActivationError):
             self._activate(archive, metadata, digest)
@@ -807,7 +829,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         backup = Path(status["legacy_backup"])
         self.assertTrue(backup.is_dir())
         self.assertEqual((backup / "legacy-sentinel.txt").read_bytes(), b"legacy bytes")
-        self.assertEqual((self.app_path / "viewer/app.js").stat().st_mode & 0o222, 0)
+        self.assertEqual((self.app_path / "viewer/main.js").stat().st_mode & 0o222, 0)
         persisted = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.assertEqual(persisted["source_sha"], self.sha)
         self.assertEqual(persisted["archive_digest"], digest)
@@ -847,7 +869,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "status": "prepared",
         })
         self.assertTrue(prepared.is_dir())
-        self.assertEqual((prepared / "viewer/app.js").stat().st_mode & 0o222, 0)
+        self.assertEqual((prepared / "viewer/main.js").stat().st_mode & 0o222, 0)
         self.assertFalse(self.app_path.is_symlink())
         self.assertEqual((self.app_path / "legacy-sentinel.txt").read_bytes(), b"legacy bytes")
         self.assertFalse(self.state_path.exists())
@@ -1339,7 +1361,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(status["status"], "active")
         self.assertEqual(self.restart_calls, ["activate"])
 
-        viewer_script = self.release_root / self.sha / "storage-monitor/viewer/app.js"
+        viewer_script = self.release_root / self.sha / "storage-monitor/viewer/main.js"
         viewer_script.chmod(0o755)
         with self.assertRaisesRegex(self.module.ActivationError, "existing release mode mismatch"):
             self._activate(archive, metadata, digest)
@@ -1452,7 +1474,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         external = self.root / "external.js"
         external.write_text("shared", encoding="utf-8")
         external.chmod(0o644)
-        os.link(external, payload_dir / "app.js")
+        os.link(external, payload_dir / "main.js")
         payload_dir.chmod(0o555)
         payload_dir.parent.chmod(0o555)
         release.chmod(0o555)

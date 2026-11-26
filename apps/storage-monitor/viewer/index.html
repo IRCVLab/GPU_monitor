@@ -82,13 +82,14 @@
       <div class="seg-tabs" id="tabs" role="tablist">
         <button class="tab active" data-tab="treemap" role="tab">Treemap</button>
         <button class="tab" data-tab="users" role="tab">Users</button>
-        <button class="tab" data-tab="topfiles" role="tab">Top files</button>
+        <button class="tab" data-tab="top" role="tab">Top files</button>
         <button class="tab" data-tab="stale" role="tab">Stale</button>
       </div>
     </nav>
   </header>
 
   <main id="main">
+    <div class="err" id="bootError" hidden>Overview data is unavailable. <button id="bootRetry">Retry</button></div>
     <section id="overviewView" class="overview-view">
       <p id="sampleDataMarker" class="sample-data-marker" hidden>샘플 데이터</p>
       <div id="overviewError" class="err" hidden></div>
@@ -186,15 +187,16 @@
             <span class="hint">Sorted by size · rows tint redder with age · scroll for more</span>
           </div>
           <div class="card">
-            <div class="vhead" id="staleHead">
-              <div class="vc vc-select" title="Inspect a snapshot path and copy safe command templates">Inspect</div>
-              <div class="vc vc-size sortable" data-key="bytes" style="text-align:right">Size<span class="arrow"></span></div>
-              <div class="vc vc-age sortable" data-key="age_days" style="text-align:right">Age<span class="arrow"></span></div>
-              <div class="vc vc-own sortable" data-key="owner">Owner<span class="arrow"></span></div>
-              <div class="vc vc-mnt sortable" data-key="mount">Storage<span class="arrow"></span></div>
-              <div class="vc vc-path sortable" data-key="path">Path<span class="arrow"></span></div>
+            <div id="staleViewport">
+              <table class="stale-table"><thead id="staleHead"><tr>
+              <th class="vc vc-select" title="Inspect a snapshot path and copy safe command templates">Inspect</th>
+              <th class="vc vc-size sortable" data-key="bytes" style="text-align:right">Size<span class="arrow"></span></th>
+              <th class="vc vc-age sortable" data-key="age_days" style="text-align:right">Age<span class="arrow"></span></th>
+              <th class="vc vc-own sortable" data-key="owner">Owner<span class="arrow"></span></th>
+              <th class="vc vc-mnt sortable" data-key="mount">Storage<span class="arrow"></span></th>
+              <th class="vc vc-path sortable" data-key="path">Path<span class="arrow"></span></th>
+              </tr></thead><tbody id="staleRows"></tbody></table>
             </div>
-            <div id="staleViewport"><div id="staleSpacer"><div id="staleRows"></div></div></div>
           </div>
           <div class="rowcount" id="staleCount"></div>
         </section>
@@ -225,12 +227,6 @@
     <div class="cleanup-safe">storage-viz never runs these commands. Pasted, they remove the selected paths without asking, and only on the server they were made for. Review the paths before pasting.</div>
   </div>
 </div>
-<script src="data-client.js"></script>
-<script src="selection.js"></script>
-<script src="treemap.js"></script>
-<script src="tables.js"></script>
-<script src="overview.js"></script>
-<script src="scan-status.js"></script>
-<script src="app.js"></script>
+<script type="module" src="main.js"></script>
 </body>
 </html>

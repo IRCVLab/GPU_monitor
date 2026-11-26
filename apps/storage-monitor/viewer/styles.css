@@ -672,26 +672,11 @@
 
   /* virtualized stale body */
   #staleViewport { position: relative; overflow: auto; max-height: calc(100vh - 360px); }
-  #staleSpacer { position: relative; width: 100%; }
-  #staleRows { position: absolute; top: 0; left: 0; right: 0; }
-  .vrow { display: flex; align-items: center; border-bottom: 1px solid var(--separator); height: 41px; }
-  .vrow:hover { background: var(--hover) !important; }
-  .vrow .vc { padding: 0 16px; overflow: hidden; }
-  .vrow .vc-select { width: 52px; text-align: center; flex: 0 0 auto; padding: 0 12px; }
-  .vrow .vc-size { width: 168px; text-align: right; position: relative; flex: 0 0 auto; }
-  .vrow .vc-age  { width: 96px;  text-align: right; flex: 0 0 auto; }
-  .vrow .vc-own  { width: 168px; flex: 0 0 auto; }
-  .vrow .vc-mnt  { width: 96px;  flex: 0 0 auto; }
-  .vrow .vc-path { flex: 1 1 auto; min-width: 0; }
-  .vhead { display: flex; align-items: center; background: var(--surface); border-bottom: 1px solid var(--separator);
-           position: sticky; top: 0; z-index: 3; height: 42px; }
-  .vhead .vc { padding: 0 16px; color: var(--text2); font-weight: 600; font-size: 12px; }
-  .vhead .vc.sortable { cursor: pointer; user-select: none; }
-  .vhead .vc.sortable:hover { color: var(--text); }
-  .vhead .vc-select { width: 52px; text-align: center; flex: 0 0 auto; padding: 0 12px; }
-  .vhead .vc-size { width: 168px; flex: 0 0 auto; } .vhead .vc-age { width: 96px; flex: 0 0 auto; }
-  .vhead .vc-own { width: 168px; flex: 0 0 auto; } .vhead .vc-mnt { width: 96px; flex: 0 0 auto; }
-  .vhead .vc-path { flex: 1 1 auto; }
+  .stale-table { width: 100%; min-width: 780px; border-collapse: separate; border-spacing: 0; }
+  .stale-table thead { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+  .stale-table .selectcell, .stale-table .vc-select { width: 1%; min-width: 5.5rem; white-space: nowrap; }
+  .stale-table .pathcell, .stale-table .vc-path, #topTbl td.pathcell { min-width: 240px; }
+  .stale-table tbody tr { height: 41px; }
   .vhead .arrow { color: var(--accent); font-size: 9px; margin-left: 4px; }
 
   .cleanup-panel { position: fixed; right: calc(24px + env(safe-area-inset-right)); bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 40;
