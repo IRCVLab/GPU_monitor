@@ -82,7 +82,7 @@ function scanStatusModel(status, snapshot, now = Date.now() / 1000) {
     state, running, label: disconnected ? "상태 확인 지연" : s.error_code === "SCAN_INTERRUPTED" ? "스캔 중단" : (labels[state] || labels.unknown),
     lastFinished, duration, elapsed, eta, snapshotFinished,
     snapshotPending: !!pendingScanGeneration(s, data),
-    etaNote: heartbeatStale ? "진행 정보 확인 후 예상 시간 갱신" : predicted !== null && predicted <= now ? "이전 소요 시간 초과 · 계속 진행 중" : started === null ? "현재 스캔 시작 시각 확인 중" : "같은 범위의 완료 기록이 없어 예상 시간 확인 불가",
+    etaNote: heartbeatStale ? "진행 정보 확인 후 예상 시간 갱신" : predicted !== null && predicted <= now ? "최근 최장 소요 시간 초과 · 계속 진행 중" : started === null ? "현재 스캔 시작 시각 확인 중" : "같은 범위의 완료 기록이 없어 예상 시간 확인 불가",
     nextRunLabel: s.schedule_mode === "due-check" ? "다음 확인" : "다음",
     nextRun: !disconnected && s.timer_state === "active" && next > now ? next : null,
     scheduleNote: s.timer_state === "inactive" || s.timer_state === "disabled" ? "자동 스캔 비활성" : "예약 정보 확인 불가",

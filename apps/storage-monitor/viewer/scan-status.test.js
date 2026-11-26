@@ -16,7 +16,7 @@ assert.equal(model.files, 12500);
 assert.equal(model.root, '/data');
 assert.equal(model.label, '스캔 중');
 assert.equal(scanStatusModel({ state: 'running', started_unix: 1800, observed_unix: now }, snapshot, now).eta, null, 'overrun cannot look almost complete');
-assert.match(scanStatusModel({ state: 'running', started_unix: 1800, observed_unix: now }, snapshot, now).etaNote, /초과/);
+assert.match(scanStatusModel({ state: 'running', started_unix: 1800, observed_unix: now }, snapshot, now).etaNote, /^최근 최장 소요 시간 초과/);
 assert.equal(scanStatusModel({ state: 'running', started_unix: 1950, observed_unix: now }, null, now).eta, null);
 model = scanStatusModel({ state: 'running', started_unix: 1800, updated_unix: 1801, observed_unix: now, progress_available: true, scanned_files: 900 }, snapshot, now);
 assert.equal(model.files, null, 'stale heartbeat must not look live');
