@@ -293,7 +293,7 @@ class Collector:
             assert all(self.summary(sid)["latest_pull_status"] == "succeeded" for sid in ids)
 
     def restart(self, **fleet_options):
-        fleet_options = {**self.fleet_options, **fleet_options}
+        fleet_options = {"desired_path": self.state_dir.parent / "no-agent.json", **self.fleet_options, **fleet_options}
         self.fleet = Fleet(self.servers, self.state_dir, self.host, clock=self.clock, spawn=self.spawn, **fleet_options)
         for actor in self.fleet.actors.values():
             actor._guard(actor.load)

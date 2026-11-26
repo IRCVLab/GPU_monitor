@@ -8,7 +8,7 @@ import json
 import os
 import pathlib
 import re
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from collector import judge
 from collector.ids import SERVER_ID_RE
@@ -57,6 +57,7 @@ SERVER_ALLOWED_KEYS = frozenset({
     "known_hosts_file",
     "scanner",
     "transport",
+    "canary",
 })
 SECURITY_FORBIDDEN_KEYS = frozenset({
     "password", "passphrase", "token", "secret", "private_key", "private_key_data",
@@ -120,6 +121,8 @@ class Server:
     scanner_digest: str
     transport: str = "gate"
     """``gate``, or ``legacy`` for a host not bootstrapped yet: S2 until its gate answers (collector/gate.py)."""
+    canary: bool = False
+    """Takes a new agent release before the rest of the fleet (§3.4). At most one server has it."""
 
 
 @dataclass(frozen=True)
@@ -163,7 +166,18 @@ def parse_inventory(raw: Any) -> Inventory:
         seen.add(server.id)
         orders.add(server.order)
         servers.append(server)
+    canaries = [server.id for server in servers if server.canary]
+    if len(canaries) > 1:
+        raise ValueError(f"only one server may be the canary: {', '.join(canaries)}")
     return Inventory(tuple(servers), thresholds)
+
+
+def canary_of(servers: Tuple[Server, ...]) -> Optional[str]:
+    """The server marked ``canary: true``, otherwise the one with the lowest order."""
+    marked = [server.id for server in servers if server.canary]
+    if marked:
+        return marked[0]
+    return min(servers, key=lambda server: server.order).id if servers else None
 
 
 def _parse_server(raw: Any, idx: int) -> Server:
@@ -192,7 +206,7 @@ def _parse_server(raw: Any, idx: int) -> Server:
     if transport not in TRANSPORTS:
         raise ValueError(f"transport must be one of {', '.join(TRANSPORTS)}")
     return Server(sid, display_name, order, host, port, enabled, username, identity_file, known_hosts_file, scanner, digest,
-                  transport)
+                  transport, _bool(raw.get("canary", False), "canary"))
 
 
 def scanner_digest(scanner: Mapping[str, Any]) -> str:

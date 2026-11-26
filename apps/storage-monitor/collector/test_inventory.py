@@ -185,9 +185,6 @@ class InventoryTests(unittest.TestCase):
             self.load(cfg)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
     def test_transport_defaults_to_the_gate_and_legacy_must_be_explicit(self):
         cfg = self.valid_config()
         parsed = inventory.parse_inventory(cfg)
@@ -198,3 +195,24 @@ if __name__ == "__main__":
             cfg["servers"][0]["transport"] = bad
             with self.assertRaisesRegex(ValueError, "transport"):
                 inventory.parse_inventory(cfg)
+
+    def test_canary_flag_parses_and_two_canaries_are_refused(self):
+        cfg = self.valid_config()
+        second = json.loads(json.dumps(cfg["servers"][0]))
+        second.update(id="beta-2", order=5, scanner={**second["scanner"], "server_id": "beta-2"})
+        cfg["servers"].append(second)
+        parsed = inventory.parse_inventory(cfg)
+        self.assertEqual(inventory.canary_of(parsed.servers), "beta-2", "no flag: the lowest order")
+        cfg["servers"][0]["canary"] = True
+        parsed = inventory.parse_inventory(cfg)
+        self.assertEqual((parsed.servers[0].canary, inventory.canary_of(parsed.servers)), (True, "alpha-1"))
+        cfg["servers"][1]["canary"] = True
+        with self.assertRaisesRegex(ValueError, "only one server may be the canary"):
+            inventory.parse_inventory(cfg)
+        cfg["servers"][1]["canary"] = "yes"
+        with self.assertRaisesRegex(ValueError, "canary"):
+            inventory.parse_inventory(cfg)
+
+
+if __name__ == "__main__":
+    unittest.main()
