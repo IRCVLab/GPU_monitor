@@ -142,4 +142,3 @@ class TestHostConfig(unittest.TestCase):
         entries = mount_policy.parse_mountinfo(mi(1, 0, "8:1", "/", "/", "rw", "ext4", "/dev/sda1"))
 
         self.assertEqual(mount_policy.verified_root_directory_paths(entries, lstat=lambda path: (_ for _ in ()).throw(PermissionError(path))), ())
-

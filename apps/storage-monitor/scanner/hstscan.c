@@ -1110,6 +1110,10 @@ static struct node *scan_target(const char *target, int nthreads, int stale_days
 
     ctx.scanned_dirs = 1;
     ctx.scanned_bytes = root_blocks;
+    pthread_mutex_lock(&progress_lock);
+    g_progress_bytes += root_blocks;
+    g_progress_dirs++;
+    pthread_mutex_unlock(&progress_lock);
     user_add(rootst.st_uid, target, root_blocks, 0);
 
     /* Parked: process_dir duplicates the pinned root descriptor. */
