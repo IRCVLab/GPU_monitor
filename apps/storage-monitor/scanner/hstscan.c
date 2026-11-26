@@ -1399,7 +1399,7 @@ static void emit_node_head(FILE *f, const struct node *n, bool capped) {
     fprintf(f, ",\"files\":%llu", (unsigned long long)n->files);
     fprintf(f, ",\"uid\":%u", (unsigned)n->uid);
     fprintf(f, ",\"mtime\":%lld", (long long)n->mtime);
-    fprintf(f, ",\"other_bytes\":%llu", (unsigned long long)(capped && n->nchildren ? n->bytes : n->other_bytes));
+    fprintf(f, ",\"other_bytes\":%llu", (unsigned long long)(capped ? n->bytes : n->other_bytes));
     if (!capped && n->nchildren > 0) fputs(",\"children\":[", f);
 }
 

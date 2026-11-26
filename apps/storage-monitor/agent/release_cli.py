@@ -67,9 +67,13 @@ def selftest(config_path: str, release_root: pathlib.Path) -> List[str]:
         tree = pathlib.Path(tmp) / "tree"
         out = pathlib.Path(tmp) / "out.json"
         _make_tree(tree)
+        device = tree.stat().st_dev
+        major_minor = "%d:%d" % (os.major(device), os.minor(device))
         try:
             completed = subprocess.run(
-                [str(hstscan), "--threads", "1", "--out", str(out), str(tree)],
+                [str(hstscan), "--threads", "1", "--run-id", "0" * 32, "--group", "selftest",
+                 "--progress", str(pathlib.Path(tmp) / "progress.json"), "--out", str(out),
+                 "--target", str(tree), major_minor, "data"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 timeout=SELFTEST_TIMEOUT_SECONDS, check=False,
             )

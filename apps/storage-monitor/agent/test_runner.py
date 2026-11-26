@@ -188,6 +188,9 @@ def test_kill_after_each_persist_step(tmp_path):
             host.run(persisted=kill)
             os._exit(1)
         assert os.waitpid(pid, 0)[1] == signal.SIGKILL
+        journal_path = host.data / "run.json"
+        stale = json.loads(journal_path.read_bytes()) if journal_path.exists() else None
+        previous = host.manifest() if (host.data / "manifest.json").exists() else {}
         snapshots = []
         def inspect(step):
             if step == "manifest":
@@ -195,7 +198,18 @@ def test_kill_after_each_persist_step(tmp_path):
         assert host.run(scheduled=True, persisted=inspect) == 0
         assert not (host.data / "run.json").exists()
         receipt, = host.manifest()["requests"]
-        assert receipt["outcome"] in ("complete", "interrupted")
+        if stale and not previous.get("last_run"):
+            recovered = snapshots[0]
+            assert recovered["last_run"]["outcome"] == "interrupted"
+            assert recovered["last_run"]["run_id"] == stale["run_id"]
+            planned = {vid for group in stale["plan"] for vid in group["volumes"]}
+            for old, new in zip(previous.get("volumes", []), recovered["volumes"]):
+                assert old["capture"] == new["capture"]
+                if old["volume_id"] in planned and old["last_attempt"] is None:
+                    assert new["last_attempt"]["outcome"] == "interrupted"
+            assert receipt["outcome"] == ("interrupted" if stale["request_ids"] else "complete")
+        else:
+            assert receipt["outcome"] == "complete"
         assert all(m["seq"] == snapshots[0]["seq"] + n for n, m in enumerate(snapshots))
         assert all(v["capture"] for v in host.volumes().values())
 
