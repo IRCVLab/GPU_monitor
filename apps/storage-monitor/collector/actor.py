@@ -36,6 +36,8 @@ _MISMATCH_MESSAGES = ("byte_size does not match downloaded bytes", "sha256 does 
 _CONTENT_ERRORS = (ValueError, TypeError, KeyError, IndexError, AttributeError, RecursionError)
 TICK_FAILED = "TICK_FAILED"
 MAX_TICK_BACKOFF_SECONDS = 10 * 60
+SEQ_BLOCK = 1000
+"""Contact sequence numbers reserved per record write. record.json stores the ceiling as link.seq."""
 
 
 class Clock(Protocol):
@@ -141,6 +143,12 @@ def _capture_event(message: Fetched, at: int) -> health.DataEvent:
     return TransferFailed(message.sha)
 
 
+def _durable(record: Record) -> Record:
+    """The record less what changes on every exchange or lives only in memory; a change here needs a write."""
+    return replace(record, link=replace(record.link, seq=0, last_ok_unix=None),
+                   data=replace(record.data, fetching=None, retried=frozenset()))
+
+
 def record_duration(durations: Mapping[str, Any], status: Mapping[str, Any]) -> Mapping[str, Any]:
     """Keep the last completed full and ssd scan durations for the ETA (today's rule)."""
     plan = status.get("scan_plan")
@@ -177,6 +185,8 @@ class ServerActor:
         self._host_clock = None
         self._error: Optional[str] = None
         self._seq = 0
+        self._ceiling = 0
+        """No seq above this was issued: the link.seq record.json holds."""
         self._next_contact = 0.0
         self._failed_ticks = 0
 
@@ -245,7 +255,7 @@ class ServerActor:
         if record != stored:
             self.store.commit(record, prune=False)
         self._record = record
-        self._seq = record.link.seq
+        self._seq = self._ceiling = record.link.seq
         self._error = None
         self.loaded = True
         self._next_contact = 0.0
@@ -262,14 +272,22 @@ class ServerActor:
             return None
 
     def _commit(self, record: Record, capture: Optional[tuple] = None) -> bool:
-        if record == self._record and capture is None:
+        """Make ``record`` current, writing it only when its durable part changed or a capture comes with it."""
+        if capture is None and _durable(record) == _durable(self._record):
+            self._record = record
             return True
+        return self._write(record, capture)
+
+    def _write(self, record: Record, capture: Optional[tuple] = None) -> bool:
+        # On disk link.seq is the ceiling of issued seqs, so a restart resumes above all of them (I7).
+        ceiling = self._ceiling if self._seq <= self._ceiling else self._seq + SEQ_BLOCK - 1
         try:
-            self.store.commit(record, capture)
+            self.store.commit(replace(record, link=replace(record.link, seq=ceiling)), capture)
         except StoreUnavailable:
             _LOG.exception("commit failed for %s", self.server.id)
             self._error = StoreUnavailable.code
             return False
+        self._ceiling = ceiling
         self._record = record
         if self._error == StoreUnavailable.code:
             self._error = None
@@ -280,6 +298,9 @@ class ServerActor:
 
     def _next_seq(self) -> int:
         self._seq += 1
+        if self._seq > self._ceiling:
+            # Reserve a block before the seq leaves the actor. If the write fails, the next seq tries again.
+            self._write(self._record)
         return self._seq
 
     @staticmethod

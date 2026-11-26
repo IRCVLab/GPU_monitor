@@ -696,3 +696,49 @@ def test_rescan_request_answers_within_the_reply_bound_while_the_admission_commi
     assert host.summary()["active_job"]["phase"] == "dispatching", "the admission that finished late was lost"
     with pytest.raises(ActiveJob):
         host.fleet.request_rescan("alpha-1", "operator")
+
+
+def test_idle_observes_do_not_rewrite_the_record(tmp_path, monkeypatch):
+    # M2b review: record.json was written and fsynced on every observe only because link.seq changed.
+    host = Collector(tmp_path, "alpha-1")
+    host.tick()
+    writes = []
+    commit = ServerStore.commit
+    monkeypatch.setattr(ServerStore, "commit", lambda store, *args, **kwargs: (writes.append(args), commit(store, *args, **kwargs)))
+    observes = len(host.host.observe_calls)
+    for _ in range(20):
+        host.tick()
+    assert len(host.host.observe_calls) - observes == 20
+    assert writes == [], f"{len(writes)} observes that changed nothing durable rewrote the record"
+    host.host.publish("alpha-1", started=1719203000)
+    host.tick()
+    assert writes and ServerStore(host.state_dir, "alpha-1").load().data.accepted == host.host.publications["alpha-1"]["sha256"]
+
+
+def test_contact_sequence_numbers_keep_increasing_across_a_restart(tmp_path, monkeypatch):
+    import collector.actor as actor_module
+    from collector import health
+
+    monkeypatch.setattr(actor_module, "SEQ_BLOCK", 3)
+    applied = []
+    reduce_link = health.reduce_link
+
+    def spy(link, event):
+        applied.append(event.seq)
+        return reduce_link(link, event)
+
+    monkeypatch.setattr(health, "reduce_link", spy)
+    host = Collector(tmp_path, "alpha-1")
+    for started in range(1719203000, 1719203010):
+        host.host.publish("alpha-1", started=started)
+        host.tick()
+    for _ in range(4):
+        host.tick()  # seqs issued after the last durable change
+    before = list(applied)
+    host.restart()
+    for _ in range(10):
+        host.tick()
+    after = applied[len(before):]
+    assert before and after
+    assert after[0] > max(before), f"seq {after[0]} after restart is not above {max(before)}"
+    assert applied == sorted(set(applied)), "contact sequence numbers repeated or went back"
