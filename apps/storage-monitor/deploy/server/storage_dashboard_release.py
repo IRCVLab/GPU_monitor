@@ -36,21 +36,24 @@ REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | froz
         "viewer/treemap.js",
         "viewer/users-chart.js",
         "collector/__init__.py",
-        "collector/duration_history.py",
+        "collector/actor.py",
+        "collector/fleet.py",
         "collector/inventory.py",
         "collector/jobs.py",
-        "collector/service.py",
-        "collector/scan_telemetry.py",
+        "collector/legacy.py",
         "collector/snapshot.py",
         "collector/store.py",
         "collector/transport.py",
+        "collector/view.py",
         "config/servers.example.yaml",
         "deploy/direct_proxy.py",
     }
 )
 
 BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {
-    "collector/contract.py", "collector/ids.py", "collector/judge.py", "collector/live_capacity.py", "storage_fstypes.py",
+    "api/__init__.py", "api/errors.py",
+    "collector/contract.py", "collector/errors.py", "collector/health.py", "collector/ids.py", "collector/judge.py",
+    "collector/live_capacity.py", "collector/update.py", "storage_fstypes.py",
 }
 
 

@@ -31,6 +31,7 @@ class FakeRunner:
         self.fail_next = None
         self.returncode_next = None
         self.ssh_stdout_next = b""
+        self.ssh_stderr_next = b"ignored /secret/path"
         self.truncate_to_cap_on_nonzero = False
         self.seen_temp_modes = []
         self.seen_temp_is_regular = []
@@ -46,7 +47,7 @@ class FakeRunner:
         if argv[0] == "ssh":
             code = self.returncode_next if self.returncode_next is not None else 0
             self.returncode_next = None
-            return Completed(returncode=code, stdout=self.ssh_stdout_next, stderr=b"ignored /secret/path")
+            return Completed(returncode=code, stdout=self.ssh_stdout_next, stderr=self.ssh_stderr_next)
         if argv[:4] != [sys.executable, "-I", "-S", "-c"] or argv[6] != "sftp":
             raise AssertionError(argv)
         limit = int(argv[5])
@@ -184,34 +185,21 @@ class OpenSshTransportTests(unittest.TestCase):
         self.assertIn("User=monitoring", "\0".join(argv))
         self.assertFalse(fake.calls[0]["shell"])
 
-    def test_scan_active_state_uses_fixed_unprivileged_systemctl_show_command(self):
-        from collector.transport import OpenSshTransport
-
-        fake = FakeRunner()
-        fake.ssh_stdout_next = b"inactive\n\nactivating\n"
-        state = OpenSshTransport(runner=fake, active_state_timeout_seconds=7).scan_active_state(server())
-
-        self.assertEqual(state, "activating")
-        argv = fake.calls[0]["argv"]
-        dash_index = argv.index("--")
-        self.assertEqual(argv[dash_index + 1], "alpha.example.test")
-        self.assertEqual(argv[dash_index + 2:], ["/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service", "storage-viz-scheduled-scan.service"])
-        self.assertIn("User=monitoring", "\0".join(argv))
-        self.assertNotIn("sudo", argv[dash_index + 2:])
-        self.assertFalse(fake.calls[0]["shell"])
-
-    def test_scan_active_state_rejects_malformed_or_failed_bounded_output(self):
+    def test_ssh_exit_255_is_classified_as_auth_or_transport_failure(self):
         from collector.transport import OpenSshTransport, TransportError
-
-        fake = FakeRunner(); fake.ssh_stdout_next = b"active\nextra\n"
-        with self.assertRaises(TransportError) as ctx:
-            OpenSshTransport(runner=fake).scan_active_state(server())
-        self.assertEqual(ctx.exception.code, "BAD_ACTIVE_STATE")
-
-        fake = FakeRunner(); fake.returncode_next = 1
-        with self.assertRaises(TransportError) as ctx:
-            OpenSshTransport(runner=fake).scan_active_state(server())
-        self.assertEqual(ctx.exception.code, "ACTIVE_STATE_FAILED")
+        runner = FakeRunner()
+        tx = OpenSshTransport(runner=runner)
+        for stderr, code in ((b"monitoring@alpha: Permission denied (publickey).", "AUTH_FAILED"),
+                             (b"Host key verification failed.", "AUTH_FAILED"),
+                             (b"ssh: connect to host alpha port 2222: Connection refused", "UNREACHABLE")):
+            runner.returncode_next, runner.ssh_stderr_next = 255, stderr
+            with self.assertRaises(TransportError) as raised:
+                tx.run_probe(server())
+            self.assertEqual(raised.exception.code, code)
+        runner.returncode_next = 1
+        with self.assertRaises(TransportError) as raised:
+            tx.run_probe(server())
+        self.assertEqual(raised.exception.code, "TELEMETRY_UNAVAILABLE")
 
     def test_snapshot_size_is_checked_before_download_and_generation_must_match_server(self):
         from collector.transport import MAX_SNAPSHOT_BYTES, OpenSshTransport, TransportError

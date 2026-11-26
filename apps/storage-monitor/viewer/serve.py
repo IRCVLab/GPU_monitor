@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-from collections import OrderedDict
 import hashlib
 import hmac
 import http.server
@@ -22,16 +21,22 @@ if str(Path(__file__).resolve().parents[1]) not in sys.path:
 from typing import Any, Callable, Mapping
 from urllib.parse import unquote, urlsplit
 
+from api.errors import http_error
 from collector.contract import snapshot_response
+from collector.errors import DomainError, RescanDisabled, SnapshotAbsent, StoreUnavailable, UnknownServer
+from collector.fleet import Fleet
+from collector.health import Data
 from collector.ids import SERVER_ID_RE
 from collector.inventory import CapacityThresholds, Server as InventoryServer, load_inventory
+from collector.legacy import LegacyHost
+from collector.live_capacity import POLL_SECONDS as CAPACITY_POLL_SECONDS, LiveCapacity
+from collector.store import Record
+from collector.transport import OpenSshTransport
+from collector.view import (
+    ServerView, build_view, error_row_v1, job_v1, render_snapshot, scan_status_v1, snapshot_v1_chunks, summary_v1,
+)
 
 SAMPLE_FILE_TOKEN_RE = SERVER_ID_RE
-from collector.jobs import RescanJobManager
-from collector.live_capacity import POLL_SECONDS as CAPACITY_POLL_SECONDS, LiveCapacity
-from collector.service import ACTIVE_TELEMETRY_INTERVAL_SECONDS, PollService
-from collector.store import CentralStore, SnapshotRevision
-from collector.transport import OpenSshTransport
 
 VIEWER_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(os.environ.get("STORAGE_VIZ_ROOT", VIEWER_DIR.parent)).resolve()
@@ -158,7 +163,8 @@ if DIRECT_LOOPBACK_RESCAN:
 
 
 class _DevSampleService:
-    data_mode = "sample"
+    """Sample fixtures served through the same views as the production fleet. Rescans are disabled."""
+    clock = time
 
     def __init__(self, sample_dir: str | os.PathLike[str]) -> None:
         raw_root = Path(sample_dir)
@@ -170,6 +176,7 @@ class _DevSampleService:
         self.root = root
         self._paths: dict[str, Path] = {}
         self.servers: tuple[InventoryServer, ...] = tuple(self._load_servers())
+        self._views = {server.id: self._build_view(server) for server in self.servers}
 
     def _safe_manifest_path(self, file_token: str) -> Path:
         if not isinstance(file_token, str) or not SAMPLE_FILE_TOKEN_RE.fullmatch(file_token) or file_token in {".", ".."}:
@@ -250,139 +257,88 @@ class _DevSampleService:
             raise ValueError("sample file is missing or unsafe")
         return resolved
 
-    def server_summaries(self) -> list[dict[str, Any]]:
-        out = []
-        for s in self.servers:
-            snap = self.load_snapshot_for_api(s.id)
-            out.append({"id": s.id, "display_name": s.display_name, "order": s.order, "snapshot_availability": "available", "freshness": "unknown", "latest_pull_status": "succeeded", "latest_scan_result": "complete", "configuration_sync": "in_sync", "mount_count": len(snap.get("mounts", [])), "active_job": None, "scan_status": self.scan_status_for_api(s.id)})
-        return out
+    def _build_view(self, server: InventoryServer) -> ServerView:
+        snapshot = render_snapshot(json.loads(self._path(server.id).read_text(encoding="utf-8")))
+        manifest = {"status": snapshot.scan_result, "config_digest": server.scanner_digest}
+        return build_view(server, Record(data=Data(manifest=manifest)), snapshot, None, None, None)
 
-    def scan_status_for_api(self, server_id: str) -> dict[str, Any]:
-        from collector.scan_telemetry import empty_status
-        snap = self.load_snapshot_for_api(server_id)
-        return empty_status() | {"last_finished_unix": snap.get("scan_finished_unix"),
-                                 "last_duration_sec": snap.get("scan_duration_sec"),
-                                 "snapshot_generation": snap.get("scan_generation")}
+    def lookup(self, server_id: Any) -> InventoryServer:
+        if server_id not in self._views:
+            raise UnknownServer("unknown sample server")
+        return self._views[server_id].server
 
-    def load_snapshot_for_api(self, server_id: str) -> Mapping[str, Any] | None:
-        return json.loads(self._path(server_id).read_text(encoding="utf-8"))
+    def view(self, server_id: Any) -> ServerView:
+        self.lookup(server_id)
+        return self._views[server_id]
 
-    def load_state_for_api(self, server_id: str) -> dict[str, Any]:
-        self._path(server_id)
-        return {"active_job": None}
+    def views(self) -> list[ServerView]:
+        return [self._views[server.id] for server in self.servers]
+
+    def request_rescan(self, server_id: Any, actor_name: str) -> dict[str, Any]:
+        self.lookup(server_id)
+        raise RescanDisabled()
 
 
 capacity_thresholds = CapacityThresholds()
-service: Any
-jobs: RescanJobManager | None = None
+data_mode = "sample"
+fleet: Any = None
 RESCAN_API_ENABLED = False
 if DEV_SAMPLE_DIR:
-    service = _DevSampleService(DEV_SAMPLE_DIR)
+    fleet = _DevSampleService(DEV_SAMPLE_DIR)
 elif INVENTORY_PATH:
     inventory = load_inventory(INVENTORY_PATH)
     capacity_thresholds = inventory.capacity_thresholds
-    service = PollService(list(inventory.servers), CentralStore(STATE_DIR), OpenSshTransport())
-    service.data_mode = "inventory"
-    jobs = None
+    data_mode = "inventory"
+    fleet = Fleet(list(inventory.servers), STATE_DIR, LegacyHost(OpenSshTransport()),
+                  cooldown_seconds=COOLDOWN_SECONDS, max_active_jobs=MAX_CONCURRENT_RESCANS)
     RESCAN_API_ENABLED = (TRUSTED_PROXY or DIRECT_LOOPBACK_RESCAN or PREFLIGHT_BACKEND) and bool(OPERATORS)
-else:
-    service = None
+# Preflight validates routing and auth only: actors never start, so nothing contacts a host or runs a job.
+RUNS_ACTORS = isinstance(fleet, Fleet) and not PREFLIGHT_BACKEND
 
 
 class CentralPoller:
-    """Lifecycle-safe background poller for production inventory mode."""
+    """Lifecycle-safe background poller for the live capacity feed."""
 
-    def __init__(self, poll: Callable[[], Any], interval_seconds: float, *,
-                 scan_status_poll: Callable[[], None] | None = None) -> None:
+    def __init__(self, poll: Callable[[], Any], interval_seconds: float) -> None:
         self._poll = poll
-        self._scan_status_poll = scan_status_poll
         self.interval_seconds = max(float(interval_seconds), 0.001)
         self._stop = threading.Event()
         self._lock = threading.Lock()
-        self._threads: tuple[threading.Thread, ...] = ()
+        self._thread: threading.Thread | None = None
 
     @property
     def thread_ident(self) -> int | None:
-        return self._threads[0].ident if self._threads else None
+        return self._thread.ident if self._thread else None
 
     @property
     def is_running(self) -> bool:
-        return any(thread.is_alive() for thread in self._threads)
+        return self._thread is not None and self._thread.is_alive()
 
     def start(self) -> bool:
         with self._lock:
             if self.is_running:
                 return False
             self._stop.clear()
-            self._threads = (
-                threading.Thread(
-                    target=self._run, args=(self._poll, self.interval_seconds),
-                    name="storage-viz-central-poller", daemon=True
-                ),
-            )
-            if self._scan_status_poll is not None:
-                self._threads += (threading.Thread(
-                    target=self._run, args=(self._scan_status_poll, ACTIVE_TELEMETRY_INTERVAL_SECONDS),
-                    name="storage-viz-telemetry-poller", daemon=True
-                ),)
-            for thread in self._threads:
-                thread.start()
+            self._thread = threading.Thread(target=self._run, name="storage-viz-capacity-poller", daemon=True)
+            self._thread.start()
             return True
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self._stop.set()
-        deadline = time.monotonic() + timeout
-        for thread in self._threads:
-            thread.join(max(0, deadline - time.monotonic()))
+        if self._thread is not None:
+            self._thread.join(timeout)
 
-    def _run(self, poll, interval: float) -> None:
+    def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                poll()
+                self._poll()
             except Exception as exc:
-                print(f"storage-viz central poll failed: {exc}", file=sys.stderr, flush=True)
-            if self._stop.wait(interval):
+                print(f"storage-viz capacity poll failed: {exc}", file=sys.stderr, flush=True)
+            if self._stop.wait(self.interval_seconds):
                 break
 
 
-class ExecutionDisabledRescanJobManager:
-    """Preflight guard: validate routing/auth but never execute real rescan jobs."""
-
-    def __init__(self, active_service: Any) -> None:
-        self._server_ids = {s.id for s in getattr(active_service, "servers", ()) if getattr(s, "enabled", True)}
-
-    def request_rescan(self, server_id: str, actor: str) -> tuple[int, dict[str, Any]]:
-        if not isinstance(server_id, str) or not SERVER_ID_RE.fullmatch(server_id) or server_id not in self._server_ids:
-            return 404, {"error": "UNKNOWN_SERVER", "code": "UNKNOWN_SERVER"}
-        return 403, {"error": "RESCAN_DISABLED", "code": "EXECUTION_DISABLED"}
-
-    def job_for(self, server_id: str) -> tuple[int, dict[str, Any]]:
-        if not isinstance(server_id, str) or not SERVER_ID_RE.fullmatch(server_id) or server_id not in self._server_ids:
-            return 404, {"error": "UNKNOWN_SERVER"}
-        return 200, {"job": None}
-
-
-if isinstance(service, PollService):
-    if PREFLIGHT_BACKEND:
-        jobs = ExecutionDisabledRescanJobManager(service)
-    else:
-        jobs = RescanJobManager(service, cooldown_seconds=COOLDOWN_SECONDS, max_concurrent=MAX_CONCURRENT_RESCANS)
-
-
-def build_central_poller(active_service: Any) -> CentralPoller | None:
-    if PREFLIGHT_BACKEND:
-        return None
-    if isinstance(active_service, PollService):
-        return CentralPoller(active_service.poll_background_once, active_service.poll_interval_seconds,
-                             scan_status_poll=active_service.poll_scan_status_once)
-    return None
-
-
-central_poller = build_central_poller(service)
-live_capacity = (
-    LiveCapacity(service.servers, int(CAPACITY_PORT))
-    if central_poller is not None and CAPACITY_PORT else None
-)
+live_capacity = LiveCapacity(fleet.servers, int(CAPACITY_PORT)) if RUNS_ACTORS and CAPACITY_PORT else None
 capacity_poller = CentralPoller(live_capacity.poll_once, CAPACITY_POLL_SECONDS) if live_capacity else None
 
 
@@ -390,46 +346,20 @@ def _encode_json(obj: Any) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-class SnapshotResponseCache:
-    def __init__(self, byte_budget: int = 64 * 1024 * 1024) -> None:
-        self._byte_budget = byte_budget
-        self._size = 0
-        self._entries: OrderedDict[str, tuple[tuple[SnapshotRevision, bytes | None], bytes]] = OrderedDict()
-        self._lock = threading.Lock()
-        self._load_locks = tuple(threading.Lock() for _ in range(32))
-
-    def get(self, service: PollService, capacity: LiveCapacity | None, server_id: str) -> bytes | None:
-        with self._load_locks[hash(server_id) % len(self._load_locks)]:
-            with service.open_snapshot_for_api(server_id) as selected:
-                if selected is None:
-                    return None
-                sample = capacity.sample_for(server_id) if capacity is not None else None
-                key = (selected.revision, sample.revision if sample is not None else None)
-                with self._lock:
-                    cached = self._entries.get(server_id)
-                    if cached is not None and cached[0] == key:
-                        self._entries.move_to_end(server_id)
-                        return cached[1]
-
-                snapshot = selected.read()
-                sample = capacity.sample_for(server_id) if capacity is not None else None
-                body = _encode_json(snapshot_response(LiveCapacity.project_sample(snapshot, sample), capacity_thresholds))
-                key = (selected.revision, sample.revision if sample is not None else None)
-
-            with self._lock:
-                previous = self._entries.pop(server_id, None)
-                if previous is not None:
-                    self._size -= len(previous[1])
-                if len(body) <= self._byte_budget:
-                    while self._size + len(body) > self._byte_budget:
-                        _, (_, evicted) = self._entries.popitem(last=False)
-                        self._size -= len(evicted)
-                    self._entries[server_id] = (key, body)
-                    self._size += len(body)
-            return body
+def _overview_with_capacity(server_id: str, overview: Mapping[str, Any]) -> Mapping[str, Any]:
+    projected = live_capacity.project(server_id, overview) if live_capacity is not None else overview
+    return snapshot_response(projected, capacity_thresholds)
 
 
-snapshot_responses = SnapshotResponseCache()
+def _summary_row(view: ServerView, now_monotonic: float) -> dict[str, Any]:
+    try:
+        row = summary_v1(view, now_monotonic)
+        if row["overview_snapshot"] is not None:
+            row["overview_snapshot"] = _overview_with_capacity(view.server.id, row["overview_snapshot"])
+        return row
+    except Exception:
+        print(f"storage-viz fleet row failed for {view.server.id}", file=sys.stderr, flush=True)
+        return error_row_v1(view.server, "INTERNAL")
 
 
 def _sign(text: str) -> str:
@@ -505,18 +435,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Expires", "0")
         super().end_headers()
 
-    def _json(self, obj: Any, code: int = 200, *, cookie: str | None = None) -> None:
-        return self._json_bytes(_encode_json(obj), code, cookie=cookie)
+    def _json(self, obj: Any, code: int = 200, *, cookie: str | None = None, headers: Mapping[str, str] | None = None) -> None:
+        return self._json_chunks([_encode_json(obj)], code, cookie=cookie, headers=headers)
 
-    def _json_bytes(self, body: bytes, code: int = 200, *, cookie: str | None = None) -> None:
+    def _json_chunks(self, chunks: list[bytes], code: int = 200, *, cookie: str | None = None,
+                     headers: Mapping[str, str] | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(sum(len(chunk) for chunk in chunks)))
         if cookie:
             self.send_header("Set-Cookie", cookie)
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(body)
+            for chunk in chunks:
+                self.wfile.write(chunk)
+
+    def _api(self, route: Callable[..., None], *args: Any) -> None:
+        """The one error boundary of the API: every route answers with a status from api/errors.py (I4)."""
+        try:
+            return route(*args)
+        except Exception as exc:
+            code, headers, body = http_error(exc)
+            if not isinstance(exc, DomainError):
+                print(f"storage-viz request failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            return self._json(body, code, headers=headers)
 
     def _actor(self) -> str | None:
         if not TRUSTED_PROXY:
@@ -611,7 +555,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._json({"error": "not found"}, 404)
             parts = self._api_parts()
             if parts is not None:
-                return self._handle_api_get(parts)
+                return self._api(self._handle_api_get, parts)
             route = self.path.split("?", 1)[0]
             if route == "/capabilities":
                 return self._json({"rescan": False, "message": "Manual rescan only: use the bounded per-server API behind a trusted proxy."})
@@ -631,7 +575,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if parts == ["api", "servers"]:
             return self._json({"error": "not found"}, 404)
         if len(parts or []) == 4 and parts[1] == "servers" and parts[3] == "rescan":
-            return self._handle_rescan(parts[2])
+            return self._api(self._handle_rescan, parts[2])
         return self._json({"error": "not found"}, 404)
 
     def _handle_api_get(self, parts: list[str]) -> None:
@@ -641,50 +585,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         auth_error = self._require_read_auth()
         if auth_error is not None:
             return self._json(auth_error[1], auth_error[0])
-        if service is None:
+        if fleet is None:
             return self._json({"error": "api not configured"}, 503)
+        now = fleet.clock.monotonic()
         if parts == ["api", "servers"]:
-            summaries = service.server_summaries()
-            for summary in summaries:
-                overview = summary.get("overview_snapshot")
-                if overview is not None:
-                    if live_capacity is not None:
-                        overview = live_capacity.project(summary["id"], overview)
-                    summary["overview_snapshot"] = snapshot_response(overview, capacity_thresholds)
-            return self._json({"data_mode": getattr(service, "data_mode", "inventory"), "servers": summaries})
-        if len(parts) == 4 and parts[1] == "servers" and parts[3] == "scan-status":
-            try:
-                status = service.scan_status_for_api(parts[2])
-                if live_capacity is not None:
-                    overview = service.overview_snapshot_for_api(parts[2])
-                    if overview is not None:
-                        projected = live_capacity.project(parts[2], overview)
-                        status["capacity"] = {
-                            "scan_generation": overview["scan_generation"],
-                            "mounts": snapshot_response(projected, capacity_thresholds)["mounts"],
-                        }
-            except ValueError:
-                return self._json({"error": "UNKNOWN_SERVER"}, 404)
-            return self._json(status)
-        if len(parts) == 4 and parts[1] == "servers" and parts[3] == "snapshot":
-            try:
-                if isinstance(service, PollService):
-                    body = snapshot_responses.get(service, live_capacity, parts[2])
-                else:
-                    snap = service.load_snapshot_for_api(parts[2])
-                    body = _encode_json(snapshot_response(snap, capacity_thresholds)) if snap is not None else None
-            except Exception:
-                return self._json({"error": "UNKNOWN_SERVER"}, 404)
-            if body is None:
-                return self._json({"error": "SNAPSHOT_ABSENT"}, 404)
-            return self._json_bytes(body)
-        if len(parts) == 4 and parts[1] == "servers" and parts[3] == "job":
-            if jobs is not None:
-                code, obj = jobs.job_for(parts[2]); return self._json(obj, code)
-            try:
-                return self._json({"job": service.load_state_for_api(parts[2]).get("active_job")})
-            except Exception:
-                return self._json({"error": "UNKNOWN_SERVER"}, 404)
+            return self._json({"data_mode": data_mode, "servers": [_summary_row(view, now) for view in fleet.views()]})
+        if len(parts) == 4 and parts[1] == "servers" and parts[3] in ("scan-status", "snapshot", "job"):
+            # The inventory lookup comes first and is the only source of UNKNOWN_SERVER (C6).
+            view = fleet.view(parts[2])
+            if parts[3] == "scan-status":
+                status = scan_status_v1(view, now)
+                if live_capacity is not None and view.snapshot is not None:
+                    overview = view.snapshot.overview
+                    status["capacity"] = {"scan_generation": overview["scan_generation"],
+                                          "mounts": _overview_with_capacity(view.server.id, overview)["mounts"]}
+                return self._json(status)
+            if parts[3] == "snapshot":
+                if view.snapshot is None:
+                    raise StoreUnavailable() if view.error == StoreUnavailable.code else SnapshotAbsent()
+                sample = live_capacity.sample_for(view.server.id) if live_capacity is not None else None
+                return self._json_chunks(snapshot_v1_chunks(view.snapshot, sample, capacity_thresholds))
+            return self._json({"job": job_v1(view.job, view.server.id)})
         return self._json({"error": "not found"}, 404)
 
     def _handle_rescan(self, server_id: str) -> None:
@@ -713,10 +634,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         code, obj, actor = self._require_post_auth()
         if code != 200:
             return self._json(obj, code)
-        if jobs is None:
+        if fleet is None:
             return self._json({"error": "RESCAN_DISABLED"}, 403)
-        out_code, out = jobs.request_rescan(server_id, actor or "unknown")
-        return self._json(out, out_code)
+        if not RUNS_ACTORS:
+            fleet.lookup(server_id)
+            raise RescanDisabled(code="EXECUTION_DISABLED")
+        return self._json(fleet.request_rescan(server_id, actor or "unknown"), 202)
 
     def _data_file(self, normalized: str):
         auth_error = self._require_read_auth()
@@ -751,12 +674,15 @@ if __name__ == "__main__":
     PORT = _configured_port(include_argv=True)
     with Server((BIND, PORT), Handler) as httpd:
         host, port = httpd.server_address[:2]
-        pollers = [poller for poller in (central_poller, capacity_poller) if poller is not None]
-        for poller in pollers:
-            poller.start()
+        if RUNS_ACTORS:
+            fleet.start()
+        if capacity_poller is not None:
+            capacity_poller.start()
         print(f"storage-viz serving {VIEWER_DIR} on {host}:{port}", flush=True)
         try:
             httpd.serve_forever()
         finally:
-            for poller in reversed(pollers):
-                poller.stop()
+            if capacity_poller is not None:
+                capacity_poller.stop()
+            if RUNS_ACTORS:
+                fleet.stop()

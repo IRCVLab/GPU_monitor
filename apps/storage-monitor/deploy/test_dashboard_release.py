@@ -66,7 +66,7 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
 
     def _write_fixture(self) -> None:
         runtime_files = {
-            "viewer/serve.py": "from collector.inventory import load_inventory\nfrom collector.jobs import RescanJobManager\nfrom collector.service import PollService\nfrom collector.store import CentralStore\nfrom collector.transport import OpenSshTransport\n",
+            "viewer/serve.py": "from collector.inventory import load_inventory\nfrom collector.fleet import Fleet\nfrom collector.legacy import LegacyHost\nfrom collector.transport import OpenSshTransport\n",
             "viewer/app.js": "console.log('app');\n",
             "viewer/data-client.js": "export const dataClient = {};\n",
             "viewer/debug.html": "<html>debug</html>\n",
@@ -79,19 +79,25 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "viewer/tables.js": "export const tables = {};\n",
             "viewer/treemap.js": "export const treemap = {};\n",
             "viewer/users-chart.js": "export const users = {};\n",
+            "api/__init__.py": "",
+            "api/errors.py": "STATUS = {}\n",
             "collector/__init__.py": "",
-            "collector/duration_history.py": "PLANS = ()\n",
+            "collector/actor.py": "class ServerActor: pass\n",
+            "collector/errors.py": "class DomainError(Exception): pass\n",
+            "collector/fleet.py": "class Fleet: pass\n",
+            "collector/health.py": "class Link: pass\n",
+            "collector/legacy.py": "class LegacyHost: pass\n",
+            "collector/update.py": "class Update: pass\n",
+            "collector/view.py": "class ServerView: pass\n",
             "storage_fstypes.py": "REMOTE_FSTYPES = frozenset()\n",
             "collector/contract.py": "",
             "collector/judge.py": "",
             "collector/ids.py": "SERVER_ID_RE = None\n",
             "collector/inventory.py": "def load_inventory(): pass\n",
-            "collector/jobs.py": "class RescanJobManager: pass\n",
+            "collector/jobs.py": "class Job: pass\n",
             "collector/live_capacity.py": "class LiveCapacity: pass\n",
-            "collector/service.py": "class PollService: pass\n",
-            "collector/scan_telemetry.py": "def empty_status(): return {}\n",
             "collector/snapshot.py": "class Snapshot: pass\n",
-            "collector/store.py": "class CentralStore: pass\n",
+            "collector/store.py": "class ServerStore: pass\n",
             "collector/transport.py": "class OpenSshTransport: pass\n",
             "config/servers.example.yaml": "servers: []\n",
             "docs/schema-v1.md": "# Schema\n",
@@ -160,7 +166,8 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertEqual(member_names[0], "storage-monitor/RELEASE-MANIFEST.json")
         self.assertIn("storage-monitor/viewer/serve.py", member_names)
         self.assertIn("storage-monitor/collector/store.py", member_names)
-        self.assertIn("storage-monitor/collector/scan_telemetry.py", member_names)
+        self.assertIn("storage-monitor/collector/actor.py", member_names)
+        self.assertIn("storage-monitor/api/errors.py", member_names)
         self.assertIn("storage-monitor/viewer/scan-status.js", member_names)
         self.assertIn("storage-monitor/deploy/direct_proxy.py", member_names)
         self.assertIn("storage-monitor/config/servers.example.yaml", member_names)
@@ -400,13 +407,14 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "viewer/treemap.js": b"export const treemap = {};\n",
             "viewer/users-chart.js": b"export const users = {};\n",
             "collector/__init__.py": b"",
-            "collector/duration_history.py": b"PLANS = ()\n",
+            "collector/actor.py": b"class ServerActor: pass\n",
+            "collector/fleet.py": b"class Fleet: pass\n",
             "collector/inventory.py": b"def load_inventory(): pass\n",
-            "collector/jobs.py": b"class RescanJobManager: pass\n",
-            "collector/service.py": b"class PollService: pass\n",
-            "collector/scan_telemetry.py": b"def empty_status(): return {}\n",
+            "collector/jobs.py": b"class Job: pass\n",
+            "collector/legacy.py": b"class LegacyHost: pass\n",
             "collector/snapshot.py": b"class Snapshot: pass\n",
-            "collector/store.py": b"class CentralStore: pass\n",
+            "collector/store.py": b"class ServerStore: pass\n",
+            "collector/view.py": b"class ServerView: pass\n",
             "collector/transport.py": b"class OpenSshTransport: pass\n",
             "config/servers.example.yaml": b"servers: []\n",
             "docs/schema-v1.md": b"# Schema\n",
@@ -772,7 +780,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(staged, set())
 
     def test_rejects_missing_runtime_file_and_manifest_file_hash_mismatch(self) -> None:
-        for missing in ["deploy/direct_proxy.py", "viewer/styles.css", "viewer/scan-status.js", "collector/scan_telemetry.py"]:
+        for missing in ["deploy/direct_proxy.py", "viewer/styles.css", "viewer/scan-status.js", "collector/actor.py"]:
             with self.subTest(missing=missing):
                 files = self._runtime_files()
                 files.pop(missing)
