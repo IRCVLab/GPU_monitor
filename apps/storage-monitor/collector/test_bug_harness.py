@@ -1,47 +1,194 @@
-"""Collector bug fixtures with a real on-disk store and a simulated remote host."""
-from collector.scan_telemetry import empty_status
-from collector.service import PollService
-from collector.store import CentralStore
-from collector.test_service import FakeClock, FakeTransport, make_server, payload_for, status_data
-from collector.transport import RemoteScanObservation
+"""Collector fixtures: a real on-disk store, a fake clock and a simulated host on the legacy protocol.
+
+``Collector`` drives the actors without threads. ``settle`` handles every queued
+message and runs each contact that is due on the fake clock, so a test controls
+time and ordering exactly.
+"""
+from __future__ import annotations
+
+import copy
+import pathlib
+import threading
+
+from collector.fleet import Fleet
+from collector.inventory import Server
+from collector.jobs import Scan
+from collector.legacy import Observation, empty_status
+from collector.test_snapshot import base_payload, status_for
+from collector.transport import TransportError
+from collector.view import summary_v1
 
 
-class PublishingTransport(FakeTransport):
-    def publish(self, server_id, started=1719200000):
-        status, data = status_data(payload_for(server_id, started=started))
-        self.status[server_id] = status
-        self.downloads[server_id] = status, data
+def make_server(server_id="alpha-1", order=1, enabled=True, digest="a" * 64):
+    return Server(
+        id=server_id, display_name=server_id, order=order, host=f"{server_id}.example.test", port=22,
+        enabled=enabled, username="monitoring",
+        identity_file=pathlib.PurePosixPath(f"/etc/storage-viz/{server_id}.key"),
+        known_hosts_file=pathlib.PurePosixPath("/etc/storage-viz/known_hosts"),
+        scanner={"server_id": server_id}, scanner_digest=digest,
+    )
 
-    def fetch_scan_status(self, server):
-        publication = self.status[server.id]
-        generation = publication["generation"].removesuffix(".json")
-        status = empty_status()
-        status.update(state="complete", generation=generation, published_generation=generation,
-                      published_finished_unix=publication["scan_finished_unix"])
-        return RemoteScanObservation(status, publication.copy())
+
+def payload_for(server_id="alpha-1", started=1719200000, digest="a" * 64, partial=False, total_failed=False):
+    payload = base_payload(server_id=server_id, generation=f"{server_id}-{started}-v1")
+    payload.update(hostname=f"{server_id}.example.test", scan_started_unix=started,
+                   scan_finished_unix=started + 42, config_digest=digest)
+    if partial:
+        payload["selected_roots"].append({
+            "mount_id": "archive", "major_minor": "8:2", "mount_source": "/dev/storage-viz/archive",
+            "mount_root": "/", "mountpoint": "/archive", "scan_root": "/archive", "fstype": "xfs",
+            "status": "failed", "scanned_bytes": 0, "scanned_files": 0, "scanned_dirs": 0,
+            "blocked_count": 0, "error_count": 1, "error_code": "EIO",
+        })
+    if total_failed:
+        payload["selected_roots"][0].update(status="failed", scanned_bytes=0, scanned_files=0, scanned_dirs=0, error_count=1, error_code="EIO")
+        payload["mounts"] = []
+    return payload
+
+
+def status_data(payload, status_value=None):
+    status, data = status_for(payload, config_digest=payload["config_digest"])
+    if status_value is not None:
+        status["status"] = status_value
+    elif any(root["status"] == "failed" for root in payload["selected_roots"]):
+        status["status"] = "partial"
+    return status, data
+
+
+class FakeClock:
+    def __init__(self, now=1719200042 + 3600):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+    def monotonic(self):
+        return self.now
+
+
+def inline(work, name):
+    work()
+
+
+class ManualSpawn:
+    """Holds helper work until the test runs it, to put a transfer or a rescan start in flight."""
+
+    def __init__(self):
+        self.pending = []
+
+    def __call__(self, work, name):
+        self.pending.append((name, work))
+
+    def run(self, prefix=""):
+        ready = [item for item in self.pending if item[0].startswith(prefix)]
+        self.pending = [item for item in self.pending if item not in ready]
+        for _, work in ready:
+            work()
+        return len(ready)
+
+
+class FakeHost:
+    """A host as the legacy adapter reports it: published status, captures, scan units."""
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.publications = {}
+        self.captures = {}
+        self.scans = {}
+        self.statuses = {}
+        self.observe_errors = {}
+        self.fetch_errors = {}
+        self.rescan_errors = {}
+        self.observe_calls = []
+        self.fetch_calls = []
+        self.rescans = []
+        self.observe_gate = None
+        self.fetch_gate = None
+        self.rescan_started = threading.Event()
+        self.lock = threading.Lock()
+        self.active_fetches = 0
+        self.max_active_fetches = 0
+
+    def publish(self, server_id, started=1719200000, **kwargs):
+        status, data = status_data(payload_for(server_id, started=started, **kwargs))
+        self.publications[server_id] = status
+        self.captures[status["sha256"]] = data
+        return status, data
+
+    def observe(self, server):
+        self.observe_calls.append(server.id)
+        if self.observe_gate is not None:
+            self.observe_gate(server)
+        error = self.observe_errors.get(server.id)
+        if error is not None:
+            raise error
+        status = {**empty_status(), "state": "idle", **self.statuses.get(server.id, {})}
+        publication = self.publications.get(server.id)
+        return Observation(int(self.clock.time()), status, copy.deepcopy(publication), None, self.scans.get(server.id, Scan()))
+
+    def fetch_capture(self, server, publication):
+        with self.lock:
+            self.fetch_calls.append((server.id, publication["sha256"]))
+            self.active_fetches += 1
+            self.max_active_fetches = max(self.max_active_fetches, self.active_fetches)
+        try:
+            if self.fetch_gate is not None:
+                self.fetch_gate(server)
+            error = self.fetch_errors.get(server.id)
+            if error is not None:
+                raise error
+            return self.captures[publication["sha256"]]
+        finally:
+            with self.lock:
+                self.active_fetches -= 1
+
+    def start_rescan(self, server):
+        self.rescans.append(server.id)
+        self.rescan_started.set()
+        error = self.rescan_errors.get(server.id)
+        if error is not None:
+            raise error
+
+    def fetches_of(self, sha):
+        return sum(1 for _, fetched in self.fetch_calls if fetched == sha)
 
 
 class Collector:
-    def __init__(self, tmp_path, *ids):
+    def __init__(self, tmp_path, *ids, publish=True, spawn=inline):
         self.state_dir = tmp_path / "state"
-        self.transport = PublishingTransport()
         self.clock = FakeClock()
+        self.host = FakeHost(self.clock)
+        self.spawn = spawn
         self.servers = [make_server(sid, order=i) for i, sid in enumerate(ids, 1)]
+        if publish:
+            for sid in ids:
+                self.host.publish(sid)
         self.restart()
-        for sid in ids:
-            self.transport.publish(sid)
-        states = self.service.poll_once()
-        assert all(states[sid]["latest_pull_status"] == "succeeded" for sid in ids)
+        self.settle()
+        if publish:
+            assert all(self.summary(sid)["latest_pull_status"] == "succeeded" for sid in ids)
 
-    def restart(self):
-        self.store = CentralStore(self.state_dir)
-        self.service = PollService(self.servers, self.store, self.transport, clock=self.clock)
+    def restart(self, **fleet_options):
+        self.fleet = Fleet(self.servers, self.state_dir, self.host, clock=self.clock, spawn=self.spawn, **fleet_options)
+        for actor in self.fleet.actors.values():
+            actor._guard(actor.load)
 
-    def tick(self):
-        self.clock.now += 61
-        self.service.poll_scan_status_once()
-        # Observation workers can start refresh workers, so join them in that order.
-        for group in (self.service._telemetry_threads, self.service._refresh_threads):
-            for worker in list(group.values()):
-                worker.join(5)
-                assert not worker.is_alive(), "telemetry tick did not finish"
+    def settle(self):
+        for actor in self.fleet.actors.values():
+            actor.step()
+            while not actor.inbox.empty():
+                actor.step()
+
+    def tick(self, seconds=61):
+        self.clock.now += seconds
+        self.settle()
+
+    def actor(self, server_id="alpha-1"):
+        return self.fleet.actors[server_id]
+
+    def summary(self, server_id="alpha-1"):
+        return summary_v1(self.fleet.view(server_id), self.clock.monotonic())
+
+
+def transport_error(code):
+    return TransportError(code, code.lower())

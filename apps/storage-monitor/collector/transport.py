@@ -1,4 +1,8 @@
-"""Fixed OpenSSH/SFTP transport for remote storage-viz snapshots."""
+"""Fixed OpenSSH/SFTP transport for remote storage-viz snapshots.
+
+SHIM(M2b..M3b) S2: SFTP, the Python probe and the blocking ``systemctl start``
+serve today's agents until the gate transport replaces them in M3.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,13 +18,11 @@ import sys
 import tempfile
 from typing import Any, Mapping, Optional, Protocol, Tuple
 
-from collector import judge
 from collector.inventory import Server
 
 STATUS_PATH = "/var/lib/storage-viz/scan-status.json"
 SNAPSHOT_DIR = "/var/lib/storage-viz/snapshots"
 RESCAN_COMMAND = ("sudo", "-n", "/usr/bin/systemctl", "start", "storage-viz-scan.service")
-ACTIVE_STATE_COMMAND = ("/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service", "storage-viz-scheduled-scan.service")
 KNOWN_ACTIVE_STATES = frozenset({"active", "reloading", "inactive", "failed", "activating", "deactivating", "maintenance"})
 MAX_STATUS_BYTES = 64 * 1024
 MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
@@ -30,6 +32,8 @@ DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 3600
 DEFAULT_RESCAN_TIMEOUT_SECONDS = 6 * 60 * 60
 DEFAULT_ACTIVE_STATE_TIMEOUT_SECONDS = 10
 MAX_RESCAN_TIMEOUT_SECONDS = 24 * 60 * 60
+SSH_ERROR_EXIT = 255
+AUTH_FAILURE_MARKERS = ("Permission denied", "Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED")
 GENERATION_RE = re.compile(r"^(?P<server_id>[A-Za-z0-9_.-]+)-(?P<started>[0-9]+)-v1\.json$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -66,12 +70,6 @@ class Runner(Protocol):
 class _SubprocessRunner:
     def run(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(argv, **kwargs)
-
-
-@dataclass(frozen=True)
-class RemoteScanObservation:
-    status: Mapping[str, Any]
-    publication: Mapping[str, Any] | None = None
 
 
 class OpenSshTransport:
@@ -116,43 +114,16 @@ class OpenSshTransport:
         finally:
             _unlink_quiet(tmp_name)
 
-    def fetch_scan_status(self, server: Server) -> RemoteScanObservation:
-        from collector.scan_telemetry import REMOTE_OBSERVATION_SCRIPT, merge_status, parse_timer
-        import math
+    def run_probe(self, server: Server) -> bytes:
+        """Run the fixed legacy observation probe (SHIM(M2b..M3b) S2) and return its stdout."""
+        from collector.legacy import MAX_PROBE_BYTES, REMOTE_OBSERVATION_SCRIPT
         self._validate_server(server)
         result = self._run_ssh(server, ["python3", "-c", shlex.quote(REMOTE_OBSERVATION_SCRIPT)], timeout=self._active_state_timeout)
         _check_returncode(result, "TELEMETRY_UNAVAILABLE")
         raw = getattr(result, "stdout", b"")
-        if not isinstance(raw, (str, bytes)) or len(raw) > 48 * 1024:
+        if not isinstance(raw, (str, bytes)) or len(raw) > MAX_PROBE_BYTES:
             raise TransportError("BAD_TELEMETRY", "telemetry exceeds maximum size")
-        try:
-            obj = json.loads(raw)
-            for key in ("remote_unix", "remote_monotonic"):
-                if isinstance(obj[key], bool) or not isinstance(obj[key], (float,int)) or not math.isfinite(obj[key]) or not 0 <= obj[key] < 10**12:
-                    raise ValueError("clock")
-            active, started = observed_scan_service(obj)
-            for key in ("lifecycle", "progress"):
-                if not isinstance(obj[key], dict) or obj[key].get("invalid"):
-                    raise TransportError("BAD_TELEMETRY", "telemetry file is invalid")
-            if obj["lifecycle"].get("server_id",server.id) != server.id:
-                raise TransportError("BAD_TELEMETRY", "telemetry server mismatch")
-            timer = parse_timer(obj["timer"], remote_unix=obj["remote_unix"], remote_monotonic=obj["remote_monotonic"])
-            result = merge_status(obj["lifecycle"], obj["progress"], active, timer, int(obj["remote_unix"]), service_started=started)
-            published = obj.get("published")
-            if isinstance(published, dict) and published and not published.get("invalid"):
-                try:
-                    published = validate_status_envelope(published, server)
-                except TransportError:
-                    return RemoteScanObservation(result)
-                if published["status"] in {"complete", "partial"}:
-                    result["published_generation"] = published["generation"].removesuffix(".json")
-                    result["published_finished_unix"] = published["scan_finished_unix"]
-                    return RemoteScanObservation(result, published)
-            return RemoteScanObservation(result)
-        except TransportError:
-            raise
-        except Exception as exc:
-            raise TransportError("BAD_TELEMETRY", "telemetry is malformed") from exc
+        return raw
 
     def fetch_snapshot(self, server: Server, expected_status: Mapping[str, Any] | None = None) -> Tuple[dict[str, Any], bytes]:
         first = dict(expected_status) if expected_status is not None else self.fetch_status(server)
@@ -170,22 +141,6 @@ class OpenSshTransport:
             return second, data
         finally:
             _unlink_quiet(tmp_name)
-
-    def scan_active_state(self, server: Server) -> str:
-        self._validate_server(server)
-        result = self._run_ssh(server, list(ACTIVE_STATE_COMMAND), timeout=self._active_state_timeout)
-        _check_returncode(result, "ACTIVE_STATE_FAILED")
-        raw = getattr(result, "stdout", b"")
-        if isinstance(raw, str):
-            text = raw
-        elif isinstance(raw, (bytes, bytearray)):
-            text = bytes(raw).decode("utf-8", errors="replace")
-        else:
-            raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
-        states = text.split()
-        if len(text) > 64 or not 1 <= len(states) <= 2 or any(state not in KNOWN_ACTIVE_STATES for state in states):
-            raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
-        return next((state for state in states if judge.unit_is_active(state)), states[0])
 
     def start_rescan(self, server: Server) -> None:
         self._validate_server(server)
@@ -213,6 +168,8 @@ class OpenSshTransport:
             raise TransportError("TIMEOUT", "transport command timed out") from exc
         except Exception as exc:
             raise TransportError("UNREACHABLE", "transport command failed") from exc
+        if getattr(result, "returncode", 0) == SSH_ERROR_EXIT:
+            raise TransportError(classify_ssh_failure(getattr(result, "stderr", b"")), "sftp connection failed")
         _check_returncode(result, "UNREACHABLE", limit_code=limit_code, local_path=local_path, limit_bytes=limit_bytes)
         return result
 
@@ -224,6 +181,8 @@ class OpenSshTransport:
             raise TransportError("TIMEOUT", "transport command timed out") from exc
         except Exception as exc:
             raise TransportError("UNREACHABLE", "transport command failed") from exc
+        if getattr(result, "returncode", 0) == SSH_ERROR_EXIT:
+            raise TransportError(classify_ssh_failure(getattr(result, "stderr", b"")), "ssh connection failed")
         return result
 
     def _common_options(self, server: Server) -> list[str]:
@@ -261,31 +220,10 @@ def _batch_get(remote: str, local: str) -> bytes:
     return f"get {shlex.quote(remote)} {shlex.quote(local)}\n".encode("utf-8")
 
 
-def observed_scan_service(observation: Mapping[str, Any]) -> tuple[str, int | None]:
-    services = []
-    observed_monotonic = observation["remote_monotonic"]
-
-    def monotonic(props, key):
-        value = props.get(key, "")
-        if value.isascii() and value.isdecimal() and len(value) <= 20:
-            seconds = int(value) / 1_000_000
-            if 0 < seconds <= observed_monotonic:
-                return seconds
-        return 0
-
-    lines = observation.get("services") or [observation.get("service", "")]
-    for text in lines:
-        props = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
-        state = props.get("ActiveState")
-        if state in KNOWN_ACTIVE_STATES:
-            recent = monotonic(props, "StateChangeTimestampMonotonic")
-            started = max(monotonic(props, "ExecMainStartTimestampMonotonic"), monotonic(props, "InactiveExitTimestampMonotonic"))
-            services.append((judge.unit_is_active(state), recent, state, started))
-    if not services:
-        raise TransportError("ACTIVE_STATE_FAILED", "service state is unavailable")
-    active, _, state, started = max(services)
-    started_unix = int(observation["remote_unix"] - observed_monotonic + started) if active and started else None
-    return state, started_unix if started_unix is not None and started_unix > 0 else None
+def classify_ssh_failure(stderr: Any) -> str:
+    """Exit 255 is ssh's own failure. A refused key or a changed host key is AUTH_FAILED, the rest UNREACHABLE."""
+    text = stderr.decode("utf-8", "replace") if isinstance(stderr, (bytes, bytearray)) else str(stderr or "")
+    return "AUTH_FAILED" if any(marker in text for marker in AUTH_FAILURE_MARKERS) else "UNREACHABLE"
 
 
 def validate_snapshot_status(status: Mapping[str, Any], server: Server, max_snapshot_bytes: int) -> str:

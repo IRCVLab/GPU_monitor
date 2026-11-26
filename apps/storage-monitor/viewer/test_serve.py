@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import fcntl
+import base64
+import hashlib
+import hmac
 import http.client
 import re
 import json
+import select
 import os
 import socket
 import subprocess
@@ -13,14 +16,13 @@ import tempfile
 import threading
 import time
 import unittest
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from pathlib import Path
 
 import pytest
 
-from collector.test_bug_harness import Collector
-from collector.jobs import RescanJobManager
+from collector.test_bug_harness import Collector, payload_for, status_data
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVE = ROOT / "viewer" / "serve.py"
@@ -29,6 +31,16 @@ GiB = 1024 ** 3
 
 def free_port() -> int:
     sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close(); return port
+
+
+def wait_until_serving(proc, timeout=10):
+    """Block until serve.py prints its ready line, or fail with its output if it exits first."""
+    ready, _, _ = select.select([proc.stdout], [], [], timeout)
+    line = proc.stdout.readline() if ready else ""
+    if not line.startswith("storage-viz serving"):
+        proc.kill()
+        out, err = proc.communicate(timeout=5)
+        raise AssertionError(f"serve.py did not become ready\nstdout={line}{out}\nstderr={err}")
 
 
 def sample_snapshot(server_id="hinton") -> dict:
@@ -47,44 +59,32 @@ def sample_snapshot(server_id="hinton") -> dict:
 
 
 class CentralPollingLifecycleTest(unittest.TestCase):
-    class FakePollService:
-        poll_interval_seconds = 3600
-        def __init__(self):
-            self.calls = 0
-            self.first = threading.Event()
-            self.observed = threading.Event()
-        def poll_once(self):
-            self.calls += 1
-            self.first.set()
-            return {}
-        def poll_scan_status_once(self):
-            self.observed.set()
-
-    def test_central_polling_starts_once_and_stops_cleanly(self):
-        sys.path.insert(0, str(ROOT))
-        sys.path.insert(0, str(ROOT))
+    def test_capacity_polling_starts_once_and_stops_cleanly(self):
         from viewer import serve
-        svc = self.FakePollService()
-        poller = serve.CentralPoller(svc.poll_once, 3600, scan_status_poll=svc.poll_scan_status_once)
+        polled = threading.Event()
+        poller = serve.CentralPoller(polled.set, 3600)
         self.assertTrue(poller.start())
-        self.assertTrue(svc.first.wait(2), "production inventory mode must poll immediately after startup")
-        self.assertTrue(svc.observed.wait(2), "scan observations must start without a browser request")
+        self.assertTrue(polled.wait(2), "the capacity feed must be polled right after startup")
         first_thread = poller.thread_ident
         self.assertFalse(poller.start(), "second start must not create duplicate polling thread")
         self.assertEqual(poller.thread_ident, first_thread)
         poller.stop(timeout=2)
         self.assertFalse(poller.is_running)
 
-    def test_dev_sample_mode_does_not_create_poller(self):
+    def test_dev_sample_mode_serves_views_and_refuses_rescans(self):
+        from collector.errors import RescanDisabled, UnknownServer
         from viewer import serve
         with tempfile.TemporaryDirectory(prefix="storage-viz-dev-service.") as tmp:
             sample_dir = Path(tmp)
             rows = [{"id":"hinton", "label":"hinton", "file":"hinton", "default":True, "sample_data":True}]
             (sample_dir / "hosts.json").write_text(json.dumps(rows) + "\n", encoding="utf-8")
             (sample_dir / "hinton.sample.json").write_text(json.dumps(sample_snapshot("hinton")) + "\n", encoding="utf-8")
-            self.assertIsNone(serve.build_central_poller(serve._DevSampleService(str(sample_dir))))
-
-
+            samples = serve._DevSampleService(str(sample_dir))
+            self.assertEqual(samples.view("hinton").snapshot.overview["scan_generation"], "hinton-1719200000-v1")
+            with self.assertRaises(RescanDisabled):
+                samples.request_rescan("hinton", "operator")
+            with self.assertRaises(UnknownServer):
+                samples.view("absent")
 
     def test_dev_sample_rejects_symlink_root_before_resolve(self):
         from viewer import serve
@@ -104,25 +104,18 @@ class CentralPollingLifecycleTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "8088")
 
-class SnapshotResponseCacheTest(unittest.TestCase):
+class SnapshotRouteTest(unittest.TestCase):
     def setUp(self):
-        from collector import store
         from collector.live_capacity import LiveCapacity
-        from collector.service import PollService
-        from collector.test_service import FakeClock, FakeTransport, make_server
         from viewer import serve
 
-        self.store_module = store
         self.serve = serve
-        self.clock = FakeClock()
-        self.host = make_server("hinton")
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.state_path = Path(temporary.name)
-        self.store = store.CentralStore(self.state_path)
-        self.service = PollService([self.host], self.store, FakeTransport())
-        self.capacity = LiveCapacity([self.host], 8001, clock=self.clock.time)
-        overrides = patch.multiple(serve, service=self.service, live_capacity=self.capacity, TRUSTED_PROXY=True)
+        self.host = Collector(Path(temporary.name), "hinton", publish=False)
+        self.server_entry = self.host.servers[0]
+        self.capacity = LiveCapacity(self.host.servers, 8001, clock=self.host.clock.time)
+        overrides = patch.multiple(serve, fleet=self.host.fleet, live_capacity=self.capacity, TRUSTED_PROXY=True)
         overrides.start()
         self.addCleanup(overrides.stop)
         self.server = serve.Server(("127.0.0.1", 0), serve.Handler)
@@ -132,16 +125,13 @@ class SnapshotResponseCacheTest(unittest.TestCase):
         self.addCleanup(thread.join, 3)
         self.addCleanup(self.server.shutdown)
 
-    def publish(self, started=1719200000):
-        from collector.snapshot import DesiredServer, validate_download
-        from collector.test_service import payload_for, status_data
-
-        payload = payload_for(self.host.id, started=started)
+    def publish(self, started=1719200000, payload=None):
+        payload = payload or payload_for("hinton", started=started)
         for row in (payload["selected_roots"][0], payload["mounts"][0]):
             row.update(capacity_id="dev-8-1", storage_media="ssd", storage_media_confidence="resolved")
         status, data = status_data(payload)
-        valid = validate_download(status, data, DesiredServer(self.host.id, self.host.scanner_digest))
-        self.assertTrue(self.store.commit_snapshot(valid).accepted)
+        self.host.host.publications["hinton"], self.host.host.captures[status["sha256"]] = status, data
+        self.host.tick()
         payload["mounts"][0].update(used_pct=70, severity="critical")
         return payload
 
@@ -161,23 +151,16 @@ class SnapshotResponseCacheTest(unittest.TestCase):
     def test_all_v1_capacity_views_use_inventory_after_live_overlay(self):
         from collector.inventory import CapacityThresholds
         from collector.live_capacity import CapacitySample, VolumeCapacity
-        from collector.test_service import payload_for, status_data
 
-        payload = payload_for(self.host.id)
+        payload = payload_for("hinton")
         started = payload["scan_started_unix"]
         file_row = dict(path="/home/a", kind="file", bytes=20, uid=1000, owner="user", mtime=started - 86400)
         payload["top_files"] = [file_row]
         payload["stale"] = [dict(file_row, age_days=999)]
-        for row in (payload["selected_roots"][0], payload["mounts"][0]):
-            row.update(capacity_id="dev-8-1", storage_media="ssd", storage_media_confidence="resolved")
-        status, data = status_data(payload)
-        transport = self.service.transport
-        transport.status[self.host.id] = status
-        transport.downloads[self.host.id] = status, data
-        self.assertEqual(self.service.poll_server(self.host.id)["latest_pull_status"], "succeeded")
+        self.publish(payload=payload)
         key = ("dev-8-1", "/dev/storage-viz/home", "ext4")
-        self.capacity._samples[(self.host.host, self.host.port)] = CapacitySample(
-            self.clock.now, {key: VolumeCapacity(100, 75, 25, 75)},
+        self.capacity._samples[(self.server_entry.host, self.server_entry.port)] = CapacitySample(
+            self.host.clock.now, {key: VolumeCapacity(100, 75, 25, 75)},
         )
         policy = CapacityThresholds(warning_used_pct=75, warning_free_bytes=10, critical_free_bytes=1)
         with patch.object(self.serve, "capacity_thresholds", policy):
@@ -189,37 +172,18 @@ class SnapshotResponseCacheTest(unittest.TestCase):
             self.assertEqual(view["mounts"][0]["severity"], "warning")
         self.assertEqual(detail["top_files"][0]["age_days"], 1)
         self.assertEqual(detail["stale"][0]["age_days"], 1)
-        stored = self.store.load_snapshot(self.host.id)
+        stored = json.loads(self.host.actor("hinton").store.read_capture(self.host.fleet.view("hinton").data.accepted))
         self.assertEqual(stored["stale"][0]["age_days"], 999)
         self.assertNotIn("severity", stored["mounts"][0])
 
-    def test_parallel_detail_reads_decode_and_encode_each_generation_once(self):
+    def test_parallel_detail_reads_never_touch_the_store(self):
         expected = self.publish()
-        decoded = []
-        encoded = []
-        decode = self.store_module._decode_json
-        dumps = json.dumps
-
-        def count_decode(stream, label):
-            if label == "snapshot":
-                decoded.append(label)
-            return decode(stream, label)
-
-        def count_encode(obj, *args, **kwargs):
-            if isinstance(obj, dict) and "scan_generation" in obj:
-                encoded.append(obj["scan_generation"])
-            return dumps(obj, *args, **kwargs)
-
-        with patch.object(self.store_module, "_decode_json", side_effect=count_decode):
-            with patch.object(self.serve.json, "dumps", side_effect=count_encode), ThreadPoolExecutor(max_workers=6) as pool:
-                reads = list(pool.map(lambda _: self.get(), range(12)))
-                self.assertEqual(reads, [(200, expected)] * 12)
-                self.assertEqual(len(decoded), 1)
-                self.assertEqual(encoded, [expected["scan_generation"]])
-            newer = self.publish(started=1719200100)
-            self.assertEqual(self.get(), (200, newer))
-            self.assertEqual(self.get(), (200, newer))
-            self.assertEqual(len(decoded), 2)
+        store = self.host.actor("hinton").store
+        with patch.object(store, "read_capture", side_effect=AssertionError("a read went to disk")), ThreadPoolExecutor(max_workers=6) as pool:
+            reads = list(pool.map(lambda _: self.get(), range(12)))
+        self.assertEqual(reads, [(200, expected)] * 12)
+        newer = self.publish(started=1719200100)
+        self.assertEqual(self.get(), (200, newer))
 
     def test_detail_updates_when_live_capacity_changes_or_expires(self):
         from collector.live_capacity import CapacitySample, MAX_AGE_SECONDS, VolumeCapacity
@@ -227,45 +191,16 @@ class SnapshotResponseCacheTest(unittest.TestCase):
         expected = self.publish()
         mount = expected["mounts"][0]
         key = ("dev-8-1", "/dev/storage-viz/home", "ext4")
-        target = (self.host.host, self.host.port)
+        target = (self.server_entry.host, self.server_entry.port)
         self.assertEqual(self.get(authenticated=False), (401, {"authenticated": False, "error": "AUTH_REQUIRED"}))
         self.assertEqual(self.get()[1]["mounts"][0], mount)
-
-        at = self.clock.now
+        at = self.host.clock.now
         self.capacity._samples = {target: CapacitySample(at, {key: VolumeCapacity(100, 80, 20, 80)})}
         self.assertEqual(self.get()[1]["mounts"][0]["df_used"], 80)
         self.capacity._samples = {target: CapacitySample(at, {key: VolumeCapacity(100, 81, 19, 81)})}
         self.assertEqual(self.get()[1]["mounts"][0]["df_used"], 81)
-        self.clock.now += MAX_AGE_SECONDS + 1
+        self.host.clock.now += MAX_AGE_SECONDS + 1
         self.assertEqual(self.get()[1]["mounts"][0], mount)
-
-    def test_oversized_response_is_served_without_retaining_it(self):
-        expected = self.publish()
-        cache = self.serve.SnapshotResponseCache(byte_budget=1)
-        decoded = []
-        decode = self.store_module._decode_json
-
-        def count_decode(stream, label):
-            if label == "snapshot":
-                decoded.append(label)
-            return decode(stream, label)
-
-        with patch.object(self.serve, "snapshot_responses", cache), patch.object(self.store_module, "_decode_json", side_effect=count_decode):
-            self.assertEqual(self.get(), (200, expected))
-            self.assertEqual(self.get(), (200, expected))
-        self.assertEqual(len(decoded), 2)
-
-    def test_replaced_snapshot_file_does_not_serve_cached_stale_content(self):
-        expected = self.publish()
-        self.assertEqual(self.get(), (200, expected))
-        directory = self.state_path / self.host.id
-        name = json.loads((directory / "current.json").read_text())["snapshot"]
-        path = directory / name
-        good = path.read_bytes()
-        path.write_text("{")
-        self.assertEqual(self.get(), (404, {"error": "UNKNOWN_SERVER"}))
-        path.write_bytes(good)
-        self.assertEqual(self.get(), (200, expected))
 
     def test_absent_snapshot_can_be_published_after_a_404(self):
         self.assertEqual(self.get(), (404, {"error": "SNAPSHOT_ABSENT"}))
@@ -290,21 +225,12 @@ class ApiServerTest(unittest.TestCase):
         if env.get("STORAGE_VIZ_DEV_SAMPLE_DIR") == "": env.pop("STORAGE_VIZ_DEV_SAMPLE_DIR", None)
         self.proc = subprocess.Popen([sys.executable, str(SERVE)], cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if expect_exit:
-            deadline = time.time() + 3
-            while time.time() < deadline and self.proc.poll() is None: time.sleep(0.05)
-            self.assertIsNotNone(self.proc.poll())
-            return
-        deadline = time.time() + 5
-        while time.time() < deadline:
             try:
-                self.request("GET", "/api/session")
-                return
-            except Exception:
-                if self.proc.poll() is not None:
-                    out, err = self.proc.communicate(timeout=1)
-                    self.fail(f"serve.py exited early\nstdout={out}\nstderr={err}")
-                time.sleep(0.05)
-        self.fail("serve.py did not become ready")
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.fail("serve.py accepted a configuration it must refuse")
+            return
+        wait_until_serving(self.proc)
 
     def _stop(self):
         if self.proc and self.proc.poll() is None:
@@ -402,18 +328,8 @@ class ApiServerTest(unittest.TestCase):
         )
         env.pop("STORAGE_VIZ_DEV_SAMPLE_DIR", None)
         self.proc = subprocess.Popen([sys.executable, str(SERVE)], cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            try:
-                code, headers, sess = self.request("GET", "/api/session")
-                break
-            except Exception:
-                if self.proc.poll() is not None:
-                    out, err = self.proc.communicate(timeout=1)
-                    self.fail(f"serve.py exited early\nstdout={out}\nstderr={err}")
-                time.sleep(0.05)
-        else:
-            self.fail("serve.py did not become ready")
+        wait_until_serving(self.proc)
+        code, headers, sess = self.request("GET", "/api/session")
         self.assertEqual(code, 200)
         self.assertTrue(sess["can_rescan"])
         cookie = self.cookie_value(headers)
@@ -592,27 +508,21 @@ class ApiServerTest(unittest.TestCase):
         env.update(STORAGE_VIZ_BIND="127.0.0.1", STORAGE_VIZ_DEV_SAMPLE_DIR=str(self.sample_dir))
         env.pop("STORAGE_VIZ_PORT", None)
         self.proc = subprocess.Popen([sys.executable, str(SERVE), str(self.port)], cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            try:
-                code, _, _ = self.request("GET", "/api/session")
-                self.assertEqual(code, 200)
-                return
-            except Exception:
-                if self.proc.poll() is not None:
-                    out, err = self.proc.communicate(timeout=1)
-                    self.fail(f"serve.py exited early\nstdout={out}\nstderr={err}")
-                time.sleep(0.05)
-        self.fail("serve.py did not become ready on positional port")
+        wait_until_serving(self.proc)
+        self.assertEqual(self.request("GET", "/api/session")[0], 200)
 
     def test_expired_session_cookie_is_rejected_on_post(self):
         inv = self.write_inventory()
-        self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1", "STORAGE_VIZ_SESSION_TTL_SECONDS":"1"})
-        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"operator-1"})
-        self.assertEqual(code, 200)
-        cookie = self.cookie_value(headers)
-        time.sleep(1.2)
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        secret = "s" * 64
+        self.start_server({"STORAGE_VIZ_DEV_SAMPLE_DIR":"", "STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1", "STORAGE_VIZ_CSRF_SECRET":secret})
+        issued = int(time.time()) - 7200
+        claims = {"actor": "operator-1", "iat": issued, "exp": issued + 3600, "nonce": "0" * 32}
+        encoded = base64.urlsafe_b64encode(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
+        value = encoded + "." + hmac.new(secret.encode(), encoded.encode(), hashlib.sha256).hexdigest()
+        csrf = hmac.new(secret.encode(), ("csrf:" + value).encode(), hashlib.sha256).hexdigest()
+        headers = {"Cookie": "storage_viz_session=" + value, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":csrf}
+        code, _, body = self.request("POST", "/api/servers/unknown/rescan", {}, headers=headers)
+        self.assertEqual((code, body.get("error")), (403, "BAD_SESSION"))
 
     def test_operator_mode_without_allowed_origin_fails_startup(self):
         inv = self.write_inventory()
@@ -680,12 +590,12 @@ inv.write_text(json.dumps({'servers':[{'id':'hinton','display_name':'hinton','or
 os.environ.update(STORAGE_VIZ_DEV_SAMPLE_DIR='', STORAGE_VIZ_INVENTORY=str(inv), STORAGE_VIZ_STATE_DIR=str(root/'state'), STORAGE_VIZ_PREFLIGHT_BACKEND='1', STORAGE_VIZ_TRUSTED_PROXY='1', STORAGE_VIZ_ALLOWED_ORIGINS='http://166.104.167.11:505', STORAGE_VIZ_OPERATOR_ALLOWLIST='fixed-proxy-operator', STORAGE_VIZ_SESSION_COOKIE_SECURE='0', STORAGE_VIZ_BIND='127.0.0.1')
 sys.path.insert(0, str(pathlib.Path('apps/storage-monitor').resolve()))
 from viewer import serve
-print(type(serve.jobs).__name__, serve.central_poller)
+print(serve.RUNS_ACTORS, serve.live_capacity, serve.fleet.actors['hinton'].loaded)
 """
         with tempfile.TemporaryDirectory(prefix="storage-viz-preflight-import.") as tmp:
             result = subprocess.run([sys.executable, "-c", code, tmp], cwd=str(ROOT.parents[1]), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "ExecutionDisabledRescanJobManager None")
+        self.assertEqual(result.stdout.strip(), "False None False")
 
 
 @pytest.fixture
@@ -695,11 +605,16 @@ def collector_api(tmp_path, monkeypatch):
     host = Collector(tmp_path, "alpha-1", "beta-2")
     origin = "https://dashboard.example.test"
     for name, value in {
-        "service": host.service, "jobs": RescanJobManager(host.service, clock=host.clock),
-        "live_capacity": None, "TRUSTED_PROXY": True, "RESCAN_API_ENABLED": True,
+        "live_capacity": None, "TRUSTED_PROXY": True, "RESCAN_API_ENABLED": True, "RUNS_ACTORS": True,
         "DIRECT_LOOPBACK_RESCAN": False, "OPERATORS": {"operator"}, "ALLOWED_ORIGINS": {origin},
     }.items():
         monkeypatch.setattr(serve, name, value)
+
+    def use_fleet():
+        monkeypatch.setattr(serve, "fleet", host.fleet)
+
+    use_fleet()
+    host.use_fleet = use_fleet
     with serve.Server(("127.0.0.1", 0), serve.Handler) as server:
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
@@ -718,103 +633,127 @@ def collector_api(tmp_path, monkeypatch):
         finally:
             server.shutdown()
             thread.join()
+            host.fleet.stop()
 
 
-@pytest.mark.xfail(
-    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C3 "),
-    reason="C3 One server's unreadable state blanks /api/servers for every server",
-)
-def test_c3_fleet_isolates_unreadable_server(collector_api):
+def rescan_headers(request, origin):
+    code, session, headers = request("GET", "/api/session")
+    assert code == 200 and session["can_rescan"]
+    return {"Origin": origin, "Cookie": headers["Set-Cookie"].split(";", 1)[0], "X-CSRF-Token": session["csrf_token"]}
+
+
+def test_c3_fleet_isolates_unreadable_server(collector_api, monkeypatch):
+    from viewer import serve
+
     host, request, _ = collector_api
     code, fleet, _ = request("GET", "/api/servers")
     assert code == 200
     healthy = next(row for row in fleet["servers"] if row["id"] == "alpha-1")
-    directory = host.state_dir / "beta-2"
-    state_path = directory / json.loads((directory / "current.json").read_text())["state"]
-    state = json.loads(state_path.read_text())
-    state_path.write_text(json.dumps({**state, "future_field": 1}))
-
+    (host.state_dir / "servers" / "beta-2" / "record.json").write_text("{")
+    host.restart()
+    host.use_fleet()
+    host.tick()
     try:
         code, fleet, _ = request("GET", "/api/servers")
     except http.client.RemoteDisconnected:
         raise AssertionError("C3 unreadable server disconnected the fleet request") from None
     assert code == 200
-    assert healthy in fleet["servers"]
+    alpha = next(row for row in fleet["servers"] if row["id"] == "alpha-1")
+    assert {k: v for k, v in alpha.items() if k != "scan_status"} == {k: v for k, v in healthy.items() if k != "scan_status"}
     broken = next(row for row in fleet["servers"] if row.get("id", row.get("server_id")) == "beta-2")
-    assert broken["error"]["code"] == "STORE_UNAVAILABLE"
+    assert broken["error"]["code"] == "STORE_UNAVAILABLE", "C3 broken server row is not a typed error"
+
+    render = serve.summary_v1
+    monkeypatch.setattr(serve, "summary_v1", lambda view, now: (_ for _ in ()).throw(RuntimeError("bug")) if view.server.id == "beta-2" else render(view, now))
+    code, fleet, _ = request("GET", "/api/servers")
+    assert code == 200
+    assert next(row for row in fleet["servers"] if row["id"] == "beta-2")["error"]["code"] == "INTERNAL"
+    assert next(row for row in fleet["servers"] if row["id"] == "alpha-1")["status"] == "ok"
 
 
-@pytest.mark.xfail(
-    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C5 "),
-    reason='C5 A rescan POST gets no HTTP response when the store lock is busy',
-)
 def test_c5_rescan_always_answers_when_actor_busy(collector_api):
     host, request, origin = collector_api
-    code, session, headers = request("GET", "/api/session")
-    assert code == 200 and session["can_rescan"]
-    auth = {"Origin": origin, "Cookie": headers["Set-Cookie"].split(";", 1)[0],
-            "X-CSRF-Token": session["csrf_token"]}
-    with (host.state_dir / "alpha-1" / "store.lock").open("rb") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    auth = rescan_headers(request, origin)
+    entered, release = threading.Event(), threading.Event()
+
+    def gate(server):
+        if server.id == "alpha-1":
+            entered.set()
+            assert release.wait(10), "observe barrier was never released"
+
+    host.host.observe_gate = gate
+    host.fleet.start()
+    try:
+        assert entered.wait(5), "alpha's actor never started its observe"
+        host.fleet.reply_timeout = 0
         try:
-            code, body, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
+            code, body, headers = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
         except http.client.RemoteDisconnected:
-            raise AssertionError("C5 busy store disconnected the rescan POST without an HTTP response") from None
-    assert code == 503
-    assert body["error"] in ("STORE_UNAVAILABLE", "SERVER_BUSY")
+            raise AssertionError("C5 busy actor disconnected the rescan POST without an HTTP response") from None
+        assert code == 503, f"C5 busy actor answered {code} {body}"
+        assert body["error"] == "SERVER_BUSY" and headers["Retry-After"] == "5"
+        host.fleet.reply_timeout = 5
+        code, body, _ = request("POST", "/api/servers/beta-2/rescan", "{}", auth)
+        assert code == 202 and body["job"]["state"] == "running", "a busy actor blocked another server's rescan"
+        code, body, _ = request("POST", "/api/servers/beta-2/rescan", "{}", auth)
+        assert code == 409 and body["error"] == "ACTIVE_JOB" and body["job"]["id"]
+    finally:
+        release.set()
 
 
-@pytest.mark.xfail(
-    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C6 "),
-    reason='C6 A store error on a known server is reported as UNKNOWN_SERVER (404)',
-)
+def test_rescan_limits_answer_429(collector_api):
+    host, request, origin = collector_api
+    auth = rescan_headers(request, origin)
+    host.restart(max_active_jobs=1)
+    host.use_fleet()
+    host.fleet.start()
+    code, _, _ = request("POST", "/api/servers/alpha-1/rescan", "{}", auth)
+    assert code == 202
+    code, body, _ = request("POST", "/api/servers/beta-2/rescan", "{}", auth)
+    assert (code, body["error"]) == (429, "GLOBAL_CONCURRENCY")
+
+
 def test_c6_store_error_on_known_server_is_503(collector_api):
     host, request, _ = collector_api
-    directory = host.state_dir / "alpha-1"
-    (directory / "current.json").write_text("{")
-    (directory / "previous.json").unlink(missing_ok=True)
+    (host.state_dir / "servers" / "alpha-1" / "record.json").write_text("{")
+    host.restart()
+    host.use_fleet()
     code, body, _ = request("GET", "/api/servers/alpha-1/snapshot")
     assert code == 503, f"C6 known server with unreadable store returned {code} {body}"
     assert body["error"] == "STORE_UNAVAILABLE"
+    code, body, _ = request("GET", "/api/servers/not-in-inventory/snapshot")
+    assert (code, body["error"]) == (404, "UNKNOWN_SERVER")
 
 
-@pytest.mark.xfail(
-    strict=True, raises=pytest.RaisesExc(AssertionError, match="^C9 "),
-    reason='C9 /api/servers stalls up to about 400 ms while a snapshot is committed',
-)
-def test_c9_fleet_p99_during_large_commit(tmp_path, monkeypatch):
-    host = Collector(tmp_path, "alpha-1")
-    host.transport.publish("alpha-1", started=1719203000)
-    entered = threading.Event()
-    release = threading.Event()
-    reading = threading.Event()
-    commit = host.store.commit_snapshot
+def test_c9_fleet_responsive_during_large_commit(collector_api, monkeypatch):
+    host, request, _ = collector_api
+    host.host.publish("alpha-1", started=1719203000)
+    actor = host.actor("alpha-1")
+    entered, release = threading.Event(), threading.Event()
+    commit = actor.store.commit
 
-    def slow_commit(*args, **kwargs):
-        entered.set()
-        if not release.wait(5):
-            raise RuntimeError("commit barrier was never released")
-        return commit(*args, **kwargs)
+    def slow_commit(record, capture=None):
+        if capture is not None:
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError("commit barrier was never released")
+        return commit(record, capture)
 
-    def read_summary():
-        reading.set()
-        return host.service.server_summaries()
-
-    monkeypatch.setattr(host.store, "commit_snapshot", slow_commit)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        writer = pool.submit(host.service.poll_once)
+    monkeypatch.setattr(actor.store, "commit", slow_commit)
+    host.clock.now += 61
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        writer = pool.submit(lambda: (actor.step(), actor.step()))
         try:
-            assert entered.wait(2), "writer never reached commit"
-            reader = pool.submit(read_summary)
-            assert reading.wait(2), "reader never started"
-            try:
-                summaries = reader.result(timeout=0.050)
-            except FutureTimeoutError:
-                raise AssertionError("C9 fleet summary stalled beyond 50 ms during commit") from None
-            assert [row["id"] for row in summaries] == ["alpha-1"]
+            assert entered.wait(5), "writer never reached the capture commit"
+            code, fleet, _ = request("GET", "/api/servers")
+            assert code == 200, "C9 fleet read failed during a commit"
+            row = next(row for row in fleet["servers"] if row["id"] == "alpha-1")
+            assert row["overview_snapshot"]["scan_generation"] == "alpha-1-1719200000-v1"
         finally:
             release.set()
-            assert writer.result(timeout=5)["alpha-1"]["latest_pull_status"] == "succeeded"
+            writer.result(timeout=10)
+    code, fleet, _ = request("GET", "/api/servers")
+    assert next(row for row in fleet["servers"] if row["id"] == "alpha-1")["overview_snapshot"]["scan_generation"] == "alpha-1-1719203000-v1"
 
 
 if __name__ == "__main__":
@@ -834,17 +773,9 @@ def test_c7_every_data_spelling_requires_read_auth(tmp_path):
         STORAGE_VIZ_OPERATOR_ALLOWLIST="operator-1",
     )
     proc = subprocess.Popen([sys.executable, str(SERVE)], cwd=str(ROOT), env=env,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        deadline = time.time() + 5
-        while True:
-            try:
-                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
-                break
-            except OSError:
-                if time.time() > deadline or proc.poll() is not None:
-                    pytest.fail("serve.py did not start")
-                time.sleep(0.05)
+        wait_until_serving(proc)
         leaked = []
         for path in ("/data/hosts.json", "/./data/hosts.json", "/data/", "/x/../data/hosts.json", "//data/hosts.json",
                      "../data/hosts.json", "..//data/hosts.json", "./../data/hosts.json", "x/../../data/hosts.json",
@@ -861,4 +792,4 @@ def test_c7_every_data_spelling_requires_read_auth(tmp_path):
         assert not leaked, "C7 private data served without read auth: " + ", ".join(leaked)
     finally:
         proc.terminate()
-        proc.wait(timeout=5)
+        proc.communicate(timeout=5)

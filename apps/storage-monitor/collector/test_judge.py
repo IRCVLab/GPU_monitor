@@ -67,3 +67,19 @@ def test_eta(observations, agent, expected):
 ])
 def test_activity_expires(state, elapsed, expected):
     assert judge.activity({"state": state}, 10, 10 + elapsed) == expected
+
+
+def test_retained_roots_age_independently_after_faster_scan():
+    from collector.judge import FRESHNESS_SLACK_SECONDS, freshness
+    now = 1719300000
+    legacy = {"scan_finished_unix": now - 6 * 3600, "selected_roots": [{"storage_media": "ssd"}]}
+    assert freshness(legacy, now, FRESHNESS_SLACK_SECONDS) == "fresh"
+    payload = {"scan_finished_unix": now, "selected_roots": [
+        {"storage_media": "ssd", "scan_finished_unix": now - 4790},
+        {"storage_media": "hdd", "scan_finished_unix": now - 4 * 3600},
+    ]}
+    assert freshness(payload, now, FRESHNESS_SLACK_SECONDS) == "stale"
+    payload["selected_roots"][1]["scan_finished_unix"] = now - 3 * 3600
+    assert freshness(payload, now, FRESHNESS_SLACK_SECONDS) == "fresh"
+    payload["selected_roots"][0]["scan_finished_unix"] = now - 4861
+    assert freshness(payload, now, FRESHNESS_SLACK_SECONDS) == "stale"

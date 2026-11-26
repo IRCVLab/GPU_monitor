@@ -18,6 +18,8 @@ SCHEDULED_TIMER_DELAY_SECONDS = 360
 ACTIVE_TELEMETRY_INTERVAL_SECONDS = 5
 IDLE_TELEMETRY_INTERVAL_SECONDS = 60
 MAX_CAPACITY_AGE_SECONDS = 900
+# The v1 freshness grace, sized for the old 15-minute status poll. Kept so the v1 badge does not move.
+FRESHNESS_SLACK_SECONDS = 900
 
 
 def host_now(host_unix: Optional[int], received_monotonic: Optional[float], now_monotonic: float) -> Optional[int]:
