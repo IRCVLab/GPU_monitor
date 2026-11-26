@@ -1,3 +1,5 @@
+import {isScanActive} from './scan-status.js';
+import {formatUrl} from '../router.js';
 "use strict";
 
 const SAFE_SERVER_ID_RE = /^[A-Za-z0-9._-]+$/;
@@ -396,10 +398,6 @@ function strongestPressure(mounts) {
   return worst;
 }
 
-const overviewHasActiveScan = typeof module !== "undefined" && module.exports
-  ? require("./scan-status.js").isScanActive
-  : summary => isScanActive(summary);
-
 function derivePrimaryStatus(summaryInput, snapshot, error = null) {
   const summary = normalizeSummary(summaryInput);
   const mounts = summarizeMounts(snapshot);
@@ -413,7 +411,7 @@ function derivePrimaryStatus(summaryInput, snapshot, error = null) {
   if (summary.latest_scan_result === "partial") return statusPresentation("partial_scan");
   if (summary.freshness === "stale") return statusPresentation("stale_snapshot");
   if (error) return statusPresentation("snapshot_load_failed");
-  if (overviewHasActiveScan(summary)) return statusPresentation("active_scan");
+  if (isScanActive(summary)) return statusPresentation("active_scan");
   if (pressure === "critical") return statusPresentation("pressure_critical");
   if (pressure === "warning") return statusPresentation("pressure_warning");
   return statusPresentation("normal");
@@ -421,7 +419,7 @@ function derivePrimaryStatus(summaryInput, snapshot, error = null) {
 
 function deriveSecondaryStatus(summaryInput, primaryCode) {
   const summary = normalizeSummary(summaryInput);
-  if (overviewHasActiveScan(summary) && primaryCode !== "active_scan") return statusPresentation("active_scan");
+  if (isScanActive(summary) && primaryCode !== "active_scan") return statusPresentation("active_scan");
   return null;
 }
 
@@ -548,23 +546,6 @@ function renderFleetUserUsage(container, usage) {
   nextFocus?.focus({ preventScroll: true });
 }
 
-function parseRoute(locationLike) {
-  const search = String((locationLike && locationLike.search) || "");
-  const hash = String((locationLike && locationLike.hash) || "").replace(/^#/, "");
-  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
-  const rawServerId = params.get("server") || "";
-  const serverId = isSafeServerId(rawServerId) ? rawServerId : null;
-  const tab = KNOWN_DETAIL_TABS.has(hash) ? hash : "treemap";
-  return { serverId, tab };
-}
-
-function buildRouteHref(pathname, route) {
-  const safePath = pathname || "/";
-  if (!route || !route.serverId || !isSafeServerId(route.serverId)) return safePath;
-  const tab = KNOWN_DETAIL_TABS.has(route.tab) ? route.tab : "treemap";
-  return safePath + "?server=" + encodeURIComponent(route.serverId) + "#" + tab;
-}
-
 function makeEl(doc, tag, className, text) {
   const el = doc.createElement(tag);
   if (className) el.className = className;
@@ -634,7 +615,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   const operationalTone = capacityOnlyState ? "normal" : (row.primaryStatus.tone || "normal");
   const renderedMounts = row && Array.isArray(row.capacityGroups) && row.capacityGroups.length ? row.capacityGroups : row.mounts;
   const card = makeEl(doc, "a", "overview-card");
-  card.setAttribute("href", buildRouteHref(handlers.pathname || "/", { serverId: row.id, tab: "treemap" }));
+  card.setAttribute("href", formatUrl({ page: "server", serverId: row.id, tab: "treemap" }));
   card.dataset.serverId = row.id;
   card.setAttribute("data-primary-status", row.primaryStatus.code);
   card.setAttribute("data-tone", operationalTone);
@@ -729,19 +710,8 @@ function createOverviewRowElement(doc, row, handlers = {}) {
     card.appendChild(footer);
   }
 
-  const activate = () => {
-    if (handlers && typeof handlers.onOpenServer === "function") handlers.onOpenServer(row.id);
-  };
-  card.onclick = (event) => {
-    if (event && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || (event.button != null && event.button !== 0))) return;
-    if (event && typeof event.preventDefault === "function") event.preventDefault();
-    activate();
-  };
-  card.onkeydown = (event) => {
-    if (event && event.key === " ") {
-      if (typeof event.preventDefault === "function") event.preventDefault();
-      activate();
-    }
+  card.onkeydown = event => {
+    if (event.key === " ") { event.preventDefault(); card.click(); }
   };
   item.appendChild(card);
   return item;
@@ -849,12 +819,23 @@ function scheduleOverviewMasonry(container) {
 
 function renderOverviewList(container, rows, handlers = {}) {
   if (!container) return;
-  container.innerHTML = "";
-  for (const row of Array.isArray(rows) ? rows : []) container.appendChild(createOverviewRowElement(container.ownerDocument || document, row, handlers));
+  const existing = new Map(Array.from(container.children, item => [item.children[0].dataset.serverId,item]));
+  rows.forEach((row,index) => {
+    const fresh = createOverviewRowElement(container.ownerDocument || document,row,handlers);
+    const item = existing.get(row.id) ?? fresh;
+    if (item !== fresh) {
+      existing.delete(row.id);
+      const link = item.children[0], next = fresh.children[0];
+      for (const name of ['data-primary-status','data-tone','href']) link.setAttribute(name,next.getAttribute(name));
+      link.replaceChildren(...next.childNodes);
+    }
+    if (container.children[index] !== item) container.insertBefore(item,container.children[index] ?? null);
+  });
+  for (const item of existing.values()) item.remove();
   scheduleOverviewMasonry(container);
 }
 
-const overviewExports = {
+export {
   SAFE_SERVER_ID_RE,
   isSafeServerId,
   KNOWN_DETAIL_TABS,
@@ -874,13 +855,11 @@ const overviewExports = {
   buildOverviewRows,
   buildFleetUserUsage,
   renderFleetUserUsage,
-  parseRoute,
-  buildRouteHref,
+  compatibleCapacityMetrics, hasVolumeFolderLevel,
   renderOverviewAggregate,
   renderOverviewList,
   layoutOverviewMasonry,
   totalAvailableMetaText,
 };
 
-if (typeof globalThis !== "undefined") Object.assign(globalThis, overviewExports);
-if (typeof module !== "undefined" && module.exports) module.exports = overviewExports;
+export {scheduleOverviewMasonry};

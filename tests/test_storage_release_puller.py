@@ -383,7 +383,7 @@ class StorageReleasePullerTest(unittest.TestCase):
             pull("empty commit", "unchanged-runtime", 0)
             (repo / app_path / "docs/schema-v1.md").write_text("# Revised schema explanation\n", encoding="utf-8")
             pull("packaged documentation only", "unchanged-runtime", 0)
-            script = repo / app_path / "viewer/app.js"
+            script = repo / app_path / "viewer/main.js"
             script.chmod(script.stat().st_mode ^ 0o100)
             pull("mode-only change", "activated", 1)
             with script.open("a", encoding="utf-8") as handle:

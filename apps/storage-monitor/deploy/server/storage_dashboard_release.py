@@ -20,21 +20,33 @@ APPLICATION_NAME = "storage-monitor"
 SCHEMA_VERSION = 1
 ARTIFACT_FORMAT_VERSION = 1
 MANIFEST_PATH = "storage-monitor/RELEASE-MANIFEST.json"
-VIEWER_PAGES = ("viewer/index.html", "viewer/debug.html")
+VIEWER_PAGES = ("viewer/index.html",)
 PACKAGED_DOCUMENTATION = frozenset({"docs/schema-v1.md"})
 REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | frozenset(
     {
         "viewer/serve.py",
-        "viewer/app.js",
-        "viewer/data-client.js",
+        "viewer/api.js",
+        "viewer/columns.js",
         "viewer/echarts.min.js",
-        "viewer/overview.js",
-        "viewer/selection.js",
-        "viewer/scan-status.js",
+        "viewer/effects.js",
+        "viewer/format.js",
+        "viewer/main.js",
+        "viewer/removal.js",
+        "viewer/router.js",
+        "viewer/state.js",
+        "viewer/store.js",
         "viewer/styles.css",
-        "viewer/tables.js",
-        "viewer/treemap.js",
         "viewer/users-chart.js",
+        "viewer/views/files.js",
+        "viewer/views/header.js",
+        "viewer/views/notices.js",
+        "viewer/views/overview.js",
+        "viewer/views/scan-status.js",
+        "viewer/views/selection-bar.js",
+        "viewer/views/server.js",
+        "viewer/views/theme.js",
+        "viewer/views/treemap.js",
+        "viewer/views/users.js",
         "collector/__init__.py",
         "collector/duration_history.py",
         "collector/inventory.py",

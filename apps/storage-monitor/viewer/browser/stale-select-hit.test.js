@@ -17,7 +17,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
-const { expectedFailure } = require('../expected-failure');
+
 
 const APP_DIR = path.resolve(__dirname, '..', '..');
 const CDP_URL = process.env.STORAGE_VIZ_CDP_URL || 'http://127.0.0.1:9223';
@@ -70,19 +70,17 @@ function findChrome() {
   return null;
 }
 
-// Stops a child this script started, by its PID. Chrome runs detached, so its PID
-// leads a process group and signalling the group stops its helper processes too.
-async function stop(child, { group = false } = {}) {
+// Only children returned by spawn reach this function. An existing CDP browser
+// receives a tab close and is never signalled.
+async function stop(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise(resolve => child.once('exit', resolve));
-  const signal = sig => { try { process.kill(group ? -child.pid : child.pid, sig); } catch {} };
-  signal('SIGTERM');
-  const done = await Promise.race([exited.then(() => true), new Promise(resolve => setTimeout(resolve, 5000, false))]);
-  if (!done) signal('SIGKILL');
-  if (group) {
-    await waitFor('Chrome helper processes to exit', () => {
-      try { process.kill(-child.pid, 0); return false; } catch { return true; }
-    }, 5000).catch(() => signal('SIGKILL'));
+  const exited = new Promise(resolve => child.once('exit',resolve));
+  const timeout = setTimeout(() => child.kill('SIGKILL'),5000);
+  try {
+    child.kill('SIGTERM');
+    await exited;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -101,7 +99,8 @@ async function openBrowser(tmp) {
     `--user-data-dir=${path.join(tmp, 'chrome')}`, 'about:blank',
   ], { stdio: 'ignore', detached: true });
   const cdpUrl = `http://127.0.0.1:${port}`;
-  await waitFor('Chrome DevTools endpoint', () => getJson(cdpUrl + '/json/version'));
+  try { await waitFor('Chrome DevTools endpoint', () => getJson(cdpUrl + '/json/version')); }
+  catch (error) { await stop(chrome); throw error; }
   return { cdpUrl, chrome };
 }
 
@@ -119,7 +118,8 @@ async function startSampleServer(tmp) {
     },
   });
   const origin = `http://127.0.0.1:${port}`;
-  await waitFor('sample serve.py', () => getJson(origin + '/api/servers'));
+  try { await waitFor('sample serve.py', () => getJson(origin + '/api/servers')); }
+  catch (error) { await stop(server); throw error; }
   return { server, origin };
 }
 
@@ -213,7 +213,11 @@ async function checkWidth(tab, origin, width) {
     last = current;
     return settled ? current : null;
   });
-  const picks = () => tab.evaluate('cleanupItems().length');
+  assert.ok(await tab.evaluate(`(() => {
+    const b = ${BUTTON}, r = b.getBoundingClientRect();
+    return [r.left+4,r.right-4].every(x => [r.top+4,r.bottom-4].every(y => b.contains(document.elementFromPoint(x,y))));
+  })()`), 'V3 all four inset corners hit Select');
+  const picks = () => tab.evaluate("document.querySelectorAll('#staleRows .cleanup-select-btn[aria-pressed=true]').length");
   const before = await picks();
   await tab.click(...probe.point);
   const after = await waitFor('the pick count to change', async () => {
@@ -225,6 +229,81 @@ async function checkWidth(tab, origin, width) {
   assert.ok(after === before + 1 && pressed === 'true',
     `${CLICK_MESSAGE}\nat ${width}px the point ${probe.point.map(Math.round)} hits ${probe.hit}; ` +
     `button rect ${probe.rect}; picks ${before} -> ${after}; aria-pressed ${pressed}`);
+  assert.equal(await tab.evaluate("document.getElementById('cleanupDetails').hidden"),true);
+  const command = await tab.evaluate("document.getElementById('cleanupCopyAll').dataset.copyCommand");
+  assert.match(command,/hostname -s/);
+  await tab.evaluate("window.dispatchEvent(new Event('focus'))");
+  await waitFor('focus refresh', () => tab.evaluate("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('/hinton/snapshot')).length >= 2"));
+  assert.equal(await tab.evaluate("document.getElementById('cleanupCopyAll').dataset.copyCommand"),command,'V1 focus preserves command');
+  const geometry = await tab.evaluate(`(() => {
+    const vp=document.getElementById('staleViewport'); vp.scrollLeft=vp.scrollWidth;
+    const head=[...document.querySelectorAll('#staleHead th')].map(e=>e.getBoundingClientRect());
+    const cells=[...document.querySelector('#staleRows tr:not([aria-hidden])').cells].map(e=>e.getBoundingClientRect());
+    return {aligned:head.every((r,i)=>Math.abs(r.left-cells[i].left)<1 && Math.abs(r.width-cells[i].width)<1),
+      path:cells.at(-1).width, page:document.documentElement.scrollWidth};
+  })()`);
+  assert.ok(geometry.aligned && geometry.path >= 240 && geometry.page <= width,'V4 header and rows align after scroll: '+JSON.stringify(geometry));
+}
+
+async function shot(tab, name, width) {
+  const dir = process.env.STORAGE_VIZ_SCREENSHOT_DIR;
+  if (!dir) return;
+  fs.mkdirSync(dir,{recursive:true});
+  if (name !== 'overview') await tab.evaluate(`(async () => {
+    const target=document.querySelector('${name === 'stale' ? '#staleViewport' : '#treemap'}');
+    target.scrollIntoView({block:'center',behavior:'instant'});
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  })()`);
+  const {data} = await tab.send('Page.captureScreenshot',{format:'png'});
+  fs.writeFileSync(path.join(dir,name+'-'+width+'.png'),Buffer.from(data,'base64'));
+}
+
+async function checkNavigation(tab,origin,width) {
+  await tab.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
+  await tab.send('Page.navigate',{url:origin+'/'});
+  await waitFor('overview mounts',()=>tab.evaluate("document.querySelectorAll('.overview-mount[data-pressure]').length >= 4"));
+  await shot(tab,'overview',width);
+  await tab.evaluate("document.querySelector('.overview-card[data-server-id=hinton]').click()");
+  await waitFor('treemap tiles',()=>tab.evaluate("document.querySelectorAll('.tmtile').length"));
+  assert.equal(await tab.evaluate("new URL(location).searchParams.get('tab')"),'treemap','V6 card href decides tab');
+  await shot(tab,'detail-treemap',width);
+  const drill = await tab.evaluate(`(() => {
+    const tile=document.querySelector('.tmtile.drillable[data-cleanup-path]');
+    tile.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+    return new URL(location).searchParams.get('path');
+  })()`);
+  assert.ok(drill,'Enter on a directory records the drill in the URL');
+  await waitFor('drilled tiles',()=>tab.evaluate("document.querySelectorAll('.tm-crumb').length > 1"));
+  await tab.evaluate("document.getElementById('treemapCleanupMode').click()");
+  await waitFor('latched select mode',()=>tab.evaluate("document.getElementById('treemapCleanupMode').getAttribute('aria-pressed')==='true'"));
+  await tab.evaluate("document.querySelector('.tmtile[data-cleanup-path]').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
+  await waitFor('keyboard selection',()=>tab.evaluate("document.getElementById('cleanupCopyAll').dataset.copyCommand.length>0"));
+  await tab.evaluate("document.getElementById('cleanupClear').click()");
+  await tab.evaluate("document.getElementById('treemapCleanupMode').click()");
+
+  await tab.evaluate("document.querySelector('.tab[data-tab=stale]').click()");
+  await waitFor('Stale',()=>tab.evaluate("!!document.querySelector('#staleRows .cleanup-select-btn')"));
+  await shot(tab,'stale',width);
+  await tab.evaluate("document.querySelector('.tab[data-tab=top]').click()");
+  await waitFor('owner options',()=>tab.evaluate("document.getElementById('ownerFilter').options.length > 1"));
+  const owner = await tab.evaluate(`(() => {const select=document.getElementById('ownerFilter');
+    select.selectedIndex=1;select.dispatchEvent(new Event('change'));return select.value;})()`);
+  await tab.evaluate('history.back()');
+  await waitFor('back to unfiltered files',()=>tab.evaluate("!new URL(location).searchParams.has('owner')"));
+  await tab.evaluate('history.forward()');
+  await waitFor('V8 forward restores owner',()=>tab.evaluate("document.getElementById('ownerFilter').value === "+JSON.stringify(owner)));
+  await tab.evaluate("document.getElementById('overviewBack').click()");
+  await tab.evaluate('history.back()');
+  await waitFor('V8 back restores owner',()=>tab.evaluate("document.querySelector('#panel-topfiles.active') && document.getElementById('ownerFilter').value === "+JSON.stringify(owner)));
+  await tab.evaluate('history.forward()');
+  await waitFor('forward restores overview',()=>tab.evaluate("!document.getElementById('overviewView').hidden"));
+  await tab.evaluate("document.querySelector('.overview-card[data-server-id=hinton]').click()");
+  await waitFor('card after another tab',()=>tab.evaluate("!!document.querySelector('#panel-treemap.active') && !document.getElementById('detailView').hidden"));
+  await tab.evaluate("document.querySelector('.tab[data-tab=users]').click()");
+  await waitFor('Users chart',()=>tab.evaluate("!!document.querySelector('#usersChart canvas') && !!document.querySelector('#usersTbl tr[data-uid]')"));
+  await tab.send('Page.navigate',{url:origin+'/?server=unknown'});
+  await waitFor('unknown server',()=>tab.evaluate("!document.getElementById('detailError').hidden"));
+  assert.ok(await tab.evaluate("['detailHead','detailActions','detailTabs','caps','detailPanels'].every(id=>document.getElementById(id).hidden)"),'V7 unknown server hides chrome');
 }
 
 async function main() {
@@ -240,14 +319,13 @@ async function main() {
     }
     sample = await startSampleServer(tmp);
     tab = await CdpTab.open(browser.cdpUrl);
-    await expectedFailure(['V3'], CLICK_MESSAGE, async function testStaleSelectRightEdgeClickLandsOnButton() {
-      for (const width of WIDTHS) await checkWidth(tab, sample.origin, width);
-    });
+    for (const width of WIDTHS) await checkWidth(tab, sample.origin, width);
+    for (const width of [390,1440]) await checkNavigation(tab,sample.origin,width);
     console.log('stale select hit test passed');
   } finally {
     if (tab) await tab.close();
     if (sample) await stop(sample.server);
-    if (browser) await stop(browser.chrome, { group: true });
+    if (browser) await stop(browser.chrome);
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }

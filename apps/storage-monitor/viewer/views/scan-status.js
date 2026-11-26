@@ -1,3 +1,4 @@
+import {clockSeconds} from '../format.js';
 "use strict";
 
 function scanNumber(value) {
@@ -7,14 +8,6 @@ function scanNumber(value) {
 function activeRescanState(job) {
   if (!job) return null;
   return job.state === "running" ? job.state : null;
-}
-
-function classifyRescanJob(job, expectedJobId, sawActive) {
-  if (expectedJobId && job && job.id && job.id !== expectedJobId) return "stale";
-  const active = activeRescanState(job);
-  if (active) return active;
-  if (job && job.state === "failed") return "failed";
-  return sawActive ? "refresh" : "idle";
 }
 
 function newerScanGeneration(generation, time, snapshot) {
@@ -43,7 +36,7 @@ function isScanActive(summary) {
   ));
 }
 
-function scanStatusModel(status, snapshot, now = scanNumber(status?.host_now_unix) ?? Date.now() / 1000) {
+function scanStatusModel(status, snapshot, now = scanNumber(status?.host_now_unix) ?? clockSeconds()) {
   const s = status || {}, data = snapshot || {};
   const disconnected = !!s.disconnected;
   const state = disconnected ? "unknown" : (s.state || "unknown");
@@ -114,7 +107,7 @@ function renderScanStatus(status, snapshot, options = {}) {
   const doc = options.document || document;
   const panel = doc.getElementById("scanStatusPanel");
   if (!panel) return;
-  const now = options.now ?? scanNumber(status?.host_now_unix) ?? Date.now() / 1000;
+  const now = options.now ?? scanNumber(status?.host_now_unix) ?? clockSeconds();
   const model = scanStatusModel(status, snapshot, now);
   const set = (id, value) => { const el = doc.getElementById(id); if (el && el.textContent !== value) el.textContent = value; };
   const title = (id, value) => { const el = doc.getElementById(id); if (el) el.title = value; };
@@ -154,34 +147,4 @@ function renderScanStatus(status, snapshot, options = {}) {
   return model;
 }
 
-// One outstanding request per viewing session. The token also handles A → B → A.
-function createScanMonitor({ fetchStatus, onStatus, onError = () => {}, schedule = setTimeout, cancel = clearTimeout }) {
-  let token = 0, timer = null;
-  function stop() { token += 1; if (timer !== null) cancel(timer); timer = null; }
-  function start(id) {
-    stop();
-    if (!id) return;
-    const mine = token;
-    async function poll() {
-      let delay = 30000;
-      try {
-        const status = await fetchStatus(id);
-        if (mine !== token) return;
-        delay = status.state === "running" ? 5000 : 30000;
-        await onStatus(id, status, () => mine === token);
-      } catch (error) {
-        if (mine !== token) return;
-        delay = 10000;
-        onError(id, error);
-      }
-      if (mine === token) {
-        timer = schedule(poll, delay);
-        if (timer && typeof timer.unref === "function") timer.unref();
-      }
-    }
-    void poll();
-  }
-  return { start, stop };
-}
-
-if (typeof module !== "undefined" && module.exports) module.exports = { readyScanGeneration, pendingScanGeneration, isScanActive, scanStatusModel, scanDuration, scanDate, renderScanStatus, createScanMonitor };
+export {readyScanGeneration, pendingScanGeneration, isScanActive, scanStatusModel, renderScanStatus};

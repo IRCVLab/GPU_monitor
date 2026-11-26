@@ -17,7 +17,7 @@ from threading import Thread
 from urllib.parse import quote
 from unittest.mock import patch
 
-from storage_dashboard_release import VIEWER_PAGES, viewer_asset_paths
+from storage_dashboard_release import REQUIRED_RELEASE_FILES, VIEWER_PAGES, viewer_asset_paths
 
 
 @contextmanager
@@ -76,7 +76,8 @@ def smoke(root: Path, release: Path) -> None:
                     if html != (release / page).read_bytes():
                         raise RuntimeError(f"packaged dashboard returned unexpected bytes for {page}")
                     assets.update(viewer_asset_paths(html))
-                for asset in sorted(assets | {"echarts.min.js", "users-chart.js"}):
+                assets.update(path.removeprefix("viewer/") for path in REQUIRED_RELEASE_FILES if path.startswith("viewer/") and path.endswith(".js"))
+                for asset in sorted(assets):
                     if fetch(proxy_port, "/" + quote(asset)) != (release / "viewer" / asset).read_bytes():
                         raise RuntimeError(f"packaged dashboard returned unexpected bytes for {asset}")
 

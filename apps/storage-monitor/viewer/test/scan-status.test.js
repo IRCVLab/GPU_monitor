@@ -1,8 +1,5 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-assert.ok(fs.existsSync(__dirname + '/scan-status.js'), 'scan status presentation module must exist');
-const { pendingScanGeneration, scanStatusModel, createScanMonitor } = require('./scan-status.js');
-
+import assert from 'node:assert/strict';
+import {pendingScanGeneration, scanStatusModel} from '../views/scan-status.js';
 const now = 2000;
 const snapshot = { scan_started_unix: 1000, scan_finished_unix: 1100, scan_duration_sec: 100, scan_generation: 'old', selected_roots: [{status:'complete'}] };
 let model = scanStatusModel({}, snapshot, now);
@@ -48,26 +45,6 @@ assert.equal(model.snapshotPending, true);
 assert.equal(scanStatusModel({ snapshot_finished_unix: 1200 }, null, now).snapshotFinished, null);
 assert.equal(scanStatusModel({ schedule_mode: "due-check" }, snapshot, now).nextRunLabel, "다음 확인");
 
-async function testMonitor() {
-  let resolveA;
-  const events = [], scheduled = [];
-  const monitor = createScanMonitor({
-    fetchStatus: id => id === 'a' ? new Promise(resolve => { resolveA = resolve; }) : Promise.resolve({ state: 'running' }),
-    onStatus: (id, value) => events.push([id, value.state]),
-    schedule: (fn, ms) => { const timer = { fn, ms }; scheduled.push(timer); return timer; },
-    cancel: timer => { timer.cancelled = true; },
-  });
-  monitor.start('a');
-  monitor.start('b');
-  await new Promise(resolve => setImmediate(resolve));
-  resolveA({ state: 'complete' });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(events, [['b', 'running']], 'navigation must discard old responses');
-  assert.equal(scheduled.length, 1);
-  assert.equal(scheduled[0].ms, 5000);
-  monitor.stop();
-  assert.equal(scheduled[0].cancelled, true);
-}
 {
   const slow = scanStatusModel({ state: 'running', started_unix: 1000, observed_unix: 1100, updated_unix: 1100, estimate_duration_sec: 19, estimate_max_duration_sec: 1396 }, null, 1100);
   assert.equal(slow.eta, null, 'past the typical duration there is no near ETA');
@@ -79,4 +56,3 @@ async function testMonitor() {
   assert.equal(over.slowEta, null);
   assert.match(over.etaNote, /^최근 최장 소요 시간 초과/, 'only past the longest recent run is the scan overdue');
 }
-testMonitor().then(() => console.log('scan status tests passed')).catch(error => { console.error(error); process.exitCode = 1; });
