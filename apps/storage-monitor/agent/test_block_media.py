@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agent.block_media import BlockMediaResolver, MediaResult, capacity_id
+from agent.storage_viz_agent.block_media import BlockMediaResolver, MediaResult, capacity_id
 
 
 class FakeSysfs:
