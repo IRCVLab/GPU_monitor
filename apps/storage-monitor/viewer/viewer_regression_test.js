@@ -2733,6 +2733,9 @@ function testRemovalScriptRemovesOnlyOnItsOwnServerWithoutPrompts() {
     return fs.readdirSync(data).sort();
   };
   assert.deepStrictEqual(run('neo'), ['-model.bin', "it's dir"], 'pasted on another server, the script must remove nothing');
+  viewer.DATA.hostname = 'gpu_01';
+  assert.match(viewer.cleanupRemovalScript(plans), /^if \[ "\$\(hostname -s\)" = 'gpu_01' \]; then /, 'an unusual but valid hostname still gets the host check');
+  viewer.DATA.hostname = 'hinton.lab';
   assert.deepStrictEqual(run('hinton'), [], 'pasted on its own server, the script must remove every selected path without asking');
   for (const bad of ['/data/a\u202Eb', '/data/a\ud800b', '/data/a\u0085b']) {
     const plan = viewer.buildCleanupCommandPlan(viewer.DATA, { path: data + bad.slice(5), kind: 'directory', bytes: 1 }, {});

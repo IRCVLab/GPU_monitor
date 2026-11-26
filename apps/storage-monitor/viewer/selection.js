@@ -370,9 +370,9 @@ function cleanupRemovalScript(entries) {
   const body = commands.join("; ");
   const snapshot = currentCleanupSnapshot();
   const host = snapshot && typeof snapshot.hostname === "string" ? snapshot.hostname.split(".")[0] : "";
-  if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/.test(host)) return body;
-  return "if [ \"$(hostname -s)\" = '" + host + "' ]; then " + body +
-    "; else echo 'storage-viz: these paths belong to " + host + "; nothing was removed' >&2; fi";
+  if (!host || hasControlCharacters(host)) return body;
+  return "if [ \"$(hostname -s)\" = " + shellQuote(host) + " ]; then " + body +
+    "; else echo 'storage-viz: wrong server, nothing was removed. These paths belong to:' " + shellQuote(host) + " >&2; fi";
 }
 
 function syncCleanupSelectionControls() {
