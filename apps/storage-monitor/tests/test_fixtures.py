@@ -9,8 +9,8 @@ import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data"
-GENERATOR = DATA_DIR / "gen_sample.py"
+DATA_DIR = ROOT / "tests/fixtures/fleet"
+GENERATOR = ROOT / "tools/gen_sample.py"
 EXPECTED_SAMPLE_IDS = ["hinton", "atlas", "orion", "zeus"]
 MEDIA_VALUES = {"ssd", "hdd", "mixed", "unknown"}
 CONFIDENCE_VALUES = {"resolved", "unresolved"}
@@ -204,7 +204,7 @@ class DataFixtureTests(unittest.TestCase):
         self.assertEqual(mount["storage_media_confidence"], "unresolved")
 
     def test_sample_generator_writes_all_ordered_fixtures_byte_for_byte(self):
-        before = {sid: (DATA_DIR / f"{sid}.sample.json").read_bytes() for sid in EXPECTED_SAMPLE_IDS}
+        before = {sid: (DATA_DIR / f"{sid}.json").read_bytes() for sid in EXPECTED_SAMPLE_IDS}
         result = subprocess.run(
             [sys.executable, str(GENERATOR)],
             cwd=ROOT,
@@ -213,7 +213,7 @@ class DataFixtureTests(unittest.TestCase):
             text=True,
         )
         self.assertIn("tree byte-consistency: OK", result.stdout)
-        after = {sid: (DATA_DIR / f"{sid}.sample.json").read_bytes() for sid in EXPECTED_SAMPLE_IDS}
+        after = {sid: (DATA_DIR / f"{sid}.json").read_bytes() for sid in EXPECTED_SAMPLE_IDS}
         self.assertEqual(
             {sid: hashlib.sha256(data).hexdigest() for sid, data in after.items()},
             {sid: hashlib.sha256(data).hexdigest() for sid, data in before.items()},
@@ -225,7 +225,7 @@ class DataFixtureTests(unittest.TestCase):
         media_sets = {sid: set() for sid in EXPECTED_SAMPLE_IDS}
         generations = set()
         for sid in EXPECTED_SAMPLE_IDS:
-            payload = json.loads((DATA_DIR / f"{sid}.sample.json").read_text(encoding="utf-8"))
+            payload = json.loads((DATA_DIR / f"{sid}.json").read_text(encoding="utf-8"))
             payloads.append(payload)
             self.assertEqual(payload["hostname"], sid)
             self.assertEqual(payload["server_id"], sid)
@@ -267,7 +267,7 @@ class DataFixtureTests(unittest.TestCase):
         self.assertEqual(statuses, {"healthy", "warning", "critical"})
 
     def test_hinton_preserves_rich_tree_semantics(self):
-        payload = json.loads((DATA_DIR / "hinton.sample.json").read_text(encoding="utf-8"))
+        payload = json.loads((DATA_DIR / "hinton.json").read_text(encoding="utf-8"))
         roots_by_id = {root["mount_id"]: root for root in payload["selected_roots"]}
         self.assertEqual(roots_by_id["rootfs"]["mountpoint"], "/")
         self.assertEqual(roots_by_id["rootfs"]["scan_root"], "/home")

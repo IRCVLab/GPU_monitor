@@ -33,9 +33,7 @@ export function bindEffects(store, fetcher = fetchResource) {
   function detail(id, force) {
     const key = detailKey(id);
     if (resource(key)?.status !== 'loading' && (force || !resource(key)?.data)) {
-      const source = resource('session')?.data?.source;
-      const file = resource('fleet')?.data?.servers.find(row => row.id === id)?.file;
-      return request(key,{source,file});
+      return request(key);
     }
   }
   const tracking = id => state().rescans[id];
@@ -43,11 +41,11 @@ export function bindEffects(store, fetcher = fetchResource) {
   function openServer(id) {
     if (!id || !resource('fleet')?.data?.servers.some(row => row.id === id)) return;
     detail(id,false);
-    if (resource('session')?.data?.source !== 'static') request('activity/' + id);
+    request('activity/' + id);
   }
   async function refresh(force = false) {
     if (!resource('session')?.data && !await request('session')) return;
-    const fleet = await request('fleet',{source:resource('session')?.data?.source});
+    const fleet = await request('fleet');
     if (!fleet) return;
     const current = state().route.serverId;
     for (const row of fleet.servers) {

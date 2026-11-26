@@ -79,66 +79,12 @@ function normalizeDetailUsers(users) {
   return rows;
 }
 
-const DEFAULT_HOSTS = [
-  { id: "hinton", label: "hinton", file: "hinton", default: true }
-];
-function isSafeHostToken(value) {
-  return typeof value === "string" && /^[A-Za-z0-9._-]+$/.test(value) && value !== "." && value !== "..";
-}
-function normalizeHosts(input) {
-  const rows = Array.isArray(input) ? input : [];
-  const out = [];
-  for (const row of rows) {
-    const id = row && String(row.id || "").trim();
-    const file = row && String(row.file || id).trim();
-    if (!isSafeHostToken(id) || !isSafeHostToken(file)) continue;
-    const normalized = {
-      id,
-      label: String(row.label || id),
-      file,
-      default: row.default === true,
-      description: row.description ? String(row.description) : "",
-    };
-    if (row.sample_data === true) normalized.sample_data = true;
-    out.push(normalized);
-  }
-  if (!out.length) return DEFAULT_HOSTS.slice();
-  return out;
-}
-
-async function staticFleet(signal) {
-  const hosts = normalizeHosts(await fetchJson('data/hosts.json',{signal}).catch(error => {
-    if (signal.aborted) throw error;
-    return [];
-  }));
-  return {data_mode:hosts.every(host => host.sample_data) ? 'sample' : 'inventory',
-    servers:hosts.map(({id,label,file},order) => ({id, file, order, display_name:label, snapshot_availability:'available',
-      freshness:'unknown', latest_pull_status:'succeeded',latest_scan_result:'complete',configuration_sync:'in_sync'}))};
-}
-
-async function staticDetail(file,signal) {
-  if (!isSafeHostToken(file)) throw makeFetchError('',404,{error:'UNKNOWN_SERVER'});
-  try { return await fetchJson('data/' + file + '.json',{signal}); }
-  catch (error) {
-    if (signal.aborted) throw error;
-    return fetchJson('data/' + file + '.sample.json',{signal});
-  }
-}
-
 export async function fetchResource(key, signal, options = {}) {
   const [kind,id] = key.split('/');
   const routes = {detail:'snapshot',activity:'scan-status',job:'job',rescan:'rescan'};
   const path = kind === 'session' ? '/api/session' : kind === 'fleet' ? '/api/servers'
     : '/api/servers/' + encodeURIComponent(id) + '/' + routes[kind];
-  const {source,file,...init} = options;
-  if (kind === 'fleet' && source === 'static') return staticFleet(signal);
-  let body;
-  try {
-    body = kind === 'detail' && source === 'static' ? await staticDetail(file,signal) : await fetchJson(path,{...init,signal});
-  } catch (error) {
-    if (kind === 'session' && error.status === 404) return {source:'static',authenticated:false,can_rescan:false};
-    throw error;
-  }
+  const body = await fetchJson(path,{...options,signal});
   if (kind === 'fleet') return normalizeServerSummariesEnvelope(body);
   if (kind !== 'detail') return body;
   return normalizeDetail(body);
