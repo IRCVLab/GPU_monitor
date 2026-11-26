@@ -75,6 +75,8 @@ test-storage:
 	node viewer/viewer.test.js; \
 	node viewer/viewer_regression_test.js; \
 	node viewer/scan-status.test.js; \
+	node viewer/browser/stale-select-hit.test.js; \
+	python3 tools/check_bug_coverage.py; \
 	bash deploy/test_deploy_scripts.sh; \
 	test ! -e scanner/hstscan || { printf '%s\n' 'FAIL: deploy tests left scanner/hstscan behind'; exit 1; }; \
 	test ! -e output/verification/linux-verification.txt || { printf '%s\n' 'FAIL: deploy tests left a verification artifact behind'; exit 1; }; \
