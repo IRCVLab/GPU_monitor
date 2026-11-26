@@ -24,11 +24,11 @@ as root. The steps follow target-design §4.5:
 5. Rename releases/<sha>.tmp to releases/<sha>, then swap the `current`
    symlink with one rename and record the state.
 
-Permanent `bad` marks: a signed bundle whose content or floor fails, and a
-release rolled back by `rollback <sha>`, the bad-run signal central sends when
-a release fails its first real run. That re-activates the recorded previous
-release even below the floor: it was active just before, and the rollback
-consumes `previous`, so it cannot chain.
+Permanent `bad` marks: a signed bundle whose content or floor fails (never on a
+mismatch with the requested sha), and a release rolled back by `rollback <sha>`,
+the bad-run signal central sends when a release fails its first real run. That
+re-activates the recorded previous release only if its release_seq is at least
+floor_high_water: a floor raise is final, so a rollback can never undo a fix.
 
 Every step reads its state from disk, so a rerun after a crash converges.
 Standard library only, Python 3.8. The update channel never replaces this file.
@@ -283,7 +283,12 @@ class Updater:
         failed = state["active"]
         if failed is None or state["previous"] != sha:
             raise Failed("ROLLBACK_TARGET", f"previous is {state['previous']}")
-        self._check_installed(sha)
+        manifest = self._check_installed(sha)
+        # A floor raise (a security fix, a schema boundary) is final: rolling back past it
+        # would let central undo the fix and ban it. Routine rollbacks pass, because the
+        # trailing floor sits 20 releases back.
+        if manifest.get("release_seq", -1) < state["floor_high_water"]:
+            raise Failed("FLOOR", f"previous release_seq {manifest.get('release_seq')} < floor {state['floor_high_water']}")
         failed_manifest = self.release_manifest(failed)
         state["bad"].append({"sha": failed, "archive_sha256": failed_manifest.get("archive_sha256")})
         self._switch(sha)
@@ -359,9 +364,14 @@ class Updater:
         try:
             members, manifest = read_bundle(bundle, sha)
             self._check_floor(state, manifest)
-        except Failed:
-            # CI signed this bundle and it is broken or below the floor: it never becomes valid.
-            state["bad"].append({"sha": sha, "archive_sha256": archive_sha256})
+        except Failed as failure:
+            # A signed bundle that is broken or below the floor never becomes valid. Mark only
+            # what does not depend on the name central requested: an archive whose manifest
+            # cannot be trusted marks its digest alone, and a name mismatch marks nothing.
+            if failure.code == "UNSAFE_ARCHIVE":
+                state["bad"].append({"sha": None, "archive_sha256": archive_sha256})
+            elif failure.code != "SHA_MISMATCH":
+                state["bad"].append({"sha": sha, "archive_sha256": archive_sha256})
             raise
         self._check_policy(state, manifest)  # BOOTSTRAP_TOO_OLD clears once the host's bootstrap tier is upgraded
         staging = self.paths.releases / f"{sha}.tmp"
@@ -434,9 +444,12 @@ def read_bundle(bundle: bytes, sha: str) -> Tuple[Dict[str, Tuple[bytes, int]], 
         manifest = json.loads(members.pop(MANIFEST)[0])
     except (KeyError, ValueError):
         raise Failed("MANIFEST", "missing or not JSON")
+    if isinstance(manifest, dict) and manifest.get("source_sha") != sha:
+        # Central named a different sha than CI signed: says nothing about either release.
+        raise Failed("SHA_MISMATCH", f"bundle is {manifest.get('source_sha')!r}")
     ints = ("release_seq", "rollback_floor_seq", "bootstrap_version")
     if (not isinstance(manifest, dict) or manifest.get("application") != APPLICATION
-            or manifest.get("source_sha") != sha or not isinstance(manifest.get("files"), dict)
+            or not isinstance(manifest.get("files"), dict)
             or not all(type(manifest.get(key)) is int and manifest[key] >= 0 for key in ints)
             or manifest["rollback_floor_seq"] > manifest["release_seq"]):
         raise Failed("MANIFEST", "fields")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -98,7 +99,7 @@ class UpdaterTest(unittest.TestCase):
     def test_manifest_naming_another_sha_is_refused(self):
         self.stage(SHA_A, fixtures.bundle(SHA_B))
         self.assertEqual(self.updater().run(), 1)
-        self.assertEqual(self.state()["last_attempt"]["code"], "MANIFEST")
+        self.assertEqual(self.state()["last_attempt"]["code"], "SHA_MISMATCH")
 
     def test_unsafe_archive_members_are_refused(self):
         def member(name, **attrs):
@@ -123,7 +124,8 @@ class UpdaterTest(unittest.TestCase):
                 self.stage(sha, fixtures.bundle(sha, extra_members=add))
                 self.assertEqual(self.updater().run(), 1)
                 self.assertEqual(self.state()["last_attempt"]["code"], "UNSAFE_ARCHIVE")
-                self.assertIn(sha, [entry["sha"] for entry in self.state()["bad"]], "CI signed it broken")
+                self.assertEqual(self.state()["bad"][-1], {"sha": None, "archive_sha256": hashlib.sha256(
+                    (self.paths.incoming / f"{sha}.tar.gz").read_bytes()).hexdigest()}, "its manifest is untrusted: digest only")
                 self.assertIsNone(self.current())
                 self.assertEqual(list(self.paths.releases.iterdir()), [])
 
@@ -195,15 +197,41 @@ class UpdaterTest(unittest.TestCase):
         self.assertEqual(self.activate(SHA_B, release_seq=89, floor=70), 1)
         self.assertEqual(self.state()["last_attempt"]["code"], "FLOOR")
 
-    def test_rollback_to_previous_is_allowed_below_the_floor_the_failed_release_raised(self):
+    def test_rollback_never_undoes_a_floor_raise(self):
+        """Review proof p7: rollback-update to the release a security fix floored out."""
+        V, F, N = "1" * 40, "2" * 40, "3" * 40
+        self.activate(V, release_seq=90, floor=70)
+        self.activate(F, release_seq=100, floor=100)  # RELEASE-FLOOR raised: nothing older may run
+        self.stage(V, action="rollback")
+        self.assertEqual(self.updater().run(), 1)
+        state = self.state()
+        self.assertEqual((state["last_attempt"]["outcome"], state["last_attempt"]["code"]), ("refused", "FLOOR"))
+        self.assertEqual(self.current(), f"releases/{F}")
+        self.assertEqual(state["bad"], [], "the fix is not banned")
+        self.assertEqual(self.activate(N, release_seq=101, floor=100), 0)
+        self.stage(F, action="rollback")  # back to the fix itself stays allowed: seq 100 >= 100
+        self.assertEqual(self.updater().run(), 0)
+        self.assertEqual(self.current(), f"releases/{F}")
+
+    def test_routine_rollback_within_the_trailing_floor_still_works(self):
         self.activate(SHA_A, release_seq=100, floor=80)
-        self.activate(SHA_B, release_seq=120, floor=110)  # a schema boundary
+        self.activate(SHA_B, release_seq=101, floor=81)
         self.stage(SHA_A, action="rollback")
         self.assertEqual(self.updater().run(), 0)
         self.assertEqual(self.current(), f"releases/{SHA_A}")
-        self.assertEqual(self.state()["floor_high_water"], 110, "the floor does not drop with the rollback")
-        self.assertEqual(self.activate(SHA_C, release_seq=105, floor=90), 1)
-        self.assertEqual(self.state()["last_attempt"]["code"], "FLOOR")
+        self.assertEqual(self.state()["floor_high_water"], 81)
+
+    def test_bundle_staged_under_another_sha_bans_nothing(self):
+        """Review proof p8: a signed bundle X requested as Y banned both Y and X's digest."""
+        X, Y = "a" * 40, "f" * 40
+        data = fixtures.bundle(X)
+        self.stage(Y, data)
+        self.assertEqual(self.updater().run(), 1)
+        self.assertEqual(self.state()["last_attempt"]["code"], "SHA_MISMATCH")
+        self.assertEqual(self.state()["bad"], [])
+        self.stage(X, data)
+        self.assertEqual(self.updater().run(), 0, "X still activates under its own name")
+        self.assertEqual(self.current(), f"releases/{X}")
 
     def test_request_written_during_a_run_is_processed_not_deleted(self):
         """Review proof p5: rollback-update arriving mid-run was unlinked unread."""
