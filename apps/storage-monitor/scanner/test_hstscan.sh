@@ -438,39 +438,29 @@ fi
 [ "$PMRC" -eq 2 ] || fail "65 positional targets exited $PMRC, expected usage exit 2"
 pass "65 positional targets are rejected instead of silently dropped"
 
-$PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "source-order contract violated: process_dir must fstat dirfd before getdents64"
+$PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "descriptor-relative walk contract violated"
 import re, sys
 s = open(sys.argv[1], encoding="utf-8").read()
-start = s.find("static void process_dir(")
-end = s.find("static void *worker_main(", start)
-if start == -1 or end == -1:
-    raise SystemExit("process_dir bounds not found")
-body = s[start:end]
-open_i = body.find("open(")
-fstat_i = body.find("fstat(dirfd")
-getdents_i = body.find("SYS_getdents64")
-mismatch_i = body.find("dst.st_dev != c->root_dev")
-blocked_i = body.find("record_scan_error", mismatch_i)
-close_i = body.find("close(dirfd)", mismatch_i)
-if not (open_i != -1 and fstat_i != -1 and getdents_i != -1 and open_i < fstat_i < getdents_i):
-    raise SystemExit(f"open={open_i} fstat={fstat_i} getdents={getdents_i}")
-if not (mismatch_i != -1 and blocked_i != -1 and close_i != -1 and mismatch_i < blocked_i < close_i):
-    raise SystemExit("process_dir device mismatch must increment visible blocked/error state before close")
+def body(name, next_marker):
+    start = s.find(name)
+    end = s.find(next_marker, start)
+    if start == -1 or end == -1:
+        raise SystemExit(f"{name} bounds not found")
+    return s[start:end]
+verified = body("static int open_verified(", "static int reopen_from_root(")
+if "openat(parent_fd, n->name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)" not in verified:
+    raise SystemExit("directories must open relative to the parent fd with O_NOFOLLOW | O_DIRECTORY")
+if not re.search(r"fstat\(fd, &st\)[\s\S]*st\.st_dev != n->dev \|\| st\.st_ino != n->ino", verified):
+    raise SystemExit("open_verified must fstat the new fd and compare (dev, ino) with the parent's fstatat")
+walk = body("static void process_dir(", "static void *worker_main(")
+if re.search(r"(?<![a-z_])open\(", walk) or "openat(" in walk:
+    raise SystemExit("process_dir must open directories only through open_verified/reopen_from_root")
+if walk.find("st.st_dev != c->root_dev") > walk.find("queue_child(") or "st.st_dev != c->root_dev" not in walk:
+    raise SystemExit("the one-file-system device guard must run before a child is queued")
+if "SYS_getdents64" not in walk or walk.find("reopen_from_root") > walk.find("SYS_getdents64"):
+    raise SystemExit("a parked directory must be reopened and verified before getdents64")
 PYEOF
-pass "source-order contract fstat(dirfd) before getdents64 is present"
-
-$PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "transient disappearance contract violated: ENOENT races must not become blocked scan errors"
-import re, sys
-s = open(sys.argv[1], encoding="utf-8").read()
-if not re.search(r"static bool\s+record_scan_error\s*\([^)]*\)\s*\{[\s\S]*?if\s*\(err\s*==\s*ENOENT\)\s*return false;", s):
-    raise SystemExit("record_scan_error must ignore ENOENT from entries that disappear during a concurrent scan")
-start = s.find("static void process_dir(")
-end = s.find("static void *worker_main(", start)
-body = s[start:end]
-if body.count("record_scan_error(w, ") < 4:
-    raise SystemExit("all process_dir read/open/stat failures must use the centralized transient-race filter")
-PYEOF
-pass "transient ENOENT scan races are excluded from blocked/error state"
+pass "directories open relative to a verified parent fd with identity and device checks before enumeration"
 
 $PY - "$SCRIPT_DIR/hstscan.c" <<'PYEOF' || fail "root preflight contract violated: open+fstat must happen before root node creation"
 import sys
@@ -720,10 +710,70 @@ else
     fail "wide-tree byte mismatch: du=$WIDE_DU scanner=$WIDE_SCAN"
 fi
 
-# Catalogued scanner bugs (docs/redesign/bug-catalog.md) as strict expected
-# failures. While a bug is present its case exits non-zero and prints
-# "BUG <id>: ...". A case that passes, or fails without that line, fails the
-# suite: when the fixing unit (M4) lands, drop the xfail_case wrapper.
+reopened_count() {
+    sed -n 's/^hstscan: \([0-9][0-9]*\) parked dir(s) reopened from the pinned root.*/\1/p' "$1"
+}
+
+# The same tree under ulimit -n 64. The queued-descriptor budget is then 16,
+# below the tree's fan-out, so directories are parked and later reopened one
+# component at a time from the pinned root. Totals must still match du.
+( ulimit -n 64; "$BIN" --threads 16 --prune-home 0 --prune-data 0 \
+    --out "$TMP/wide64.json" "$WIDE" 2>"$TMP/wide64.err" )
+W64RC=$?
+[ "$W64RC" -eq 0 ] || fail "wide-tree scan under ulimit -n 64 exited non-zero ($W64RC): $(cat "$TMP/wide64.err")"
+read -r WIDE64_SCAN WIDE64_ERRS <<EOF
+$($PY - "$TMP/wide64.json" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1]))["mounts"][0]
+print(m["scanned_bytes"], m["errors"])
+PYEOF
+)
+EOF
+WIDE64_REOPENED="$(reopened_count "$TMP/wide64.err")"
+echo "  wide scan = $WIDE64_SCAN (errors=$WIDE64_ERRS, reopened=$WIDE64_REOPENED, ulimit -n 64, 16 threads)"
+[ "$WIDE64_ERRS" = "0" ] || fail "wide-tree scan under ulimit -n 64 reported $WIDE64_ERRS errors"
+[ "$WIDE_DU" = "$WIDE64_SCAN" ] || fail "wide-tree byte mismatch under ulimit -n 64: du=$WIDE_DU scanner=$WIDE64_SCAN"
+[ "${WIDE64_REOPENED:-0}" -gt 0 ] || fail "ulimit -n 64 run never parked a directory, so it did not exercise reopen"
+pass "wide+deep tree under ulimit -n 64: parked directories reopened from the pinned root, exact du match"
+
+# A chain far deeper than any recursion could survive on a 1 MiB stack, with
+# one-byte names. Totals must match du with no errors. The prune threshold
+# folds the chain below the two preserved levels so the output stays shallow
+# enough for json.load.
+DEEP_CHAIN="$TMP/deep-chain"
+$PY - "$DEEP_CHAIN" <<'PYEOF'
+import os, sys
+os.mkdir(sys.argv[1])
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY)
+for _ in range(50_000):
+    os.mkdir("d", dir_fd=fd)
+    child = os.open("d", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+    os.close(fd)
+    fd = child
+leaf = os.open("leaf.bin", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd)
+os.write(leaf, b"\1" * 65536)
+os.close(leaf)
+os.close(fd)
+PYEOF
+DEEP_CHAIN_DU="$(du -x --block-size=1 -s "$DEEP_CHAIN" | cut -f1)"
+( ulimit -s 1024; "$BIN" --threads 2 --prune-data 1000000 --top 10 --out "$TMP/deep-chain.json" \
+    --target "$DEEP_CHAIN" "$TREE_DEV" data 2>"$TMP/deep-chain.err" )
+DCRC=$?
+[ "$DCRC" -eq 0 ] || fail "50000-level chain scan exited $DCRC on a 1 MiB stack: $(cat "$TMP/deep-chain.err")"
+$PY - "$TMP/deep-chain.json" "$DEEP_CHAIN_DU" <<'PYEOF' || fail "50000-level chain totals do not match du"
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+mount = payload["mounts"][0]
+assert mount["errors"] == 0, mount["errors"]
+assert mount["scanned_bytes"] == int(sys.argv[2]), (mount["scanned_bytes"], sys.argv[2])
+assert mount["scanned_dirs"] == 50_001, mount["scanned_dirs"]
+PYEOF
+pass "50000-level chain on a 1 MiB stack: no recursion by depth, exact du match"
+
+# Catalogued scanner bugs (docs/redesign/bug-catalog.md). M0 landed each one
+# as a strict expected failure. M4 fixed A1, A5, A6 and A7, so their cases are
+# required now. A newly catalogued scanner bug goes through xfail_case until
+# its fix lands, and the expected count below changes with it.
 XFAIL_COUNT=0
 xfail_case() {
     local name="$1" bug="$2" log="$TMP/xfail-$1.log"
@@ -758,11 +808,13 @@ du_bytes() {
     du -x --block-size=1 -s "$1" | cut -f1
 }
 
-# A1 needs the rename to land between the parent's enumeration and the child's
-# open. An LD_PRELOAD hook makes that deterministic: the first open/openat of
-# $A1_VICTIM renames it to $A1_MOVED_TO (and with A1_REPLACE=1 recreates an empty
-# directory in its place) before the real call. --threads 1 guarantees the
-# parent's enumeration has finished, so the new name is never listed.
+# A1 needs a rename to land at a chosen moment of the walk. An LD_PRELOAD hook
+# makes that deterministic: when an open/openat resolves to $A1_TRIGGER
+# (default $A1_VICTIM) for the first time after $A1_SKIP (default 0) earlier
+# matches, it renames $A1_VICTIM to $A1_MOVED_TO (and with A1_REPLACE=1
+# recreates an empty directory in its place) before the real call. The scanner
+# opens each child while it enumerates the parent, so with --threads 1 a hook
+# on a child fires between the parent's fstatat and the child's openat.
 A1_HOOK="$TMP/a1_rename_hook.so"
 cat > "$TMP/a1_rename_hook.c" <<'CEOF'
 #define _GNU_SOURCE
@@ -778,11 +830,15 @@ cat > "$TMP/a1_rename_hook.c" <<'CEOF'
 
 typedef int (*open_fn)(const char *, int, ...);
 typedef int (*openat_fn)(int, const char *, int, ...);
-static int fired;
+static int fired, seen;
 
 static void maybe_fire(const char *path) {
     const char *victim = getenv("A1_VICTIM");
-    if (fired || !victim || strcmp(path, victim) != 0) return;
+    const char *trigger = getenv("A1_TRIGGER");
+    const char *skip = getenv("A1_SKIP");
+    if (!trigger) trigger = victim;
+    if (fired || !victim || strcmp(path, trigger) != 0) return;
+    if (skip && seen++ < atoi(skip)) return;
     fired = 1;
     if (rename(victim, getenv("A1_MOVED_TO")) != 0) _exit(97);
     const char *replace = getenv("A1_REPLACE");
@@ -823,38 +879,101 @@ CEOF
 cc -shared -fPIC -O2 -Wall -Wextra -o "$A1_HOOK" "$TMP/a1_rename_hook.c" -ldl \
     || fail "could not build the A1 rename hook"
 
-# $1 = rename | replace. The totals must include the subtree as it stood when
-# the scan started, or the root must report an error (partial, not complete).
+# $1 = rename | replace. The victim moves after the root's fstatat saw it and
+# before its openat. The scan must not report a complete root: it records a
+# VANISHED (rename) or REPLACED (replace) row for the victim.
 a1_during_scan() {
     local mode="$1" root="$TMP/a1-$1"
+    mkdir -p "$root/tree/victim/inner" "$root/tree/other"
+    head -c 1048576 /dev/zero > "$root/tree/victim/inner/f.bin"
+    head -c 65536 /dev/zero > "$root/tree/other/g.bin"
+    local dev replace=0 reason=VANISHED
+    dev="$(dev_of "$root/tree")"
+    if [ "$mode" = replace ]; then replace=1; reason=REPLACED; fi
+    env A1_VICTIM="$root/tree/victim" A1_MOVED_TO="$root/tree/moved" \
+        A1_REPLACE="$replace" LD_PRELOAD="$A1_HOOK" \
+        "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 \
+        --out "$root/out.json" --target "$root/tree" "$dev" data \
+        || fail "A1 $mode scan exited non-zero"
+    [ -d "$root/tree/moved" ] || fail "A1 hook never fired: victim was not opened"
+    $PY - "$root/out.json" "$root/tree/victim" "$reason" <<'PYEOF'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+mount, victim, reason = payload["mounts"][0], sys.argv[2], sys.argv[3]
+rows = [(b["path"], b["reason"]) for b in payload["blocked"]]
+assert (victim, reason) in rows, ("expected a %s row for %s" % (reason, victim), rows)
+assert mount["errors"] >= 1 and mount["vanished_dirs"] >= 1, mount
+PYEOF
+}
+required_case a1_rename_during_scan a1_during_scan rename
+required_case a1_replace_during_scan a1_during_scan replace
+
+# The victim moves while the scanner enumerates it, after its openat succeeded.
+# The walk continues on the pinned descriptor, so the subtree is counted in
+# full and the root is complete.
+a1_rename_after_open() {
+    local root="$TMP/a1-after-open"
     mkdir -p "$root/tree/victim/inner" "$root/tree/other"
     head -c 1048576 /dev/zero > "$root/tree/victim/inner/f.bin"
     head -c 65536 /dev/zero > "$root/tree/other/g.bin"
     local expected dev
     expected="$(du_bytes "$root/tree")"
     dev="$(dev_of "$root/tree")"
-    local replace=0
-    [ "$mode" = replace ] && replace=1
-    env A1_VICTIM="$root/tree/victim" A1_MOVED_TO="$root/tree/moved" \
-        A1_REPLACE="$replace" LD_PRELOAD="$A1_HOOK" \
+    env A1_VICTIM="$root/tree/victim" A1_TRIGGER="$root/tree/victim/inner" \
+        A1_MOVED_TO="$root/tree/moved" LD_PRELOAD="$A1_HOOK" \
         "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 \
         --out "$root/out.json" --target "$root/tree" "$dev" data \
-        || fail "A1 $mode scan exited non-zero"
-    [ -d "$root/tree/moved" ] || fail "A1 hook never fired: victim was not opened by path"
-    $PY - "$root/out.json" "$expected" "$mode" <<'PYEOF'
+        || fail "A1 rename-after-open scan exited non-zero"
+    [ -d "$root/tree/moved" ] || fail "A1 hook never fired: inner was not opened"
+    $PY - "$root/out.json" "$expected" <<'PYEOF'
 import json, sys
-mount = json.load(open(sys.argv[1], encoding="utf-8"))["mounts"][0]
-expected, mode = int(sys.argv[2]), sys.argv[3]
-if mount["scanned_bytes"] == expected or mount["errors"] > 0:
-    sys.exit(0)
-print("BUG A1: %s during scan dropped %d of %d bytes and the root still reports errors=0"
-      % (mode, expected - mount["scanned_bytes"], expected))
-sys.exit(1)
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+mount, expected = payload["mounts"][0], int(sys.argv[2])
+assert mount["errors"] == 0, payload["blocked"]
+assert mount["scanned_bytes"] == expected, (mount["scanned_bytes"], expected)
 PYEOF
 }
-xfail_case a1_rename_during_scan A1 a1_during_scan rename
-xfail_case a1_replace_during_scan A1 a1_during_scan replace
+required_case a1_rename_after_open a1_rename_after_open
 
+# Under ulimit -n 64 the budget is 16 descriptors, so most of P's 40 children
+# are parked. P is renamed when the first parked child is reopened from the
+# root (the second open of P). Every parked child must become a scoped
+# FD_BUDGET_REOPEN_FAILED row, never a silent drop.
+a1_ancestor_renamed_while_parked() {
+    local root="$TMP/a1-parked" i
+    mkdir -p "$root/tree/P"
+    for i in $(seq -w 0 39); do
+        mkdir "$root/tree/P/c$i"
+        head -c 65536 /dev/zero > "$root/tree/P/c$i/f.bin"
+    done
+    local expected dev
+    expected="$(du_bytes "$root/tree")"
+    dev="$(dev_of "$root/tree")"
+    ( ulimit -n 64
+      env A1_VICTIM="$root/tree/P" A1_SKIP=1 A1_MOVED_TO="$root/tree/moved" \
+        LD_PRELOAD="$A1_HOOK" \
+        "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 \
+        --out "$root/out.json" --target "$root/tree" "$dev" data ) \
+        || fail "parked-reopen scan exited non-zero"
+    [ -d "$root/tree/moved" ] || fail "hook never fired: P was not reopened from the root"
+    $PY - "$root/out.json" "$expected" <<'PYEOF'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+mount, expected = payload["mounts"][0], int(sys.argv[2])
+reasons = {b["reason"] for b in payload["blocked"]}
+assert mount["errors"] > 0, "parked children vanished without an error"
+assert reasons == {"FD_BUDGET_REOPEN_FAILED"}, reasons
+assert mount["vanished_dirs"] == mount["errors"], mount
+assert mount["scanned_bytes"] < expected, (mount["scanned_bytes"], expected)
+print("parked children lost: %d" % mount["errors"])
+PYEOF
+}
+required_case a1_ancestor_renamed_while_parked a1_ancestor_renamed_while_parked
+
+# A path over 4096 bytes, scanned under ulimit -n 64. The leaf directory has 40
+# subdirectories, more than the descriptor budget of 16. With one worker
+# nothing drains the queue while the leaf is enumerated, so 25 children are
+# parked and later reopened through all 25 components from the root.
 a5_path_over_4096() {
     local root="$TMP/a5"
     $PY - "$root" <<'PYEOF'
@@ -870,26 +989,38 @@ for level in range(24):  # 24 x 201 bytes: the leaf path is over 4096 bytes long
 leaf = os.open("deep.bin", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd)
 os.write(leaf, b"\1" * 1048576)
 os.close(leaf)
+for index in range(40):
+    name = "fan%02d" % index
+    os.mkdir(name, dir_fd=fd)
+    sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+    small = os.open("f.bin", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=sub)
+    os.write(small, b"\1" * 4096)
+    os.close(small)
+    os.close(sub)
 os.close(fd)
 PYEOF
     local expected dev
     expected="$(du_bytes "$root")"
     dev="$(dev_of "$root")"
-    ( ulimit -n 64; "$BIN" --threads 2 --prune-home 0 --prune-data 0 --top 10 \
-        --out "$TMP/a5.json" --target "$root" "$dev" data ) || fail "A5 scan exited non-zero"
+    ( ulimit -n 64; "$BIN" --threads 1 --prune-home 0 --prune-data 0 --top 10 \
+        --out "$TMP/a5.json" --target "$root" "$dev" data 2>"$TMP/a5.err" ) \
+        || fail "A5 scan exited non-zero"
+    local reopened
+    reopened="$(reopened_count "$TMP/a5.err")"
+    [ "${reopened:-0}" -gt 0 ] || fail "A5 fan-out never parked a directory (reopened=${reopened:-none})"
     $PY - "$TMP/a5.json" "$expected" <<'PYEOF'
 import json, sys
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
 mount, expected = payload["mounts"][0], int(sys.argv[2])
-if mount["scanned_bytes"] == expected and mount["errors"] == 0:
-    sys.exit(0)
-reasons = sorted({row["reason"] for row in payload["blocked"]})
-print("BUG A5: scanner=%d du=%d errors=%d blocked reasons=%s"
-      % (mount["scanned_bytes"], expected, mount["errors"], reasons))
-sys.exit(1)
+assert mount["errors"] == 0, payload["blocked"]
+assert mount["scanned_bytes"] == expected, (mount["scanned_bytes"], expected)
+# Rows longer than 4096 bytes would make the agent reject the whole output.
+for key in ("top_files", "stale", "blocked"):
+    for row in payload[key]:
+        assert len(row["path"].encode()) <= 4096, (key, len(row["path"]))
 PYEOF
 }
-xfail_case a5_path_over_4096 A5 a5_path_over_4096
+required_case a5_path_over_4096 a5_path_over_4096
 
 # Same-shape home and data trees with different thresholds and no "/" target.
 # --prune-home 0 keeps every home directory; --prune-data 1 folds the data
@@ -948,7 +1079,7 @@ PYEOF
 required_case a7_non_utf8_siblings_distinct a7_non_utf8_siblings_distinct
 
 echo "  expected failures = $XFAIL_COUNT"
-[ "$XFAIL_COUNT" -eq 3 ] || fail "expected 3 XFAIL cases, got $XFAIL_COUNT"
+[ "$XFAIL_COUNT" -eq 0 ] || fail "expected 0 XFAIL cases, got $XFAIL_COUNT"
 
 echo
 echo "ALL TESTS PASSED"
