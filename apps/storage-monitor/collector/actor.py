@@ -1,10 +1,10 @@
-"""ServerActor: the only writer of one server's record, store directory, SSH contact and job.
+"""ServerActor: the only writer of one server's record, store directory, SSH contact, job and update track.
 
-Every change goes through the pure reducers in ``health`` and ``jobs``. The actor
+Every change goes through the pure reducers in ``health``, ``jobs`` and ``update``. The actor
 commits the new record before it runs the effects the reducers asked for, then
-publishes a new immutable ``ServerView`` by one attribute assignment. Transfers
-and the blocking rescan start run in helper threads that post their results back
-to the inbox, so observes continue while they run.
+publishes a new immutable ``ServerView`` by one attribute assignment. Transfers,
+update requests and the blocking rescan start run in helper threads that post their
+results back to the inbox, so observes continue while they run.
 """
 from __future__ import annotations
 
@@ -15,10 +15,11 @@ import logging
 import queue
 import threading
 import time
-from typing import Any, Callable, Mapping, Optional, Protocol
+from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
 
 from collector import contract, health, jobs, judge, snapshot
-from collector.contract import ContractError, HostManifest, HostRun, LastRun, ManifestPointer
+from collector import update as updates
+from collector.contract import AgentFacts, ContractError, HostManifest, HostRun, LastRun, ManifestPointer
 from collector.errors import RescanUnavailable, StoreUnavailable
 from collector.health import (
     LEGACY_VOLUME, CaptureAccepted, CaptureGone, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
@@ -43,6 +44,13 @@ TICK_FAILED = "TICK_FAILED"
 MAX_TICK_BACKOFF_SECONDS = 10 * 60
 SEQ_BLOCK = 1000
 """Contact sequence numbers reserved per record write. record.json stores the ceiling as link.seq."""
+UPDATE_BUSY = updates.REQUEST_STATES
+"""Update states that observe at the active interval, to read the host's answer soon."""
+CONTRACT_REJECTED = "CONTRACT_REJECTED"
+MANIFEST_REFUSALS = contract.REASONS | {"IDENTITY_MISMATCH", "MANIFEST_SEQ_REGRESSED"}
+"""Refusals of a manifest that blame the agent that wrote it."""
+AGENT_FAULT_PREFIX = "INTERNAL_"
+BUNDLE_UNAVAILABLE = "BUNDLE_UNAVAILABLE"
 
 
 class Clock(Protocol):
@@ -51,18 +59,67 @@ class Clock(Protocol):
 
 
 class Host(Protocol):
-    """What the actor asks of a storage server. ``legacy.LegacyHost`` speaks today's protocol (S2);
-    M3b adds the gate's implementation of the same calls."""
-    def observe(self, server: Server) -> Any: ...
+    """What the actor asks of a storage server: ``gate.HostRouter`` sends each call over the
+    server's transport, the gate (``gate.GateHost``) or S2 (``legacy.LegacyHost``)."""
+    def observe(self, server: Server) -> Any:
+        """An Observation whose ``transport`` names who answered. Only the gate delivers request ids."""
     def get_manifest(self, server: Server) -> bytes: ...
     def get_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes: ...
     def rescan(self, server: Server, request_id: str) -> jobs.RescanReply: ...
-    delivers_request_ids: bool
-    """Whether ``rescan`` can hand the host a request id. False for the legacy adapter (S2)."""
     def fetch_capture(self, server: Server, publication: Mapping[str, Any]) -> bytes:
         """SHIM(M2b..M5c) S3: the v1 snapshot named by a scan-status envelope."""
     def start_rescan(self, server: Server) -> None:
         """SHIM(M2b..M5c) S4: the blocking start of the manual scan unit."""
+    def stage_update(self, server: Server, sha: str, bundle: bytes, signature: bytes) -> None: ...
+    def activate_update(self, server: Server, sha: str) -> None: ...
+    def rollback_update(self, server: Server, sha: str) -> None: ...
+
+
+class Channel(Protocol):
+    """The fleet's side of the agent update channel (``fleet.Rollout``)."""
+    def desired(self) -> Any:
+        """The desired agent release (``fleet.DesiredAgent``: ``sha``, ``read_bundle()``), or None."""
+    def permits(self, server_id: str) -> bool:
+        """Whether the rollout lets this host take the desired release at all (no slot involved)."""
+    def acquire(self, server_id: str) -> bool:
+        """Reserve one of the fleet's staging slots, if the rollout lets this host stage now."""
+    def hold(self, server_id: str) -> None:
+        """Keep the slot of a host that was staging before a restart."""
+    def release(self, server_id: str) -> None: ...
+    def reported(self, server_id: str, before: updates.Update, after: updates.Update) -> None:
+        """A committed change of this host's update track."""
+    def confirmed(self, server_id: str, sha: str) -> None:
+        """The host runs ``sha``, which passed probation here, and its accepted manifest shows a good real run by it."""
+    def passed(self, sha: Optional[str]) -> bool:
+        """Whether ``sha`` is in the rollout's ``passed``."""
+
+
+class NoChannel:
+    """No desired agent release: every update track stays idle."""
+
+    def desired(self) -> Any:
+        return None
+
+    def permits(self, server_id: str) -> bool:
+        return False
+
+    def acquire(self, server_id: str) -> bool:
+        return False
+
+    def hold(self, server_id: str) -> None:
+        pass
+
+    def release(self, server_id: str) -> None:
+        pass
+
+    def reported(self, server_id: str, before: updates.Update, after: updates.Update) -> None:
+        pass
+
+    def confirmed(self, server_id: str, sha: str) -> None:
+        pass
+
+    def passed(self, sha: Optional[str]) -> bool:
+        return False
 
 
 def spawn_thread(work: Callable[[], None], name: str) -> None:
@@ -152,7 +209,81 @@ class Dispatched:
     code: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class UpdateSent:
+    """The result of one stage, activate or rollback request."""
+    seq: int
+    effect: updates.Effect
+    ok: bool
+    code: Optional[str] = None
+    contacted: bool = True
+    """False when the request never reached ssh (the bundle could not be read)."""
+
+
 STOP = object()
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A manifest central refused for its content, as read just now."""
+    code: str
+    sha256: str
+    claimed_release: Optional[str]
+    """agent.release_sha as the refused bytes claim it, untrusted: only ever a reason not to blame a release."""
+
+
+def blames(refusal: Optional[Refusal], update: updates.Update) -> bool:
+    """Whether a refused manifest counts against the release in probation.
+
+    Only a manifest that appeared after the activation: not the one the host showed when probation
+    began, and not one whose bytes say another release wrote it.
+    """
+    return (refusal is not None and refusal.sha256 != update.probation_manifest
+            and refusal.claimed_release in (None, update.desired))
+
+
+def probation_verdict(update: updates.Update, data: health.Data) -> Optional[Tuple[bool, Optional[str]]]:
+    """(fault, code) for the first real run by the desired release, or None while there is none yet.
+
+    The run is the manifest's last run by the desired release that started after the activation
+    (host times both).
+    """
+    if update.requested_host_unix is None:
+        return None
+    return run_verdict(update.trial, data, since=update.requested_host_unix)
+
+
+def run_verdict(release: Optional[str], data: health.Data, since: Optional[int] = None) -> Optional[Tuple[bool, Optional[str]]]:
+    """(fault, code) for the accepted manifest's last run by ``release``, or None when it decides nothing.
+
+    The manifest must be written by ``release`` and its last run made by it (started at or after
+    ``since``, host time). An ``INTERNAL_*`` error on any volume of that run is an agent fault. A
+    complete or partial run passes once central holds every capture the manifest names, and a
+    rejected capture is CONTRACT_REJECTED. Environment errors (EACCES, a failed group) are scan
+    diagnostics: the track waits for a real run, up to cadence + 1 h.
+    """
+    manifest = data.manifest
+    run = manifest.last_run if isinstance(manifest, HostManifest) else None
+    if (release is None or run is None or run.agent_sha != release or manifest.raw["agent"]["release_sha"] != release
+            or (since is not None and run.started_unix < since)):
+        return None
+    for volume in manifest.volumes:
+        attempt = volume.last_attempt
+        if attempt is not None and attempt.run_id == run.run_id and (attempt.error_code or "").startswith(AGENT_FAULT_PREFIX):
+            return True, attempt.error_code
+    if run.outcome not in ("complete", "partial"):
+        return None
+    progress = health.captures_progress(data)
+    if progress == "rejected":
+        return True, CONTRACT_REJECTED
+    return (False, None) if progress == "current" else None
+
+
+def _cadence(data: health.Data) -> int:
+    manifest = data.manifest
+    if isinstance(manifest, HostManifest) and manifest.volumes:
+        return max(volume.cadence_sec for volume in manifest.volumes)
+    return updates.Observed.__dataclass_fields__["cadence_sec"].default
 
 
 def _capture_event(message: Fetched, at: int) -> health.DataEvent:
@@ -201,10 +332,12 @@ def _add_duration(durations: Mapping[str, Any], plan: Any, finished: Any, durati
 class ServerActor:
     def __init__(self, server: Server, store: ServerStore, host: Host, *, clock: Clock = time,
                  transfers: Optional[threading.BoundedSemaphore] = None,
-                 spawn: Callable[[Callable[[], None], str], None] = spawn_thread) -> None:
+                 spawn: Callable[[Callable[[], None], str], None] = spawn_thread,
+                 channel: Optional[Channel] = None) -> None:
         self.server = server
         self.store = store
         self.host = host
+        self.channel: Channel = channel or NoChannel()
         self.clock = clock
         self.transfers = transfers or threading.BoundedSemaphore(1)
         self.spawn = spawn
@@ -227,11 +360,15 @@ class ServerActor:
         self._run: HostRun = HostRun()
         self._host_clock = None
         self._error: Optional[str] = None
+        self._agent = AgentFacts()
+        """The agent release and updater state from the last gate observe."""
         self._seq = 0
         self._ceiling = 0
         """No seq above this was issued: the link.seq record.json holds."""
         self._next_contact = 0.0
         self._failed_ticks = 0
+        self._transport = server.transport
+        """Who answered the last observe: ``gate`` or ``legacy`` (S2). The inventory's choice until then."""
 
     # ------------------------------------------------------------ driving
 
@@ -300,6 +437,10 @@ class ServerActor:
         if record != stored:
             self.store.commit(record, prune=False)
         self._record = record
+        if record.update.state in updates.STAGING_STATES:
+            self.channel.hold(self.server.id)
+        else:
+            self.channel.release(self.server.id)
         self._seq = self._ceiling = record.link.seq
         self._error = None
         self.loaded = True
@@ -368,7 +509,8 @@ class ServerActor:
         return True
 
     def _publish(self) -> None:
-        self.view = build_view(self.server, self._record, self._snapshot, self._observation, self._host_clock, self._error)
+        self.view = build_view(self.server, self._record, self._snapshot, self._observation, self._host_clock, self._error,
+                               self._transport, self._agent.release_sha)
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -413,6 +555,8 @@ class ServerActor:
             self._dispatched(message)
         elif isinstance(message, Replied):
             self._replied(message)
+        elif isinstance(message, UpdateSent):
+            self._update_sent(message)
         else:
             raise TypeError(f"unknown actor message {type(message).__name__}")
 
@@ -448,13 +592,17 @@ class ServerActor:
             self._commit(replace(self._record, link=health.reduce_link(self._record.link, ExchangeFailed(seq, at, exc.code))))
             return
         received = self.clock.monotonic()
+        self._transport = observation.transport
         self._host_clock = (observation.host_now, received)
         self._observation = ObservationView({**observation.status, "observed_unix": at}, received)
+        self._agent = observation.agent
         self._scan = observation.scan
         self._run = observation.run
         record = self._record
+        before = record.update
+        refused = None
         if observation.manifest is not None:
-            record, fetches = self._manifest_observed(record, observation.manifest, seq, at)
+            record, fetches, refused = self._manifest_observed(record, observation.manifest, seq, at)
         elif observation.publication_error is None:
             # SHIM(M2b..M5c) S3: a host without manifest.json, or one rolled back to the v1 agent.
             data, fetches = health.reduce_data(record.data, PublicationObserved(LegacyPublication(observation.publication), at))
@@ -468,8 +616,12 @@ class ServerActor:
         if record.job is not None:
             job, dispatches = self._job_observed(record, self._snapshot)
             record = self._with_job(record, job)
-        self._schedule(record.job is not None or observation.status.get("state") == "running")
-        if not self._commit(record):
+        record, update_effects = self._update_observed(record, observation, at, refused)
+        self._schedule(record.job is not None or observation.status.get("state") == "running"
+                       or record.update.state in UPDATE_BUSY)
+        committed = self._commit(record)
+        self._update_settled(before, update_effects if committed else ())
+        if not committed:
             return
         self._swap(self._hold(record.data, self._captures))
         for fetch in fetches:
@@ -478,24 +630,26 @@ class ServerActor:
             self._dispatch(record.job)
 
     def _manifest_observed(self, record: Record, pointer: ManifestPointer, seq: int, at: int) -> tuple:
-        """Read a changed manifest, then publish the held one to the data reducer (design §4.2 steps 2, 3)."""
+        """Read a changed manifest, then publish the held one to the data reducer (design §4.2 steps 2, 3).
+
+        Returns (record, fetches, refusal): a Refusal when a newly read manifest was refused for its content."""
         held = record.data.manifest if isinstance(record.data.manifest, HostManifest) else None
         link = health.reduce_link(record.link, ExchangeOk(seq, at))
         manifest = held
         if self._reread_manifest or held is None or pointer.sha256 != held.sha256:
             if not self._reread_manifest and self._bad_manifest is not None and self._bad_manifest[0] == pointer.sha256:
                 # The same refused manifest: keep the link on its error without reading it again.
-                return replace(record, link=health.reduce_link(record.link, ExchangeFailed(seq, at, self._bad_manifest[1]))), ()
+                return replace(record, link=health.reduce_link(record.link, ExchangeFailed(seq, at, self._bad_manifest[1]))), (), None
             self._reread_manifest = False
             read_seq = self._next_seq()
             try:
                 raw = self.host.get_manifest(self.server)
             except TransportError as exc:
                 if exc.code in health.TRANSPORT_CODES | health.AUTH_CODES:
-                    return replace(record, link=health.reduce_link(link, ExchangeFailed(read_seq, at, exc.code))), ()
+                    return replace(record, link=health.reduce_link(link, ExchangeFailed(read_seq, at, exc.code))), (), None
                 if exc.code == "MANIFEST_MISSING":
                     # Replaced between observe and read, or rolled back: the next observe decides.
-                    return replace(record, link=link), ()
+                    return replace(record, link=link), (), None
                 raw, code = None, exc.code
             else:
                 try:
@@ -509,12 +663,13 @@ class ServerActor:
                     code = "MANIFEST_UNREADABLE"
             if code is not None:
                 self._bad_manifest = (hashlib.sha256(raw).hexdigest() if raw is not None else pointer.sha256, code)
-                return replace(record, link=health.reduce_link(link, ExchangeFailed(read_seq, at, code))), ()
+                refused = Refusal(code, self._bad_manifest[0], contract.claimed_release(raw)) if code in MANIFEST_REFUSALS else None
+                return replace(record, link=health.reduce_link(link, ExchangeFailed(read_seq, at, code))), (), refused
             self._bad_manifest = None
             link = health.reduce_link(link, ExchangeOk(read_seq, at))
         # Every observe republishes the held manifest, so a failed transfer is retried (design §4.2 step 3).
         data, fetches = health.reduce_data(record.data, PublicationObserved(manifest, at))
-        return replace(record, link=link, data=data, durations=last_run_duration(record.durations, manifest.last_run)), fetches
+        return replace(record, link=link, data=data, durations=last_run_duration(record.durations, manifest.last_run)), fetches, None
 
     def _schedule(self, busy: bool) -> None:
         interval = judge.ACTIVE_TELEMETRY_INTERVAL_SECONDS if busy else judge.IDLE_TELEMETRY_INTERVAL_SECONDS
@@ -539,8 +694,8 @@ class ServerActor:
         if last is not None and message.at - last < message.cooldown_seconds:
             return Admitted(error="COOLDOWN", retry_after=message.cooldown_seconds - (message.at - last))
         protocol = "receipt" if isinstance(record.data.manifest, HostManifest) else "invocation"
-        if protocol == "receipt" and not self.host.delivers_request_ids:
-            # Refused before any job or cooldown exists: a 202 here could only end failed (M3b lifts it).
+        if protocol == "receipt" and self._transport != "gate":
+            # Refused before any job or cooldown exists: only the gate writes the request mailbox (S2 cannot).
             return Admitted(error=RescanUnavailable.code)
         job = jobs.admit(message.request_id, message.actor, message.at, protocol)
         if not self._commit(replace(record, job=job)):
@@ -611,7 +766,8 @@ class ServerActor:
                     data = host.get_capture(server, volume_id, sha, declared)
             except TransportError as exc:
                 post("gone" if exc.code in _GONE_CODES else "transport" if exc.code in health.TRANSPORT_CODES | health.AUTH_CODES
-                     else "rejected" if exc.code in _REJECT_CODES else "retry", exc.code)
+                     else "rejected" if exc.code in _REJECT_CODES else "mismatch" if exc.code in _MISMATCH_CODES
+                     else "retry", exc.code)
                 return
             except Exception:
                 _LOG.exception("capture transfer failed for %s", server.id)
@@ -644,10 +800,14 @@ class ServerActor:
             if record.job is not None and record.job.state == "collecting":
                 job, _ = self._job_observed(record, held[2])
                 record = self._with_job(record, job)
+            before = record.update
+            record, update_effects = self._judge_probation(record, at, None, ())
         except Exception:
             self._drop_fetch(message.volume_id, message.sha)
             raise
-        if not self._commit(record, (message.volume_id, message.sha, message.data) if accepted else None):
+        committed = self._commit(record, (message.volume_id, message.sha, message.data) if accepted else None)
+        self._update_settled(before, update_effects if committed else ())
+        if not committed:
             self._drop_fetch(message.volume_id, message.sha)
             return
         self._swap(held)
@@ -660,6 +820,108 @@ class ServerActor:
         """The transfer's result was not applied, so the next observe fetches the capture again."""
         data, _ = health.reduce_data(self._record.data, TransferFailed(volume_id, sha))
         self._record = replace(self._record, data=data)
+
+    # ------------------------------------------------------------ agent update track
+
+    def _host_time(self) -> Optional[int]:
+        return judge.host_now(*self._host_clock, self.clock.monotonic()) if self._host_clock else None
+
+    def _update_observed(self, record: Record, observation: Any, at: int, refused: Optional[str]) -> tuple:
+        """Feed one observe to the update track: a desired-release change, then over the gate the host's state."""
+        update = record.update
+        desired = self.channel.desired()
+        sha = desired.sha if desired is not None else None
+        if sha != update.desired:
+            update, _ = updates.reduce(update, updates.DesiredChanged(at, sha))
+        effects: tuple = ()
+        if observation.transport == "gate":  # S2 cannot stage: the track only follows the desired release
+            agent = observation.agent
+            permitted = self.channel.permits(self.server.id)
+            allowed = (permitted and update.state in ("in_sync", "backoff") and update.desired is not None
+                       and agent.release_sha != update.desired and self.channel.acquire(self.server.id))
+            update, effects = updates.reduce(update, updates.Observed(
+                at, observation.host_now, agent.release_sha, idle=not observation.run.present,
+                job_active=record.job is not None, allowed=allowed, permitted=permitted, broken=agent.broken,
+                attempt=agent.attempt, cadence_sec=_cadence(record.data),
+                manifest_sha=observation.manifest.sha256 if observation.manifest is not None else None,
+                release_passed=self.channel.passed(agent.release_sha)))
+        return self._judge_probation(replace(record, update=update), at, refused, effects)
+
+    def _judge_probation(self, record: Record, at: int, refused: Optional[Refusal], effects: tuple) -> tuple:
+        if record.update.state != "probation":
+            return record, effects
+        verdict = (True, CONTRACT_REJECTED) if blames(refused, record.update) else probation_verdict(record.update, record.data)
+        host_at = self._host_time()
+        if verdict is None or host_at is None:
+            return record, effects
+        update, more = updates.reduce(record.update, updates.ProbationJudged(at, host_at, *verdict))
+        return replace(record, update=update), effects + more
+
+    def _update_settled(self, before: updates.Update, effects: tuple) -> None:
+        """After a commit attempt: free the staging slot, tell the rollout, then send the requests."""
+        after = self._record.update
+        if after.state not in updates.STAGING_STATES:
+            self.channel.release(self.server.id)
+        if after != before:
+            self.channel.reported(self.server.id, before, after)
+        if (after.state == "in_sync" and self._transport == "gate" and self._agent.release_sha == after.desired == after.verified
+                and run_verdict(after.desired, self._record.data) == (False, None)):
+            # A host whose release passed probation here and shows a good real run by it, such as the
+            # canary after rollout.json was lost: it counts as in sync for the rollout.
+            self.channel.confirmed(self.server.id, after.desired)
+        for effect in effects:
+            self._start_update(effect)
+
+    def _start_update(self, effect: updates.Effect) -> None:
+        """Send one update request from a helper thread. Only a stage, which carries the bundle, waits for
+        the fleet transfer semaphore; an activate or rollback request is a few bytes and goes out at once."""
+        seq = self._next_seq()
+        server, host, transfers, desired = self.server, self.host, self.transfers, self.channel.desired()
+
+        def work() -> None:
+            try:
+                if isinstance(effect, updates.Stage):
+                    if desired is None or desired.sha != effect.sha:
+                        raise ValueError("the desired release changed")
+                    bundle, signature = desired.read_bundle()
+                    with transfers:
+                        host.stage_update(server, effect.sha, bundle, signature)
+                elif isinstance(effect, updates.Activate):
+                    host.activate_update(server, effect.sha)
+                else:
+                    host.rollback_update(server, effect.sha)
+            except TransportError as exc:
+                self.post(UpdateSent(seq, effect, False, exc.code))
+            except (OSError, ValueError):
+                _LOG.exception("agent bundle unavailable for %s", server.id)
+                self.post(UpdateSent(seq, effect, False, BUNDLE_UNAVAILABLE, contacted=False))
+            except Exception:
+                _LOG.exception("update request failed for %s", server.id)
+                self.post(UpdateSent(seq, effect, False, "UPDATE_FAILED", contacted=False))
+            else:
+                self.post(UpdateSent(seq, effect, True))
+
+        self.spawn(work, f"storage-viz-update-{server.id}")
+
+    def _update_sent(self, message: UpdateSent) -> None:
+        at = int(self.clock.time())
+        record = self._record
+        before = record.update
+        if message.contacted:
+            failed_contact = message.code in health.TRANSPORT_CODES | health.AUTH_CODES
+            link_event = ExchangeFailed(message.seq, at, message.code) if failed_contact else ExchangeOk(message.seq, at)
+            record = replace(record, link=health.reduce_link(record.link, link_event))
+        effects: tuple = ()
+        host_at = self._host_time()
+        if host_at is not None:
+            # A sent activate or rollback only queues the updater: its answer comes with a later observe.
+            update, effects = updates.reduce(record.update, updates.Sent(at, host_at, message.effect, message.ok, message.code,
+                                                                         permitted=self.channel.permits(self.server.id)))
+            record = replace(record, update=update)
+        committed = self._commit(record)
+        self._update_settled(before, effects if committed else ())
+        if committed:
+            self._next_contact = min(self._next_contact, self.clock.monotonic() + judge.ACTIVE_TELEMETRY_INTERVAL_SECONDS)
 
     # ------------------------------------------------------------ rescan
 

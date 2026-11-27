@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, Mapping, Optional, 
 from collector import judge
 from collector.ids import BINDING_RE, RELEASE_SHA_RE, REQUEST_ID_RE, RUN_ID_RE, SERVER_ID_RE, SHA256_RE, VOLUME_ID_RE
 from collector.inventory import CapacityThresholds
+from collector.update import Attempt
 
 MANIFEST_SCHEMA = "storage-viz.manifest/2"
 CAPTURE_SCHEMA = "storage-viz.capture/2"
@@ -114,6 +115,14 @@ class Expected:
 
 
 @dataclass(frozen=True)
+class VolumeAttempt:
+    """A volume's last scan attempt: the update track reads its error code for agent faults."""
+    run_id: str
+    outcome: str
+    error_code: Optional[str]
+
+
+@dataclass(frozen=True)
 class Volume:
     volume_id: str
     identity: str
@@ -127,6 +136,7 @@ class Volume:
     roots: Tuple[RootRef, ...]
     capacity: Optional[Capacity]
     capture: Optional[CaptureRef]
+    last_attempt: Optional[VolumeAttempt] = None
 
     def expected(self, sha256: str) -> Expected:
         return Expected(self.volume_id, sha256, frozenset((root.scan_root, root.binding) for root in self.roots))
@@ -149,6 +159,8 @@ class LastRun:
     started_unix: int
     finished_unix: int
     outcome: str
+    agent_sha: Optional[str] = None
+    """The release that ran it."""
 
 
 @dataclass(frozen=True)
@@ -223,6 +235,102 @@ class HostRun:
     """Request ids waiting in ``requests/``."""
 
 
+@dataclass(frozen=True)
+class AgentFacts:
+    """What the gate reports of the agent release and its updater. Empty over S2."""
+    release_sha: Optional[str] = None
+    """The release ``/opt/storage-viz/current`` points at."""
+    broken: bool = False
+    """The release's ``check-config`` fails on the host."""
+    attempt: Optional[Attempt] = None
+    """The updater's last attempt, from ``update/state.json``."""
+
+
+@dataclass(frozen=True)
+class GateObservation:
+    """The gate's ``observe`` reply (§4.5). Scan state comes from the host's lock and run.json (I12)."""
+    manifest: Optional[ManifestPointer]
+    """None for a host without manifest.json (a v1 agent)."""
+    run: HostRun
+    progress: Any
+    """progress.json as the gate read it; the v1 status reader checks it against the run."""
+    agent: AgentFacts
+    units: Mapping[str, Any]
+    """Id, ActiveState and InvocationID of the scan, scheduled-scan and update units."""
+    legacy: Mapping[str, Any]
+    """SHIM(M3b..M5c) S7: the v1 telemetry section, checked by ``legacy.parse_telemetry``."""
+
+
+OBSERVE_SCHEMA = "storage-viz.observe/1"
+MAX_OBSERVE_BYTES = 64 * 1024
+SCAN_STATES = frozenset({"idle", "running", "interrupted"})
+ATTEMPT_ACTIONS = frozenset({"activate", "rollback"})
+ATTEMPT_OUTCOMES = frozenset({"activated", "already_active", "rolled_back", "busy", "refused", "failed"})
+MAX_PENDING_REPORTED = 16
+
+
+def parse_observation(data: bytes) -> GateObservation:
+    if not isinstance(data, (bytes, bytearray)) or len(data) > MAX_OBSERVE_BYTES:
+        raise ContractError(MALFORMED, "observe reply is not bytes or too large")
+    raw = decode_json(bytes(data))
+    if not isinstance(raw, dict) or raw.get("schema") != OBSERVE_SCHEMA:
+        raise ContractError(BAD_SCHEMA)
+    manifest = raw["manifest"]
+    pointer = None
+    if manifest is not None:
+        seq = manifest.get("seq")
+        pointer = ManifestPointer(_id(manifest["sha256"], SHA256_RE, "manifest.sha256"), seq if type(seq) is int else None)
+    state = _choice(raw["scan"]["state"], SCAN_STATES, "scan.state")
+    run = raw["scan"]["run"]
+    run = run if isinstance(run, dict) and not run.get("invalid") and not run.get("truncated") else {}
+    ids = _list(run.get("request_ids") or [], "run.request_ids", MAX_RECEIPTS)
+    pending = _list(raw["requests_pending"], "requests_pending", MAX_PENDING_REPORTED)
+    run_id = run.get("run_id")
+    host_run = HostRun(
+        present=state != "idle", scanning=state == "running",
+        run_id=run_id if isinstance(run_id, str) and RUN_ID_RE.fullmatch(run_id) else None,
+        request_ids=frozenset(_id(item, REQUEST_ID_RE, "run.request_ids") for item in ids),
+        pending=frozenset(_id(item, REQUEST_ID_RE, "requests_pending") for item in pending))
+    agent = raw["agent"]
+    facts = AgentFacts(release_sha=_optional(agent["release_sha"], lambda value: _id(value, RELEASE_SHA_RE, "agent.release_sha")),
+                       broken=agent["health"] == "broken", attempt=_attempt(raw["update"]))
+    units, legacy = raw["units"], raw["legacy"]
+    if not isinstance(units, dict) or not isinstance(legacy, dict):
+        raise ContractError(BAD_FIELD, "units or legacy is not an object")
+    return GateObservation(pointer, host_run, raw["progress"], facts, units, legacy)
+
+
+def _attempt(update: Any) -> Optional[Attempt]:
+    """The updater's last attempt. state.json is the updater's own file: an unusable one reads as no attempt."""
+    attempt = update.get("last_attempt") if isinstance(update, dict) else None
+    if not isinstance(attempt, dict):
+        return None
+    action, sha, outcome, code, finished = (attempt.get(key) for key in ("action", "sha", "outcome", "code", "finished_unix"))
+    if (action is not None and action not in ATTEMPT_ACTIONS) or outcome not in ATTEMPT_OUTCOMES \
+            or (sha is not None and not (isinstance(sha, str) and RELEASE_SHA_RE.fullmatch(sha))) \
+            or type(finished) is not int or finished < 0:
+        return None
+    try:
+        code = _optional(code, lambda value: _code(value, "update.last_attempt.code"))
+    except ContractError:
+        return None
+    return Attempt(action, sha, outcome, code, finished)
+
+
+def claimed_release(data: Optional[bytes]) -> Optional[str]:
+    """agent.release_sha as refused manifest bytes claim it, or None. Untrusted: it can only clear a
+    release of blame for a manifest it says another release wrote, never prove anything."""
+    if not isinstance(data, (bytes, bytearray)) or len(data) > MAX_MANIFEST_BYTES:
+        return None
+    try:
+        raw = decode_json(bytes(data))
+    except ContractError:
+        return None
+    agent = raw.get("agent") if isinstance(raw, dict) else None
+    release = agent.get("release_sha") if isinstance(agent, dict) else None
+    return release if isinstance(release, str) and RELEASE_SHA_RE.fullmatch(release) else None
+
+
 # ------------------------------------------------------------------ manifest
 
 _MANIFEST_KEYS = ("schema", "server_id", "hostname", "seq", "written_unix", "agent", "volumes", "mount_table",
@@ -243,6 +351,9 @@ def _typed(parse: Callable[..., Any]) -> Callable[..., Any]:
             raise ContractError(BAD_FIELD, f"{type(exc).__name__} while parsing") from exc
     guarded.__name__, guarded.__doc__ = parse.__name__, parse.__doc__
     return guarded
+
+
+parse_observation = _typed(parse_observation)
 
 
 @_typed
@@ -296,13 +407,15 @@ def _volume(value: Any) -> Volume:
     roots = tuple(_root_ref(root) for root in _list(raw["roots"], "roots", MAX_ROOTS_PER_VOLUME))
     if not roots:
         raise ContractError(BAD_FIELD, "a volume has no roots")
+    last_attempt = None
     if raw["last_attempt"] is not None:
         attempt = _object(raw["last_attempt"], ("run_id", "started_unix", "finished_unix", "outcome", "error_code"), "last_attempt")
-        _id(attempt["run_id"], RUN_ID_RE, "last_attempt.run_id")
         _time(attempt["started_unix"], "last_attempt.started_unix")
         _optional(attempt["finished_unix"], lambda item: _time(item, "last_attempt.finished_unix"))
-        _choice(attempt["outcome"], RUN_OUTCOMES, "last_attempt.outcome")
-        _optional(attempt["error_code"], lambda item: _code(item, "last_attempt.error_code"))
+        last_attempt = VolumeAttempt(
+            _id(attempt["run_id"], RUN_ID_RE, "last_attempt.run_id"),
+            _choice(attempt["outcome"], RUN_OUTCOMES, "last_attempt.outcome"),
+            _optional(attempt["error_code"], lambda item: _code(item, "last_attempt.error_code")))
     return Volume(
         volume_id=volume_id,
         identity=identity,
@@ -316,6 +429,7 @@ def _volume(value: Any) -> Volume:
         roots=roots,
         capacity=_optional(raw["capacity"], _capacity),
         capture=_optional(raw["capture"], _capture_ref),
+        last_attempt=last_attempt,
     )
 
 
@@ -356,11 +470,11 @@ def _mount_table(value: Any) -> Mapping[str, Any]:
 
 def _last_run(value: Any) -> LastRun:
     raw = _object(value, ("run_id", "trigger", "plan", "started_unix", "finished_unix", "outcome", "agent_sha"), "last_run")
-    _optional(raw["agent_sha"], lambda item: _id(item, RELEASE_SHA_RE, "last_run.agent_sha"))
     return LastRun(_id(raw["run_id"], RUN_ID_RE, "last_run.run_id"), _text(raw["trigger"], "trigger", 32),
                    _text(raw["plan"], "plan", 32), _time(raw["started_unix"], "last_run.started_unix"),
                    _time(raw["finished_unix"], "last_run.finished_unix"),
-                   _choice(raw["outcome"], RUN_OUTCOMES, "last_run.outcome"))
+                   _choice(raw["outcome"], RUN_OUTCOMES, "last_run.outcome"),
+                   _optional(raw["agent_sha"], lambda item: _id(item, RELEASE_SHA_RE, "last_run.agent_sha")))
 
 
 def _receipt(value: Any) -> Receipt:

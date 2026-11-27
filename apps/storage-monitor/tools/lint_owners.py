@@ -62,6 +62,20 @@ PARSE_SITES = {
     "collector/actor.py": {
         ('_load_captures', 'json.loads(data)'): 'Previously validated captures in the local record store.',
     },
+    "collector/fleet.py": {
+        ('load_desired_agent', 'json.loads(_read_bounded(path, MAX_METADATA_BYTES))'): 'Agent bundle metadata the release puller verified into the active dashboard release.',
+    },
+    "collector/gate.py": {
+        ('fetch_capture', "json.loads(self.transport.run_verb(server, 'get-status'))"): 'S7: v1 status reply over the gate.',
+    },
+    "collector/rollout.py": {
+        ('parse', 'json.loads(data)'): 'rollout.json, written only by fleet.Rollout.',
+    },
+    "deploy/e2e/collector_gate_e2e.py": {
+        ('seed', "json.loads(self.docker('cat', '/var/lib/storage-viz/manifest.json'))"): 'E2E harness: the disposable test host.',
+        ('update_fail', "json.loads(self.docker('cat', '/var/lib/storage-viz/update/state.json'))"): 'E2E harness: the disposable test host.',
+        ('update_fail', "json.loads((self.args.work / 'central-state' / 'rollout.json').read_text())"): 'E2E harness: its own central state.',
+    },
     "collector/inventory.py": {
         ('load_inventory', "json.loads(cfg_path.read_text(encoding='utf-8'))"): 'Collector inventory configuration.',
     },

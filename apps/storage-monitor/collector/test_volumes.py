@@ -47,8 +47,8 @@ class V2Host:
                          **manifest_fields))
 
 
-def v2_collector(tmp_path, spawn=None):
-    collector = Collector(tmp_path, SID, publish=False, **({"spawn": spawn} if spawn else {}))
+def v2_collector(tmp_path, spawn=None, **fleet_options):
+    collector = Collector(tmp_path, SID, publish=False, **({"spawn": spawn} if spawn else {}), **fleet_options)
     host = V2Host(collector)
     finished = collector.clock.now - 600
     host.volume(VA, BA, "/a", capture(VA, BA, "/a", finished))
@@ -628,18 +628,23 @@ def test_a_volume_naming_another_volumes_capture_is_rejected_once_without_a_fetc
 # ------------------------------------------------------------------ deviation 2: refuse a rescan the transport cannot deliver
 
 
-def test_a_v2_rescan_the_transport_cannot_deliver_is_refused_at_admission_without_a_cooldown(tmp_path):
+def test_a_v2_rescan_over_s2_is_refused_at_admission_without_a_cooldown(tmp_path):
     collector, host = v2_collector(tmp_path)
-    collector.host.delivers_request_ids = False
+    collector.host.delivers_request_ids = False  # the host now answers over S2
+    collector.tick()
     reply = admit(collector)
     assert (reply.error, reply.job) == ("RESCAN_UNAVAILABLE", None)
     assert record(collector).job is None and record(collector).last_job is None
     assert collector.host.rescan_requests == []
-    collector.host.delivers_request_ids = True
+    collector.host.delivers_request_ids = True  # bootstrapped: the gate answers the next observe
+    collector.tick()
     assert admit(collector).error is None, "the refusal started a cooldown"
+    collector.settle()
+    assert collector.host.rescan_requests and collector.host.rescan_requests[-1][1] == record(collector).job.request_id
 
 
-def test_a_v1_rescan_is_admitted_whatever_the_transport_says_of_request_ids(tmp_path):
+def test_a_v1_rescan_is_admitted_on_either_transport(tmp_path):
     collector = Collector(tmp_path, SID)
     collector.host.delivers_request_ids = False
+    collector.tick()
     assert admit(collector).job.protocol == "invocation"

@@ -9,11 +9,18 @@
 #      them with a throwaway key;
 #   2. installs the legacy agent with install-agent.sh, as hosts have it today;
 #   3. runs bootstrap-agent.sh from this machine over ssh, twice;
-#   4. drives the gate with the central key: forced command, observe, rescan,
-#      stage/activate B, a tampered bundle, C, a busy lock, rollback to A;
-#   5. runs bootstrap-agent.sh --revert and checks the legacy files are back.
+#   4. drives the gate with the central key: forced command, observe, rescan;
+#   5. runs the real collector over the gate (deploy/e2e/collector_gate_e2e.py):
+#      observe, get-manifest and get-capture of seeded v2 files, a rescan by
+#      request id, and the update track staging and activating B on the
+#      canary, which passes probation;
+#   6. drives the gate by hand again: a tampered bundle, C, a busy lock,
+#      rollback to A;
+#   7. the collector again with bundle D: probation fails, central sends
+#      rollback-update, the rollout halts;
+#   8. runs bootstrap-agent.sh --revert and checks the legacy files are back.
 #
-# Usage: deploy/e2e/run-agent-channel-e2e.sh   (needs docker, git, ssh-keygen)
+# Usage: deploy/e2e/run-agent-channel-e2e.sh   (needs docker, git, ssh-keygen, Python 3.10+ for the collector)
 # E2E_KEEP=1 keeps the container and work directory for debugging.
 set -euo pipefail
 
@@ -69,8 +76,10 @@ printf '#!/bin/sh\nwhile [ "$1" != --out ]; do shift; done\nprintf %s > "$2"\n' 
   "'{\"mounts\":[{\"scanned_files\":1,\"scanned_dirs\":1,\"scanned_bytes\":1,\"errors\":0}]}'" > "$WORK/liar"
 echo '# release C' >> "$repo/apps/storage-monitor/agent/release_cli.py"
 build C --hstscan-binary "$WORK/liar"
-SHA_A="$(sha_of A)"; SHA_B="$(sha_of B)"; SHA_C="$(sha_of C)"
-pass "built and signed bundles A=${SHA_A:0:8} (docker hstscan) B=${SHA_B:0:8} C=${SHA_C:0:8} (miscounting hstscan)"
+echo '# release D' >> "$repo/apps/storage-monitor/agent/release_cli.py"
+build D --hstscan-binary "$WORK/A-x/bin/hstscan"
+SHA_A="$(sha_of A)"; SHA_B="$(sha_of B)"; SHA_C="$(sha_of C)"; SHA_D="$(sha_of D)"
+pass "built and signed bundles A=${SHA_A:0:8} (docker hstscan) B=${SHA_B:0:8} C=${SHA_C:0:8} (miscounting hstscan) D=${SHA_D:0:8}"
 
 # The operator's checkout, with the test release key pinned instead of the real one.
 app="$WORK/app"
@@ -168,11 +177,20 @@ done
 [[ "$(gate get-manifest | tail -n +2 | python3 -c 'import json,sys; print(json.load(sys.stdin)["schema"])')" == storage-viz.manifest/2 ]] || fail "rescan did not publish v2 manifest"
 pass "rescan started the release and published a v2 manifest"
 
-[[ "$(stage "$WORK/B" "$SHA_B")" == staged ]] || fail "stage B"
-gate "activate-update $SHA_B" >/dev/null
-[[ "$(wait_update "$SHA_B")" == "activated None" ]] || fail "B not activated"
+# -- 5. the collector over the gate ----------------------------------------------
+# No timer runs: every scan from here on is one a test asked for, so seeded files stay put.
+docker exec "$CID" systemctl stop storage-viz-scan.timer
+ssh-keyscan -t ed25519 -p "$PORT" 127.0.0.1 > "$WORK/known_hosts_gate" 2>/dev/null
+collector() {  # collector PHASE [BUNDLE_DIR]
+  "${E2E_PYTHON:-python3}" "$E2E_DIR/collector_gate_e2e.py" --app "$APP_ROOT" --work "$WORK" --port "$PORT" --cid "$CID" \
+    --phase "$1" ${2:+--bundle-dir "$2"}
+}
+collector data
+collector update-pass "$WORK/B"
 [[ "$(observe "d['agent']['release_sha'] + ' ' + d['update']['previous']")" == "$SHA_B $SHA_A" ]] || fail "B/A not current/previous"
-pass "stage-update + activate-update moved the host to B; A kept as previous"
+pass "the update track moved the host to B with stage-update + activate-update; A kept as previous"
+
+# -- 6. the gate by hand ---------------------------------------------------------
 
 cp -r "$WORK/C" "$WORK/T"
 python3 - "$WORK/T/storage-viz-agent.tar.gz" <<'PY'
@@ -212,7 +230,11 @@ gate "activate-update $SHA_B" >/dev/null
 [[ "$(wait_update "$SHA_B")" == "refused BAD_RELEASE" ]] || fail "rolled-back release activated again"
 pass "rollback-update restored A, B marked bad and refused afterwards"
 
-# -- 5. revert ---------------------------------------------------------------------
+# -- 7. a probation failure through the collector --------------------------------
+collector update-fail "$WORK/D"
+[[ "$(observe "d['agent']['release_sha']")" == "$SHA_A" ]] || fail "the host is not back on A"
+
+# -- 8. revert ---------------------------------------------------------------------
 bootstrap --revert > "$WORK/revert.log" 2>&1 || { cat "$WORK/revert.log"; fail "revert failed"; }
 after="$(docker exec "$CID" sh -c "$LEGACY_SNAPSHOT")"
 if [[ "$before" != "$after" ]]; then
