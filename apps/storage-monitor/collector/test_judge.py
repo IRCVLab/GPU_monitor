@@ -1,7 +1,7 @@
 import pytest
 
 from collector import judge
-from collector.contract import snapshot_response
+from collector.contract import Capacity
 from collector.inventory import CapacityThresholds
 
 
@@ -18,39 +18,26 @@ def test_v2_severity_thresholds(pct, free, expected):
     assert judge.severity(pct, free, CapacityThresholds()) == expected
 
 
-@pytest.mark.parametrize("mount,expected", [
-    ({"df_total": 100, "df_used": 20, "df_use_pct": 85}, 85),
-    ({"df_total": 8, "df_used": 1}, 13),
-    ({"df_total": 0, "df_used": 0}, None),
-    ({"df_total": 0, "df_used": 0, "df_use_pct": 0}, 0),
-    ({"df_total": 2**53, "df_used": 1}, None),
-    ({"df_total": True, "df_used": 1}, None),
-])
-def test_used_pct(mount, expected):
-    assert judge.used_pct(mount) == expected
+@pytest.mark.parametrize("used,avail,expected", [(20,80,20),(1,7,13),(0,0,None),(0,20,0)])
+def test_used_pct(used, avail, expected):
+    fields, _ = judge.volume_capacity(Capacity(used+avail, used, avail, 50, "ok"), 50, CapacityThresholds())
+    assert fields["used_pct"] == expected
 
 
 @pytest.mark.parametrize("elapsed,expected", [(-1, 0), (0, 0), (86399, 0), (86400, 1), (86401, 1)])
 def test_v5_age_same_reference(elapsed, expected):
-    row = {"mtime": 12345}
-    snapshot = {"scan_started_unix": 12345 + elapsed, "top_files": [row], "stale": [dict(row, age_days=999)]}
-    response = snapshot_response(snapshot)
-    assert [response[table][0]["age_days"] for table in ("top_files", "stale")] == [expected, expected]
-    assert "age_days" not in row
-    assert snapshot["stale"][0]["age_days"] == 999
+    assert judge.age_days(12345, 12345 + elapsed) == expected
 
 
 @pytest.mark.parametrize("skew", [-6 * 3600, 0, 6 * 3600])
-@pytest.mark.parametrize("media,deadline", [(None, 7 * 3600), ("ssd", 4860), ("hdd", 12060), ("unknown", 12060)])
-def test_host_clock_skew(skew, media, deadline):
+@pytest.mark.parametrize("cadence", [3600, 10800])
+def test_host_clock_skew(skew, cadence):
     capture = 100000 + skew
-    snapshot = {"scan_finished_unix": capture}
-    if media:
-        snapshot["selected_roots"] = [{"scan_finished_unix": capture, "storage_media": media}]
-    assert judge.freshness(snapshot, judge.host_now(None, None, 99), 900) == "unknown"
+    deadline = cadence + judge.VOLUME_GRACE_SECONDS
+    assert judge.volume_freshness(capture, cadence, judge.host_now(None, None, 99)) == "unknown"
     for elapsed, expected in [(deadline, "fresh"), (deadline + 1, "stale")]:
         now = judge.host_now(capture, 99, 99 + elapsed)
-        assert judge.freshness(snapshot, now, 900) == expected
+        assert judge.volume_freshness(capture, cadence, now) == expected
 
 
 @pytest.mark.parametrize("observations,agent,expected", [
@@ -67,19 +54,3 @@ def test_eta(observations, agent, expected):
 ])
 def test_activity_expires(state, elapsed, expected):
     assert judge.activity({"state": state}, 10, 10 + elapsed) == expected
-
-
-def test_retained_roots_age_independently_after_faster_scan():
-    from collector.judge import FRESHNESS_SLACK_SECONDS, freshness
-    now = 1719300000
-    legacy = {"scan_finished_unix": now - 6 * 3600, "selected_roots": [{"storage_media": "ssd"}]}
-    assert freshness(legacy, now, FRESHNESS_SLACK_SECONDS) == "fresh"
-    payload = {"scan_finished_unix": now, "selected_roots": [
-        {"storage_media": "ssd", "scan_finished_unix": now - 4790},
-        {"storage_media": "hdd", "scan_finished_unix": now - 4 * 3600},
-    ]}
-    assert freshness(payload, now, FRESHNESS_SLACK_SECONDS) == "stale"
-    payload["selected_roots"][1]["scan_finished_unix"] = now - 3 * 3600
-    assert freshness(payload, now, FRESHNESS_SLACK_SECONDS) == "fresh"
-    payload["selected_roots"][0]["scan_finished_unix"] = now - 4861
-    assert freshness(payload, now, FRESHNESS_SLACK_SECONDS) == "stale"

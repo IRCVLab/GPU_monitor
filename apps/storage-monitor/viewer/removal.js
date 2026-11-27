@@ -120,7 +120,9 @@ function validateCleanupSelection(snapshot, candidate) {
     return { accepted: false, path, kind, reason: cleanupBoundedReason("top_level_root", "One-segment top-level paths are too broad for cleanup commands.") };
   }
 
-  const matchingRoot = cleanupLongestMatchingRoot(selectedRoots, path);
+  const roots = selectedRoots.filter(root =>
+    (!candidate.volume_id || root.volume_id === candidate.volume_id) && (!candidate.binding || root.binding === candidate.binding));
+  const matchingRoot = cleanupLongestMatchingRoot(roots, path);
   if (!matchingRoot) {
     return { accepted: false, path, kind, reason: cleanupBoundedReason("outside_selected_roots", "The snapshot path is outside the selected scan roots for this server.") };
   }

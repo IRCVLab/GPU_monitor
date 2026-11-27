@@ -13,8 +13,8 @@ test('V9 filtered users sort by the displayed file count', () => {
 
 test('V9 hidden file counts retain descending scoped usage under the storage filter', () => {
   const users = [
-    {uid:1,name:'many-files',bytes:100,files:1000,by_mount:{'/data':10}},
-    {uid:2,name:'big-on-data',bytes:50,files:1,by_mount:{'/data':40}}
+    {uid:1,name:'many-files',bytes:100,files:1000,by_volume:{'/data':{bytes:10}}},
+    {uid:2,name:'big-on-data',bytes:50,files:1,by_volume:{'/data':{bytes:40}}}
   ];
   assert.deepEqual(sortRows('users',users,{key:'files',dir:-1},{mount:'/data'}).map(u=>u.name),['big-on-data','many-files']);
 });

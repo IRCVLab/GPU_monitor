@@ -627,7 +627,7 @@ api/
 
 **Static serving.** `routes.STATIC` maps exact URL paths to files listed in the release manifest. Any other path is 404 before the filesystem is touched. A path containing dot segments, encoded separators or malformed escapes, or one that changes under `posixpath.normpath`, is 404. `SimpleHTTPRequestHandler`, the `viewer/data` symlink, `_data_path` and the `/data/` route are deleted (C7). `debug.html`, `serve.py` and the tests are not in the allowlist.
 
-**Fixtures mode.** `python3 -m api.server --fixtures tests/fixtures/fleet` serves a fixture fleet through the same routes, auth and views. It replaces the static `/data` demo mode. The fixtures are produced by `tools/scrub_fixture.py` from real captures: user names, uids and path components are replaced by stable synthetic values, and sizes and tree shapes are kept. Viewer unit tests, the Playwright suite and demos all run against it. Production config cannot set it: `server.py` refuses `--fixtures` when `STORAGE_VIZ_ENV=production`.
+**Fixtures mode.** `python3 -m api.server --fixtures tests/fixtures/fleet` serves a fixture fleet through the same routes, auth and views. It replaces the static `/data` demo mode. The tracked manifests and per-volume captures are generated deterministically by `tools/gen_sample.py`. Viewer unit tests, the Playwright suite and demos all run against it. Production config cannot set it: `server.py` refuses `--fixtures` when `STORAGE_VIZ_ENV=production`.
 
 **Versioning.** The contract version is in the path. v1 routes are deleted in M8. Additive changes inside v2 need no bump. A breaking change ships as `/api/v3/` with its viewer in one release. Viewer and API ship in the same dashboard release, so they cannot disagree.
 
@@ -902,6 +902,7 @@ Every shim carries a `SHIM(Mx..My)` marker that `tools/check_shims.py` checks (I
 | S6 | One-shot import of `scan-duration-history/` into `record.durations` | M2b | M9 |
 | S7 | Gate verbs `get-snapshot` and `get-status` | M3 | central callers M5c; verbs M9 (`bootstrap_version 2`) |
 | S8 | New agent keeps the v1 files on hosts for rollback | M5b | M5c |
+| S9 | Installed health checker probes the session, ordered inventory IDs and an authenticated POST for a nonexistent hc- server. Release proxy forwards this probe until the checker is reinstalled. | M8 | M9 |
 | R1 | Old store `STATE_DIR/<sid>/` kept for rollback (retained data, no code) | M2b | M9 |
 
 ## 7. Alternatives considered and rejected

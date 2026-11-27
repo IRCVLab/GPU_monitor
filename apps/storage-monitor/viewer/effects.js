@@ -45,7 +45,14 @@ export function bindEffects(store, fetcher = fetchResource) {
   }
   async function refresh(force = false) {
     if (!resource('session')?.data && !await request('session')) return;
-    if (await request('fleet')) openServer(state().route.serverId,force);
+    const fleet = await request('fleet');
+    if (!fleet) return;
+    const id = state().route.serverId;
+    for (const row of fleet.servers) {
+      const held = resource(detailKey(row.server_id))?.data;
+      if (row.server_id === id || held && held.revision !== row.revision)
+        openServer(row.server_id,force && row.server_id === id);
+    }
   }
   function loadCaptures() {
     const {route,selection} = state();
@@ -56,7 +63,7 @@ export function bindEffects(store, fetcher = fetchResource) {
     if (route.tab === 'treemap') wanted.add(route.volumeId ?? data.volumes[0]?.volume_id);
     for (const volume of data.volumes) {
       const sha = volume.capture?.sha256;
-      if (sha && wanted.has(volume.volume_id) && !resource('capture/'+sha)) {
+      if (sha && wanted.has(volume.volume_id) && !['ready','loading'].includes(resource('capture/'+sha)?.status)) {
         request('capture/'+sha,{volumeId:volume.volume_id,sha},'capture/'+route.serverId);
       }
     }
@@ -101,7 +108,7 @@ export function bindEffects(store, fetcher = fetchResource) {
   }
   store.subscribe((next,previous,event) => {
     if (next.route.serverId !== previous.route.serverId) openServer(next.route.serverId);
-    if (next.route !== previous.route || event.type === 'DataLoaded') loadCaptures();
+    if (next.route !== previous.route || event.type === 'DataLoaded' || event.type === 'Select') loadCaptures();
   });
   window.addEventListener('focus',() => refresh(true));
   document.addEventListener('visibilitychange',() => { if (!document.hidden) refresh(true); });
@@ -110,8 +117,9 @@ export function bindEffects(store, fetcher = fetchResource) {
     const id = state().route.serverId;
     if (!id || document.hidden) return;
     if (tracking(id)?.busy) return pollJob(id);
-    const status = resource('activity/'+id)?.data ?? resource(detailKey(id))?.data;
-    if ((status?.activity?.state === 'running' || status?.job) && resource('activity/'+id)?.status !== 'loading')
+    const status = resource('activity/'+id)?.data;
+    const summary = resource('fleet')?.data?.servers.find(row => row.server_id === id);
+    if ((status?.activity?.state === 'running' || status?.job || summary?.job || summary?.activity?.state === 'running') && resource('activity/'+id)?.status !== 'loading')
       return request('activity/'+id);
   },5000);
   return {refresh,rescan};

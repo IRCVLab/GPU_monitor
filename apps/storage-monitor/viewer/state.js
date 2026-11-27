@@ -44,11 +44,9 @@ function selectionEntry(detail,item) {
   const checked = validateCleanupSelection(detail,item);
   if (!checked.accepted) return null;
   const root = checked.selectedRoot;
-  const volumeId = item.volume_id ?? root.volume_id ?? root.mount_id;
-  if (!volumeId) return null;
-  // Legacy v1 snapshots describe the binding by its constituent mount fields.
-  const binding = item.binding ?? root.binding ?? JSON.stringify([root.capacity_id, root.major_minor, root.mount_source,
-    root.mount_root, root.mountpoint, root.scan_root, root.prune_class]);
+  const volumeId = item.volume_id ?? root.volume_id;
+  const binding = item.binding ?? root.binding;
+  if (!volumeId || !binding) return null;
   return {...item, volumeId, binding, rawPath:item.raw_path ?? item.path.split('/').slice(1).map(name => rawSegment({name})), flag:null};
 }
 function lookup(detail, entry) {
@@ -106,9 +104,11 @@ export function reducer(state, event) {
           const selected = serverSelection(state,server);
           const updated = selected.map(entry => {
             const volume = detail.volumes?.find(v => v.volume_id === entry.volumeId);
-            if (volume?.capture && !next.resources['capture/'+volume.capture.sha256]?.data)
-              return {...entry,flag:'pending'};
-            return lookup(detail,entry.flag === 'pending' ? {...entry,flag:null} : entry);
+            const previous = entry.pending ? {...entry,flag:entry.priorFlag,pending:false} : entry;
+            const match = lookup(detail,previous);
+            if (match.flag === 'missing' && volume?.capture && !next.resources['capture/'+volume.capture.sha256]?.data)
+              return {...entry, flag:'missing', pending:true, priorFlag:previous.flag};
+            return match;
           });
           if (updated.some((entry,i) => entry !== selected[i])) next.selection = {...next.selection,[server]:updated};
         }

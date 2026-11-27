@@ -1,13 +1,10 @@
-"""The only mapping from domain errors to HTTP statuses (target design 4.3).
-
-SHIM(M2b..M8) S5: the v1 routes keep their body ``{"error": code, ...}``. M8 retires this shape.
-"""
+"""The only mapping from domain errors to HTTP statuses (target design 4.3)."""
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from typing import Dict
 
 from collector.errors import (
-    ActiveJob, Cooldown, DomainError, GlobalConcurrency, RescanDisabled, RescanUnavailable, ServerBusy, SnapshotAbsent,
+    ActiveJob, Cooldown, DomainError, GlobalConcurrency, RescanDisabled, RescanUnavailable, ServerBusy,
     StoreUnavailable, UnknownServer,
 )
 
@@ -15,13 +12,11 @@ STATUS: Dict[type | str, int] = {
     "INTERNAL": 500,
     "NOT_FOUND": 404,
     "METHOD_NOT_ALLOWED": 405,
-    "BAD_LENGTH": 400, "BAD_BODY": 400, "BAD_JSON": 400, "BAD_REQUEST": 400,
+    "BAD_REQUEST": 400,
     "BODY_TOO_LARGE": 413,
-    "AUTH_REQUIRED": 401, "FORBIDDEN": 403, "BAD_ORIGIN": 403, "BAD_SESSION": 403, "BAD_CSRF": 403,
+    "AUTH_REQUIRED": 401, "FORBIDDEN": 403, "BAD_ORIGIN": 403, "BAD_CSRF": 403,
     "UNKNOWN_VOLUME": 404, "CAPTURE_GONE": 410,
-    "UNCONFIGURED": 503, "LEGACY_DISABLED": 503,
     UnknownServer: 404,
-    SnapshotAbsent: 404,
     RescanDisabled: 403,
     ActiveJob: 409,
     Cooldown: 429,
@@ -32,40 +27,27 @@ STATUS: Dict[type | str, int] = {
 }
 
 
-def _v1_error(exc: BaseException) -> Tuple[int, Dict[str, str], Dict[str, Any]]:
-    """Status, extra headers and v1 body for any exception a route raised. Unknown ones are 500."""
-    if isinstance(exc, RequestError):
-        return STATUS[exc.code], exc.headers, exc.body
-    if not isinstance(exc, DomainError) or type(exc) not in STATUS:
-        return STATUS["INTERNAL"], {}, {"error": "INTERNAL"}
-    headers = {}
-    retry_after = getattr(exc, "retry_after", None)
-    if isinstance(exc, GlobalConcurrency):
-        retry_after = 5
-    if retry_after is not None:
-        headers["Retry-After"] = str(retry_after)
-    return STATUS[type(exc)], headers, {"error": exc.code, **exc.detail}
-
-
 class RequestError(Exception):
-    def __init__(self, code, *, headers=None, body=None):
+    def __init__(self, code, *, headers=None):
         super().__init__(code)
         self.code = code
         self.headers = headers or {}
-        self.body = body or {"error": code}
 
 
-def http_error(exc, request_id, *, v1):
-    status, headers, body = _v1_error(exc)
-    if v1:
-        return status, headers, body
-    code = exc.code if isinstance(exc, (RequestError, DomainError)) else "INTERNAL"
-    code = {"BAD_LENGTH": "BAD_REQUEST", "BAD_BODY": "BAD_REQUEST", "BAD_JSON": "BAD_REQUEST",
-            "BAD_SESSION": "BAD_CSRF", "EXECUTION_DISABLED": "FORBIDDEN", "RESCAN_DISABLED": "FORBIDDEN",
-            "UNCONFIGURED": "STORE_UNAVAILABLE"}.get(code, code)
+def http_error(exc, request_id, *, health_probe=False):
+    code = exc.code if isinstance(exc, (DomainError, RequestError)) else "INTERNAL"
+    status = STATUS.get(type(exc), STATUS.get(code, 500))
+    if health_probe and isinstance(exc, UnknownServer):
+        # SHIM(M8..M9) S9: installed checker compares the string at body.error.
+        return status, {}, {"error": code}
+    if isinstance(exc, RescanDisabled):
+        code = "FORBIDDEN"
+    headers = dict(exc.headers) if isinstance(exc, RequestError) else {}
     error = {"code": code, "message": code.replace("_", " ").capitalize(), "request_id": request_id}
     if isinstance(exc, ActiveJob):
         error["job"] = exc.detail.get("job")
-    if "Retry-After" in headers:
-        error["retry_after_sec"] = int(headers["Retry-After"])
+    retry = 5 if isinstance(exc, GlobalConcurrency) else getattr(exc, "retry_after", None)
+    if retry is not None:
+        headers["Retry-After"] = str(retry)
+        error["retry_after_sec"] = retry
     return status, headers, {"error": error}

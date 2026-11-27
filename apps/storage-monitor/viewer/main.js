@@ -1,3 +1,4 @@
+import {pathRoundTrips} from './api.js';
 import {removal} from './removal.js';
 import {createStore} from './store.js';
 import {initialState,reducer,detailKey,drillStack,serverSelection} from './state.js';
@@ -54,7 +55,9 @@ function render() {
 store.subscribe((state,old,event) => {
   if (event.type === 'DataLoaded' && (event.key.startsWith('capture/') || event.key === detailKey(state.route.serverId)) && state.route.path?.length) {
     const stack = drillStack(state.resources[detailKey(state.route.serverId)]?.data,state.route);
-    if (!stack.length || !stack[0].node.children?.length) return schedule();
+    const detail = state.resources[detailKey(state.route.serverId)]?.data;
+    const volume = detail?.volumes.find(v => v.volume_id === (state.route.volumeId ?? detail.volumes[0]?.volume_id));
+    if (!stack.length || !state.resources['capture/'+volume?.capture?.sha256]?.data) return schedule();
     const count = stack.length-1;
     if (count < state.route.path.length) navigate({...state.route,path:state.route.path.slice(0,count)},true);
   }
@@ -83,7 +86,7 @@ document.addEventListener('click', async event => {
   else if (target.dataset.cleanupPath && target.classList.contains('cleanup-select-btn')) {
     const path = target.dataset.cleanupPath;
     const data = state.resources[detailKey(route.serverId)].data;
-    const item = (route.tab === 'stale' ? data.stale : data.top_files).find(row => row.path === path);
+    const item = (route.tab === 'stale' ? data.stale : data.top_files).find(row => row.path === path && row.binding === target.dataset.binding && pathRoundTrips(row.path,row.path_b64));
     store.dispatch(serverSelection(state,route.serverId).some(e => e.path === path) ? {type:'Unselect',path} : {type:'Select',item});
   } else if (target.dataset.copy || target.dataset.copyCommand) {
     const text = target.dataset.copy ?? removal(state.resources[detailKey(route.serverId)]?.data,serverSelection(state,route.serverId)).command;

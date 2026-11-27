@@ -62,19 +62,19 @@ class HeaderForwardingTests(unittest.TestCase):
         origin = "http://166.104.167.11:505"
         host = "166.104.167.11:505"
         self.assertTrue(proxy.is_allowed_rescan_request(
-            "/api/servers/hinton/rescan", content_length=2, origin=origin, host=host, public_origin=origin
+            "/api/v2/servers/hinton/rescan", content_length=2, origin=origin, host=host, public_origin=origin
         ))
         self.assertTrue(proxy.is_empty_rescan_body(b"{}"))
         for path, length, request_origin, request_host in (
             ("/api/servers", 2, origin, host),
-            ("/api/servers/hinton/rescan?force=1", 2, origin, host),
-            ("/api/servers/../rescan", 2, origin, host),
-            ("http://evil.test/api/servers/hinton/rescan", 2, origin, host),
-            ("//evil.test/api/servers/hinton/rescan", 2, origin, host),
-            ("/api/servers/hinton/rescan", 0, origin, host),
-            ("/api/servers/hinton/rescan", 4097, origin, host),
-            ("/api/servers/hinton/rescan", 2, "http://evil.test", host),
-            ("/api/servers/hinton/rescan", 2, origin, "evil.test"),
+            ("/api/v2/servers/hinton/rescan?force=1", 2, origin, host),
+            ("/api/v2/servers/../rescan", 2, origin, host),
+            ("http://evil.test/api/v2/servers/hinton/rescan", 2, origin, host),
+            ("//evil.test/api/v2/servers/hinton/rescan", 2, origin, host),
+            ("/api/v2/servers/hinton/rescan", 0, origin, host),
+            ("/api/v2/servers/hinton/rescan", 4097, origin, host),
+            ("/api/v2/servers/hinton/rescan", 2, "http://evil.test", host),
+            ("/api/v2/servers/hinton/rescan", 2, origin, "evil.test"),
         ):
             with self.subTest(path=path, length=length, origin=request_origin, host=request_host):
                 self.assertFalse(proxy.is_allowed_rescan_request(
@@ -94,7 +94,7 @@ class HeaderForwardingTests(unittest.TestCase):
         for server_id in ("_lab", "gpu_", ".gpu", "gpu.", "a" * 128):
             with self.subTest(server_id=server_id):
                 self.assertTrue(proxy.is_allowed_rescan_request(
-                    f"/api/servers/{server_id}/rescan",
+                    f"/api/v2/servers/{server_id}/rescan",
                     content_length=2,
                     origin=origin,
                     host=host,
@@ -103,7 +103,7 @@ class HeaderForwardingTests(unittest.TestCase):
         for server_id in (".", "..", "a" * 129, "gpu%2Fnode"):
             with self.subTest(server_id=server_id):
                 self.assertFalse(proxy.is_allowed_rescan_request(
-                    f"/api/servers/{server_id}/rescan",
+                    f"/api/v2/servers/{server_id}/rescan",
                     content_length=2,
                     origin=origin,
                     host=host,
@@ -147,7 +147,7 @@ class HeaderForwardingTests(unittest.TestCase):
                 conn = http.client.HTTPConnection("127.0.0.1", public.server_port, timeout=3)
                 conn.request(
                     "POST",
-                    "/api/servers/_lab/rescan",
+                    "/api/v2/servers/_lab/rescan",
                     body=b"{}",
                     headers={
                         "Host": f"127.0.0.1:{public.server_port}",
@@ -165,7 +165,7 @@ class HeaderForwardingTests(unittest.TestCase):
                 conn = http.client.HTTPConnection("127.0.0.1", public.server_port, timeout=3)
                 conn.request(
                     "POST",
-                    "/api/servers/_lab/rescan?force=1",
+                    "/api/v2/servers/_lab/rescan?force=1",
                     body=b"{}",
                     headers={"Host": f"127.0.0.1:{public.server_port}", "Origin": origin},
                 )
@@ -183,7 +183,7 @@ class HeaderForwardingTests(unittest.TestCase):
 
         self.assertEqual(len(captured), 1)
         path, headers, body = captured[0]
-        self.assertEqual(path, "/api/servers/_lab/rescan")
+        self.assertEqual(path, "/api/v2/servers/_lab/rescan")
         self.assertEqual(headers["Origin"], origin)
         self.assertEqual(headers["X-Forwarded-User"], "lan-operator")
         self.assertEqual(headers["X-CSRF-Token"], "csrf-1")
@@ -197,7 +197,7 @@ class HeaderForwardingTests(unittest.TestCase):
         try:
             with mock.patch.object(proxy, "RESCAN_POST_ENABLED", False):
                 conn = http.client.HTTPConnection("127.0.0.1", public.server_port, timeout=3)
-                conn.request("POST", "/api/servers/hinton/rescan", body=b"{}")
+                conn.request("POST", "/api/v2/servers/hinton/rescan", body=b"{}")
                 response = conn.getresponse()
                 self.assertEqual(response.status, 405)
                 self.assertEqual(response.headers["Allow"], "GET, HEAD")

@@ -1,139 +1,13 @@
 import {humanBytes, escapeHtml} from '../format.js';
 import {mountId} from '../state.js';
-import {compatibleCapacityMetrics, hasVolumeFolderLevel} from './overview.js';
-function detailCapacityNumber(value) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-}
-function detailSelectedRootByMountId(DATA) {
-  const byMountId = new Map();
-  const roots = Array.isArray(DATA && DATA.selected_roots) ? DATA.selected_roots : [];
-  for (const root of roots) {
-    const mountId = root && root.mount_id != null ? String(root.mount_id) : "";
-    if (!mountId || byMountId.has(mountId)) continue;
-    byMountId.set(mountId, root);
-  }
-  return byMountId;
-}
-function detailIsCanonicalDecimal(raw, allowZero) {
-  if (!/^\d{1,10}$/.test(raw)) return false;
-  if (raw.length > 1 && raw[0] === "0") return false;
-  if (!allowZero && raw === "0") return false;
-  return true;
-}
-function detailCanonicalCapacityId(value) {
-  if (typeof value !== "string") return null;
-  const match = value.match(/^dev-(\d+)-(\d+)$/);
-  if (!match) return null;
-  if (!detailIsCanonicalDecimal(match[1], false) || !detailIsCanonicalDecimal(match[2], true)) return null;
-  return value;
-}
-function detailCanonicalMajorMinor(value) {
-  if (typeof value !== "string") return null;
-  const match = value.trim().match(/^(\d+):(\d+)$/);
-  if (!match) return null;
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return null;
-  if (major === 0 && minor === 0) return null;
-  return String(major) + ":" + String(minor);
-}
-function detailCapacityIdentity(root, mount) {
-  const volumeId = String((root && root.volume_id) || (mount && mount.volume_id) || "");
-  if (volumeId) return { key: "volume_id:" + volumeId, value: volumeId };
-  const capacityId = detailCanonicalCapacityId(
-    String((root && root.capacity_id) || (mount && mount.capacity_id) || "")
-  );
-  if (capacityId) return { key: "capacity_id:" + capacityId, value: capacityId };
-  const majorMinor = detailCanonicalMajorMinor(
-    String((root && root.major_minor) || (mount && mount.major_minor) || "")
-  );
-  return majorMinor ? { key: "major_minor:" + majorMinor, value: majorMinor } : null;
-}
-function detailScanRootPath(mount, root) {
-  return String(
-    (root && (root.scan_root || root.path || root.mountpoint))
-    || (mount && (mount.scan_root || mount.path || mount.mountpoint))
-    || "/"
-  );
-}
-function detailScannedBytes(mount, root) {
-  const mountBytes = detailCapacityNumber(mount && mount.scanned_bytes);
-  if (mountBytes != null) return mountBytes;
-  return detailCapacityNumber(root && root.scanned_bytes);
-}
-function detailCapacityMetricsKnown(candidate) {
-  return candidate
-    && candidate.totalBytes != null
-    && candidate.usedBytes != null
-    && candidate.availableBytes != null
-    && candidate.capacityPct != null;
-}
-function groupDetailCapacityMounts(mounts, DATA) {
-  const rootsByMountId = detailSelectedRootByMountId(DATA);
-  const groups = [];
-  const groupsByIdentity = new Map();
-  for (const mount of Array.isArray(mounts) ? mounts : []) {
-    if (!mount) continue;
-    const mountId = mount.mount_id != null ? String(mount.mount_id) : "";
-    const root = mountId ? rootsByMountId.get(mountId) || null : null;
-    const usedBytes = detailCapacityNumber(mount.df_used);
-    const totalBytes = detailCapacityNumber(mount.df_total);
-    const availableBytes = detailCapacityNumber(mount.df_avail);
-    const usedPct = Number.isInteger(mount.used_pct) ? mount.used_pct : null;
-    const capacityPct = Number.isFinite(mount.df_use_pct) ? usedPct : null;
-    const identity = detailCapacityIdentity(root, mount);
-    const identityKey = identity && identity.key ? identity.key : "";
-    const existing = identityKey ? groupsByIdentity.get(identityKey) || null : null;
-    const candidate = {
-      key: identityKey || ("path:" + String(mount.path || mountId || groups.length)),
-      path: String((root && root.mountpoint) || mount.mountpoint || mount.path || "/"),
-      usedBytes,
-      totalBytes,
-      availableBytes,
-      capacityPct,
-      usedPct,
-      severity: mount.severity || "unknown",
-      capacityObservedUnix: mount.capacity_observed_unix,
-      media: String((mount.storage_media || mount.block_media || (root && (root.storage_media || root.block_media)) || "unknown")),
-      fstype: String((mount.fstype || (root && root.fstype) || "")),
-      scanRoots: [{
-        path: detailScanRootPath(mount, root),
-        mountPath: String(mount.path || mount.mountpoint || "/"),
-        scannedBytes: detailScannedBytes(mount, root),
-      }],
-    };
-    const canMerge = !!(
-      existing
-      && detailCapacityMetricsKnown(existing)
-      && detailCapacityMetricsKnown(candidate)
-      && compatibleCapacityMetrics(existing, candidate)
-      && existing.media === candidate.media
-      && existing.fstype === candidate.fstype
-    );
-    if (!canMerge) {
-      groups.push(candidate);
-      if (identityKey) groupsByIdentity.set(identityKey, candidate);
-      continue;
-    }
-    existing.scanRoots.push(candidate.scanRoots[0]);
-  }
-  return groups;
-}
-function isTransientBlockedEntry(entry) {
-  const reason = String(entry && entry.reason || '').trim().toLowerCase();
-  return reason === 'enoent' || reason === 'no such file or directory';
-}
+import {hasVolumeFolderLevel} from './overview.js';
 export function renderHeader(DATA, selected, navigate) {
   document.getElementById("h-host").textContent = DATA.hostname || "—";
 
   const warn = document.getElementById("warnBanner");
   const msgs = [];
-  if (DATA.run_as_root === false) msgs.push("run_as_root=false → some directories were not scanned and are hidden from totals.");
-  const blocked = (DATA.blocked || []).filter(entry => !isTransientBlockedEntry(entry));
-  const nB = blocked.length;
-  if (nB > 0) {
-    const list = blocked.slice(0, 6).map(b => b.path + " (" + b.reason + ")").join(", ");
-    msgs.push(nB + " director" + (nB === 1 ? "y" : "ies") + " could not be read: " + escapeHtml(list) + (nB > 6 ? " …" : ""));
+  for (const v of DATA.volumes) {
+    if (v.diagnostic || v.last_attempt?.error_code) msgs.push(escapeHtml(v.mountpoint + ' · ' + (v.diagnostic || v.last_attempt.error_code)));
   }
   warn.classList.toggle("show", msgs.length > 0);
   warn.innerHTML = msgs.length ? "⚠ " + msgs.join("<br>⚠ ") : "";
@@ -148,7 +22,12 @@ export function renderHeader(DATA, selected, navigate) {
     empty.textContent = "표시할 데이터 마운트 없음";
     caps.appendChild(empty);
   }
-  const capacityGroups = groupDetailCapacityMounts(actionableMounts, DATA);
+  const capacityGroups = DATA.volumes.map(v => ({
+    path:v.mountpoint, media:v.media, fstype:'', usedBytes:v.capacity?.used, totalBytes:v.capacity?.total,
+    availableBytes:v.capacity?.avail, usedPct:v.capacity?.used_pct, severity:v.severity,
+    capacityObservedUnix:v.capacity?.observed_unix,
+    scanRoots:actionableMounts.filter(m => m.volume_id === v.volume_id).map(m => ({path:m.path,mountPath:m.path,scannedBytes:m.scanned_bytes}))
+  }));
   for (const group of capacityGroups) {
     const usedBytes = group.usedBytes;
     const totalBytes = group.totalBytes;

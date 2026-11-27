@@ -33,7 +33,8 @@ def collector_api(tmp_path, monkeypatch):
             try:
                 conn.request(method, path, body, {serve.auth.IDENTITY_HEADER: "operator", **(headers or {})})
                 with conn.getresponse() as response:
-                    return response.status, json.load(response), response.headers
+                    data = response.read() if response.getheader("Content-Encoding") == "gzip" else json.load(response)
+                    return response.status, data, response.headers
             finally:
                 conn.close()
 

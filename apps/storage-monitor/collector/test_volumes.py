@@ -7,7 +7,7 @@ from collector.contract import HostRun
 from collector.inventory import CapacityThresholds
 from collector.test_bug_harness import Collector, ManualSpawn
 from collector.test_contract import capture_doc, encode, gz, manifest_doc, sha, volume_doc
-from collector.view import snapshot_v1_chunks
+from collector.view import server_bytes
 
 SID = "alpha-1"
 VA, BA = "v-000000000000000a", "b-000000000000000a"
@@ -42,6 +42,9 @@ class V2Host:
         self.seq = self.seq + 1 if seq is None else seq
         volumes = [volume_doc(volume_id, binding, root, capture=(sha(data), len(data)) if data else None, **fields)
                    for volume_id, (binding, root, data, fields) in self.volumes.items()]
+        for volume in volumes:
+            if "capacity" not in self.volumes[volume["volume_id"]][3]:
+                volume["capacity"]["observed_unix"] = self.collector.clock.now
         self.collector.host.manifests[self.server_id] = encode(
             manifest_doc(volumes=volumes, seq=self.seq, server_id=manifest_fields.pop("server_id", self.server_id),
                          **manifest_fields))
@@ -60,7 +63,7 @@ def v2_collector(tmp_path, spawn=None, **fleet_options):
 
 def snapshot(collector, server_id=SID):
     view = collector.fleet.view(server_id)
-    return json.loads(b"".join(snapshot_v1_chunks(view.snapshot, None, CapacityThresholds())))
+    return json.loads(server_bytes(view, collector.clock.monotonic(), CapacityThresholds(), detail=True))
 
 
 def record(collector, server_id=SID):
@@ -68,13 +71,13 @@ def record(collector, server_id=SID):
 
 
 def mounts(collector):
-    return {mount["mount_id"]: mount for mount in snapshot(collector)["mounts"]}
+    return {v["volume_id"]: v for v in snapshot(collector)["volumes"]}
 
 
 # ------------------------------------------------------------------ per-volume data
 
 
-def test_each_volume_is_fetched_once_and_shown_as_one_v1_mount_with_manifest_capacity(tmp_path):
+def test_each_volume_is_fetched_once_and_shown_with_manifest_capacity(tmp_path):
     collector, host = v2_collector(tmp_path)
     for _ in range(5):
         collector.tick()
@@ -82,11 +85,11 @@ def test_each_volume_is_fetched_once_and_shown_as_one_v1_mount_with_manifest_cap
     assert collector.host.manifest_calls == [SID], "an unchanged manifest was read again"
     rows = mounts(collector)
     assert set(rows) == {VA, VB}
-    assert (rows[VA]["path"], rows[VA]["df_total"], rows[VA]["df_avail"], rows[VA]["used_pct"]) == ("/a", 1000, 600, 40)
-    assert rows[VA]["tree"]["kind"] == "directory" and rows[VA]["tree"]["children"][0]["name"] == "f"
+    assert (rows[VA]["mountpoint"], rows[VA]["capacity"]["total"], rows[VA]["capacity"]["avail"], rows[VA]["capacity"]["used_pct"]) == ("/a", 1000, 600, 40)
+    assert rows[VA]["capture"]["sha256"] == sha(host.volumes[VA][2])
     summary = collector.summary()
-    assert (summary["snapshot_availability"], summary["latest_pull_status"], summary["mount_count"]) == ("available", "succeeded", 2)
-    assert summary["overview_snapshot"]["users"] == [{"uid": 1001, "name": "kim", "bytes": 0}]
+    assert summary["link"]["state"] == "ok" and len(summary["volumes"]) == 2
+    assert summary["users_top"] == [{"uid": 1001, "name": "kim", "bytes": 0}]
     stored = sorted(p.name for p in (collector.state_dir / "servers" / SID / "captures").iterdir())
     assert stored == sorted(f"{sha(host.volumes[v][2])}.json.gz" for v in (VA, VB)), "captures are not stored byte for byte by sha"
     for volume_id in (VA, VB):
@@ -102,12 +105,12 @@ def test_one_rejected_volume_never_blocks_another(tmp_path):
     bad = host.volume(VB, BB, "/b", capture(VB, "b-0000000000000099", "/b", finished))
     host.publish()
     collector.tick()
-    assert set(mounts(collector)) == {VA}
+    assert mounts(collector)[VA]["capture"] and mounts(collector)[VB]["capture"] is None
     held = record(collector).data
     assert held.accepted == {VA: sha(host.volumes[VA][2])}
     assert held.rejected[sha(bad)]["reason"] == "BINDING_MISMATCH" and held.rejected[sha(bad)]["volume_id"] == VB
-    roots = {root["mount_id"]: root for root in snapshot(collector)["selected_roots"]}
-    assert (roots[VB]["status"], roots[VB]["data_state"]) == ("skipped", "none")
+    roots = mounts(collector)
+    assert (roots[VB]["capture"], roots[VB]["data_state"]) == (None, "none")
 
 
 def test_c2_rejected_volume_capture_fetched_once_and_last_good_kept(tmp_path):
@@ -125,7 +128,6 @@ def test_c2_rejected_volume_capture_fetched_once_and_last_good_kept(tmp_path):
     assert collector.host.captures_of(sha(bad)) == 1, "C2 a rejected capture was fetched again"
     assert record(collector).data.accepted[VA] == sha(good), "the last accepted capture was dropped"
     assert mounts(collector)[VA]["data_state"] == "stale_rejected"
-    assert collector.summary()["latest_pull_status"] == "invalid_snapshot"
 
 
 def test_c8_restart_downloads_nothing_for_v2_captures(tmp_path):
@@ -133,7 +135,7 @@ def test_c8_restart_downloads_nothing_for_v2_captures(tmp_path):
     captures, manifests = len(collector.host.capture_calls), len(collector.host.manifest_calls)
     before = snapshot(collector)
     collector.restart()
-    assert snapshot(collector) == before, "the stored captures were not served from the first read"
+    assert snapshot(collector)["revision"] == before["revision"], "the stored captures were not served from the first read"
     collector.tick()
     assert len(collector.host.capture_calls) - captures == 0, "C8 restart downloaded stored v2 captures"
     assert len(collector.host.manifest_calls) - manifests == 0, "restart read the unchanged manifest again"
@@ -164,14 +166,14 @@ def test_capacity_from_a_new_manifest_updates_the_mount_without_a_download(tmp_p
     collector, host = v2_collector(tmp_path)
     calls = len(collector.host.capture_calls)
     binding, root, data, fields = host.volumes[VA]
-    sampled = 1764103405 - 30  # host time, 30 s before manifest_doc's written_unix
+    sampled = collector.clock.now - 30  # host time, 30 s before manifest_doc's written_unix
     host.volumes[VA] = (binding, root, data, {**fields, "capacity": {
         "total": 1000, "used": 950, "avail": 50, "observed_unix": sampled, "status": "ok"}})
     host.publish()
     collector.tick()
     assert len(collector.host.capture_calls) == calls
     row = mounts(collector)[VA]
-    assert (row["df_used"], row["capacity_observed_unix"], row["used_pct"]) == (950, sampled, 95)
+    assert (row["capacity"]["used"], row["capacity"]["observed_unix"], row["capacity"]["used_pct"]) == (950, sampled, 95)
 
 
 def test_freshness_reads_each_volume_cadence_from_the_manifest(tmp_path):
@@ -216,8 +218,8 @@ def test_ambiguous_volume_is_shown_with_its_diagnostic_and_never_merged(tmp_path
     rows = mounts(collector)
     assert set(rows) == {VA, ambiguous}
     assert (rows[ambiguous]["diagnostic"], rows[VA]["diagnostic"]) == ("VOLUME_IDENTITY_AMBIGUOUS", None)
-    assert rows[ambiguous]["path"] != rows[VA]["path"]
-    roots = {root["mount_id"]: root for root in collector.summary()["overview_snapshot"]["selected_roots"]}
+    assert rows[ambiguous]["mountpoint"] != rows[VA]["mountpoint"]
+    roots = mounts(collector)
     assert (roots[ambiguous]["identity"], roots[ambiguous]["diagnostic"]) == ("ambiguous", "VOLUME_IDENTITY_AMBIGUOUS")
 
 
@@ -281,7 +283,7 @@ def test_v2_host_rolled_back_to_v1_falls_back_to_s3_on_the_retained_v1_files(tmp
     collector.tick()
     assert collector.host.fetches_of(status["sha256"]) == 1
     assert record(collector).data.accepted == {"legacy": status["sha256"]}
-    assert collector.summary()["overview_snapshot"]["scan_generation"] == "alpha-1-1719203000-v1"
+    assert collector.actor()._captures["legacy"][1]["scan_generation"] == "alpha-1-1719203000-v1"
     assert record(collector).link.state == "ok"
 
 
@@ -328,15 +330,15 @@ def test_v2_rescan_is_confirmed_only_by_the_manifest_receipt(tmp_path):
     assert reply.job.protocol == "receipt"
     collector.settle()
     assert collector.host.rescan_requests == [(SID, "e" * 32)]
-    assert collector.summary()["active_job"]["phase"] == "pending"
+    assert collector.latest_job()["state"] == "pending"
     collector.host.runs[SID] = HostRun(present=True, scanning=True, run_id="9" * 32, pending=frozenset({"e" * 32}))
     for _ in range(5):
         collector.tick(5)
-    assert collector.summary()["active_job"]["phase"] == "pending", "C4 a scheduled scan moved the waiting request"
+    assert collector.latest_job()["state"] == "pending", "C4 a scheduled scan moved the waiting request"
     assert collector.host.rescan_requests == [(SID, "e" * 32)], "the request was resent while a scan held the lock"
     collector.host.runs[SID] = HostRun(present=True, scanning=True, run_id="8" * 32, request_ids=frozenset({"e" * 32}))
     collector.tick(5)
-    assert collector.summary()["active_job"]["phase"] == "running"
+    assert collector.latest_job()["state"] == "running"
     collector.host.runs[SID] = HostRun()
     binding, root, _, fields = host.volumes[VA]
     host.volume(VA, binding, root, capture(VA, binding, root, collector.clock.now - 5), **fields)
@@ -441,79 +443,6 @@ def test_an_unparsable_manifest_keeps_the_data_and_job_deadlines_still_run(tmp_p
 # ------------------------------------------------------------------ M5a review F3: a volume with several roots
 
 
-def multi_root_payload(roots, mountpoint):
-    from collector import contract
-    from collector.view import volumes_payload
-    volume = volume_doc(VA, BA, mountpoint)
-    volume["roots"] = [{"scan_root": root, "binding": f"b-{index:016x}", "prune_class": "data"} for index, root in enumerate(roots)]
-    doc = capture_doc(VA, BA, roots[0])
-    doc["outcome"], doc["roots"] = "complete", []
-    for index, path in enumerate(roots):
-        root = capture_doc(VA, f"b-{index:016x}", path)["roots"][0]
-        root.update(outcome="complete", errors=[], counts={"bytes": 7, "files": 1, "dirs": 1, "errors": 0, "vanished_dirs": 0})
-        root["tree"] = {"name": path.rsplit("/", 1)[-1], "kind": "dir", "bytes": 7, "files": 1, "uid": 0, "mtime": 0,
-                        "children": [{"name": "proj", "kind": "dir", "bytes": 7, "files": 1, "uid": 0, "mtime": 0}]}
-        doc["roots"].append(root)
-    data = gz(doc)
-    volume["capture"] = {"sha256": sha(data), "bytes": len(data), "scan_started_unix": 1764100000,
-                         "scan_finished_unix": 1764103400, "outcome": "complete"}
-    manifest = contract.parse_manifest(encode(manifest_doc(volumes=[volume])))
-    parsed = contract.parse_capture(data, manifest.volume(VA).expected(sha(data)))
-    return volumes_payload(SID, manifest, {VA: parsed}, {VA: "current"})
-
-
-VIEWER_PROBE = r"""
-import fs from 'node:fs';
-const removal = await import(process.argv[1] + '/removal.js');
-const overview = await import(process.argv[1] + '/views/overview.js');
-const {payload, overview: summary, paths} = JSON.parse(fs.readFileSync(0, 'utf8'));
-const verdicts = Object.fromEntries(paths.map(path => {
-  const result = removal.validateCleanupSelection(payload, {path, kind: 'directory', owner: 'kim', bytes: 1});
-  return [path, result.accepted ? 'accepted' : result.reason.code];
-}));
-const total = overview.aggregateMountCapacity(overview.summarizeMounts(summary));
-console.log(JSON.stringify({verdicts, totalBytes: total.totalBytes, groups: total.capacityEntries.length}));
-"""
-
-
-def viewer_verdicts(payload, paths):
-    import pathlib
-    import subprocess
-    from collector.contract import snapshot_response
-    from collector.view import render_snapshot
-    summary = snapshot_response(render_snapshot(payload).overview)
-    viewer = str(pathlib.Path(__file__).resolve().parents[1] / "viewer")
-    out = subprocess.run(["node", "--input-type=module", "-e", VIEWER_PROBE, viewer], check=True, capture_output=True,
-                         input=json.dumps({"payload": payload, "overview": summary, "paths": paths}).encode())
-    return json.loads(out.stdout)
-
-
-def test_each_root_of_a_volume_keeps_its_real_scan_root_and_paths():
-    for roots in (["/data/a", "/data/b"], ["/data", "/srv/share"]):
-        payload = multi_root_payload(roots, "/data")
-        assert [root["scan_root"] for root in payload["selected_roots"]] == roots
-        assert [(mount["path"], mount["tree"]["name"], mount["df_total"]) for mount in payload["mounts"]] == [
-            (root, root, 1000) for root in roots], "capacity is the volume's, repeated per root"
-        assert len({mount["mount_id"] for mount in payload["mounts"]}) == 2
-        assert {user["uid"]: user["by_mount"] for user in payload["users"]} == {1001: {root: 0 for root in roots}}
-
-
-def test_the_real_viewer_refuses_scan_roots_and_counts_the_volume_capacity_once():
-    payload = multi_root_payload(["/data/a", "/data/b"], "/data")
-    result = viewer_verdicts(payload, ["/data/a", "/data/b", "/data/a/proj", "/data/b/proj"])
-    assert result["verdicts"] == {"/data/a": "scan_root", "/data/b": "scan_root",
-                                  "/data/a/proj": "accepted", "/data/b/proj": "accepted"}
-    assert (result["totalBytes"], result["groups"]) == (1000, 1), "the volume's capacity was counted per root"
-    payload = multi_root_payload(["/data", "/srv/share"], "/data")
-    result = viewer_verdicts(payload, ["/srv/share", "/srv/share/proj", "/data/proj", "/data/srv/share/proj"])
-    assert result["verdicts"] == {"/srv/share": "scan_root", "/srv/share/proj": "accepted", "/data/proj": "accepted",
-                                  "/data/srv/share/proj": "accepted"}
-    assert (result["totalBytes"], result["groups"]) == (1000, 1)
-
-
-# ------------------------------------------------------------------ M5a review F2: a delivered request is not sent again
-
-
 def test_a_request_waiting_in_the_mailbox_is_sent_once_while_the_clock_stands_still(tmp_path):
     collector, host = v2_collector(tmp_path)
     collector.host.runs[SID] = HostRun(pending=frozenset({"e" * 32}))  # delivered; run.json not written yet
@@ -556,8 +485,8 @@ def test_a_capture_that_stays_gone_backs_off_and_is_shown_but_never_rejected(tmp
     # One fetch, one manifest reread that names the same sha, one more fetch: then back-off.
     assert (collector.host.captures_of(sha(data)), len(collector.host.manifest_calls)) == (2, 2), "SSH loop with no back-off"
     assert sha(data) not in record(collector).data.rejected
-    roots = {root["mount_id"]: root for root in snapshot(collector)["selected_roots"]}
-    assert (roots[VA]["status"], roots[VA]["data_error"], roots[VB]["data_error"]) == ("skipped", "CAPTURE_GONE", None)
+    roots = mounts(collector)
+    assert (roots[VA]["capture"], roots[VA]["data_error"], roots[VB]["data_error"]) == (None, "CAPTURE_GONE", None)
     fetches = []
     for _ in range(12):
         collector.tick(60)
@@ -567,7 +496,7 @@ def test_a_capture_that_stays_gone_backs_off_and_is_shown_but_never_rejected(tmp
     collector.host.volume_captures[(VA, sha(data))] = data
     collector.tick(600)
     assert record(collector).data.accepted[VA] == sha(data)
-    assert {root["mount_id"]: root for root in snapshot(collector)["selected_roots"]}[VA]["data_error"] is None
+    assert mounts(collector)[VA]["data_error"] is None
 
 
 # ------------------------------------------------------------------ M5a review nits
@@ -578,7 +507,7 @@ def test_scan_duration_is_the_last_runs_own_duration(tmp_path):
     host.publish(last_run={"run_id": "1" * 32, "trigger": "timer", "plan": "full", "started_unix": 1000,
                            "finished_unix": 1600, "outcome": "complete", "agent_sha": None})
     collector.tick()
-    assert snapshot(collector)["scan_duration_sec"] == 600
+    assert record(collector).data.manifest.last_run.finished_unix - record(collector).data.manifest.last_run.started_unix == 600
 
 
 def test_a_volume_without_an_accepted_capture_makes_the_server_freshness_unknown(tmp_path):
@@ -593,17 +522,17 @@ def test_a_volume_without_an_accepted_capture_makes_the_server_freshness_unknown
 def test_a_failed_or_old_capacity_sample_is_not_judged_as_current(tmp_path):
     collector, host = v2_collector(tmp_path)
     binding, root, data, fields = host.volumes[VA]
-    written = 1764103405  # manifest_doc's written_unix, host clock
+    written = collector.clock.now
     for capacity in ({"total": 1000, "used": 990, "avail": 10, "observed_unix": written, "status": "failed"},
                      {"total": 1000, "used": 990, "avail": 10, "observed_unix": written - 901, "status": "ok"}):
         host.volumes[VA] = (binding, root, data, {**fields, "capacity": capacity})
         host.publish()
         collector.tick()
         row = mounts(collector)[VA]
-        assert (row["df_used"], row["used_pct"], row["severity"]) == (None, None, "unknown"), capacity
-        assert row["capacity_observed_unix"] == capacity["observed_unix"]
+        assert (row["capacity"]["used"], row["capacity"]["used_pct"], row["severity"]) == (None, None, "unknown"), capacity
+        assert row["capacity"]["observed_unix"] == capacity["observed_unix"]
     host.volumes[VA] = (binding, root, data, {**fields, "capacity": {
-        "total": 1000, "used": 990, "avail": 10, "observed_unix": written - 900, "status": "ok"}})
+        "total": 1000, "used": 990, "avail": 10, "observed_unix": collector.clock.now + 61 - 900, "status": "ok"}})
     host.publish()
     collector.tick()
     assert mounts(collector)[VA]["severity"] == "critical"

@@ -255,7 +255,7 @@ async function shot(tab, name, width) {
   if (!dir) return;
   fs.mkdirSync(dir,{recursive:true});
   if (name !== 'overview') await tab.evaluate(`(async () => {
-    const target=document.querySelector('${name === 'stale' ? '#staleViewport' : '#treemap'}');
+    const target=document.querySelector('${({stale:'#staleViewport',users:'#usersChart',top:'#topTbl'})[name] || '#treemap'}');
     target.scrollIntoView({block:'center',behavior:'instant'});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   })()`);
@@ -271,6 +271,8 @@ async function checkNavigation(tab,origin,width) {
   await tab.evaluate("document.querySelector('.overview-card[data-server-id=hinton]').click()");
   await waitFor('treemap tiles',()=>tab.evaluate("document.querySelectorAll('.tmtile').length"));
   assert.equal(await tab.evaluate("new URL(location).searchParams.get('tab')"),'treemap','V6 card href decides tab');
+  await tab.evaluate('document.querySelector(".cap-folder-button[data-folder=\'/data\']").click()');
+  await waitFor('multi-root tree',()=>tab.evaluate("new URL(location).searchParams.has('vol') && document.querySelectorAll('.tm-crumb').length > 1"));
   await shot(tab,'detail-treemap',width);
   const drill = await tab.evaluate(`(() => {
     const tile=document.querySelector('.tmtile.drillable[data-cleanup-path]');
@@ -291,6 +293,7 @@ async function checkNavigation(tab,origin,width) {
   await shot(tab,'stale',width);
   await tab.evaluate("document.querySelector('.tab[data-tab=top]').click()");
   await waitFor('owner options',()=>tab.evaluate("document.getElementById('ownerFilter').options.length > 1"));
+  await shot(tab,'top',width);
   const owner = await tab.evaluate(`(() => {const select=document.getElementById('ownerFilter');
     select.selectedIndex=1;select.dispatchEvent(new Event('change'));return select.value;})()`);
   await tab.evaluate('history.back()');
@@ -306,6 +309,7 @@ async function checkNavigation(tab,origin,width) {
   await waitFor('card after another tab',()=>tab.evaluate("!!document.querySelector('#panel-treemap.active') && !document.getElementById('detailView').hidden"));
   await tab.evaluate("document.querySelector('.tab[data-tab=users]').click()");
   await waitFor('Users chart',()=>tab.evaluate("!!document.querySelector('#usersChart canvas') && !!document.querySelector('#usersTbl tr[data-uid]')"));
+  await shot(tab,'users',width);
   await tab.send('Page.navigate',{url:origin+'/?server=unknown'});
   await waitFor('unknown server',()=>tab.evaluate("!document.getElementById('detailError').hidden"));
   assert.ok(await tab.evaluate("['detailHead','detailActions','detailTabs','caps','detailPanels'].every(id=>document.getElementById(id).hidden)"),'V7 unknown server hides chrome');

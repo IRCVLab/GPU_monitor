@@ -43,11 +43,6 @@ class GlobalConcurrency(DomainError):
     code = "GLOBAL_CONCURRENCY"
 
 
-class SnapshotAbsent(DomainError):
-    """SHIM(M2b..M8) S5: the v1 snapshot route's answer for a known server with no data."""
-    code = "SNAPSHOT_ABSENT"
-
-
 class RescanUnavailable(DomainError):
     """A v2 host whose transport cannot deliver a request id: no job, no cooldown. M3b's gate lifts it."""
     code = "RESCAN_UNAVAILABLE"

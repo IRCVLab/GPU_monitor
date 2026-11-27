@@ -30,24 +30,22 @@ export function renderServer(state,previous,{navigate,dispatch,chart,resize}) {
     renderSelectionBar(detail,entries,ui.selectionBarExpanded,dispatch);
   if (!ready) { el('rescanNotice').hidden = true; return; }
   const activity = resources['activity/'+id];
-  const summary = resources.fleet?.data?.servers.find(row => row.server_id === id);
-  const facts = activity?.data ?? detail;
-  const status = {...facts.activity, estimate_duration_sec:facts.eta?.typical_sec,
-    estimate_max_duration_sec:facts.eta?.longest_sec};
-  renderScanStatus(status,detail,{
-    now:status.host_now_unix == null ? undefined : status.host_now_unix + (activity?.received ? monotonicSeconds()-activity.received : 0)});
+  const observation = activity?.data && activity.received >= active.received ? activity : active;
+  const facts = observation.data;
+  const hostTime = facts.activity.host_now_unix;
+  renderScanStatus(facts,detail,{now:hostTime == null ? null : hostTime + monotonicSeconds()-observation.received});
   const rescan = state.rescans[id];
-  const phase = rescan?.busy ? rescan.phase : status.state === 'running' ? 'running' : 'idle';
+  const phase = rescan?.busy ? rescan.phase : facts.job || facts.activity.state === 'running' ? 'running' : 'idle';
   const btn = el('rescanBtn');
   btn.disabled = !resources.session?.data?.can_rescan || phase !== 'idle';
   btn.setAttribute('aria-busy',String(phase !== 'idle'));
   btn.dataset.rescanState = phase;
-  btn.title = btn.disabled && phase === 'idle' ? 'Read-only session: manual rescan is disabled.' : 'Run a fresh scan now';
+  btn.title = phase !== 'idle' ? 'Scan is running' : btn.disabled ? 'Read-only session: manual rescan is disabled.' : 'Run a fresh scan now';
   const message = rescan?.message ?? active.code;
   renderNotice(el('rescanNotice'),message);
   const dataChanged = previous?.resources[detailKey(id)]?.data !== detail;
   const routeChanged = previous?.route !== route;
-  if (dataChanged || routeChanged || previous?.resources['activity/'+id]?.data?.capacity !== status.capacity)
+  if (dataChanged || routeChanged)
     renderHeader(detail,selectedMount(detail,route),navigate);
   if (!(resize || dataChanged || routeChanged || previous?.ui !== ui || previous?.selection[id] !== state.selection[id])) return;
   const tab = route.tab === 'top' ? 'topfiles' : route.tab;
@@ -58,7 +56,8 @@ export function renderServer(state,previous,{navigate,dispatch,chart,resize}) {
   document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active',panel.id === 'panel-'+tab));
   const mountPaths = detail.volumes.map(v => v.volume_id);
   const uidColorMap = new Map([...detail.users].sort((a,b) => b.bytes-a.bytes).map((u,i) => [u.uid,PALETTE[i] ?? OTHER_COLOR]));
-  const context = {DATA:detail, route, ui, entries, navigate, mountPaths, uidColorMap,
+  const volumeLabels = Object.fromEntries(detail.volumes.map(v => [v.volume_id,v.mountpoint]));
+  const context = {DATA:detail, volumeLabels, route, ui, entries, navigate, mountPaths, uidColorMap,
     toggleUserRow:uid => dispatch({type:'ToggleUserRow',uid}),
     toggleCleanupSelectedItem:item => dispatch(entries.some(e => e.path === item.path) ? {type:'Unselect',path:item.path} : {type:'Select',item}),
     mountColor:Object.fromEntries(mountPaths.map((path,i) => [path,MOUNT_PALETTE[i % MOUNT_PALETTE.length]])),

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate deterministic, privacy-safe sample fixtures for storage-viz.
 
-Produces hinton, atlas, orion, and zeus schema_version 1 snapshots. Sizes are in
+Produces hinton, atlas, orion, and zeus v2 manifests with per-volume captures. Sizes are in
 bytes. Tree nodes carry other_bytes so each directory's bytes equal
 sum(child.bytes) + other_bytes.
 """
@@ -215,7 +215,6 @@ class SnapshotBuilder:
             "scan_started_unix": self.scan_start,
             "scan_finished_unix": self.scan_finished,
             "scan_duration_sec": SCAN_DURATION_SEC,
-            "scan_generation": f"{self.server_id}-{self.scan_start}-v1",  # SHIM(M2b..M8) S5
             "run_as_root": True,
             "selected_roots": selected_roots,
             "mounts": mounts,
@@ -394,6 +393,14 @@ def write_server(directory, doc):
         for mount in group:
             path = mount["path"]
             tree = capture_tree(mount["tree"])
+            file_counts = {}
+            def count_files(node):
+                children = node.get("children", [])
+                own = node["files"] - sum(child["files"] for child in children)
+                file_counts[node["uid"]] = file_counts.get(node["uid"], 0) + own
+                for child in children:
+                    count_files(child)
+            count_files(tree)
             binding = "b-" + hashlib.sha256(path.encode()).hexdigest()[:16]
             files = [{k: row[k] for k in ("path", "mtime", "bytes", "uid")} for row in doc["top_files"]
                      if row["path"].startswith(path + "/")]
@@ -408,7 +415,7 @@ def write_server(directory, doc):
                     files.append(row)
             roots.append(dict(scan_root=path, binding=binding, prune_class="data", tree=tree, outcome="complete",
                 counts=dict(bytes=tree["bytes"], files=tree["files"], dirs=mount["scanned_dirs"], errors=0, vanished_dirs=0),
-                users=[dict(uid=u["uid"], name=u["name"], bytes=u["by_mount"][path], files=0)
+                users=[dict(uid=u["uid"], name=u["name"], bytes=u["by_mount"][path], files=file_counts.get(u["uid"], 0))
                        for u in doc["users"] if path in u["by_mount"]],
                 top_files=files, stale=[{k:r[k] for k in ("kind","path","bytes","uid","mtime")} for r in doc["stale"]
                                        if r["path"].startswith(path + "/")], errors=[]))
@@ -420,7 +427,7 @@ def write_server(directory, doc):
         (directory / (sha + ".json.gz")).write_bytes(raw)
         m = group[0]
         volumes.append(dict(volume_id=vid, identity="ambiguous" if ambiguous else "uuid",
-            diagnostic="AMBIGUOUS" if ambiguous else None, mountpoint=m["path"], fstype=m["fstype"],
+            diagnostic="AMBIGUOUS" if ambiguous else None, mountpoint="/" if len(group) > 1 else m["path"], fstype=m["fstype"],
             media=m["storage_media"], media_confidence=m["storage_media_confidence"], group="slow", cadence_sec=10800,
             roots=[{k:r[k] for k in ("scan_root","binding","prune_class")} for r in roots],
             capacity=dict(total=m["df_total"], used=m["df_used"], avail=m["df_avail"], observed_unix=finished,

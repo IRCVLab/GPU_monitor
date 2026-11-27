@@ -1,7 +1,11 @@
 """Exercise the checked-in fixture publications through the production parsers."""
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from api.fixtures import FixtureFleet
 from tools.gen_sample import SNAPSHOTS, write_server
@@ -25,3 +29,7 @@ class FixtureTest(unittest.TestCase):
         self.assertTrue(any(v.identity == "ambiguous" for v in volumes))
         self.assertTrue(any(v.last_attempt and v.last_attempt.outcome == "failed" and v.capture for v in volumes))
         self.assertTrue(any(v.capacity.status == "failed" for v in volumes))
+
+
+if __name__ == "__main__":
+    unittest.main()

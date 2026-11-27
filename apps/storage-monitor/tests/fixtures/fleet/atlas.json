@@ -35,8 +35,8 @@
         "status": "ok"
       },
       "capture": {
-        "sha256": "97c6e92012e2ffc6fbea66bbfe8765ef6a51dc6e2968c7cb6c9e7ac1349f86ca",
-        "bytes": 727,
+        "sha256": "9e07561d319b02777c16aba67065c478f310260937ba668875efa076d5b7335d",
+        "bytes": 729,
         "scan_started_unix": 1719200100,
         "scan_finished_unix": 1719200142,
         "outcome": "complete"
@@ -68,8 +68,8 @@
         "status": "ok"
       },
       "capture": {
-        "sha256": "48da39de4c95aa16092f1bc25f74e334829c6001d361adcacc182ff34ce02e0e",
-        "bytes": 714,
+        "sha256": "f0a3063ba6436ba796ea7704cc8f376916114f089deee3f6215089ffc5dc24e1",
+        "bytes": 716,
         "scan_started_unix": 1719200100,
         "scan_finished_unix": 1719200142,
         "outcome": "complete"

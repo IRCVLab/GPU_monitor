@@ -35,8 +35,8 @@
         "status": "ok"
       },
       "capture": {
-        "sha256": "78ee0b779540c5648a0611fb1056c4e35905fb01b00ee09612e596e80357bbb1",
-        "bytes": 635,
+        "sha256": "8b17500a1274b9d9ad0817c0be44ef18a5892e9d1beed29461b7adaf6657e118",
+        "bytes": 636,
         "scan_started_unix": 1719200000,
         "scan_finished_unix": 1719200042,
         "outcome": "complete"
@@ -47,7 +47,7 @@
       "volume_id": "v-09a913bcbc5506e3",
       "identity": "uuid",
       "diagnostic": null,
-      "mountpoint": "/data",
+      "mountpoint": "/",
       "fstype": "xfs",
       "media": "mixed",
       "media_confidence": "resolved",
@@ -73,8 +73,8 @@
         "status": "ok"
       },
       "capture": {
-        "sha256": "4c0023d943670a65d077aaa2675c186d4cae218213d9d1876394317efd96146b",
-        "bytes": 2236,
+        "sha256": "b56e611bf131ad0b51b4861ba2c9def7141f3bcfd6a7e92d253c90b3132778a8",
+        "bytes": 2241,
         "scan_started_unix": 1719200000,
         "scan_finished_unix": 1719200042,
         "outcome": "complete"
@@ -106,8 +106,8 @@
         "status": "ok"
       },
       "capture": {
-        "sha256": "93709087eadc88b80f459e2eb5898d178e7c10b88201a789a57db2d84867a6b4",
-        "bytes": 777,
+        "sha256": "c2c0bcb121daef4782c62a94ae96b06bd5743a9656794cd3a2f19875ede2a856",
+        "bytes": 779,
         "scan_started_unix": 1719200000,
         "scan_finished_unix": 1719200042,
         "outcome": "complete"

@@ -26,7 +26,7 @@ test('new requests cancel only the same key and superseded successes and failure
 });
 test('session errors stay visible to the viewer',async t => {
   t.mock.method(globalThis,'fetch',async url => {
-    assert.equal(url,'/api/session');
+    assert.equal(url,'/api/v2/session');
     return Response.json({},{status:404});
   });
   await assert.rejects(fetchResource('session',new AbortController().signal),{status:404});
@@ -41,8 +41,7 @@ function runViewer(t,handle) {
   const api = bindEffects(store,async (key,signal,init) => {
     calls.push(key);
     if (key === 'session') return {can_rescan:true,csrf_token:'token'};
-    if (key === 'fleet') return {servers:[{id:'a',overview_snapshot:{}},{id:'b',overview_snapshot:{}}]};
-    if (key.startsWith('activity/')) return {state:'idle'};
+    if (key === 'fleet') return {servers:[{server_id:'a',revision:'x'},{server_id:'b',revision:'y'}]};
     return handle(key,init);
   });
   return {store,calls,...api,tick:() => timers.get(5000)(),job:() => store.getState().rescans.a};
@@ -50,7 +49,7 @@ function runViewer(t,handle) {
 test('embedded overview renders without detail downloads and detail errors stay local',async t => {
   const detail = pending(), viewer = runViewer(t,key => key === 'detail/a' ? detail.promise : {hostname:'b'});
   await viewer.refresh();
-  assert.deepEqual(viewer.calls,['session','fleet','detail/a','activity/a']);
+  assert.deepEqual(viewer.calls,['session','fleet','detail/a']);
   assert.equal(viewer.store.getState().resources['detail/a'].status,'loading');
   viewer.store.dispatch({type:'Navigate',route:parseUrl('/?server=b')});
   await new Promise(setImmediate);
@@ -64,17 +63,17 @@ test('embedded overview renders without detail downloads and detail errors stay 
 test('rescan follows its job through a stale receipt and a transient error, keeps the button busy through refresh',async t => {
   const refreshed = pending();
   let details = 0;
-  const jobs = [{id:'old',state:'failed'},new Error('disconnected'),{id:'new',state:'running'},{id:'new',state:'succeeded'}];
+  const jobs = [{request_id:'old',state:'failed'},new Error('disconnected'),{request_id:'new',state:'running'},{request_id:'new',state:'succeeded'}];
   const viewer = runViewer(t,(key,init) => {
     if (key === 'detail/a') return ++details === 1 ? {hostname:'a'} : refreshed.promise;
     if (key === 'rescan/a') {
       assert.equal(init.method,'POST');
       assert.equal(init.headers['X-CSRF-Token'],'token');
-      return {job:{id:'new',state:'running'}};
+      return {job:{request_id:'new',state:'running'}};
     }
     const job = jobs.shift();
     if (job instanceof Error) throw job;
-    return {job};
+    return job.state === 'running' ? {job} : {last_job:job};
   });
   await viewer.refresh();
   await viewer.rescan();
@@ -94,18 +93,35 @@ test('conflict without local job never polls a persisted receipt, cooldown and f
   let count = 0;
   const viewer = runViewer(t,key => {
     if (key === 'detail/a') return {hostname:'a'};
-    if (key === 'job/a') return {job:{id:'new',state:'failed',result_code:'FAILED'}};
-    const failures = [{error:'ACTIVE_JOB',remote_active_state:'running'},{error:'COOLDOWN',retry_after_seconds:23},
-      {error:'ACTIVE_JOB',job:{id:'new',state:'running'}}];
-    throw Object.assign(new Error('request rejected'),{body:failures[count++]});
+    if (key === 'activity/a') return {last_job:{request_id:'new',state:'failed',result_code:'FAILED'}};
+    const failures = [{code:'ACTIVE_JOB',remote_active_state:'running'},{code:'COOLDOWN',retry_after_sec:23},
+      {code:'ACTIVE_JOB',job:{request_id:'new',state:'running'}}];
+    throw Object.assign(new Error('request rejected'),{body:{error:failures[count++]}});
   });
   await viewer.refresh();
   await viewer.rescan();
   assert.equal(viewer.job().busy,false);
-  assert.equal(viewer.calls.includes('job/a'),false);
+  assert.equal(viewer.calls.includes('activity/a'),false);
   await viewer.rescan();
   assert.match(viewer.job().message,/23s/);
   await viewer.rescan();
   assert.match(viewer.job().message,/FAILED/);
   assert.equal(viewer.job().busy,false);
+});
+
+test('the active volume capture is shared by SHA across focus and tab changes', async t => {
+  const volume = {volume_id:'v',capture:{sha256:'sha'}};
+  const viewer = runViewer(t, key => {
+    if (key === 'detail/a') return {revision:'x',volumes:[volume],mounts:[{volume_id:'v',binding:'b'}]};
+    if (key === 'capture/a') return {roots:[{binding:'b',counts:{bytes:10},tree:{name:'a',kind:'directory'}}]};
+    throw new Error('unexpected request '+key);
+  });
+  await viewer.refresh();
+  await new Promise(setImmediate);
+  await viewer.refresh(true);
+  viewer.store.dispatch({type:'Navigate',route:parseUrl('/?server=a&tab=users')});
+  viewer.store.dispatch({type:'Navigate',route:parseUrl('/?server=a&vol=v')});
+  await new Promise(setImmediate);
+  assert.equal(viewer.calls.filter(key => key === 'capture/a').length,1);
+  assert.equal(viewer.store.getState().resources['detail/a'].data.mounts[0].tree.name,'a');
 });

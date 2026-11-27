@@ -1,4 +1,4 @@
-import {escapeHtml, fmtAge, fmtDate, humanBytes, mountOf} from '../format.js';
+import {escapeHtml, fmtAge, fmtDate, humanBytes} from '../format.js';
 import {sortRows, columnValue, updateArrows} from '../columns.js';
 import {validateCleanupSelection} from '../removal.js';
 function pathCellHtml(path) {
@@ -21,7 +21,7 @@ function ageColor(age, maxAge) {
   return "rgba(255,59,48," + (0.04 + t * 0.16).toFixed(3) + ")";
 }
 
-export function renderFiles({DATA, route, colorForUid, entries, mountPaths, sort, navigate}) {
+export function renderFiles({DATA, route, colorForUid, entries, volumeLabels, mountPaths, sort, navigate}) {
   const stale = route.tab === 'stale';
   const prefix = stale ? 'stale' : 'top';
   const table = stale ? '#staleHead' : '#topTbl';
@@ -36,7 +36,7 @@ export function renderFiles({DATA, route, colorForUid, entries, mountPaths, sort
   mounts.replaceChildren(...['',...mountPaths].map(path => {
     const button = document.createElement('button');
     button.classList.toggle('active',path === (route.mount || ''));
-    button.textContent = path || 'All';
+    button.textContent = volumeLabels[path] ?? 'All';
     button.onclick = () => navigate({mount:path || null});
     return button;
   }));
@@ -54,13 +54,13 @@ export function renderFiles({DATA, route, colorForUid, entries, mountPaths, sort
     const valid = validateCleanupSelection(DATA,row);
     const pressed = entries.some(entry => entry.path === row.path);
     const button = valid.accepted ? '<button type="button" class="cleanup-select-btn' + (pressed ? ' is-selected' : '') +
-      '" data-cleanup-path="' + escapeHtml(row.path) + '" aria-label="Select ' + escapeHtml(row.path) + '" aria-pressed="' + pressed + '">Select</button>' :
+      '" data-binding="' + escapeHtml(row.binding) + '" data-cleanup-path="' + escapeHtml(row.path) + '" aria-label="Select ' + escapeHtml(row.path) + '" aria-pressed="' + pressed + '">Select</button>' :
       '<span class="hint" title="' + escapeHtml(valid.reason.message) + '">—</span>';
-    return '<tr data-row-key="' + escapeHtml(row.path) + '"' + (stale ? ' style="background:' + ageColor(row.age_days,maxAge) + '"' : '') + '><td class="selectcell">' + button +
+    return '<tr data-row-key="' + escapeHtml(JSON.stringify([row.volume_id,row.binding,row.path_b64 ?? row.path])) + '"' + (stale ? ' style="background:' + ageColor(row.age_days,maxAge) + '"' : '') + '><td class="selectcell">' + button +
       '</td><td class="num sizecell">' + sizeCellHtml(row.bytes,maxBytes) + '</td><td class="num" title="' + fmtDate(row.mtime) + '">' +
       fmtAge(columnValue(route.tab,'age',row,route)) + '</td><td><span class="owner-chip"><span class="owner-dot" style="background:' +
       colorForUid(row.uid) + '"></span>' + escapeHtml(row.owner || ('uid ' + row.uid)) + '</span></td><td><span class="mount-tag">' +
-      escapeHtml(row.mount) + '</span></td><td class="pathcell">' + pathCellHtml(row.path) + '</td></tr>';
+      escapeHtml(volumeLabels[row.mount]) + '</span></td><td class="pathcell">' + pathCellHtml(row.path) + '</td></tr>';
   }
   const viewport = document.getElementById('staleViewport');
   function paint() {

@@ -13,7 +13,7 @@ GENERATION = "alpha-1-1719200000-v1"
 
 
 def snapshot_generation(host, server_id="alpha-1"):
-    return host.summary(server_id)["overview_snapshot"]["scan_generation"]
+    return host.actor(server_id)._captures["legacy"][1]["scan_generation"]
 
 
 def admit(actor, at, cooldown=900):
@@ -30,12 +30,12 @@ def test_c1_observe_success_clears_unreachable(tmp_path):
     host = Collector(tmp_path, "alpha-1")
     host.host.observe_errors["alpha-1"] = transport_error("TIMEOUT")
     host.tick()
-    assert host.summary()["latest_pull_status"] == "unreachable"
+    assert host.summary()["link"]["state"] == "unreachable"
     host.host.observe_errors.clear()
     host.tick()
     summary = host.summary()
-    assert summary["scan_status"]["observed_unix"] == host.clock.now
-    assert summary["latest_pull_status"] == "succeeded", "C1 successful observation left the host unreachable"
+    assert summary["activity"]["observed_unix"] == host.clock.now
+    assert summary["link"]["state"] == "ok", "C1 successful observation left the host unreachable"
 
 
 def test_c1_late_transfer_failure_does_not_mark_reachable_host_unreachable(tmp_path):
@@ -50,7 +50,7 @@ def test_c1_late_transfer_failure_does_not_mark_reachable_host_unreachable(tmp_p
     host.tick()
     spawn.run()
     host.settle()
-    assert host.summary()["latest_pull_status"] == "succeeded", "C1 a late transfer timeout undid a newer observe"
+    assert host.summary()["link"]["state"] == "ok", "C1 a late transfer timeout undid a newer observe"
 
 
 def test_c2_rejected_capture_fetched_once(tmp_path):
@@ -61,7 +61,7 @@ def test_c2_rejected_capture_fetched_once(tmp_path):
     host.host.publications["alpha-1"], host.host.captures[status["sha256"]] = status, data
     for _ in range(100):
         host.tick()
-    assert host.summary()["latest_pull_status"] == "invalid_snapshot"
+    assert host.summary()["volumes"][0]["data_state"] == "stale_rejected"
     assert snapshot_generation(host) == GENERATION, "the last good snapshot was replaced"
     host.restart()
     host.tick()
@@ -74,7 +74,7 @@ def test_c8_restart_downloads_nothing(tmp_path):
     before = len(host.host.fetch_calls)
     host.restart()
     host.tick()
-    assert host.summary()["latest_pull_status"] == "succeeded"
+    assert host.summary()["link"]["state"] == "ok"
     downloads = len(host.host.fetch_calls) - before
     assert downloads == 0, f"C8 restarted collector downloaded {downloads} unchanged snapshots"
 
@@ -89,7 +89,7 @@ def test_unchanged_generation_skips_transfer_and_stays_fresh(tmp_path):
         host.tick()
     assert len(host.host.fetch_calls) == 1
     summary = host.summary()
-    assert (summary["latest_pull_status"], summary["snapshot_availability"], summary["freshness"]) == ("succeeded", "available", "fresh")
+    assert (summary["link"]["state"], bool(summary["volumes"]), summary["freshness"]) == ("ok", True, "fresh")
 
 
 def test_new_partial_snapshot_applies_and_failed_root_stays_visible(tmp_path):
@@ -98,7 +98,7 @@ def test_new_partial_snapshot_applies_and_failed_root_stays_visible(tmp_path):
     host.tick()
     summary = host.summary()
     assert snapshot_generation(host) == "alpha-1-1719201000-v1"
-    assert summary["latest_scan_result"] == "partial"
+    assert host.actor()._record.data.manifest.envelope["status"] == "partial"
 
 
 def test_remote_failed_status_keeps_last_good_with_failed_scan_result(tmp_path):
@@ -108,7 +108,7 @@ def test_remote_failed_status_keeps_last_good_with_failed_scan_result(tmp_path):
     host.tick()
     summary = host.summary()
     assert snapshot_generation(host) == GENERATION
-    assert (summary["latest_scan_result"], summary["latest_pull_status"]) == ("failed", "succeeded")
+    assert (host.actor()._record.data.manifest.envelope["status"], summary["link"]["state"]) == ("failed", "ok")
 
 
 def test_total_failure_payload_is_rejected_and_keeps_last_good(tmp_path):
@@ -118,14 +118,14 @@ def test_total_failure_payload_is_rejected_and_keeps_last_good(tmp_path):
     host.host.captures[status["sha256"]] = data
     host.tick()
     assert snapshot_generation(host) == GENERATION
-    assert host.summary()["latest_pull_status"] == "invalid_snapshot"
+    assert host.summary()["volumes"][0]["data_state"] == "stale_rejected"
 
 
 def test_unreachable_and_race_keep_last_good_and_race_is_retried(tmp_path):
     host = Collector(tmp_path, "alpha-1")
     host.host.observe_errors["alpha-1"] = transport_error("UNREACHABLE")
     host.tick()
-    assert (snapshot_generation(host), host.summary()["latest_pull_status"]) == (GENERATION, "unreachable")
+    assert (snapshot_generation(host), host.summary()["link"]["state"]) == (GENERATION, "unreachable")
     host.host.observe_errors.clear()
     status, _ = host.host.publish("alpha-1", started=1719203000)
     host.host.fetch_errors["alpha-1"] = transport_error("RACE")
@@ -144,7 +144,7 @@ def test_size_mismatch_gets_one_clean_retry_then_is_rejected(tmp_path):
     for _ in range(10):
         host.tick()
     assert host.host.fetches_of(status["sha256"]) == 2
-    assert host.summary()["latest_pull_status"] == "invalid_snapshot"
+    assert host.summary()["volumes"][0]["data_state"] == "stale_rejected"
 
 
 def test_oversized_publication_is_rejected_without_retries(tmp_path):
@@ -185,7 +185,7 @@ def test_config_drift_is_reported_without_refetching(tmp_path):
     host.restart()
     host.tick()
     summary = host.summary()
-    assert (summary["latest_pull_status"], summary["configuration_sync"]) == ("succeeded", "drifted")
+    assert (summary["link"]["state"], host.actor()._record.data.manifest.config_digest != host.servers[0].scanner_digest) == ("ok", True)
     assert len(host.host.fetch_calls) == 1
 
 
@@ -209,16 +209,16 @@ def test_user_totals_in_overview_survive_restart(tmp_path):
     host.host.publications["alpha-1"], host.host.captures[status["sha256"]] = status, data
     host.tick()
     expected = [{"uid": 1002, "name": "beta", "bytes": 20}, {"uid": 1001, "name": "alpha", "bytes": 10}]
-    assert host.summary()["overview_snapshot"]["users"] == expected
+    assert host.summary()["users_top"] == expected
     host.restart()
-    assert host.summary()["overview_snapshot"]["users"] == expected
+    assert host.summary()["users_top"] == expected
     assert len(host.host.fetch_calls) == 1
 
 
 def test_missing_snapshot_is_absent(tmp_path):
     host = Collector(tmp_path, "alpha-1", publish=False)
     summary = host.summary()
-    assert (summary["snapshot_availability"], summary["overview_snapshot"]) == ("absent", None)
+    assert summary["volumes"] == []
 
 
 def test_freshness_follows_retained_snapshot_age_through_failures(tmp_path):
@@ -253,7 +253,7 @@ def test_transfers_never_exceed_two_across_the_fleet(tmp_path):
     release.set()
     for sid in ("alpha-1", "beta-2", "gamma-3"):
         actor = host.actor(sid)
-        while host.summary(sid)["snapshot_availability"] != "available":
+        while not host.summary(sid)["volumes"]:
             actor._guard(actor._handle, actor.inbox.get(timeout=5))
     assert host.host.max_active_fetches == 2
 
@@ -287,7 +287,7 @@ def test_slow_host_does_not_delay_another_hosts_contact(tmp_path):
         before = host.host.observe_calls.count("beta-2")
         host.actor("beta-2").step()
         assert host.host.observe_calls.count("beta-2") == before + 1
-        assert host.summary("beta-2")["scan_status"]["observed_unix"] == host.clock.now
+        assert host.summary("beta-2")["activity"]["observed_unix"] == host.clock.now
     finally:
         release.set()
         slow.join(5)
@@ -306,7 +306,7 @@ def test_unreadable_store_isolates_one_server(tmp_path):
     assert host.summary("beta-2")["status"] == "error"
     assert "beta-2" not in host.host.observe_calls[-1:], "a server without a readable record contacted its host"
     after = host.summary("alpha-1")
-    volatile = {"scan_status", "link"}  # the tick is a newer contact: last_ok_unix moves on
+    volatile = {"activity", "link"}  # the tick is a newer contact: last_ok_unix moves on
     assert {key: after[key] for key in healthy if key not in volatile} == {key: healthy[key] for key in healthy if key not in volatile}
     assert after["link"]["state"] == "ok"
 
@@ -335,7 +335,7 @@ def test_a_transient_capture_read_error_at_startup_keeps_the_record_and_the_capt
     assert (directory / "record.json").read_bytes() == record
     host.host.observe_errors.clear()
     host.tick()
-    assert host.summary()["snapshot_availability"] == "available"
+    assert host.summary()["volumes"]
     assert host.fleet.view("alpha-1").error is None
     assert host.host.fetch_calls == [("alpha-1", host.host.publications["alpha-1"]["sha256"])], "the stored capture was downloaded again"
 
@@ -348,16 +348,16 @@ def test_a_corrupt_stored_capture_is_fetched_again_and_not_deleted_on_discovery(
     host.host.observe_errors["alpha-1"] = transport_error("UNREACHABLE")
     host.restart()
     assert capture.exists(), "the capture was deleted in the step that found it corrupt"
-    assert host.summary()["snapshot_availability"] == "absent"
+    assert not host.summary()["volumes"]
     host.host.observe_errors.clear()
     host.tick()
-    assert host.summary()["snapshot_availability"] == "available"
+    assert host.summary()["volumes"]
     assert host.host.fetches_of(sha) == 2
 
 
 def test_reducer_failure_keeps_last_good_view_and_other_servers_run(tmp_path, monkeypatch):
     host = Collector(tmp_path, "alpha-1", "beta-2")
-    before = host.summary("alpha-1")["overview_snapshot"]
+    before = host.fleet.view("alpha-1").publication
 
     def broken(server):
         if server.id == "alpha-1":
@@ -367,7 +367,7 @@ def test_reducer_failure_keeps_last_good_view_and_other_servers_run(tmp_path, mo
     monkeypatch.setattr(host.host, "observe", broken)
     host.tick()
     assert host.fleet.view("alpha-1").error == "TICK_FAILED"
-    assert host.summary("alpha-1")["overview_snapshot"] == before
+    assert host.fleet.view("alpha-1").publication is before
     assert host.fleet.view("beta-2").error is None
 
 
@@ -415,16 +415,16 @@ def test_a_failure_while_applying_a_capture_does_not_block_later_fetches(tmp_pat
     import collector.actor as actor_module
 
     host = Collector(tmp_path, "alpha-1")
-    real = actor_module.render_snapshot
+    real = actor_module.publication
     calls = []
 
-    def flaky(payload):
+    def flaky(*args, **kwargs):
         calls.append(1)
         if len(calls) == 1:
             raise MemoryError("transient")
-        return real(payload)
+        return real(*args, **kwargs)
 
-    monkeypatch.setattr(actor_module, "render_snapshot", flaky)
+    monkeypatch.setattr(actor_module, "publication", flaky)
     host.host.publish("alpha-1", started=1719203000)
     host.tick()
     assert snapshot_generation(host) == GENERATION
@@ -480,8 +480,8 @@ def test_cutover_imports_the_old_store_without_downloading(tmp_path):
     host.tick()
     summary = host.summary()
     assert host.host.fetch_calls == [], "the cutover downloaded a snapshot the old store held"
-    assert summary["overview_snapshot"]["scan_generation"] == GENERATION
-    assert summary["active_job"]["state"] == "succeeded"
+    assert summary["volumes"][0]["capture"] is not None
+    assert host.latest_job()["state"] == "succeeded"
     assert host.fleet.view("alpha-1").durations == {"full": [[1719100000, 3000], [1719150000, 3400]]}
     old_files = sorted(path.relative_to(state_dir) for path in state_dir.rglob("*") if not str(path.relative_to(state_dir)).startswith(("servers", "dashboard")))
     assert old_files == before, "the old store changed"
@@ -510,8 +510,8 @@ def test_completed_full_and_ssd_durations_feed_the_eta_and_survive_restart(tmp_p
     host.host.statuses["alpha-1"] = {"state": "running", "scan_plan": "full"}
     host.restart()
     host.tick()
-    status = host.summary()["scan_status"]
-    assert (status["estimate_duration_sec"], status["estimate_max_duration_sec"]) == (900, 900)
+    status = host.summary()["eta"]
+    assert (status["typical_sec"], status["longest_sec"]) == (900, 900)
 
 
 def test_record_duration_keeps_five_successful_completions_once_each():
@@ -537,20 +537,20 @@ def test_rescan_starts_ties_to_the_unit_and_succeeds_on_the_new_publication(tmp_
     host.tick()
     actor = host.actor()
     reply = admit(actor, int(host.clock.now))
-    assert reply.error is None and host.summary()["active_job"]["state"] == "running"
+    assert reply.error is None and host.latest_job()["state"] == "dispatching"
     assert spawn.run("storage-viz-rescan") == 1, "the job did not start the scan"
-    assert host.summary()["active_job"]["phase"] == "dispatching"
+    assert host.latest_job()["state"] == "dispatching"
     host.host.scans["alpha-1"] = Scan(invocation="1" * 32, full=True, run_id="s" * 32, run_state="running", run_full=True)
     host.tick(5)
-    assert host.summary()["active_job"]["phase"] == "running"
+    assert host.latest_job()["state"] == "running"
     status, _ = host.host.publish("alpha-1", started=1719300000)
     host.host.scans["alpha-1"] = Scan(run_id="s" * 32, run_state="complete", run_full=True, generation="alpha-1-1719300000-v1")
     host.tick(5)
-    assert host.summary()["active_job"]["phase"] == "collecting"
+    assert host.latest_job()["state"] == "collecting"
     spawn.run()
     host.settle()
-    job = host.summary()["active_job"]
-    assert (job["state"], job["phase"], job["result_code"]) == ("succeeded", "succeeded", "OK")
+    job = host.latest_job()
+    assert (job["state"], job["state"], job["result_code"]) == ("succeeded", "succeeded", "OK")
 
 
 def test_rescan_admission_refuses_active_job_cooldown_and_unloaded_store(tmp_path):
@@ -575,7 +575,7 @@ def test_admission_after_the_asker_gave_up_creates_no_job(tmp_path):
     actor.post(Admit("q" * 32, "operator", int(host.clock.now), 900, ask))
     assert ask.wait(0) is None
     actor.step()
-    assert host.summary()["active_job"] is None
+    assert host.latest_job() is None
 
 
 def test_job_and_cooldown_survive_restart(tmp_path):
@@ -583,11 +583,11 @@ def test_job_and_cooldown_survive_restart(tmp_path):
     now = int(host.clock.now)
     assert admit(host.actor(), now).error is None
     host.restart()
-    job = host.summary()["active_job"]
-    assert (job["state"], job["phase"]) == ("running", "reconciling"), "an in-flight start must become ambiguous after restart"
+    job = host.latest_job()
+    assert (job["state"], job["state"]) == ("reconciling", "reconciling"), "an in-flight start must become ambiguous after restart"
     host.clock.now += 20 * 60
     host.settle()
-    assert host.summary()["active_job"]["phase"] == "unconfirmed"
+    assert host.latest_job()["state"] == "unconfirmed"
     host.restart()
     cooled = admit(host.actor(), now + 899)
     assert (cooled.error, cooled.retry_after) == ("COOLDOWN", 1)
@@ -596,13 +596,12 @@ def test_job_and_cooldown_survive_restart(tmp_path):
 def test_fleet_start_serves_stored_data_from_the_first_read(tmp_path):
     from collector.fleet import Fleet
     from collector.test_bug_harness import inline
-    from collector.view import summary_v1
 
     host = Collector(tmp_path, "alpha-1")
     fleet = Fleet(host.servers, host.state_dir, host.host, clock=host.clock, spawn=inline)
     fleet.start()
     try:
-        assert summary_v1(fleet.view("alpha-1"), host.clock.monotonic())["snapshot_availability"] == "available"
+        assert fleet.view("alpha-1").publication.captures
         with pytest.raises(SystemExit):
             Fleet(host.servers, host.state_dir, host.host, clock=host.clock).start()
     finally:
@@ -631,10 +630,10 @@ def test_manual_run_that_fails_before_its_plan_fails_the_job_without_redispatch(
         host.tick(5)
         spawn.run()
         host.settle()
-        if host.summary()["active_job"]["phase"] in ("succeeded", "failed", "unconfirmed"):
+        if host.latest_job()["state"] in ("succeeded", "failed", "unconfirmed"):
             break
-    job = host.summary()["active_job"]
-    assert (job["phase"], job["result_code"]) == ("failed", "NO_SAFE_ROOTS")
+    job = host.latest_job()
+    assert (job["state"], job["result_code"]) == ("failed", "NO_SAFE_ROOTS")
     assert len(host.host.rescans) == 1, f"the scan was started {len(host.host.rescans)} times"
 
 
@@ -651,10 +650,10 @@ def test_rescan_admitted_before_any_observation_cannot_succeed_from_an_old_run(t
     host.host.rescan_errors["alpha-1"] = transport_error("RESCAN_FAILED")
     for _ in range(300):
         host.tick(5)
-        if host.summary()["active_job"]["phase"] in ("succeeded", "failed", "unconfirmed"):
+        if host.latest_job()["state"] in ("succeeded", "failed", "unconfirmed"):
             break
-    job = host.summary()["active_job"]
-    assert (job["phase"], job["result_code"]) == ("unconfirmed", "NO_TRACE"), "a rescan that never ran ended " + job["phase"]
+    job = host.latest_job()
+    assert (job["state"], job["result_code"]) == ("unconfirmed", "NO_TRACE"), "a rescan that never ran ended " + job["state"]
 
 
 def test_rescan_request_answers_within_the_reply_bound_while_the_admission_commit_stalls(tmp_path):
@@ -693,9 +692,9 @@ def test_rescan_request_answers_within_the_reply_bound_while_the_admission_commi
         host.fleet.request_rescan("beta-2", "operator")
     release.set()
     deadline = time.monotonic() + 5
-    while host.summary()["active_job"] is None and time.monotonic() < deadline:
+    while host.latest_job() is None and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert host.summary()["active_job"]["phase"] == "dispatching", "the admission that finished late was lost"
+    assert host.latest_job()["state"] == "dispatching", "the admission that finished late was lost"
     with pytest.raises(ActiveJob):
         host.fleet.request_rescan("alpha-1", "operator")
 

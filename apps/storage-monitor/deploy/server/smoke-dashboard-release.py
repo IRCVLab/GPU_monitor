@@ -88,7 +88,7 @@ def smoke(root: Path, release: Path) -> None:
             os.environ["STORAGE_VIZ_PROXY_UPSTREAM_PORT"] = str(dashboard_port)
             proxy = runpy.run_path(str(release / "deploy/direct_proxy.py"))
             with serve(proxy) as proxy_port:
-                if json.loads(fetch(proxy_port, "/api/servers")) != {"data_mode": "inventory", "servers": []}:
+                if json.loads(fetch(proxy_port, "/api/v2/fleet")).get("servers") != []:
                     raise RuntimeError("packaged dashboard returned unexpected inventory")
                 assets = set()
                 for page in VIEWER_PAGES:

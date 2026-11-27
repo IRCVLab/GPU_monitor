@@ -28,7 +28,8 @@ from collector.health import (
 from collector.inventory import Server
 from collector.store import DURATION_LIMIT, DURATION_PLANS, Record, ServerStore
 from collector.transport import TransportError
-from collector.view import ObservationView, ServerView, Snapshot, build_view, publication, render_snapshot, volumes_payload
+from collector.view import ObservationView, ServerView, build_view, publication
+from collector.legacy import legacy_volume
 
 _LOG = logging.getLogger(__name__)
 
@@ -297,7 +298,7 @@ class ServerActor:
         self.transfers = transfers or threading.BoundedSemaphore(1)
         self.spawn = spawn
         self.inbox: "queue.Queue[Any]" = queue.Queue()
-        self.view = ServerView(server=server)
+        self.view = build_view(server, Record(), None, None, None, None)
         self.loaded = False
         self.started = threading.Event()
         """Set once the first load attempt has published a view, loaded or not."""
@@ -305,9 +306,8 @@ class ServerActor:
         self._publication = None
         self._captures: Mapping[str, tuple] = {}
         """volume_id -> (sha, parsed capture) for every accepted capture: a v1 payload (S3) or a VolumeCapture."""
-        self._snapshot: Optional[Snapshot] = None
         self._rendered: Any = None
-        """What ``_snapshot`` was rendered from, so an unchanged publication renders nothing."""
+        """What the publication was rendered from, so an unchanged publication renders nothing."""
         self._bad_manifest: Optional[tuple] = None
         """Memory only: (sha256, code) of the last manifest refused, so it is read once per process."""
         self._reread_manifest = False
@@ -423,28 +423,27 @@ class ServerActor:
         return captures
 
     def _hold(self, data: health.Data, captures: Mapping[str, tuple]) -> tuple:
-        """(captures, render key, snapshot) for ``data``: the accepted captures and the v1 snapshot built from them.
-        The snapshot is reused when nothing it shows changed. Nothing is assigned until ``_swap``."""
+        """Build a publication only when its manifest, accepted captures or diagnostics change."""
         captures = {volume_id: held for volume_id, held in captures.items() if data.accepted.get(volume_id) == held[0]}
         if LEGACY_VOLUME in captures:
-            key = ("v1", captures[LEGACY_VOLUME][0])
+            key = ("v1", captures[LEGACY_VOLUME][0], health.volume_state(data, LEGACY_VOLUME))
         elif isinstance(data.manifest, HostManifest):
             key = ("v2", data.manifest.sha256, tuple(sorted(data.accepted.items())),
                    tuple(sorted(health.volume_states(data).items())), tuple(sorted(health.volume_problems(data).items())))
         else:
             key = None
         if key == self._rendered:
-            return captures, key, self._snapshot, self._publication
+            return captures, key, self._publication
         if key is None:
-            return captures, key, None, None
+            return captures, key, None
         if key[0] == "v1":
-            return captures, key, render_snapshot(captures[LEGACY_VOLUME][1]), None
-        parsed = {volume_id: capture for volume_id, (_, capture) in captures.items()}
-        return captures, key, render_snapshot(volumes_payload(self.server.id, data.manifest, parsed, health.volume_states(data),
-                                                              health.volume_problems(data))) if parsed else None, publication(data.manifest, captures)
+            sha, payload = captures[LEGACY_VOLUME]
+            manifest, parsed, raw = legacy_volume(payload, sha)
+            return captures, key, publication(manifest, parsed, raw, states=health.volume_states(data))
+        return captures, key, publication(data.manifest, captures, states=health.volume_states(data), problems=health.volume_problems(data))
 
     def _swap(self, held: tuple) -> None:
-        self._captures, self._rendered, self._snapshot, self._publication = held
+        self._captures, self._rendered, self._publication = held
 
     def _commit(self, record: Record, capture: Optional[tuple] = None) -> bool:
         """Make ``record`` current, writing it only when its durable part changed or a capture comes with it."""
@@ -469,8 +468,8 @@ class ServerActor:
         return True
 
     def _publish(self) -> None:
-        self.view = build_view(self.server, self._record, self._snapshot, self._observation, self._host_clock, self._error,
-                               self._transport, self._agent.release_sha, self._publication)
+        self.view = build_view(self.server, self._record, self._publication, self._observation, self._host_clock, self._error,
+                               self._transport, self._agent.release_sha)
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -485,13 +484,13 @@ class ServerActor:
             return replace(record, job=None, last_job=job)
         return replace(record, job=job)
 
-    def _job_observed(self, record: Record, held: Optional[Snapshot]) -> tuple:
+    def _job_observed(self, record: Record, captures) -> tuple:
         if record.job.protocol == "receipt":
             return jobs.reduce(record.job, self._trace(record))
         if self._scan is None:
             return record.job, ()
         rejected = frozenset(entry.get("generation") for entry in record.data.rejected.values())
-        accepted = held.overview.get("scan_generation") if held is not None else None  # SHIM(M2b..M5c) S3
+        accepted = captures[LEGACY_VOLUME][1]["scan_generation"] if LEGACY_VOLUME in captures else None  # SHIM(M2b..M5c) S3
         event = jobs.Observed(int(self.clock.time()), self._scan, accepted, rejected)
         return jobs.reduce(record.job, event)
 
@@ -574,8 +573,9 @@ class ServerActor:
             fetches = ()
         dispatches: tuple = ()
         if record.job is not None:
-            job, dispatches = self._job_observed(record, self._snapshot)
+            job, dispatches = self._job_observed(record, self._captures)
             record = self._with_job(record, job)
+        held = self._hold(record.data, self._captures)
         record, update_effects = self._update_observed(record, observation, at, refused)
         self._schedule(record.job is not None or observation.status.get("state") == "running"
                        or record.update.state in UPDATE_BUSY)
@@ -583,7 +583,7 @@ class ServerActor:
         self._update_settled(before, update_effects if committed else ())
         if not committed:
             return
-        self._swap(self._hold(record.data, self._captures))
+        self._swap(held)
         for fetch in fetches:
             self._start_transfer(fetch)
         for _ in dispatches:
@@ -758,7 +758,7 @@ class ServerActor:
             captures = {**self._captures, message.volume_id: (message.sha, message.payload)} if accepted else self._captures
             held = self._hold(data, captures)
             if record.job is not None and record.job.state == "collecting":
-                job, _ = self._job_observed(record, held[2])
+                job, _ = self._job_observed(record, held[0])
                 record = self._with_job(record, job)
             before = record.update
             record, update_effects = self._judge_probation(record, at, None, ())

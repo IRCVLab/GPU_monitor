@@ -98,9 +98,6 @@ PARSE_SITES = {
     "tools/check_shims.py": {
         ('done_units', 'json.loads((root / PROGRESS).read_text())'): 'Lint progress configuration.',
     },
-    "tools/scrub_fixture.py": {
-        ("", "json.loads(args.snapshot.read_bytes())"): "S5: offline v1 fixture conversion.",
-    },
     "deploy/bootstrap_host.py": {
         ('revert', 'json.loads(manifest_path.read_text())'): 'Installation rollback manifest.',
         ('preflight_bundle', "json.loads((self.payload / 'agent/storage-viz-agent.json').read_text())"): 'Bootstrap payload metadata.',
@@ -120,7 +117,7 @@ PARSE_SITES = {
         ('_json_response', "json.loads(raw.decode('utf-8') if raw else '{}')"): 'Health probe response at the standalone command boundary.',
     },
     "deploy/server/smoke-dashboard-release.py": {
-        ('smoke', "json.loads(fetch(proxy_port, '/api/servers'))"): 'Smoke probe response.',
+        ('smoke', "json.loads(fetch(proxy_port, '/api/v2/fleet'))"): 'Smoke probe response.',
         ('main', "json.loads(metadata.read_text(encoding='utf-8'))"): 'Smoke candidate metadata and activation result.',
         ('main', 'json.loads(prepared)'): 'Smoke candidate metadata and activation result.',
     },

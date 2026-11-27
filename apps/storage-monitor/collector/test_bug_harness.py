@@ -20,7 +20,8 @@ from collector.legacy import Observation, empty_status
 from collector.update import Attempt
 from collector.test_snapshot import base_payload, status_for
 from collector.transport import TransportError
-from collector.view import summary_v1
+from collector.view import server_bytes, activity_body
+from collector.inventory import CapacityThresholds
 
 
 def make_server(server_id="alpha-1", order=1, enabled=True, digest="a" * 64):
@@ -290,7 +291,7 @@ class Collector:
         self.restart()
         self.settle()
         if publish:
-            assert all(self.summary(sid)["latest_pull_status"] == "succeeded" for sid in ids)
+            assert all(self.summary(sid)["link"]["state"] == "ok" for sid in ids)
 
     def restart(self, **fleet_options):
         fleet_options = {"desired_path": self.state_dir.parent / "no-agent.json", **self.fleet_options, **fleet_options}
@@ -312,7 +313,11 @@ class Collector:
         return self.fleet.actors[server_id]
 
     def summary(self, server_id="alpha-1"):
-        return summary_v1(self.fleet.view(server_id), self.clock.monotonic())
+        return json.loads(server_bytes(self.fleet.view(server_id), self.clock.monotonic(), CapacityThresholds()))
+
+    def latest_job(self, server_id="alpha-1"):
+        state = activity_body(self.fleet.view(server_id), self.clock.monotonic())
+        return state["job"] or state["last_job"]
 
 
 def transport_error(code):

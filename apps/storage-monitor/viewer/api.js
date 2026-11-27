@@ -28,11 +28,8 @@ export function pathRoundTrips(path, bytes) {
 
 function mountRows(volumes) {
   return volumes.flatMap(volume => volume.roots.map(root => ({
-    ...root, mount_id:root.binding, volume_id:volume.volume_id, path:root.scan_root, mountpoint:volume.mountpoint,
-    status:volume.capture?.outcome ?? 'skipped', storage_media:volume.media,
-    df_total:volume.capacity?.total, df_used:volume.capacity?.used, df_avail:volume.capacity?.avail,
-    used_pct:volume.capacity?.used_pct, severity:volume.severity, capacity_observed_unix:volume.capacity?.observed_unix,
-    scan_finished_unix:volume.capture?.scan_finished_unix,
+    ...root, volume_id:volume.volume_id, path:root.scan_root, mountpoint:volume.mountpoint,
+    status:volume.capture?.outcome ?? 'skipped',
   })));
 }
 
@@ -58,7 +55,15 @@ export async function fetchResource(key, signal, options = {}) {
   else if (kind !== 'detail') path += '/' + kind;
   const {sha, volumeId, ...init} = options;
   const body = await fetchJson(path,{...init, signal, cache:kind === 'capture' ? 'default' : 'no-store'});
-  if (kind === 'detail') return normalizeDetail(body);
-  if (kind === 'capture') return {...body, roots:body.roots.map(root => ({...root,tree:treeNode(root.tree)}))};
+  if (!body || typeof body !== 'object') throw new Error('Invalid '+kind+' response');
+  if (kind === 'fleet' && !Array.isArray(body.servers)) throw new Error('Missing fleet rows');
+  if (kind === 'detail') {
+    if (body.server_id !== id || !Array.isArray(body.volumes)) throw new Error('Invalid server detail');
+    return normalizeDetail(body);
+  }
+  if (kind === 'capture') {
+    if (body.schema !== 'storage-viz.capture/2' || body.volume_id !== volumeId) throw new Error('Unexpected capture');
+    return {...body,roots:body.roots.map(root => ({...root,tree:treeNode(root.tree)}))};
+  }
   return body;
 }

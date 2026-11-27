@@ -112,7 +112,6 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "collector/ids.py": "SERVER_ID_RE = None\n",
             "collector/inventory.py": "def load_inventory(): pass\n",
             "collector/jobs.py": "class Job: pass\n",
-            "collector/live_capacity.py": "class LiveCapacity: pass\n",
             "collector/snapshot.py": "class Snapshot: pass\n",
             "collector/store.py": "class ServerStore: pass\n",
             "collector/transport.py": "class OpenSshTransport: pass\n",
@@ -1653,7 +1652,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             def getresponse(self): return FakeResponse()
             def close(self): pass
 
-        self.module._request(FakeConnection, contract, "GET", "/api/session")
+        self.module._request(FakeConnection, contract, "GET", "/api/v2/session")
 
         self.assertEqual(connections, [("192.168.0.3", 8088, 5)])
         self.assertEqual(contract.public_origin, "http://166.104.167.11:505")
@@ -1676,7 +1675,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             def getresponse(self): return FakeResponse()
             def close(self): pass
 
-        self.module._request(FakeConnection, contract, "GET", "/api/session")
+        self.module._request(FakeConnection, contract, "GET", "/api/v2/session")
 
         self.assertEqual(connections, [("166.104.167.11", 505, 5)])
 
@@ -1701,8 +1700,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         class FakeConnection:
             responses = [
                 FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie":"storage_viz_session=abc; Path=/"}),
-                FakeResponse(200, {"data_mode":"inventory", "servers":[{"id":"atlas"},{"id":"hinton"}]}),
-                FakeResponse(404, {"error":"UNKNOWN_SERVER"}),
+                FakeResponse(200, {"policy":{}, "servers":[{"server_id":"atlas"},{"server_id":"hinton"}]}),
+                FakeResponse(404, {"error":{"code":"UNKNOWN_SERVER"}}),
             ]
             def __init__(self, host, port, timeout):
                 self.host = host; self.port = port; self.timeout = timeout
@@ -1712,8 +1711,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             def close(self): pass
         self.module.run_health_check(contract, runner=runner, connection_factory=FakeConnection, sleep=lambda _: None)
         self.assertEqual(calls, [["systemctl", "is-active", "storage-viz-dashboard.service"], ["systemctl", "is-active", "storage-viz-proxy.service"]])
-        self.assertEqual([r[0:2] for r in requests], [("GET", "/api/session"), ("GET", "/api/servers"), ("POST", requests[2][1])])
-        self.assertRegex(requests[2][1], r"^/api/servers/[A-Za-z0-9_.-]{1,128}/rescan$")
+        self.assertEqual([r[0:2] for r in requests], [("GET", "/api/v2/session"), ("GET", "/api/v2/fleet"), ("POST", requests[2][1])])
+        self.assertRegex(requests[2][1], r"^/api/v2/servers/[A-Za-z0-9_.-]{1,128}/rescan$")
         self.assertNotIn(requests[2][1].split("/")[3], contract.enabled_server_ids)
         self.assertEqual(requests[2][3], b"{}")
         self.assertEqual(requests[2][2]["Cookie"], "storage_viz_session=abc")
@@ -1747,8 +1746,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             for _ in range(4)
         ] + [
             FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie": "storage_viz_session=abc; Path=/"}),
-            FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
-            FakeResponse(404, {"error": "UNKNOWN_SERVER"}),
+            FakeResponse(200, {"policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
+            FakeResponse(404, {"error": {"code": "UNKNOWN_SERVER"}}),
         ]
 
         class FakeConnection:
@@ -1843,8 +1842,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
 
         responses = [
             FakeResponse(200, {"can_rescan": True, "csrf_token": "candidate-csrf"}, {"Set-Cookie": "storage_viz_session=candidate; Path=/"}),
-            FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
-            FakeResponse(404, {"error": "UNKNOWN_SERVER"}),
+            FakeResponse(200, {"policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
+            FakeResponse(404, {"error": {"code": "UNKNOWN_SERVER"}}),
         ]
 
         class FakeConnection:
@@ -1873,8 +1872,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
 
         self.assertEqual(connections, [("127.0.0.1", 1505, 5)] * 3)
         self.assertEqual([request[:2] for request in requests], [
-            ("GET", "/api/session"),
-            ("GET", "/api/servers"),
+            ("GET", "/api/v2/session"),
+            ("GET", "/api/v2/fleet"),
             ("POST", requests[2][1]),
         ])
         self.assertTrue(all(request[2]["Host"] == "166.104.167.11:505" for request in requests))
@@ -1934,7 +1933,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
                         {"can_rescan": True, "csrf_token": "csrf"},
                         {"Set-Cookie": "storage_viz_session=abc; Path=/"},
                     ),
-                    FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
+                    FakeResponse(200, {"policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
                     FakeResponse(404, {"code": "UNKNOWN_SERVER"}),
                 ]
             )

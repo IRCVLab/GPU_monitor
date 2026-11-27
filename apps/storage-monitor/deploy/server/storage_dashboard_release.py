@@ -81,7 +81,7 @@ AGENT_BUNDLE_FILES = frozenset({
 
 BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {
     "collector/contract.py", "collector/errors.py", "collector/health.py", "collector/ids.py", "collector/judge.py",
-    "collector/live_capacity.py", "collector/update.py", "storage_fstypes.py",
+    "collector/update.py", "storage_fstypes.py",
 }
 
 

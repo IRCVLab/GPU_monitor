@@ -1,4 +1,3 @@
-import {isScanActive} from './scan-status.js';
 import {formatUrl} from '../router.js';
 "use strict";
 
@@ -37,215 +36,13 @@ function compactBytes(n) {
   return value.toFixed(value < 10 ? 2 : (value < 100 ? 1 : 0)) + " " + units[idx];
 }
 
-function asInt(value, fallback) {
-  const num = Number(value);
-  return Number.isFinite(num) ? Math.round(num) : fallback;
-}
-
-
-function isActionableMountPath(path) {
-  const value = String(path || "").replace(/\/+$/, "") || "/";
-  return value !== "/boot" && !value.startsWith("/boot/");
-}
-
-function normalizeSummary(summary) {
-  const state = summary && summary.state && typeof summary.state === "object" ? summary.state : summary || {};
-  return {
-    id: summary && summary.id ? String(summary.id) : "",
-    display_name: summary && summary.display_name ? String(summary.display_name) : (summary && summary.id ? String(summary.id) : ""),
-    order: asInt(summary && summary.order, 0),
-    mount_count: asInt(summary && summary.mount_count, 0),
-    snapshot_availability: String(state.snapshot_availability || "absent"),
-    freshness: String(state.freshness || "unknown"),
-    latest_pull_status: String(state.latest_pull_status || "not_installed"),
-    latest_scan_result: String(state.latest_scan_result || "failed"),
-    configuration_sync: String(state.configuration_sync || "unknown"),
-    active_job: state.active_job || null,
-    scan_status: summary?.scan_status ?? state.scan_status ?? null,
-  };
-}
-
 function statusPresentation(code) {
   const meta = STATUS_META[code] || STATUS_META.normal;
   return Object.assign({ code }, meta, { text: meta.shape ? meta.shape + " " + meta.label : meta.label });
 }
 
-function hasOwn(obj, key) {
-  return !!(obj && Object.prototype.hasOwnProperty.call(obj, key));
-}
-
-function normalizeBytes(value) {
-  if (typeof value !== "number") return null;
-  if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) return null;
-  return value;
-}
-
-function isCanonicalDecimal(raw, allowZero) {
-  if (!/^\d{1,10}$/.test(raw)) return false;
-  if (raw.length > 1 && raw[0] === "0") return false;
-  if (!allowZero && raw === "0") return false;
-  return true;
-}
-
-function canonicalCapacityId(value) {
-  if (typeof value !== "string") return null;
-  const match = value.match(/^dev-(\d+)-(\d+)$/);
-  if (!match) return null;
-  if (!isCanonicalDecimal(match[1], false) || !isCanonicalDecimal(match[2], true)) return null;
-  return value;
-}
-
-function canonicalMajorMinor(value) {
-  if (typeof value !== "string") return null;
-  const match = value.trim().match(/^(\d+):(\d+)$/);
-  if (!match) return null;
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) return null;
-  if (major === 0 && minor === 0) return null;
-  return String(major) + ":" + String(minor);
-}
-
-
-function capacityIdentityFromRoot(root) {
-  if (!root || typeof root !== "object") return null;
-  if (typeof root.volume_id === "string" && root.volume_id) {
-    return { kind: "volume_id", value: root.volume_id, key: "volume_id:" + root.volume_id };
-  }
-  if (hasOwn(root, "capacity_id")) {
-    const capacityId = canonicalCapacityId(root.capacity_id);
-    return capacityId ? { kind: "capacity_id", value: capacityId, key: "capacity_id:" + capacityId } : null;
-  }
-  const majorMinor = canonicalMajorMinor(root.major_minor);
-  return majorMinor ? { kind: "major_minor", value: majorMinor, key: "major_minor:" + majorMinor } : null;
-}
-
-function selectedRootByMountId(snapshot) {
-  const byMountId = new Map();
-  const roots = Array.isArray(snapshot && snapshot.selected_roots) ? snapshot.selected_roots : [];
-  for (const root of roots) {
-    const mountId = root && root.mount_id != null ? String(root.mount_id) : "";
-    if (!mountId || byMountId.has(mountId)) continue;
-    byMountId.set(mountId, root);
-  }
-  return byMountId;
-}
-
-function scanRootPath(mount, selectedRoot) {
-  return String(
-    (selectedRoot && (selectedRoot.scan_root || selectedRoot.path || selectedRoot.mountpoint))
-    || (mount && (mount.scan_root || mount.path || mount.mountpoint))
-    || "/"
-  );
-}
-
-function scannedBytesForMount(mount, selectedRoot) {
-  const mountBytes = normalizeBytes(mount && mount.scanned_bytes);
-  if (mountBytes != null) return mountBytes;
-  return normalizeBytes(selectedRoot && selectedRoot.scanned_bytes);
-}
-
-function summarizeMounts(snapshot) {
-  const mounts = Array.isArray(snapshot && snapshot.mounts) ? snapshot.mounts : [];
-  const rootsByMountId = selectedRootByMountId(snapshot);
-  return mounts.filter(mount => isActionableMountPath(mount && (mount.path || mount.mountpoint))).map((mount, index) => {
-    const mountId = mount && mount.mount_id != null ? String(mount.mount_id) : "";
-    const selectedRoot = mountId ? rootsByMountId.get(mountId) || null : null;
-    const usedBytes = normalizeBytes(mount && mount.df_used);
-    const totalBytes = normalizeBytes(mount && mount.df_total);
-    const availableBytes = normalizeBytes(mount && mount.df_avail);
-    const usedPct = Number.isInteger(mount?.used_pct) ? mount.used_pct : null;
-    const freeBytes = availableBytes;
-    const media = String((selectedRoot && (selectedRoot.storage_media || selectedRoot.block_media)) || (mount && (mount.storage_media || mount.block_media)) || "unknown");
-    const mediaConfidence = String((selectedRoot && (selectedRoot.storage_media_confidence || selectedRoot.block_media_confidence)) || (mount && (mount.storage_media_confidence || mount.block_media_confidence)) || "unknown");
-    const usedPctText = usedPct == null ? "—" : usedPct + "%";
-    const usedTotalText = compactBytes(usedBytes) + " / " + compactBytes(totalBytes);
-    const totalText = totalBytes == null ? "총용량 미확인" : "총 " + compactBytes(totalBytes);
-    const freeText = availableBytes == null ? "여유 미확인" : "여유 " + compactBytes(availableBytes);
-    const capacityText = "볼륨 " + totalText + " · " + freeText;
-    const pressure = mount?.severity || "unknown";
-    return {
-      key: String((mount && mount.mount_id) || (mount && mount.path) || index),
-      mountId,
-      path: String((mount && mount.path) || (mount && mount.mountpoint) || "/"),
-      volumePath: (selectedRoot && selectedRoot.mountpoint) || (mount && mount.mountpoint) || null,
-      scanRoot: scanRootPath(mount, selectedRoot),
-      scannedBytes: scannedBytesForMount(mount, selectedRoot),
-      usedBytes,
-      totalBytes,
-      availableBytes,
-      capacityPct: Number.isFinite(mount?.df_use_pct) ? usedPct : null,
-      capacityObservedUnix: mount.capacity_observed_unix,
-      usedPct,
-      freeBytes,
-      media,
-      mediaConfidence,
-      mediaLabel: formatMediaLabel(media),
-      usedTotalText,
-      totalText,
-      usedPctText,
-      freeText,
-      capacityText,
-      identity: capacityIdentityFromRoot(selectedRoot),
-      pressure,
-      pressureLabel: pressureText(pressure),
-      metricText: usedPctText + " · " + freeText,
-    };
-  });
-}
-
 function hasVolumeFolderLevel(volumePath, scanRoots) {
   return scanRoots.length > 1 || scanRoots[0].path !== volumePath;
-}
-
-function summarizeCapacityGroups(mounts) {
-  const groups = [];
-  const groupsByIdentity = new Map();
-  for (const mount of Array.isArray(mounts) ? mounts : []) {
-    if (!mount) continue;
-    const identityKey = mount.identity && mount.identity.key ? mount.identity.key : "";
-    const existing = identityKey ? groupsByIdentity.get(identityKey) || null : null;
-    const canMerge = !!(
-      existing
-      && capacityMetricsKnown(existing)
-      && capacityMetricsKnown(mount)
-      && compatibleCapacityMetrics(existing, mount)
-      && existing.media === mount.media
-      && existing.mediaConfidence === mount.mediaConfidence
-    );
-    if (!canMerge) {
-      const group = {
-        key: identityKey || ("path:" + mount.key),
-        path: mount.path,
-        volumePath: mount.volumePath,
-        usedBytes: mount.usedBytes,
-        totalBytes: mount.totalBytes,
-        availableBytes: mount.availableBytes,
-        capacityPct: mount.capacityPct,
-        capacityObservedUnix: mount.capacityObservedUnix,
-        usedPct: mount.usedPct,
-        freeBytes: mount.freeBytes,
-        media: mount.media,
-        mediaConfidence: mount.mediaConfidence,
-        mediaLabel: mount.mediaLabel,
-        usedTotalText: mount.usedTotalText,
-        totalText: mount.totalText,
-        usedPctText: mount.usedPctText,
-        freeText: mount.freeText,
-        capacityText: mount.capacityText,
-        identity: mount.identity,
-        pressure: mount.pressure,
-        pressureLabel: mount.pressureLabel,
-        metricText: mount.metricText,
-        scanRoots: [{ path: mount.scanRoot, scannedBytes: mount.scannedBytes }],
-      };
-      groups.push(group);
-      if (identityKey) groupsByIdentity.set(identityKey, group);
-      continue;
-    }
-    existing.scanRoots.push({ path: mount.scanRoot, scannedBytes: mount.scannedBytes });
-  }
-  return groups;
 }
 
 function formatMediaLabel(value) {
@@ -402,61 +199,11 @@ function strongestPressure(mounts) {
   return worst;
 }
 
-function derivePrimaryStatus(summaryInput, snapshot, error = null) {
-  const summary = normalizeSummary(summaryInput);
-  const mounts = summarizeMounts(snapshot);
-  const pressure = strongestPressure(mounts);
-  if (summary.snapshot_availability === "absent" && summary.latest_pull_status === "not_installed") return statusPresentation("agent_missing");
-  if (summary.snapshot_availability === "absent") return statusPresentation("snapshot_absent");
-  if (summary.latest_pull_status === "unreachable") return statusPresentation("pull_unreachable");
-  if (summary.latest_pull_status === "invalid_snapshot") return statusPresentation("pull_invalid");
-  if (summary.latest_scan_result === "failed") return statusPresentation("scan_failed");
-  if (summary.configuration_sync === "drifted") return statusPresentation("config_drift");
-  if (summary.latest_scan_result === "partial") return statusPresentation("partial_scan");
-  if (summary.freshness === "stale") return statusPresentation("stale_snapshot");
-  if (error) return statusPresentation("snapshot_load_failed");
-  if (isScanActive(summary)) return statusPresentation("active_scan");
-  if (pressure === "critical") return statusPresentation("pressure_critical");
-  if (pressure === "warning") return statusPresentation("pressure_warning");
-  return statusPresentation("normal");
-}
-
-function deriveSecondaryStatus(summaryInput, primaryCode) {
-  const summary = normalizeSummary(summaryInput);
-  if (isScanActive(summary) && primaryCode !== "active_scan") return statusPresentation("active_scan");
-  return null;
-}
-
-function buildOverviewServer(summaryInput, snapshot, error = null) {
-  const summary = normalizeSummary(summaryInput);
-  const mounts = summarizeMounts(snapshot);
-  const snapshotHasMountList = Array.isArray(snapshot && snapshot.mounts);
-  const primaryStatus = derivePrimaryStatus(summary, snapshot, error);
-  const secondaryStatus = deriveSecondaryStatus(summary, primaryStatus.code);
-  const aggregate = aggregateMountCapacity(mounts);
-  const hasKnownCapacity = aggregate.availableLabel !== "—";
-  return {
-    id: summary.id,
-    displayName: summary.display_name || summary.id,
-    order: summary.order,
-    mountCount: snapshotHasMountList ? mounts.length : summary.mount_count,
-    totalAvailableBytes: hasKnownCapacity ? aggregate.availableBytes : null,
-    totalAvailableLabel: hasKnownCapacity ? aggregate.availableLabel : "여유 미확인",
-    mounts,
-    capacityGroups: summarizeCapacityGroups(mounts),
-    aggregate,
-    primaryStatus,
-    secondaryStatus,
-    snapshot,
-    error,
-  };
-}
-
 function buildOverviewRows(summaries) {
   return summaries.map(row => {
     const mounts = (row.volumes ?? []).map(v => {
       const c = v.capacity ?? {};
-      return {identity:{key:v.volume_id,value:v.volume_id}, capacityPct:c.used_pct,key:v.volume_id, path:v.mountpoint, volumePath:v.mountpoint, usedBytes:c.used,
+      return {identity:{key:v.volume_id,value:v.volume_id}, capacityPct:c.used_pct,key:v.volume_id, path:v.mountpoint, freshness:v.freshness, volumePath:v.mountpoint, usedBytes:c.used,
         totalBytes:c.total, availableBytes:c.avail, usedPct:c.used_pct, pressure:v.severity,
         capacityObservedUnix:c.observed_unix, pressureLabel:pressureText(v.severity), mediaLabel:formatMediaLabel(v.media),
         capacityText:'볼륨 총 ' + compactBytes(c.total) + ' · 여유 ' + compactBytes(c.avail),
@@ -465,7 +212,8 @@ function buildOverviewRows(summaries) {
     });
     const aggregate = aggregateMountCapacity(mounts);
     const pressure = strongestPressure(mounts);
-    const status = row.error ? 'snapshot_load_failed' : row.freshness === 'stale' ? 'stale_snapshot' :
+    const status = row.link?.state === 'unreachable' ? 'pull_unreachable' : !mounts.length && !row.error ? 'snapshot_absent' :
+      row.volumes?.some(v => v.last_attempt?.outcome === 'failed') ? 'scan_failed' : row.error ? 'snapshot_load_failed' : row.freshness === 'stale' ? 'stale_snapshot' :
       row.activity?.state === 'running' ? 'active_scan' : pressure === 'normal' ? 'normal' : 'pressure_'+pressure;
     return {id:row.server_id, displayName:row.display_name ?? row.server_id, order:row.order, mountCount:mounts.length,
       totalAvailableLabel:aggregate.availableLabel, totalAvailableBytes:aggregate.availableBytes,
@@ -624,7 +372,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
   const operationalTone = capacityOnlyState ? "normal" : (row.primaryStatus.tone || "normal");
   const renderedMounts = row && Array.isArray(row.capacityGroups) && row.capacityGroups.length ? row.capacityGroups : row.mounts;
   const card = makeEl(doc, "a", "overview-card");
-  card.setAttribute("href", formatUrl({ page: "server", serverId: row.id, tab: "treemap" }));
+  card.setAttribute("href", formatUrl({ page: "server", serverId: row.id, tab: "treemap", volumeId:row.mounts[0]?.key }));
   card.dataset.serverId = row.id;
   card.setAttribute("data-primary-status", row.primaryStatus.code);
   card.setAttribute("data-tone", operationalTone);
@@ -656,6 +404,8 @@ function createOverviewRowElement(doc, row, handlers = {}) {
     for (const mount of renderedMounts) {
       const mountEl = makeEl(doc, "div", "overview-mount");
       mountEl.setAttribute("data-pressure", mount.pressure);
+      mountEl.dataset.freshness = mount.freshness;
+
       if (mount.pressure === "warning" || mount.pressure === "critical") {
         mountEl.setAttribute("role", "group");
         mountEl.setAttribute("aria-label", [mount.scanRoots.map(root => root.path).join(", "), mount.mediaLabel, mount.usedPctText, mount.capacityText, mount.pressureLabel].join(", "));
@@ -674,6 +424,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
         pathEl.textContent = primaryPath;
       }
       line.appendChild(pathEl);
+      if (mount.freshness === 'stale') line.appendChild(makeEl(doc,'span','overview-meta','오래됨'));
       line.appendChild(makeEl(doc, "div", "overview-mount-pct", mount.usedPctText));
       body.appendChild(line);
       const metrics = makeEl(doc, "div", "overview-mount-metrics");
@@ -844,31 +595,7 @@ function renderOverviewList(container, rows, handlers = {}) {
   scheduleOverviewMasonry(container);
 }
 
-export {
-  SAFE_SERVER_ID_RE,
-  isSafeServerId,
-  KNOWN_DETAIL_TABS,
-  compactBytes,
-  isActionableMountPath,
-  normalizeSummary,
-  selectedRootByMountId,
-  summarizeMounts,
-  summarizeCapacityGroups,
-  formatMediaLabel,
-  pressureText,
-  aggregateMountCapacity,
-  buildOverviewAggregate,
-  statusPresentation,
-  derivePrimaryStatus,
-  buildOverviewServer,
-  buildOverviewRows,
-  buildFleetUserUsage,
-  renderFleetUserUsage,
-  compatibleCapacityMetrics, hasVolumeFolderLevel,
-  renderOverviewAggregate,
-  renderOverviewList,
-  layoutOverviewMasonry,
-  totalAvailableMetaText,
-};
+export {buildOverviewRows,buildFleetUserUsage,renderOverviewList,renderFleetUserUsage,layoutOverviewMasonry,
+  hasVolumeFolderLevel,buildOverviewAggregate,renderOverviewAggregate,createOverviewRowElement};
 
 export {scheduleOverviewMasonry};

@@ -1,4 +1,4 @@
-"""Read-only fleet backed by v1 fixture snapshots."""
+"""Read-only fleet backed by manifest and volume capture fixtures."""
 import json
 import os
 from pathlib import Path
@@ -93,8 +93,8 @@ class FixtureFleet:
                 held[volume.volume_id] = sha, parse_capture(self.read_capture(server.id, volume.volume_id, sha), volume.expected(sha))
         record = Record(link=Link(state="ok"), data=Data(manifest=manifest, accepted={v: pair[0] for v,pair in held.items()}))
         mono = self.clock.monotonic()
-        return build_view(server, record, None, ObservationView({"state":"idle"}, mono), (manifest.written_unix, mono),
-                          None, "gate", publication=publication(manifest, held))
+        return build_view(server, record, publication(manifest, held), ObservationView({"state":"idle"}, mono), (manifest.written_unix, mono),
+                          None, "gate")
 
     def _bytes(self, filename):
         path = self.root / filename
