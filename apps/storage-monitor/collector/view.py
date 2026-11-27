@@ -58,7 +58,7 @@ def build_view(server: Server, record, pub: Optional[Publication], observation: 
                       "link": {"state": record.link.state, "last_ok_unix": record.link.last_ok_unix,
                       "error": record.link.error, "transport": transport or server.transport},
                       "agent": {"release_sha": release_sha, "matches_desired": bool(record.update.desired and
-                               release_sha == record.update.desired), "update": record.update.state, "last_error": record.update.last_error},
+                               release_sha == record.update.desired), "update": "manual" if server.agent_updates == "manual" else record.update.state, "last_error": record.update.last_error},
                       "revision": (pub or EMPTY_PUBLICATION).revision})[:-1]
     return ServerView(
         server=server, summary=summary, publication=pub, last_job=record.last_job, link=record.link, data=record.data,

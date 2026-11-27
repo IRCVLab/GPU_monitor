@@ -1,6 +1,7 @@
 """The fleet rollout (design §3.4, I23): the pure reducer, rollout.json, and the fleet's channel driving real actors."""
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 
@@ -65,6 +66,16 @@ def test_allows_the_canary_alone_then_everyone_and_nobody_while_halted():
     assert allows(state(phase="fleet"), OTHER)
     assert not allows(state(phase="halted"), CANARY)
     assert not allows(state(desired_sha=None), CANARY)
+
+
+def test_events_from_a_manual_host_change_nothing_and_it_never_stages():
+    manual = state(manual=frozenset({OTHER}))
+    for phase in rollout.PHASES:
+        for event in (HostRolledBack(OTHER, B, "X"), HostFailed(OTHER, B, "FLOOR"), HostInSync(OTHER, B)):
+            assert reduce(replace(manual, phase=phase), event) == replace(manual, phase=phase), (phase, event)
+    assert reduce(state(phase="fleet"), HostRolledBack(OTHER, B, "X")).phase == "halted", "an auto host still halts"
+    assert not allows(replace(manual, phase="fleet"), OTHER) and allows(replace(manual, phase="fleet"), THIRD)
+    assert reduce(manual, DesiredChanged(C, 3)).manual == frozenset({OTHER})
 
 
 def test_rollout_table_total():
@@ -190,6 +201,23 @@ def test_staging_slots_canary_alone_then_two_at_a_time_and_none_while_halted(tmp
     channel.release(CANARY)
     channel.release("s4")
     assert channel.view().phase == "halted" and not channel.acquire(CANARY)
+
+
+def test_the_fleet_channel_keeps_manual_hosts_out_of_the_rollout(tmp_path):
+    import dataclasses
+    path = write_agent(tmp_path / "agent", B)
+    hosts = servers(CANARY, OTHER, THIRD)
+    hosts[0] = dataclasses.replace(hosts[0], agent_updates="manual")  # lowest order, but manual
+    channel = Rollout(tmp_path / "state", hosts, path)
+    assert channel.view().canary == OTHER, "the canary is the lowest-order auto host"
+    assert not channel.acquire(CANARY) and not channel.permits(CANARY)
+    channel.reported(OTHER, Update(desired=B, state="probation", trial=B), Update(desired=B, state="in_sync", verified=B))
+    assert channel.view().phase == "fleet"
+    assert not channel.acquire(CANARY), "no staging slot for a manual host in the fleet phase either"
+    channel.reported(CANARY, Update(desired=B, state="probation", trial=B), Update(desired=B, state="rolling_back", last_error="X"))
+    channel.confirmed(CANARY, C)
+    assert channel.view().phase == "fleet" and [p.sha for p in channel.view().passed] == [B]
+    assert "manual" not in json.loads((tmp_path / "state" / "rollout.json").read_bytes()), "the inventory decides it"
 
 
 def test_a_restart_keeps_a_halted_rollout_halted(tmp_path):

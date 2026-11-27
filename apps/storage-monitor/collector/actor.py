@@ -438,7 +438,7 @@ class ServerActor:
         if record != stored:
             self.store.commit(record, prune=False)
         self._record = record
-        if record.update.state in updates.STAGING_STATES:
+        if record.update.state in updates.STAGING_STATES and self.server.agent_updates == "auto":
             self.channel.hold(self.server.id)
         else:
             self.channel.release(self.server.id)
@@ -835,6 +835,12 @@ class ServerActor:
         sha = desired.sha if desired is not None else None
         if sha != update.desired:
             update, _ = updates.reduce(update, updates.DesiredChanged(at, sha))
+        if self.server.agent_updates == "manual":
+            # An operator installs releases on this host: the track only names the desired release,
+            # never holds a request or a probation, and so never reaches the rollout.
+            if update.state != "in_sync":
+                update = updates.Update(desired=sha, since_unix=at, verified=update.verified, seen=update.seen)
+            return replace(record, update=update), ()
         effects: tuple = ()
         if observation.transport == "gate":  # S2 cannot stage: the track only follows the desired release
             agent = observation.agent

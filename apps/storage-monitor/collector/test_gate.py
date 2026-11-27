@@ -314,6 +314,40 @@ def test_observe_reports_the_agent_release_its_health_and_the_updaters_last_atte
     assert observe(transport).agent.attempt is None, "an unusable state.json reads as no attempt"
 
 
+class UnitlessHealth(host_gate.UnitlessHost):
+    def agent_health(self, paths):
+        return "ok"
+
+
+def test_a_truenas_host_without_units_reads_as_a_v2_host(transport, remote, tmp_path):
+    """`gate.py --root DIR --no-units`: no systemd blocks, the cron job's lock and run.json still decide."""
+    remote.paths, _ = host_gate.options(["--root", str(tmp_path / "nexus"), "--no-units"])
+    remote.units = UnitlessHealth()
+    for directory in (remote.paths.requests, remote.paths.run):
+        directory.mkdir(parents=True)
+    remote.paths.scan_lock.touch()
+    write(remote.paths.data / "manifest.json", manifest_bytes())
+    idle = observe(transport)
+    assert (idle.transport, idle.manifest.seq, idle.run.scanning, idle.agent.broken) == ("gate", 7, False, False)
+    assert idle.status["state"] != "running"
+    run = {"schema": "storage-viz.run/2", "run_id": "b" * 32, "request_ids": []}
+    write(remote.paths.data / "run.json", json.dumps(run).encode())
+    with open(remote.paths.scan_lock, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        running = observe(transport)
+    assert (running.run.scanning, running.run.run_id, running.status["state"]) == (True, "b" * 32, "running")
+    assert gate_host(transport).rescan(SERVER, REQUEST).outcome == "received"
+    assert (remote.paths.requests / REQUEST).exists()
+
+
+def test_a_systemd_host_whose_units_are_unreadable_still_fails_active_state(transport, remote):
+    remote.units.show = lambda units, properties: ""
+    write(remote.paths.data / "manifest.json", manifest_bytes())
+    with pytest.raises(TransportError) as caught:
+        observe(transport)
+    assert caught.value.code == "ACTIVE_STATE_FAILED", "only a cron host's gate lets the lock stand in for units"
+
+
 def test_observe_refuses_malformed_replies_as_bad_telemetry(transport, remote):
     good = json.loads(host_gate.observe(remote.paths, remote.units))
     for broken in ({**good, "schema": "x"}, {**good, "scan": {"state": "phase", "run": None}, "manifest": {"seq": 1, "sha256": "0" * 64}},

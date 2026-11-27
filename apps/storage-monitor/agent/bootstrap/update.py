@@ -32,6 +32,10 @@ floor_high_water: a floor raise is final, so a rollback can never undo a fix.
 
 Every step reads its state from disk, so a rerun after a crash converges.
 Standard library only, Python 3.8. The update channel never replaces this file.
+
+`update.py --root DIR` is the manual path of a host without units (TrueNAS): the
+same steps over the dataset layout, with the self-test run directly instead of
+under systemd-run. deploy/bootstrap-truenas.py stages the bundle and runs it.
 """
 from __future__ import annotations
 
@@ -49,7 +53,7 @@ import sys
 import tarfile
 import time
 from pathlib import Path, PurePosixPath
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
 BOOTSTRAP_VERSION = 1
 APPLICATION = "storage-viz-agent"
@@ -105,16 +109,26 @@ class Failed(Exception):
 
 
 class Paths:
-    def __init__(self, root: Path = Path("/")) -> None:
-        self.opt = root / "opt/storage-viz"
+    """``dataset`` is the gate's one-directory layout (gate.Paths): DIR/opt, DIR/data, DIR/run,
+    DIR/agent.yaml, and the pinned signers in DIR/bootstrap beside this file."""
+
+    def __init__(self, root: Path = Path("/"), dataset: Optional[Path] = None) -> None:
+        if dataset is None:
+            self.opt = root / "opt/storage-viz"
+            self.update = root / "var/lib/storage-viz/update"
+            self.scan_lock = root / "run/storage-viz/scan.lock"
+            self.signers = root / "etc/storage-viz/allowed_signers"
+            self.config = root / "etc/storage-viz/agent.yaml"
+        else:
+            self.opt = dataset / "opt"
+            self.update = dataset / "data/update"
+            self.scan_lock = dataset / "run/scan.lock"
+            self.signers = dataset / "bootstrap/allowed_signers"
+            self.config = dataset / "agent.yaml"
         self.releases = self.opt / "releases"
         self.current = self.opt / "current"
-        self.update = root / "var/lib/storage-viz/update"
         self.incoming = self.update / "incoming"
         self.state = self.update / "state.json"
-        self.scan_lock = root / "run/storage-viz/scan.lock"
-        self.signers = root / "etc/storage-viz/allowed_signers"
-        self.config = root / "etc/storage-viz/agent.yaml"
 
 
 def verify_signature(signers: Path, bundle: bytes, signature: bytes, scratch: Path) -> bool:
@@ -141,6 +155,18 @@ def sandboxed_selftest(release: Path, config: Path) -> Tuple[bool, str]:
     try:
         done = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, timeout=300, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, type(exc).__name__
+    return done.returncode == 0, done.stdout.decode("utf-8", "replace")[-400:]
+
+
+def direct_selftest(release: Path, config: Path) -> Tuple[bool, str]:
+    """The self-test without the systemd sandbox, for a host with no units (TrueNAS, ``--root``).
+    The cron job runs scans there as plain root, so this is the confinement they have."""
+    argv = [str(release / "bin/storage-viz-agent"), "selftest", "--config", str(config)]
+    try:
+        done = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              env={"LC_ALL": "C", "TZ": "UTC", "PATH": "/usr/bin:/bin"}, timeout=300, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         return False, type(exc).__name__
     return done.returncode == 0, done.stdout.decode("utf-8", "replace")[-400:]
@@ -529,9 +555,17 @@ def _unlink(path: Path) -> None:
         pass
 
 
-def main() -> int:
-    return Updater(Paths()).run()
+def main(argv: Sequence[str] = ()) -> int:
+    """No arguments: the update unit. ``--root DIR``: a manual run on a host with the dataset layout,
+    where deploy/bootstrap-truenas.py has staged the bundle and written the request."""
+    args = list(argv)
+    if not args:
+        return Updater(Paths()).run()
+    if len(args) != 2 or args[0] != "--root" or not os.path.isabs(args[1]) or os.path.normpath(args[1]) != args[1]:
+        print("usage: update.py [--root DIR]", file=sys.stderr)
+        return 2
+    return Updater(Paths(dataset=Path(args[1])), selftest=direct_selftest).run()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

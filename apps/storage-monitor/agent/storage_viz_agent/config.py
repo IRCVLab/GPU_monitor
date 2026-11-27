@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -20,7 +20,11 @@ _ALLOWED_KEYS = frozenset({
     "prune_data_mb",
     "top",
     "stale_days",
+    "host_profile",
+    "volume_media",
 })
+HOST_PROFILES = ("standard", "truenas")
+MEDIA_OVERRIDES = ("ssd", "hdd")
 _FORBIDDEN_KEYS = frozenset({
     "targets",
     "include_mounts",
@@ -53,6 +57,10 @@ class ScannerConfig:
     stale_days: int
     volume_aliases: dict
     config_digest: str
+    host_profile: str = "standard"
+    """``truenas`` keeps only the data-pool datasets under /mnt (mount_policy.truenas_classifier)."""
+    volume_media: Mapping[str, str] = field(default_factory=dict)
+    """mountpoint -> ssd or hdd, replacing the sysfs media classification of that mount."""
 
 
 def _canonical_json(data: Mapping[str, Any]) -> bytes:
@@ -92,8 +100,15 @@ def load_config(path: Union[os.PathLike, str]) -> ScannerConfig:
     aliases = raw.get("volume_aliases", {})
     if not isinstance(aliases, dict) or any(not k.startswith("/") or not isinstance(v, str) or not v or "\0" in v for k, v in aliases.items()):
         raise ValueError("volume_aliases must map absolute paths to nonempty names")
+    host_profile = raw.get("host_profile", "standard")
+    if host_profile not in HOST_PROFILES:
+        raise ValueError(f"host_profile must be one of {', '.join(HOST_PROFILES)}")
+    media = raw.get("volume_media", {})
+    if not isinstance(media, dict) or any(not k.startswith("/") or v not in MEDIA_OVERRIDES for k, v in media.items()):
+        raise ValueError(f"volume_media must map absolute mountpoints to one of {', '.join(MEDIA_OVERRIDES)}")
     digest = hashlib.sha256(_canonical_json(raw)).hexdigest()
-    return ScannerConfig(server_id, scanner_path, data_dir, run_dir, threads, prune_home_mb, prune_data_mb, top, stale_days, aliases, digest)
+    return ScannerConfig(server_id, scanner_path, data_dir, run_dir, threads, prune_home_mb, prune_data_mb, top, stale_days,
+                         aliases, digest, host_profile, media)
 
 
 def _string(value: Any, name: str) -> str:

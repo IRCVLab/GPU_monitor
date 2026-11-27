@@ -47,7 +47,7 @@ def parse_observe(raw: bytes, server: Server) -> legacy.Observation:
     try:
         probe = {
             "lifecycle": section["lifecycle"], "published": section["published"], "progress": section["progress"],
-            "services": _services(section["services"], facts.units), "timer": section["timer"],
+            "services": _services(section["services"], facts), "timer": section["timer"],
             "remote_unix": section["remote_unix"], "remote_monotonic": section["remote_monotonic"],
         }
     except (KeyError, TypeError, AttributeError) as exc:
@@ -59,8 +59,14 @@ def parse_observe(raw: bytes, server: Server) -> legacy.Observation:
                               facts.run, transport="gate", agent=facts.agent)
 
 
-def _services(services: Any, units: Mapping[str, Any]) -> list:
-    """The ``systemctl show`` blocks, named: the gate reports Id and InvocationID under ``units``."""
+def _services(services: Any, facts: contract.GateObservation) -> list:
+    """The ``systemctl show`` blocks, named: the gate reports Id and InvocationID under ``units``.
+
+    A cron host's gate has no units, so its scan lock stands in for the scheduled unit's ActiveState.
+    """
+    if facts.cron:
+        return [f"Id={SERVICE_UNITS[1]}\nActiveState={'active' if facts.run.scanning else 'inactive'}"]
+    units = facts.units
     if isinstance(services, dict):  # the gate shrank it to fit its cap
         return []
     blocks = []

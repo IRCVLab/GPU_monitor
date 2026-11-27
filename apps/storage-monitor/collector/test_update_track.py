@@ -1,6 +1,8 @@
 """The update track driven by the actor: what it sends the gate, when, and what it reports to the rollout."""
 from __future__ import annotations
 
+import dataclasses
+
 from collector import update as updates
 from collector.contract import HostRun
 from collector.test_bug_harness import FakeUpdater, ManualSpawn, transport_error
@@ -303,3 +305,31 @@ def test_a_stage_whose_result_never_comes_is_staged_again_and_a_restart_mid_acti
     channel.slots.clear()
     collector.restart()
     assert channel.slots == {SID} and track(collector).state == "activating"
+
+
+def manual(collector):
+    """The inventory now says ``agent_updates: manual`` for the host; central restarts with it."""
+    collector.servers = [dataclasses.replace(server, agent_updates="manual") for server in collector.servers]
+    collector.restart()
+
+
+def test_a_manual_host_is_never_staged_and_shows_its_release_as_manual(tmp_path):
+    collector, host, channel = gate_collector(tmp_path)
+    manual(collector)
+    for _ in range(5):
+        collector.tick(updates.RESEND_SECONDS)
+    assert calls(collector) == [] and channel.slots == set(), "no update verb and no staging slot"
+    assert track(collector).state == "in_sync" and track(collector).desired == NEW
+    agent = collector.summary(SID)["agent"]
+    assert (agent["release_sha"], agent["update"], agent["matches_desired"]) == (OLD, "manual", False)
+    assert [report for report in channel.reports if report[1] != report[2]] == []
+
+
+def test_a_host_made_manual_mid_update_drops_its_probation_and_slot(tmp_path):
+    collector, host, channel = gate_collector(tmp_path)
+    to_probation(collector)
+    manual(collector)
+    collector.tick(updates.PROBATION_GRACE_SECONDS + 7200)  # long past the probation deadline
+    assert track(collector).state == "in_sync" and channel.slots == set()
+    assert calls(collector) == [("stage-update", NEW), ("activate-update", NEW)], "no rollback-update to a manual host"
+    assert not [r for r in channel.reports if r[2] in ("rolling_back", "refused")]

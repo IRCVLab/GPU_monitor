@@ -257,7 +257,7 @@ NOT_GATE = "NOT_GATE"
 """The host answered without the gate's header line: it is not bootstrapped, or the bootstrap was reverted."""
 GATE_CODES = frozenset({
     "USAGE", "IO_ERROR", "START_FAILED", "FILE_TOO_LARGE", "OUTPUT_TOO_LARGE", "SHORT_READ", "BAD_SIGNATURE_SIZE",
-    "CAPTURE_GONE", "MANIFEST_MISSING", "SNAPSHOT_GONE", "STATUS_MISSING",
+    "CAPTURE_GONE", "MANIFEST_MISSING", "SNAPSHOT_GONE", "STATUS_MISSING", "UPDATES_MANUAL",
 })
 """The gate's own refusal codes (agent/bootstrap/gate.py), kept as the error code. Any other code a host sends
 becomes GATE_REFUSED with the host's text in ``host_code``, so a host can never claim one of central's own

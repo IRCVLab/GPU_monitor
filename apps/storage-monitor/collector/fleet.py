@@ -23,7 +23,7 @@ from collector.errors import (
     ActiveJob, Cooldown, GlobalConcurrency, RescanUnavailable, ServerBusy, StoreUnavailable, UnknownServer,
 )
 from collector.ids import RELEASE_SHA_RE, SERVER_ID_RE, SHA256_RE
-from collector.inventory import Server, canary_of
+from collector.inventory import Server, canary_of, manual_updates
 from collector.store import ServerStore
 from collector.view import ServerView, active_job, job_body
 
@@ -96,7 +96,9 @@ class Rollout:
     def __init__(self, state_root: pathlib.Path, servers: Iterable[Server], desired_path: pathlib.Path) -> None:
         self.path = state_root / "rollout.json"
         self.desired_path = desired_path
-        self._canary = canary_of(tuple(servers))
+        servers = tuple(servers)
+        self._canary = canary_of(servers)
+        self._manual = manual_updates(servers)
         self._lock = threading.Lock()
         self._staging: set = set()
         self._stamp: Any = ()
@@ -108,7 +110,7 @@ class Rollout:
     def _current(self) -> rollout.RolloutState:
         """The state with the desired release refreshed. Call with the lock held."""
         if self._state is None:
-            self._state = replace(self._load(), canary=self._canary)  # the inventory decides the canary
+            self._state = replace(self._load(), canary=self._canary, manual=self._manual)  # the inventory decides both
         try:
             st = os.stat(self.desired_path)
             stamp: Any = (st.st_mtime_ns, st.st_size, st.st_ino)

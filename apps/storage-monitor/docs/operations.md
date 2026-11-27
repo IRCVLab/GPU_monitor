@@ -522,6 +522,57 @@ monitoring ALL=(root) NOPASSWD: /usr/bin/systemctl start storage-viz-scan.servic
 
 Do not grant shell, restart, stop, daemon-reload, edit, or wildcard sudo privileges to `monitoring`.
 
+## TrueNAS host (Nexus)
+
+Nexus is a TrueNAS SCALE host. TrueNAS keeps `/` and `/usr` read-only and rebuilds `/etc` on boot and on update, so the standard bootstrap's units, sudoers and `/etc/storage-viz` files would not survive. On Nexus everything lives in the pool dataset `tank/storage-viz`, mounted at `/mnt/tank/storage-viz`:
+
+| Path | Contents |
+| --- | --- |
+| `opt/releases/<sha>`, `opt/current` | agent releases and the active one |
+| `data/` | manifest, captures, `requests/` (setgid `2770`), `update/` |
+| `run/` | `scan.lock`, `progress.json` |
+| `bootstrap/` | `gate.py`, `update.py`, `allowed_signers` |
+| `agent.yaml` | `host_profile: truenas`, `volume_aliases` and `volume_media: ssd` for `/mnt/tank/datasets` and `/mnt/tank/workspace` |
+| `home/` | home of `monitoring`; the middleware writes `.ssh/authorized_keys` |
+
+The differences from a standard host:
+
+- A TrueNAS cron job runs the agent as root every 5 minutes with `--scheduled`. It also serves rescans: the gate only writes `data/requests/<id>`, and the next cron run consumes it. There are no systemd units and no sudoers rule.
+- `monitoring` is a middleware user in the group `storage-viz-collector`, with shell `/usr/bin/sh`. Its key runs `gate.py --root /mnt/tank/storage-viz --no-units`. The gate reports `scheduler: "cron"` and no units, and refuses `stage-update`, `activate-update` and `rollback-update` with `UPDATES_MANUAL`.
+- The `truenas` profile scans only the data-pool datasets under `/mnt`. It skips the boot pool, the pool root, the `.system` datasets and the dataset that holds the agent's data.
+- All files there are owned by `nobody` because of the NFS `mapall`, so the per-user breakdown shows one owner. The folder tree, top files and stale files are still accurate.
+
+### Set up
+
+Run the setup tool from the central host. It connects as `truenas_admin` with that account's key. Give it the sudo password through the environment or stdin; never on the command line.
+
+```bash
+cd ~/GPU_monitor/apps/storage-monitor
+read -rs STORAGE_VIZ_SUDO_PASSWORD && export STORAGE_VIZ_SUDO_PASSWORD
+./deploy/bootstrap-truenas.py --host 192.168.0.200 --admin truenas_admin --admin-key ~/.ssh/<admin-key> \
+  --monitoring-key /etc/storage-viz/keys/nexus_ed25519.pub
+unset STORAGE_VIZ_SUDO_PASSWORD
+```
+
+The tool prints every command it sends. It verifies the bundle under `/opt/storage-viz-dashboard/agent` against `agent/bootstrap/allowed_signers` before it contacts the host. The host's `update.py` checks the signature again, extracts the release, self-tests it and switches `opt/current`. The tool checks that `home/.ssh/authorized_keys` holds exactly the forced-command line, and it stops with an error if the middleware changed it. Expect the last line to report `observe through the gate: scan idle, release <sha>, health ok`. The tool is idempotent: a rerun changes only what differs.
+
+Then add Nexus to the inventory with `transport: gate` and `agent_updates: manual`, as in the disabled `nexus` entry in `config/servers.example.yaml`, and restart the dashboard. The canary must be another server: the inventory refuses a manual canary.
+
+### Upgrade the agent
+
+The update channel never stages a release on a server with `agent_updates: manual`. The dashboard shows its release with `update: "manual"`. After the dashboard release carries a newer bundle, install it by hand:
+
+```bash
+./deploy/bootstrap-truenas.py --upgrade --host 192.168.0.200 --admin-key ~/.ssh/<admin-key> \
+  --monitoring-key /etc/storage-viz/keys/nexus_ed25519.pub
+```
+
+If a scan holds the lock, the tool says so and the request stays queued. Rerun it after the scan. The previous release stays in `opt/releases`. To roll back to it, run on Nexus as root: `echo "activate <previous-sha>" > /mnt/tank/storage-viz/data/update/incoming/activate`, then `python3 -I /mnt/tank/storage-viz/bootstrap/update.py --root /mnt/tank/storage-viz`. Use `rollback <sha>` instead of `activate` to also mark the current release bad.
+
+### Revert
+
+`./deploy/bootstrap-truenas.py --revert --host 192.168.0.200 --admin-key ~/.ssh/<admin-key>` removes the cron job and the `monitoring` user. It keeps the dataset and the group. Add `--purge` to delete them too. Remove the server from the inventory first.
+
 ## Collection and manual rescan
 
 `storage-viz-scan.timer` starts `storage-viz-scheduled-scan.service` at the start of each UTC hour with up to six minutes of scheduling delay. The agent scans resolved SSD roots every hour and HDD, mixed, and unresolved roots every third hourly slot. A persistent timer catches up after downtime. A new disk group, an incomplete scan, or a missing cached result triggers a fresh scan at the next tick. The shared agent lock prevents concurrent scans.

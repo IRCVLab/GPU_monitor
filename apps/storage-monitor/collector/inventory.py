@@ -16,6 +16,7 @@ from collector.ids import SERVER_ID_RE
 HOST_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^localhost$")
 MAX_INT = 10**18
 TRANSPORTS = ("gate", "legacy")
+AGENT_UPDATES = ("auto", "manual")
 
 SCANNER_ALLOWED_KEYS = frozenset({
     "server_id",
@@ -58,6 +59,7 @@ SERVER_ALLOWED_KEYS = frozenset({
     "scanner",
     "transport",
     "canary",
+    "agent_updates",
 })
 SECURITY_FORBIDDEN_KEYS = frozenset({
     "password", "passphrase", "token", "secret", "private_key", "private_key_data",
@@ -123,6 +125,9 @@ class Server:
     """``legacy`` (the default): S2 until the host's gate answers, then the gate. ``gate``: the gate only (collector/gate.py)."""
     canary: bool = False
     """Takes a new agent release before the rest of the fleet (§3.4). At most one server has it."""
+    agent_updates: str = "auto"
+    """``auto``: the update channel stages and activates releases. ``manual``: an operator installs them
+    (deploy/bootstrap-truenas.py --upgrade); central never sends an update verb and the host is never the canary."""
 
 
 @dataclass(frozen=True)
@@ -169,15 +174,24 @@ def parse_inventory(raw: Any) -> Inventory:
     canaries = [server.id for server in servers if server.canary]
     if len(canaries) > 1:
         raise ValueError(f"only one server may be the canary: {', '.join(canaries)}")
+    manual_canaries = [server.id for server in servers if server.canary and server.agent_updates == "manual"]
+    if manual_canaries:
+        raise ValueError(f"a server with agent_updates: manual cannot be the canary: {', '.join(manual_canaries)}")
     return Inventory(tuple(servers), thresholds)
 
 
 def canary_of(servers: Tuple[Server, ...]) -> Optional[str]:
-    """The server marked ``canary: true``, otherwise the one with the lowest order."""
+    """The server marked ``canary: true``, otherwise the automatically updated one with the lowest order."""
     marked = [server.id for server in servers if server.canary]
     if marked:
         return marked[0]
-    return min(servers, key=lambda server: server.order).id if servers else None
+    auto = [server for server in servers if server.agent_updates == "auto"]
+    return min(auto, key=lambda server: server.order).id if auto else None
+
+
+def manual_updates(servers: Tuple[Server, ...]) -> frozenset:
+    """The ids of the servers whose agent an operator updates by hand."""
+    return frozenset(server.id for server in servers if server.agent_updates == "manual")
 
 
 def _parse_server(raw: Any, idx: int) -> Server:
@@ -205,8 +219,11 @@ def _parse_server(raw: Any, idx: int) -> Server:
     transport = raw.get("transport", "legacy")
     if transport not in TRANSPORTS:
         raise ValueError(f"transport must be one of {', '.join(TRANSPORTS)}")
+    agent_updates = raw.get("agent_updates", "auto")
+    if agent_updates not in AGENT_UPDATES:
+        raise ValueError(f"agent_updates must be one of {', '.join(AGENT_UPDATES)}")
     return Server(sid, display_name, order, host, port, enabled, username, identity_file, known_hosts_file, scanner, digest,
-                  transport, _bool(raw.get("canary", False), "canary"))
+                  transport, _bool(raw.get("canary", False), "canary"), agent_updates)
 
 
 def scanner_digest(scanner: Mapping[str, Any]) -> str:
