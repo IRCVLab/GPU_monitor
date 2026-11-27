@@ -1,4 +1,5 @@
 """The actor on v2 hosts: one manifest, one immutable capture per volume, and the v1 views built from them."""
+from collector import judge
 import json
 import threading
 
@@ -524,7 +525,7 @@ def test_a_failed_or_old_capacity_sample_is_not_judged_as_current(tmp_path):
     binding, root, data, fields = host.volumes[VA]
     written = collector.clock.now
     for capacity in ({"total": 1000, "used": 990, "avail": 10, "observed_unix": written, "status": "failed"},
-                     {"total": 1000, "used": 990, "avail": 10, "observed_unix": written - 901, "status": "ok"}):
+                     {"total": 1000, "used": 990, "avail": 10, "observed_unix": written - judge.MAX_CAPACITY_AGE_SECONDS - 1, "status": "ok"}):
         host.volumes[VA] = (binding, root, data, {**fields, "capacity": capacity})
         host.publish()
         collector.tick()
@@ -536,6 +537,19 @@ def test_a_failed_or_old_capacity_sample_is_not_judged_as_current(tmp_path):
     host.publish()
     collector.tick()
     assert mounts(collector)[VA]["severity"] == "critical"
+
+
+def test_capacity_sampled_by_the_last_hourly_run_is_current(tmp_path):
+    # Live: poseidon's samples were 31 minutes old between hourly runs and every
+    # volume showed "unknown" capacity under the old 900 s limit.
+    collector, host = v2_collector(tmp_path)
+    binding, root, data, fields = host.volumes[VA]
+    host.volumes[VA] = (binding, root, data, {**fields, "capacity": {
+        "total": 1000, "used": 990, "avail": 10, "observed_unix": collector.clock.now - 3600, "status": "ok"}})
+    host.publish()
+    collector.tick()
+    row = mounts(collector)[VA]
+    assert (row["capacity"]["used"], row["severity"]) == (990, "critical")
 
 
 def test_a_volume_naming_another_volumes_capture_is_rejected_once_without_a_fetch(tmp_path):
