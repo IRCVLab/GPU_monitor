@@ -1,4 +1,5 @@
 """The host's single-writer scan transaction."""
+import dataclasses
 import logging
 import fcntl
 import os
@@ -74,7 +75,12 @@ def discover(cfg, reader, resolver):
         resolver = MediaOverrides(resolver, {e.major_minor: MediaResult(cfg.volume_media[e.mountpoint], "resolved")
                                              for e in entries if e.mountpoint in cfg.volume_media})
     roots = identity.resolve(selection.selected, cfg.volume_aliases, cfg.config_digest,
-                             resolver, devices=[e.major_minor for e in entries])
+                             resolver, devices=[e.major_minor for e in entries],
+                             zfs_pool_volumes=cfg.host_profile == "truenas")
+    if cfg.display_prefixes:
+        roots = [dataclasses.replace(r, shown_path=identity.shown(r.path, cfg.display_prefixes),
+                                     volume_mountpoint=identity.shown(r.volume_mountpoint or r.mountpoint, cfg.display_prefixes))
+                 for r in roots]
     return roots, mount_policy.mounts_within_roots(entries, roots)
 
 
@@ -89,9 +95,10 @@ def prepare_volumes(manifest, roots, now):
             reuse = r.identity != "ambiguous" and descriptors == previous.get("roots")
             volumes[vid] = dict(volume_id=vid, identity=r.identity,
                 diagnostic=r.diagnostic,
-                mountpoint=identity.display_path(r.mountpoint), fstype=r.fstype, media=r.media, media_confidence=r.media_confidence,
+                mountpoint=identity.display_path(r.volume_mountpoint or r.mountpoint), fstype=r.fstype, media=r.media,
+                media_confidence=r.media_confidence,
                 group=group, cadence_sec=plan.CADENCE.get(group, plan.CADENCE["slow"]),
-                roots=descriptors, capacity=capacity.sample(r, previous.get("capacity"), now),
+                roots=descriptors, capacity=capacity.sample_volume(rs, previous.get("capacity"), now),
                 capture=previous.get("capture") if reuse else None,
                 last_attempt=previous.get("last_attempt") if reuse else None)
     manifest["volumes"] = list(volumes.values())
@@ -113,8 +120,9 @@ def run_group(cfg, record, group, volumes, execute, clock):
                 argv.extend(["--target", root.path, root.device, root.prune_class])
         try:
             if execute(argv).returncode == 0:
-                return capture.split_group_output(capture.read(out), volumes, record["run_id"],
-                                                  group, start, clock())
+                captures = capture.split_group_output(capture.read(out), volumes, record["run_id"],
+                                                      group, start, clock())
+                return capture.relabel(captures, cfg.display_prefixes)
         except (OSError, ValueError, KeyError, TypeError, RecursionError):
             pass
     return {}
@@ -236,7 +244,7 @@ def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted
         volumes = prepare_volumes(manifest, roots, clock())
     root_by_vid = {}
     for root in sorted(roots, key=lambda r: r.path):
-        root_by_vid.setdefault(root.volume_id, root)
+        root_by_vid.setdefault(root.volume_id, []).append(root)
     samples = {vid: v["capacity"] for vid, v in volumes.items()}
     while state == "preparing":
         known = {r["request_id"] for r in manifest["requests"]}
@@ -266,7 +274,7 @@ def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted
             record["current"] = dict(group=group, started_unix=clock())
             save()
             captures = run_group(cfg, record, group, members, execute, clock)
-            samples = {vid: capacity.sample(root, samples[vid], clock()) for vid, root in root_by_vid.items()}
+            samples = {vid: capacity.sample_volume(rs, samples[vid], clock()) for vid, rs in root_by_vid.items()}
             for vid in members:
                 v = volumes[vid]
                 c = captures.get(vid)

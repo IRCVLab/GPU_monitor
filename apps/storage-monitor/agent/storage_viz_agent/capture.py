@@ -167,3 +167,28 @@ def split_group_output(raw, volumes, run_id, group, started, finished):
                              volume_id=vid, scan_started_unix=started, scan_finished_unix=max(started, finished),
                              outcome=outcome, roots=root_rows)
     return captures
+
+
+def relabel(captures, prefixes):
+    """Rename host paths in published captures to the paths users see (display_prefixes)."""
+    if not prefixes:
+        return captures
+    from agent.storage_viz_agent.identity import shown
+    byte_prefixes = {os.fsencode(k): os.fsencode(v) for k, v in prefixes.items()}
+
+    def raw(path_bytes):
+        for real in sorted(byte_prefixes, key=len, reverse=True):
+            if path_bytes == real or path_bytes.startswith(real + b"/"):
+                return byte_prefixes[real] + path_bytes[len(real):]
+        return path_bytes
+
+    for cap in captures.values():
+        for root in cap["roots"]:
+            if root["tree"].get("name", "").startswith("/"):
+                root["tree"]["name"] = shown(root["tree"]["name"], prefixes)
+            for key in ("top_files", "stale", "errors"):
+                for row in root.get(key, []):
+                    row["path"] = shown(row["path"], prefixes)
+                    if "path_b64" in row:
+                        row["path_b64"] = base64.b64encode(raw(base64.b64decode(row["path_b64"]))).decode("ascii")
+    return captures

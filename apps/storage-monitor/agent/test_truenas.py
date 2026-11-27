@@ -96,10 +96,12 @@ def test_zfs_datasets_resolve_by_alias_and_land_in_the_fast_group(tmp_path):
     assert set(runner.plan.validate_partition(roots)) == {"fast"}
 
 
-def test_without_alias_or_media_a_zfs_dataset_is_ambiguous_and_unknown(tmp_path):
+def test_without_media_override_the_pool_volume_has_unknown_media(tmp_path):
     cfg = config.load_config(write_config(tmp_path, volume_aliases={}, volume_media={}))
     roots, _ = runner.discover(cfg, lambda: NEXUS, NoSysfsMedia())
-    assert {(r.identity, r.media) for r in roots} == {("ambiguous", "unknown")}
+    # The pool, not an alias, names the volume, so no alias is needed for a stable identity.
+    assert {(r.identity, r.media) for r in roots} == {("alias", "unknown")}
+    assert len({r.volume_id for r in roots}) == 1
 
 
 def test_media_override_replaces_only_the_named_mountpoints(tmp_path):
@@ -154,8 +156,8 @@ def test_cron_runs_every_five_minutes_without_systemd(tmp_path, monkeypatch):
     assert manifest["seq"] > first["seq"] and all(v["capacity"]["status"] for v in manifest["volumes"])
     assert len(run_ids) == 37, "each cron run gets its own run id without INVOCATION_ID"
     assert max(sizes) - min(sizes) < 64, "a nothing-due run must not grow the manifest"
-    # manifest.json, captures/, one directory per volume and at most two captures each (current and previous).
-    assert max(len(listing) for listing in listings) == 2 + 3 * len(DATASETS)
+    # manifest.json, captures/, one directory for the pool volume and at most two captures (current and previous).
+    assert max(len(listing) for listing in listings) == 2 + 3 * 1
     assert all(len(list(d.iterdir())) == 2 for d in (data / "captures").iterdir())
     assert sorted(p.name for p in (tmp_path / "run").iterdir()) == ["scan.lock"]
 
@@ -186,7 +188,62 @@ def test_busy_cron_run_exits_75(tmp_path):
                                scanner_runner=Scanner()) == 75
 
 
-def test_alias_conflict_between_zfs_datasets_is_reported(tmp_path):
-    cfg = config.load_config(write_config(tmp_path, volume_aliases={p: "same" for p in DATASETS}))
-    roots, _ = runner.discover(cfg, lambda: NEXUS, NoSysfsMedia())
-    assert {r.diagnostic for r in roots} == {"VOLUME_ALIAS_CONFLICT"}
+def test_datasets_of_one_pool_are_roots_of_one_volume(tmp_path):
+    # Owner: Nexus is one pool; show /datasets and /workspace inside it, like /home and /data
+    # inside the root filesystem on the other servers.
+    cfg = config.load_config(write_config(tmp_path, data_dir="/mnt/tank/storage-viz/data"))
+    roots, _ = runner.discover(cfg, lambda: NEXUS + AGENT_DATASET, NoSysfsMedia())
+    assert [r.path for r in roots] == DATASETS
+    assert len({r.volume_id for r in roots}) == 1
+    assert len({r.binding for r in roots}) == 2, "each dataset root keeps its own binding"
+    volumes = runner.prepare_volumes({"volumes": []}, roots, 100)
+    [volume] = volumes.values()
+    assert volume["mountpoint"] == "/mnt/tank"
+    assert [d["scan_root"] for d in volume["roots"]] == DATASETS
+    assert volume["group"] == "fast"
+
+
+def test_pool_volume_capacity_counts_the_shared_free_space_once(monkeypatch):
+    from types import SimpleNamespace
+    from agent.storage_viz_agent import capacity
+    T = 10 ** 12
+    per_root = {"/mnt/tank/datasets": dict(total=13.8 * T, used=4.16 * T, avail=9.64 * T),
+                "/mnt/tank/workspace": dict(total=9.65 * T, used=0.01 * T, avail=9.64 * T)}
+    monkeypatch.setattr(capacity, "sample", lambda root, previous, now: dict(per_root[root.mountpoint], observed_unix=now, status="ok"))
+    roots = [SimpleNamespace(mountpoint=p, volume_mountpoint="/mnt/tank") for p in DATASETS]
+    got = capacity.sample_volume(roots, None, 100)
+    assert (got["used"], got["avail"], got["total"]) == (4.17 * T, 9.64 * T, 4.17 * T + 9.64 * T)
+    plain = [SimpleNamespace(mountpoint="/mnt/tank/datasets", volume_mountpoint=None)]
+    assert capacity.sample_volume(plain, None, 100)["total"] == 13.8 * T
+
+
+def test_standard_profile_keeps_one_volume_per_zfs_dataset(tmp_path):
+    cfg = config.load_config(write_config(tmp_path, host_profile="standard"))
+    entries = mount_policy.parse_mountinfo(NEXUS)
+    from agent.storage_viz_agent import identity
+    selected = [s for s in select(NEXUS).selected]
+    roots = identity.resolve(selected, {}, cfg.config_digest, NoSysfsMedia(), boot_id="b", devices=[e.major_minor for e in entries])
+    assert len({r.volume_id for r in roots}) == 2
+
+
+def test_display_prefixes_publish_the_paths_clients_see(tmp_path):
+    cfg = config.load_config(write_config(tmp_path, data_dir="/mnt/tank/storage-viz/data",
+                                          display_prefixes={"/mnt/tank": "/nexus"}))
+    roots, _ = runner.discover(cfg, lambda: NEXUS + AGENT_DATASET, NoSysfsMedia())
+    assert [r.path for r in roots] == DATASETS, "scanning keeps the real paths"
+    [volume] = runner.prepare_volumes({"volumes": []}, roots, 100).values()
+    assert volume["mountpoint"] == "/nexus"
+    assert [d["scan_root"] for d in volume["roots"]] == ["/nexus/datasets", "/nexus/workspace"]
+    from agent.storage_viz_agent import capture
+    import base64
+    cap = {"v": {"roots": [{"tree": {"name": "/mnt/tank/datasets"},
+                            "top_files": [{"path": "/mnt/tank/datasets/NCLT/a.bin"}],
+                            "stale": [{"path": "/mnt/tank/datasets/x", "path_b64": base64.b64encode(b"/mnt/tank/datasets/x").decode()}],
+                            "errors": []}]}}
+    capture.relabel(cap, cfg.display_prefixes)
+    root = cap["v"]["roots"][0]
+    assert root["tree"]["name"] == "/nexus/datasets"
+    assert root["top_files"][0]["path"] == "/nexus/datasets/NCLT/a.bin"
+    assert base64.b64decode(root["stale"][0]["path_b64"]) == b"/nexus/datasets/x"
+    with pytest.raises(ValueError):
+        config.load_config(write_config(tmp_path, display_prefixes={"/": "/nexus"}))

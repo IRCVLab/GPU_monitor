@@ -22,6 +22,7 @@ _ALLOWED_KEYS = frozenset({
     "stale_days",
     "host_profile",
     "volume_media",
+    "display_prefixes",
 })
 HOST_PROFILES = ("standard", "truenas")
 MEDIA_OVERRIDES = ("ssd", "hdd")
@@ -61,6 +62,9 @@ class ScannerConfig:
     """``truenas`` keeps only the data-pool datasets under /mnt (mount_policy.truenas_classifier)."""
     volume_media: Mapping[str, str] = field(default_factory=dict)
     """mountpoint -> ssd or hdd, replacing the sysfs media classification of that mount."""
+    display_prefixes: Mapping[str, str] = field(default_factory=dict)
+    """host path prefix -> the path users see (Nexus: /mnt/tank -> /nexus, as clients mount it).
+    Only published paths change; scanning, identity and bindings use the real paths."""
 
 
 def _canonical_json(data: Mapping[str, Any]) -> bytes:
@@ -106,9 +110,14 @@ def load_config(path: Union[os.PathLike, str]) -> ScannerConfig:
     media = raw.get("volume_media", {})
     if not isinstance(media, dict) or any(not k.startswith("/") or v not in MEDIA_OVERRIDES for k, v in media.items()):
         raise ValueError(f"volume_media must map absolute mountpoints to one of {', '.join(MEDIA_OVERRIDES)}")
+    prefixes = raw.get("display_prefixes", {})
+    if not isinstance(prefixes, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) or not k.startswith("/") or not v.startswith("/")
+            or k == "/" or k != k.rstrip("/") or v != v.rstrip("/") or "\0" in k + v for k, v in prefixes.items()):
+        raise ValueError("display_prefixes must map absolute path prefixes (not /) to absolute path prefixes")
     digest = hashlib.sha256(_canonical_json(raw)).hexdigest()
     return ScannerConfig(server_id, scanner_path, data_dir, run_dir, threads, prune_home_mb, prune_data_mb, top, stale_days,
-                         aliases, digest, host_profile, media)
+                         aliases, digest, host_profile, media, prefixes)
 
 
 def _string(value: Any, name: str) -> str:
