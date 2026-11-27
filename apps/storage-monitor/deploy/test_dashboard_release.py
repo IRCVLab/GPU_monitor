@@ -1729,6 +1729,17 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
         legacy_release = Path(self.tempdir.name) / "legacy-release"
         (legacy_release / "viewer").mkdir(parents=True)
+        (legacy_release / "collector").mkdir(parents=True)
+        (legacy_release / "collector/service.py").write_text("class PollService: pass\n", encoding="utf-8")
+        for unknown in (Path(self.tempdir.name) / "missing", Path(self.tempdir.name) / "empty-release"):
+            if unknown.name == "empty-release":
+                unknown.mkdir()
+            with self.assertRaises(self.module.HealthCheckError):
+                self.module.probes_for(unknown)
+        dangling = Path(self.tempdir.name) / "dangling"
+        dangling.symlink_to(Path(self.tempdir.name) / "nowhere")
+        with self.assertRaises(self.module.HealthCheckError):
+            self.module.probes_for(dangling)
         current_release = Path(self.tempdir.name) / "current-release"
         (current_release / "api").mkdir(parents=True)
         (current_release / "api/routes.py").write_text("ROUTES = ()\n", encoding="utf-8")

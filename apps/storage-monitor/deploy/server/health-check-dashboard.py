@@ -281,8 +281,18 @@ LEGACY_PROBES = Probes(
 
 
 def probes_for(app_path: Path) -> Probes:
-    """The probes the release at app_path answers: every release since M6 ships api/routes.py."""
-    return V2_PROBES if (app_path / "api/routes.py").is_file() else LEGACY_PROBES
+    """The probes the release at app_path answers.
+
+    Every release since M6 ships api/routes.py. Only a release positively
+    identified as pre-redesign (it ships collector/service.py and no api/)
+    gets the legacy probes; anything else, including a missing or dangling
+    app path, fails the check instead of falling back to weaker probes.
+    """
+    if (app_path / "api/routes.py").is_file():
+        return V2_PROBES
+    if (app_path / "collector/service.py").is_file() and not (app_path / "api").exists():
+        return LEGACY_PROBES
+    raise HealthCheckError(f"cannot identify the release at {app_path}: neither api/routes.py nor a pre-redesign layout")
 
 
 def _service_active(name: str, runner: Callable[..., Any]) -> None:
