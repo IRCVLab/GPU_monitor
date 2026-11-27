@@ -89,9 +89,11 @@ class Publication:
 def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None):
     """Merge the accepted capture rows once, before publishing the actor's view."""
     users, top, stale, heads = {}, [], [], {}
+    root_bytes = {}
     for vid, (sha, capture) in held.items():
         heads[vid] = {"sha256": sha, "outcome": capture.outcome, "scan_finished_unix": capture.scan_finished_unix}
         for root in capture.roots:
+            root_bytes[vid, root.binding, root.scan_root] = root.counts["bytes"]
             for row in root.users:
                 user = users.setdefault(row["uid"], {"uid": row["uid"], "name": row["name"], "bytes": 0,
                                                       "files": 0, "by_volume": {}})
@@ -112,8 +114,10 @@ def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None
             vid = vol.volume_id
             state_id = "legacy" if legacy_bytes else vid
             attempt = raw["last_attempt"]
+            roots = [{**ref, "bytes": root_bytes.get((vid, ref["binding"], ref["scan_root"]))}
+                     for ref in raw["roots"]]
             volumes.append(encode({"volume_id": vid, "identity": vol.identity, "diagnostic": vol.diagnostic,
-                                   "mountpoint": vol.mountpoint, "media": vol.media, "roots": raw["roots"],
+                                   "mountpoint": vol.mountpoint, "media": vol.media, "roots": roots,
                                    "data_state": (states or {}).get(state_id, "current" if vid in heads else "none"),
                                    "data_error": (problems or {}).get(state_id), "capture": heads.get(vid),
                                    "last_attempt": {k:attempt[k] for k in ("finished_unix", "outcome", "error_code")}

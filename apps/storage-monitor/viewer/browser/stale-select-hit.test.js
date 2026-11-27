@@ -267,6 +267,8 @@ async function checkNavigation(tab,origin,width) {
   await tab.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
   await tab.send('Page.navigate',{url:origin+'/'});
   await waitFor('overview mounts',()=>tab.evaluate("document.querySelectorAll('.overview-mount[data-pressure]').length >= 4"));
+  const rootSizes = await tab.evaluate("Array.from(document.querySelectorAll('.overview-card[data-server-id=hinton] .overview-scan-folder'), row => [row.firstChild.textContent, row.lastChild.textContent])");
+  assert.deepEqual(rootSizes.filter(([path]) => path === '/data' || path === '/data1'), [['/data','7.53 TB'],['/data1','1.15 TB']]);
   await shot(tab,'overview',width);
   await tab.evaluate("document.querySelector('.overview-card[data-server-id=hinton]').click()");
   await waitFor('treemap tiles',()=>tab.evaluate("document.querySelectorAll('.tmtile').length"));

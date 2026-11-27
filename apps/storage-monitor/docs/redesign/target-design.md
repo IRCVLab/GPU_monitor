@@ -259,6 +259,7 @@ STATE_DIR/
  "revision": "1842:9b1c",
  "volumes": [{
    "volume_id": "v-…", "identity": "uuid", "diagnostic": null, "mountpoint": "/data", "media": "hdd",
+   "roots": [{"scan_root": "/data", "binding": "b-…", "prune_class": "data", "bytes": 0}],
    "capacity": {"total": 0, "used": 0, "avail": 0, "used_pct": 87, "observed_unix": 0, "source": "live"},
    "severity": "warn", "freshness": "fresh", "data_state": "current",
    "capture": {"sha256": "64hex", "outcome": "partial", "scan_finished_unix": 0},

@@ -28,7 +28,7 @@ export function pathRoundTrips(path, bytes) {
 
 function mountRows(volumes) {
   return volumes.flatMap(volume => volume.roots.map(root => ({
-    ...root, volume_id:volume.volume_id, path:root.scan_root, mountpoint:volume.mountpoint,
+    ...root, volume_id:volume.volume_id, path:root.scan_root, scanned_bytes:root.bytes, mountpoint:volume.mountpoint,
     status:volume.capture?.outcome ?? 'skipped',
   })));
 }

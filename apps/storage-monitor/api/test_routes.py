@@ -200,6 +200,10 @@ def test_capture_contract_and_retention(collector_api):
     assert headers.get_all("Cache-Control") == ["private, max-age=31536000, immutable"]
     code, detail, _ = request("GET", base)
     assert code == 200 and detail["host"] == {"hostname": SID, "mount_table": host.actor().view.data.manifest.mount_table}
+    fleet_rows = request("GET", "/api/v2/fleet")[1]["servers"]
+    summary = next(row for row in fleet_rows if row["server_id"] == SID)
+    assert summary["volumes"][0]["roots"] == detail["volumes"][0]["roots"]
+    assert [(r["scan_root"], r["binding"], r["bytes"]) for r in summary["volumes"][0]["roots"]] == [("/a", BA, 30)]
     assert set(detail["users"][0]["by_volume"]) == {VA, VB}
     for key in ("top_files", "stale"):
         rows = {r["volume_id"]:r for r in detail[key]}

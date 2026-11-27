@@ -1,3 +1,4 @@
+import {humanBytes} from '../format.js';
 import {formatUrl} from '../router.js';
 "use strict";
 
@@ -208,7 +209,7 @@ function buildOverviewRows(summaries) {
         capacityObservedUnix:c.observed_unix, pressureLabel:pressureText(v.severity), mediaLabel:formatMediaLabel(v.media),
         capacityText:'볼륨 총 ' + compactBytes(c.total) + ' · 여유 ' + compactBytes(c.avail),
         usedPctText:c.used_pct == null ? '—' : c.used_pct + '%',
-        scanRoots:v.roots.map(root => ({path:root.scan_root}))};
+        scanRoots:v.roots.map(root => ({path:root.scan_root, scannedBytes:root.bytes}))};
     });
     const aggregate = aggregateMountCapacity(mounts);
     const pressure = strongestPressure(mounts);
@@ -446,7 +447,7 @@ function createOverviewRowElement(doc, row, handlers = {}) {
         for (const root of mount.scanRoots) {
           const folder = makeEl(doc, "li", "overview-scan-folder");
           folder.appendChild(makeEl(doc, "span", "", root.path));
-          folder.appendChild(makeEl(doc, "span", "figure", compactBytes(root.scannedBytes)));
+          folder.appendChild(makeEl(doc, "span", "figure", humanBytes(root.scannedBytes, 1000)));
           folders.appendChild(folder);
         }
         body.appendChild(folders);

@@ -1,9 +1,9 @@
-function humanBytes(n) {
+function humanBytes(n, base = 1024) {
   if (n == null || isNaN(n)) return "—";
-  if (n < 1024) return n + " B";
-  const u = ["KB", "MB", "GB", "TB", "PB"]; // 1024-based magnitudes, short labels
+  if (n < base) return n + " B";
+  const u = ["KB", "MB", "GB", "TB", "PB"];
   let i = -1, v = n;
-  do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
+  do { v /= base; i++; } while (v >= base && i < u.length - 1);
   return v.toFixed(v < 10 ? 2 : (v < 100 ? 1 : 0)) + " " + u[i];
 }
 function fmtDate(unix) {

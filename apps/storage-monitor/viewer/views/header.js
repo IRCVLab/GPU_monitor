@@ -64,7 +64,7 @@ export function renderHeader(DATA, selected, navigate) {
       button.dataset.folder = root.path;
       button.setAttribute("aria-pressed", selected && mountId(actionableMounts[index]) === mountId(selected) ? "true" : "false");
       const pathLabel = '<span class="cap-path cap-scan-path">' + escapeHtml(root.path) + '</span>';
-      const scanSize = '<span class="figure">' + humanBytes(root.scannedBytes) + '</span>';
+      const scanSize = '<span class="figure">' + humanBytes(root.scannedBytes, 1000) + '</span>';
       button.innerHTML = pathLabel + scanSize + '<span aria-hidden="true">›</span>';
       button.addEventListener("click", () => {
         navigate({tab:"treemap", volumeId:mountId(actionableMounts[index]), path:group.scanRoots.length > 1 ? root.path.split("/").filter(Boolean) : []});
@@ -75,6 +75,6 @@ export function renderHeader(DATA, selected, navigate) {
     div.appendChild(folders);
     caps.appendChild(div);
   }
-  document.getElementById("treemapFolderLabel").textContent = selected ? selected.path + " · " + humanBytes(selected.scanned_bytes) : "";
+  document.getElementById("treemapFolderLabel").textContent = selected ? selected.path + " · " + humanBytes(selected.scanned_bytes, 1000) : "";
 
 }
