@@ -1,0 +1,125 @@
+{
+  "schema": "storage-viz.manifest/2",
+  "server_id": "hinton",
+  "hostname": "hinton",
+  "seq": 1,
+  "written_unix": 1719200045,
+  "agent": {
+    "release_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_seq": 1,
+    "config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "volumes": [
+    {
+      "volume_id": "v-ded807738be39aac",
+      "identity": "uuid",
+      "diagnostic": null,
+      "mountpoint": "/home",
+      "fstype": "ext4",
+      "media": "ssd",
+      "media_confidence": "resolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/home",
+          "binding": "b-2cc974af6afc822c",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 84051755007,
+        "used": 53793123205,
+        "avail": 30258631802,
+        "observed_unix": 1719200042,
+        "status": "ok"
+      },
+      "capture": {
+        "sha256": "a579b1335750a3efc014c5255042e1163d3a37c27aedb6e81f0582817a65cd1f",
+        "bytes": 665,
+        "scan_started_unix": 1719200000,
+        "scan_finished_unix": 1719200042,
+        "outcome": "partial"
+      },
+      "last_attempt": null
+    },
+    {
+      "volume_id": "v-09a913bcbc5506e3",
+      "identity": "uuid",
+      "diagnostic": null,
+      "mountpoint": "/",
+      "fstype": "xfs",
+      "media": "mixed",
+      "media_confidence": "resolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/data",
+          "binding": "b-bd47413b5c03dfc6",
+          "prune_class": "data"
+        },
+        {
+          "scan_root": "/data1",
+          "binding": "b-2a3891a8ce3a016b",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 8801787473229,
+        "used": 7833590851174,
+        "avail": 968196622055,
+        "observed_unix": 1719200042,
+        "status": "ok"
+      },
+      "capture": {
+        "sha256": "e5fc9916a7834a2d5273cbc815f82d9550bd2e7b7afe3382a272e36973a95ce2",
+        "bytes": 2288,
+        "scan_started_unix": 1719200000,
+        "scan_finished_unix": 1719200042,
+        "outcome": "partial"
+      },
+      "last_attempt": null
+    },
+    {
+      "volume_id": "v-01eb8e29d01e0e5e",
+      "identity": "uuid",
+      "diagnostic": null,
+      "mountpoint": "/data3",
+      "fstype": "xfs",
+      "media": "hdd",
+      "media_confidence": "resolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/data3",
+          "binding": "b-852afbddc02fa6ea",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 5747397300310,
+        "used": 5402553462292,
+        "avail": 344843838018,
+        "observed_unix": 1719200042,
+        "status": "ok"
+      },
+      "capture": {
+        "sha256": "c2c0bcb121daef4782c62a94ae96b06bd5743a9656794cd3a2f19875ede2a856",
+        "bytes": 779,
+        "scan_started_unix": 1719200000,
+        "scan_finished_unix": 1719200042,
+        "outcome": "complete"
+      },
+      "last_attempt": null
+    }
+  ],
+  "mount_table": {
+    "status": "ok",
+    "observed_unix": 1719200042,
+    "within_roots": []
+  },
+  "last_run": null,
+  "requests": []
+}

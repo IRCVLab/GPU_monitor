@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import { gpuOrigin, storageOrigin } from './playwright.config.mjs';
 
@@ -195,43 +194,31 @@ test('Power Flow preserves a conflicting draft and navigates after a successful 
 });
 
 test('Storage switches servers and shows rescan progress and failure', async ({ page, context }) => {
-  const sampleFile = new URL('../../apps/storage-monitor/data/atlas.sample.json', import.meta.url);
-  const sample = JSON.parse(await readFile(sampleFile, 'utf8'));
+  const sample = await (await context.request.get(storageOrigin+'/api/v2/servers/atlas')).json();
   const unicodePath = '/srv/atlas/vol1/보고서-été-"quote".txt';
-  const undecodablePath = '/srv/atlas/vol1/bad-\uFFFD.txt';
-  sample.top_files = [
-    { ...sample.top_files[0], path: unicodePath },
-    { ...sample.top_files[1], path: undecodablePath },
-  ];
-  const now = 1795507200;
-  sample.selected_roots = sample.selected_roots.map(root => ({ ...root, scan_finished_unix: now - 30 }));
-  const generation = 'fixture-1';
-  const scanStatus = { state: 'complete', generation, observed_unix: now, updated_unix: now, last_finished_unix: now - 30 };
-  const servers = ['atlas', 'borealis'].map(id => ({
-    id, display_name: id, mount_count: 1, snapshot_availability: 'available', freshness: 'fresh',
-    latest_pull_status: 'succeeded', latest_scan_result: 'complete', configuration_sync: 'in_sync',
-    active_job: null, scan_status: scanStatus, overview_snapshot: { ...sample, hostname: id, server_id: id, scan_generation: generation },
-  }));
+  const undecodablePath = '/srv/atlas/vol1/bad-�.txt';
+  sample.top_files = [{...sample.top_files[0],path:unicodePath},{...sample.top_files[1],path:undecodablePath}];
+  const servers = ['atlas','borealis'].map(id => ({...sample,server_id:id,display_name:id}));
   let state = 'idle';
-  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: storageOrigin });
-  await page.clock.setFixedTime(new Date(now * 1000));
-  await page.route(storageOrigin + '/api/**', async route => {
+  await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:storageOrigin});
+  await page.route(storageOrigin + '/api/v2/**', async route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === '/api/session') return route.fulfill({ json: { authenticated: true, can_rescan: true, csrf_token: 'test' } });
-    if (path === '/api/servers') return route.fulfill({ json: { data_mode: 'inventory', servers } });
-    const [, , , id, endpoint] = path.split('/');
-    if (endpoint === 'snapshot') return route.fulfill({ json: servers.find(server => server.id === id).overview_snapshot });
-    if (endpoint === 'scan-status') return route.fulfill({ json: scanStatus });
-    if (id === 'borealis' && endpoint === 'rescan') {
+    if (path.endsWith('/session')) return route.fulfill({json:{can_rescan:true,csrf_token:'test'}});
+    if (path.endsWith('/fleet')) return route.fulfill({json:{servers}});
+    const [, , , , id, endpoint] = path.split('/');
+    if (!endpoint) return route.fulfill({json:servers.find(row=>row.server_id===id)});
+    if (endpoint === 'rescan') {
       state = 'running';
-      return route.fulfill({ status: 202, json: { job: { id: 'job-1', state } } });
+      return route.fulfill({status:202,json:{job:{request_id:'job-1',state}}});
     }
-    if (id === 'borealis' && endpoint === 'job') {
-      return route.fulfill({ json: { job: { id: 'job-1', state, result_code: 'FIXTURE' } } });
+    if (endpoint === 'activity') {
+      const job = {request_id:'job-1',state,result_code:'FIXTURE'};
+      return route.fulfill({json:{activity:sample.activity,eta:sample.eta,
+        job:state==='running'?job:null,last_job:state==='failed'?job:null}});
     }
-    return route.fulfill({ status: 404 });
+    return route.fulfill({response:await route.fetch({url:route.request().url().replace('/borealis/','/atlas/')})});
   });
-  await page.goto(storageOrigin + '/viewer/');
+  await page.goto(storageOrigin + '/');
   const atlas = page.locator('[data-server-id="atlas"]');
   const mount = atlas.locator('.overview-mount').first();
   await expect(mount).not.toContainText(/스캔 /);

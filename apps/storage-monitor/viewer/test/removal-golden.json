@@ -1,0 +1,32 @@
+[
+  {
+    "items": [],
+    "command": ""
+  },
+  {
+    "items": [
+      {
+        "kind": "file",
+        "path": "/data/a's file"
+      }
+    ],
+    "command": "if [ \"$(hostname -s)\" = 'hinton' ]; then sudo rm -f -- '/data/a'\"'\"'s file'; else echo 'storage-viz: wrong server, nothing was removed. These paths belong to:' 'hinton' >&2; fi"
+  },
+  {
+    "items": [
+      {
+        "kind": "directory",
+        "path": "/data/my proj\\x"
+      },
+      {
+        "kind": "file",
+        "path": "/data/my proj\\x/nested"
+      },
+      {
+        "kind": "file",
+        "path": "/data/-a"
+      }
+    ],
+    "command": "if [ \"$(hostname -s)\" = 'hinton' ]; then sv_ok=1; for sv_p in '/data/my\\040proj\\134x'; do while read -r _ _ _ _ sv_m _; do case \"$sv_m\" in \"$sv_p\"|\"$sv_p\"/*) echo \"storage-viz: $sv_p has a mount at $sv_m; nothing was removed\" >&2; sv_ok=0;; esac; done < /proc/self/mountinfo; done; [ \"$sv_ok\" = 1 ] && { sudo rm -rf --one-file-system --preserve-root=all -- '/data/my proj\\x'; sudo rm -f -- '/data/-a'; }; else echo 'storage-viz: wrong server, nothing was removed. These paths belong to:' 'hinton' >&2; fi"
+  }
+]

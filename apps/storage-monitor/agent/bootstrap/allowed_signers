@@ -1,0 +1,5 @@
+# ssh-keygen allowed_signers pinned on every storage host as /etc/storage-viz/allowed_signers.
+# One line per trusted CI release key, for example:
+#   storage-viz-release namespaces="storage-viz-agent" ssh-ed25519 AAAA... ci-release-2026
+# No key is listed yet, so every bundle fails verification until the owner adds
+# the public half of the GitHub environment secret here and reruns the bootstrap.

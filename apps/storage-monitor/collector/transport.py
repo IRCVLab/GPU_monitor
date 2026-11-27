@@ -1,4 +1,12 @@
-"""Fixed OpenSSH/SFTP transport for remote storage-viz snapshots."""
+"""Fixed OpenSSH transports to storage hosts.
+
+``GateTransport`` speaks the host gate (design §4.5): one verb per ssh exchange,
+answered by a header line and a counted body.
+
+SHIM(M2b..M3b) S2: ``OpenSshTransport`` (SFTP, the Python probe and the blocking
+``systemctl start``) serves hosts that are not bootstrapped yet. It goes once
+every host reports the gate transport.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,15 +20,18 @@ import signal
 import subprocess
 import sys
 import tempfile
-from typing import Any, Mapping, Optional, Protocol, Tuple
+from typing import Any, Dict, Mapping, Optional, Pattern, Protocol, Sequence, Tuple
 
+from collector.ids import RELEASE_SHA_RE, REQUEST_ID_RE, SHA256_RE, VOLUME_ID_RE
 from collector.inventory import Server
 
 STATUS_PATH = "/var/lib/storage-viz/scan-status.json"
 SNAPSHOT_DIR = "/var/lib/storage-viz/snapshots"
+MANIFEST_PATH = "/var/lib/storage-viz/manifest.json"
+CAPTURE_DIR = "/var/lib/storage-viz/captures"
+MAX_MANIFEST_BYTES = 64 * 1024
+MISSING_FILE_MARKERS = ("not found", "No such file")
 RESCAN_COMMAND = ("sudo", "-n", "/usr/bin/systemctl", "start", "storage-viz-scan.service")
-ACTIVE_STATE_COMMAND = ("/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service", "storage-viz-scheduled-scan.service")
-ACTIVE_SCAN_STATES = frozenset({"active", "activating", "reloading"})
 KNOWN_ACTIVE_STATES = frozenset({"active", "reloading", "inactive", "failed", "activating", "deactivating", "maintenance"})
 MAX_STATUS_BYTES = 64 * 1024
 MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
@@ -30,8 +41,10 @@ DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 3600
 DEFAULT_RESCAN_TIMEOUT_SECONDS = 6 * 60 * 60
 DEFAULT_ACTIVE_STATE_TIMEOUT_SECONDS = 10
 MAX_RESCAN_TIMEOUT_SECONDS = 24 * 60 * 60
+SSH_ERROR_EXIT = 255
+AUTH_FAILURE_MARKERS = ("Permission denied", "Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED")
 GENERATION_RE = re.compile(r"^(?P<server_id>[A-Za-z0-9_.-]+)-(?P<started>[0-9]+)-v1\.json$")
-HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+KEY_ROOT = "/etc/storage-viz/"
 
 FILE_LIMIT_EXEC = """
 import os
@@ -55,6 +68,8 @@ class TransportError(Exception):
 
     def __init__(self, code: str, message: str):
         self.code = _safe_code(code)
+        self.host_code: Optional[str] = None
+        """The host's own ``err <CODE>`` text, for a gate refusal."""
         super().__init__(_safe_message(message))
 
 
@@ -66,12 +81,6 @@ class Runner(Protocol):
 class _SubprocessRunner:
     def run(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(argv, **kwargs)
-
-
-@dataclass(frozen=True)
-class RemoteScanObservation:
-    status: Mapping[str, Any]
-    publication: Mapping[str, Any] | None = None
 
 
 class OpenSshTransport:
@@ -116,43 +125,16 @@ class OpenSshTransport:
         finally:
             _unlink_quiet(tmp_name)
 
-    def fetch_scan_status(self, server: Server) -> RemoteScanObservation:
-        from collector.scan_telemetry import REMOTE_OBSERVATION_SCRIPT, merge_status, parse_timer
-        import math
+    def run_probe(self, server: Server) -> bytes:
+        """Run the fixed legacy observation probe (SHIM(M2b..M3b) S2) and return its stdout."""
+        from collector.legacy import MAX_PROBE_BYTES, REMOTE_OBSERVATION_SCRIPT
         self._validate_server(server)
         result = self._run_ssh(server, ["python3", "-c", shlex.quote(REMOTE_OBSERVATION_SCRIPT)], timeout=self._active_state_timeout)
         _check_returncode(result, "TELEMETRY_UNAVAILABLE")
         raw = getattr(result, "stdout", b"")
-        if not isinstance(raw, (str, bytes)) or len(raw) > 48 * 1024:
+        if not isinstance(raw, (str, bytes)) or len(raw) > MAX_PROBE_BYTES:
             raise TransportError("BAD_TELEMETRY", "telemetry exceeds maximum size")
-        try:
-            obj = json.loads(raw)
-            for key in ("remote_unix", "remote_monotonic"):
-                if isinstance(obj[key], bool) or not isinstance(obj[key], (float,int)) or not math.isfinite(obj[key]) or not 0 <= obj[key] < 10**12:
-                    raise ValueError("clock")
-            active, started = observed_scan_service(obj)
-            for key in ("lifecycle", "progress"):
-                if not isinstance(obj[key], dict) or obj[key].get("invalid"):
-                    raise TransportError("BAD_TELEMETRY", "telemetry file is invalid")
-            if obj["lifecycle"].get("server_id",server.id) != server.id:
-                raise TransportError("BAD_TELEMETRY", "telemetry server mismatch")
-            timer = parse_timer(obj["timer"], remote_unix=obj["remote_unix"], remote_monotonic=obj["remote_monotonic"])
-            result = merge_status(obj["lifecycle"], obj["progress"], active, timer, int(obj["remote_unix"]), service_started=started)
-            published = obj.get("published")
-            if isinstance(published, dict) and published and not published.get("invalid"):
-                try:
-                    published = validate_status_envelope(published, server)
-                except TransportError:
-                    return RemoteScanObservation(result)
-                if published["status"] in {"complete", "partial"}:
-                    result["published_generation"] = published["generation"].removesuffix(".json")
-                    result["published_finished_unix"] = published["scan_finished_unix"]
-                    return RemoteScanObservation(result, published)
-            return RemoteScanObservation(result)
-        except TransportError:
-            raise
-        except Exception as exc:
-            raise TransportError("BAD_TELEMETRY", "telemetry is malformed") from exc
+        return raw
 
     def fetch_snapshot(self, server: Server, expected_status: Mapping[str, Any] | None = None) -> Tuple[dict[str, Any], bytes]:
         first = dict(expected_status) if expected_status is not None else self.fetch_status(server)
@@ -160,7 +142,10 @@ class OpenSshTransport:
         remote = f"{SNAPSHOT_DIR}/{generation}"
         tmp_name = self._mk_secure_temp(".snapshot")
         try:
-            self._run_sftp(server, _batch_get(remote, tmp_name), timeout=self._snapshot_timeout, limit_bytes=min(first["byte_size"], self._max_snapshot_bytes), limit_code="SNAPSHOT_TOO_LARGE", local_path=tmp_name)
+            # The cap is the declared byte_size, which validate_snapshot_status already held to the maximum.
+            # Outgrowing it means the file disagrees with its publication; a failed transfer that reached
+            # it is still a transfer error. Neither is the permanent SNAPSHOT_TOO_LARGE.
+            self._run_sftp(server, _batch_get(remote, tmp_name), timeout=self._snapshot_timeout, limit_bytes=min(first["byte_size"], self._max_snapshot_bytes), limit_code="SIZE_MISMATCH", local_path=None)
             data = _read_regular_bounded(tmp_name, self._max_snapshot_bytes, "SNAPSHOT_TOO_LARGE")
             if len(data) != first["byte_size"]:
                 raise TransportError("SIZE_MISMATCH", "snapshot size changed during download")
@@ -171,21 +156,34 @@ class OpenSshTransport:
         finally:
             _unlink_quiet(tmp_name)
 
-    def scan_active_state(self, server: Server) -> str:
+    def fetch_manifest(self, server: Server) -> bytes:
+        """manifest.json of a v2 host (SHIM(M2b..M3b) S2: the gate's get-manifest replaces it)."""
+        return self._get_file(server, MANIFEST_PATH, MAX_MANIFEST_BYTES, "MANIFEST_TOO_LARGE", "MANIFEST_MISSING",
+                              timeout=self._status_timeout)
+
+    def fetch_volume_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes:
+        """One immutable v2 capture, at most ``cap`` bytes (SHIM(M2b..M3b) S2: the gate's get-capture)."""
+        if not VOLUME_ID_RE.fullmatch(volume_id) or not SHA256_RE.fullmatch(sha256):
+            raise TransportError("BAD_PATH", "capture name is unsafe")
+        return self._get_file(server, f"{CAPTURE_DIR}/{volume_id}/{sha256}.json.gz", cap, "CAPTURE_TOO_LARGE",
+                              "CAPTURE_GONE", timeout=self._snapshot_timeout)
+
+    def _get_file(self, server: Server, remote: str, cap: int, limit_code: str, missing_code: str, *, timeout: int) -> bytes:
         self._validate_server(server)
-        result = self._run_ssh(server, list(ACTIVE_STATE_COMMAND), timeout=self._active_state_timeout)
-        _check_returncode(result, "ACTIVE_STATE_FAILED")
-        raw = getattr(result, "stdout", b"")
-        if isinstance(raw, str):
-            text = raw
-        elif isinstance(raw, (bytes, bytearray)):
-            text = bytes(raw).decode("utf-8", errors="replace")
-        else:
-            raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
-        states = text.split()
-        if len(text) > 64 or not 1 <= len(states) <= 2 or any(state not in KNOWN_ACTIVE_STATES for state in states):
-            raise TransportError("BAD_ACTIVE_STATE", "active state output is malformed")
-        return next((state for state in states if state in ACTIVE_SCAN_STATES), states[0])
+        cap = _bounded_positive(cap, "file size limit", 1, self._max_snapshot_bytes)
+        tmp_name = self._mk_secure_temp(".v2")
+        try:
+            try:
+                self._run_sftp(server, _batch_get(remote, tmp_name), timeout=timeout, limit_bytes=cap,
+                               limit_code=limit_code, local_path=tmp_name)
+            except TransportError as exc:
+                stderr = getattr(exc, "stderr", b"")
+                if exc.code == "UNREACHABLE" and any(marker.encode() in stderr for marker in MISSING_FILE_MARKERS):
+                    raise TransportError(missing_code, "remote file is missing") from exc
+                raise
+            return _read_regular_bounded(tmp_name, cap, limit_code)
+        finally:
+            _unlink_quiet(tmp_name)
 
     def start_rescan(self, server: Server) -> None:
         self._validate_server(server)
@@ -201,7 +199,9 @@ class OpenSshTransport:
         _assert_secure_regular(tmp_name)
         return tmp_name
 
-    def _run_sftp(self, server: Server, batch: bytes, *, timeout: int, limit_bytes: int, limit_code: str, local_path: str) -> Any:
+    def _run_sftp(self, server: Server, batch: bytes, *, timeout: int, limit_bytes: int, limit_code: str, local_path: str | None) -> Any:
+        """Run one sftp batch under a file-size cap. SIGXFSZ raises ``limit_code``, and so does a failure
+        that left ``local_path`` at the cap; pass None where reaching the cap proves nothing."""
         cap = _bounded_positive(limit_bytes, "file size limit", 1, MAX_SNAPSHOT_BYTES)
         argv = [sys.executable, "-I", "-S", "-c", FILE_LIMIT_EXEC, str(cap), *self._sftp_argv(server)]
         try:
@@ -213,7 +213,15 @@ class OpenSshTransport:
             raise TransportError("TIMEOUT", "transport command timed out") from exc
         except Exception as exc:
             raise TransportError("UNREACHABLE", "transport command failed") from exc
-        _check_returncode(result, "UNREACHABLE", limit_code=limit_code, local_path=local_path, limit_bytes=limit_bytes)
+        if getattr(result, "returncode", 0) == SSH_ERROR_EXIT:
+            raise TransportError(classify_ssh_failure(getattr(result, "stderr", b"")), "sftp connection failed")
+        try:
+            _check_returncode(result, "UNREACHABLE", limit_code=limit_code, local_path=local_path, limit_bytes=limit_bytes)
+        except TransportError as exc:
+            # Kept off the message, which stays bounded; callers read it to tell a missing file apart.
+            stderr = getattr(result, "stderr", b"")
+            exc.stderr = stderr if isinstance(stderr, bytes) else str(stderr or "").encode()
+            raise
         return result
 
     def _run_ssh(self, server: Server, command: list[str], *, timeout: int) -> Any:
@@ -224,18 +232,12 @@ class OpenSshTransport:
             raise TransportError("TIMEOUT", "transport command timed out") from exc
         except Exception as exc:
             raise TransportError("UNREACHABLE", "transport command failed") from exc
+        if getattr(result, "returncode", 0) == SSH_ERROR_EXIT:
+            raise TransportError(classify_ssh_failure(getattr(result, "stderr", b"")), "ssh connection failed")
         return result
 
     def _common_options(self, server: Server) -> list[str]:
-        return [
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=yes",
-            "-o", "IdentitiesOnly=yes",
-            "-o", f"ConnectTimeout={self._connect_timeout}",
-            "-o", f"UserKnownHostsFile={server.known_hosts_file}",
-            "-o", f"User={server.username}",
-            "-i", str(server.identity_file),
-        ]
+        return ssh_options(server, self._connect_timeout)
 
     def _sftp_argv(self, server: Server) -> list[str]:
         return ["sftp", *self._common_options(server), "-P", str(server.port), "-b", "-", server.host]
@@ -244,15 +246,171 @@ class OpenSshTransport:
         return ["ssh", *self._common_options(server), "-p", str(server.port)]
 
     def _validate_server(self, server: Server) -> None:
-        if server.username != "monitoring":
-            raise TransportError("BAD_INVENTORY", "server username must be monitoring")
-        if not isinstance(server.host, str) or any(ch in server.host for ch in " ;|&`$\\\n\r\t/[]{}()<>"):
-            raise TransportError("BAD_INVENTORY", "server host is unsafe")
-        if not isinstance(server.port, int) or isinstance(server.port, bool) or not 1 <= server.port <= 65535:
-            raise TransportError("BAD_INVENTORY", "server port is unsafe")
-        for label, value in (("identity", str(server.identity_file)), ("known_hosts", str(server.known_hosts_file))):
-            if not value.startswith("/etc/storage-viz/") or _has_control(value):
-                raise TransportError("BAD_INVENTORY", f"{label} path is unsafe")
+        validate_server(server)
+
+
+# ------------------------------------------------------------------ gate transport
+
+GATE_HEADER_RE = re.compile(rb"storage-viz-gate/([1-9][0-9]{0,3}) (?:ok (0|[1-9][0-9]{0,9})|err ([A-Z0-9_]{1,64}))\n")
+MAX_GATE_HEADER_BYTES = 64
+NOT_GATE = "NOT_GATE"
+"""The host answered without the gate's header line: it is not bootstrapped, or the bootstrap was reverted."""
+GATE_CODES = frozenset({
+    "USAGE", "IO_ERROR", "START_FAILED", "FILE_TOO_LARGE", "OUTPUT_TOO_LARGE", "SHORT_READ", "BAD_SIGNATURE_SIZE",
+    "CAPTURE_GONE", "MANIFEST_MISSING", "SNAPSHOT_GONE", "STATUS_MISSING",
+})
+"""The gate's own refusal codes (agent/bootstrap/gate.py), kept as the error code. Any other code a host sends
+becomes GATE_REFUSED with the host's text in ``host_code``, so a host can never claim one of central's own
+codes (NOT_GATE, TIMEOUT, UNREACHABLE, AUTH_FAILED), which only central's observations produce."""
+SNAPSHOT_FILE_RE = re.compile(r"\A[A-Za-z0-9_.-]+-[0-9]+-v1\.json\Z")
+STAGE_SIZE_RE = re.compile(r"\A[1-9][0-9]{0,8}\Z")
+KiB = 1024
+MiB = 1024 * KiB
+
+
+@dataclass(frozen=True)
+class GateVerb:
+    args: Tuple[Pattern[str], ...]
+    cap: int
+    """The most body bytes central accepts, the gate's own output cap (§4.5)."""
+    timeout: int
+    too_large: str = "REPLY_TOO_LARGE"
+    """The code for a body over the cap."""
+
+
+GATE_VERBS: Dict[str, GateVerb] = {
+    "observe": GateVerb((), 64 * KiB, DEFAULT_STATUS_TIMEOUT_SECONDS),
+    "get-manifest": GateVerb((), 64 * KiB, DEFAULT_STATUS_TIMEOUT_SECONDS, "MANIFEST_TOO_LARGE"),
+    "get-capture": GateVerb((VOLUME_ID_RE, SHA256_RE), 512 * MiB, DEFAULT_SNAPSHOT_TIMEOUT_SECONDS, "CAPTURE_TOO_LARGE"),
+    "rescan": GateVerb((REQUEST_ID_RE,), 1 * KiB, DEFAULT_STATUS_TIMEOUT_SECONDS),
+    "stage-update": GateVerb((RELEASE_SHA_RE, STAGE_SIZE_RE), 1 * KiB, 600),
+    "activate-update": GateVerb((RELEASE_SHA_RE,), 1 * KiB, DEFAULT_STATUS_TIMEOUT_SECONDS),
+    "rollback-update": GateVerb((RELEASE_SHA_RE,), 1 * KiB, DEFAULT_STATUS_TIMEOUT_SECONDS),
+    # SHIM(M3b..M5c) S7: the central callers of the v1 verbs go with S3 and S4.
+    "get-status": GateVerb((), 64 * KiB, DEFAULT_STATUS_TIMEOUT_SECONDS, "STATUS_TOO_LARGE"),
+    "get-snapshot": GateVerb((SNAPSHOT_FILE_RE,), 512 * MiB, DEFAULT_SNAPSHOT_TIMEOUT_SECONDS, "SNAPSHOT_TOO_LARGE"),
+}
+_SIZED_VERBS = frozenset({"get-capture", "get-snapshot"})
+"""Verbs whose body length the publication declares: given as ``cap``, a body of another length is SIZE_MISMATCH."""
+
+
+class GateTransport:
+    """``run_verb`` sends exactly one gate verb over ssh and returns the body of an ``ok`` reply.
+
+    stdout and stderr go to private temporary files under a file-size limit, so no
+    reply can grow past its verb's cap in memory or on disk. Failures are typed:
+    ssh's own failure (exit 255) is AUTH_FAILED or UNREACHABLE, a timeout TIMEOUT,
+    a gate refusal its own code, a reply without the gate header NOT_GATE, and a
+    body that disagrees with its header SIZE_MISMATCH or BAD_REPLY.
+    """
+
+    def __init__(self, *, runner: Optional[Runner] = None, temp_dir: str | os.PathLike[str] | None = None,
+                 connect_timeout_seconds: int = DEFAULT_CONNECT_TIMEOUT_SECONDS, key_root: str = KEY_ROOT) -> None:
+        self._runner = runner or _SubprocessRunner()
+        self._temp_dir = temp_dir
+        self._connect_timeout = _bounded_positive(connect_timeout_seconds, "connect timeout", 1, 300)
+        if not key_root.startswith("/") or not key_root.endswith("/"):
+            raise ValueError("key root must be an absolute directory path ending in /")
+        self._key_root = key_root
+
+    def run_verb(self, server: Server, verb: str, args: Sequence[str] = (), stdin: Optional[bytes] = None,
+                 cap: Optional[int] = None) -> bytes:
+        """The body of the gate's ``ok`` reply. ``cap`` lowers the verb's cap, for a body of known size."""
+        spec = GATE_VERBS.get(verb)
+        if spec is None or len(args) != len(spec.args) or not all(
+                isinstance(arg, str) and pattern.fullmatch(arg) for pattern, arg in zip(spec.args, args)):
+            raise TransportError("BAD_VERB", "not a gate verb")
+        validate_server(server, self._key_root)
+        limit = spec.cap if cap is None else _bounded_positive(cap, "reply cap", 1, spec.cap)
+        command = " ".join((verb, *args))
+        argv = [sys.executable, "-I", "-S", "-c", FILE_LIMIT_EXEC, str(MAX_GATE_HEADER_BYTES + limit),
+                "ssh", *ssh_options(server, self._connect_timeout), "-p", str(server.port), "--", server.host, command]
+        out_name, err_name = self._temp(".gate-out"), self._temp(".gate-err")
+        try:
+            with open(out_name, "wb") as out, open(err_name, "wb") as err:
+                options: Dict[str, Any] = {"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}
+                try:
+                    result = self._runner.run(argv, stdout=out, stderr=err, timeout=spec.timeout, check=False,
+                                              shell=False, **options)
+                except (subprocess.TimeoutExpired, TimeoutError) as exc:
+                    raise TransportError("TIMEOUT", "gate command timed out") from exc
+                except Exception as exc:
+                    raise TransportError("UNREACHABLE", "gate command failed") from exc
+            returncode = getattr(result, "returncode", 1)
+            if returncode == SSH_ERROR_EXIT:
+                raise TransportError(classify_ssh_failure(_read_head(err_name)), "ssh connection failed")
+            if returncode == -getattr(signal, "SIGXFSZ", -9999):
+                raise TransportError(spec.too_large, "gate reply exceeds its cap")
+            reply = _read_regular_bounded(out_name, MAX_GATE_HEADER_BYTES + limit, spec.too_large)
+        finally:
+            _unlink_quiet(out_name)
+            _unlink_quiet(err_name)
+        return parse_gate_reply(reply, returncode, limit, spec, sized=verb in _SIZED_VERBS and cap is not None)
+
+    def _temp(self, suffix: str) -> str:
+        fd, name = tempfile.mkstemp(prefix="storage-viz-", suffix=suffix, dir=self._temp_dir)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+        _assert_secure_regular(name)
+        return name
+
+
+def parse_gate_reply(reply: bytes, returncode: int, limit: int, spec: GateVerb, *, sized: bool = False) -> bytes:
+    """Check the header line and the counted body of one gate reply. ``sized``: the body must be ``limit`` bytes."""
+    match = GATE_HEADER_RE.match(reply[:MAX_GATE_HEADER_BYTES])
+    if match is None:
+        raise TransportError(NOT_GATE, "the host did not answer with the gate header")
+    if match.group(3) is not None:
+        host_code = match.group(3).decode()
+        code = spec.too_large if host_code == "TOO_LARGE" else host_code if host_code in GATE_CODES else "GATE_REFUSED"
+        error = TransportError(code, "the gate refused the verb")
+        error.host_code = host_code
+        raise error
+    declared = int(match.group(2))
+    body = reply[match.end():]
+    if returncode != 0:
+        raise TransportError("BAD_REPLY", "an ok header with a nonzero exit status")
+    if declared > limit:
+        raise TransportError(spec.too_large if not sized or declared > spec.cap else "SIZE_MISMATCH",
+                             "the gate reply is larger than allowed")
+    if len(body) != declared or (sized and declared != limit):
+        raise TransportError("SIZE_MISMATCH" if sized else "BAD_REPLY", "the gate body length disagrees with its header")
+    return body
+
+
+def _read_head(path: str, limit: int = 4096) -> bytes:
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(limit)
+    except OSError:
+        return b""
+
+
+def ssh_options(server: Server, connect_timeout: int) -> list[str]:
+    """BatchMode, the inventory's pinned known_hosts with strict checking, and only the server's key."""
+    return [
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "IdentitiesOnly=yes",
+        "-o", f"ConnectTimeout={connect_timeout}",
+        "-o", f"UserKnownHostsFile={server.known_hosts_file}",
+        "-o", f"User={server.username}",
+        "-i", str(server.identity_file),
+    ]
+
+
+def validate_server(server: Server, key_root: str = KEY_ROOT) -> None:
+    if server.username != "monitoring":
+        raise TransportError("BAD_INVENTORY", "server username must be monitoring")
+    if not isinstance(server.host, str) or any(ch in server.host for ch in " ;|&`$\\\n\r\t/[]{}()<>"):
+        raise TransportError("BAD_INVENTORY", "server host is unsafe")
+    if not isinstance(server.port, int) or isinstance(server.port, bool) or not 1 <= server.port <= 65535:
+        raise TransportError("BAD_INVENTORY", "server port is unsafe")
+    for label, value in (("identity", str(server.identity_file)), ("known_hosts", str(server.known_hosts_file))):
+        if not value.startswith(key_root) or _has_control(value):
+            raise TransportError("BAD_INVENTORY", f"{label} path is unsafe")
 
 
 def _batch_get(remote: str, local: str) -> bytes:
@@ -261,31 +419,10 @@ def _batch_get(remote: str, local: str) -> bytes:
     return f"get {shlex.quote(remote)} {shlex.quote(local)}\n".encode("utf-8")
 
 
-def observed_scan_service(observation: Mapping[str, Any]) -> tuple[str, int | None]:
-    services = []
-    observed_monotonic = observation["remote_monotonic"]
-
-    def monotonic(props, key):
-        value = props.get(key, "")
-        if value.isascii() and value.isdecimal() and len(value) <= 20:
-            seconds = int(value) / 1_000_000
-            if 0 < seconds <= observed_monotonic:
-                return seconds
-        return 0
-
-    lines = observation.get("services") or [observation.get("service", "")]
-    for text in lines:
-        props = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
-        state = props.get("ActiveState")
-        if state in KNOWN_ACTIVE_STATES:
-            recent = monotonic(props, "StateChangeTimestampMonotonic")
-            started = max(monotonic(props, "ExecMainStartTimestampMonotonic"), monotonic(props, "InactiveExitTimestampMonotonic"))
-            services.append((state in ACTIVE_SCAN_STATES, recent, state, started))
-    if not services:
-        raise TransportError("ACTIVE_STATE_FAILED", "service state is unavailable")
-    active, _, state, started = max(services)
-    started_unix = int(observation["remote_unix"] - observed_monotonic + started) if active and started else None
-    return state, started_unix if started_unix is not None and started_unix > 0 else None
+def classify_ssh_failure(stderr: Any) -> str:
+    """Exit 255 is ssh's own failure. A refused key or a changed host key is AUTH_FAILED, the rest UNREACHABLE."""
+    text = stderr.decode("utf-8", "replace") if isinstance(stderr, (bytes, bytearray)) else str(stderr or "")
+    return "AUTH_FAILED" if any(marker in text for marker in AUTH_FAILURE_MARKERS) else "UNREACHABLE"
 
 
 def validate_snapshot_status(status: Mapping[str, Any], server: Server, max_snapshot_bytes: int) -> str:
@@ -294,7 +431,7 @@ def validate_snapshot_status(status: Mapping[str, Any], server: Server, max_snap
         raise TransportError("BAD_STATUS", "status server_id mismatch")
     if status.get("status") not in {"complete", "partial"}:
         raise TransportError("BAD_STATUS", "status is not downloadable")
-    if not isinstance(status.get("config_digest"), str) or not HEX64_RE.fullmatch(status["config_digest"]):
+    if not isinstance(status.get("config_digest"), str) or not SHA256_RE.fullmatch(status["config_digest"]):
         raise TransportError("BAD_STATUS", "status config digest is invalid")
     if not isinstance(status.get("scan_finished_unix"), int) or isinstance(status.get("scan_finished_unix"), bool) or status["scan_finished_unix"] < 0:
         raise TransportError("BAD_STATUS", "status timestamp is invalid")
@@ -304,7 +441,7 @@ def validate_snapshot_status(status: Mapping[str, Any], server: Server, max_snap
     if size > max_snapshot_bytes:
         raise TransportError("SNAPSHOT_TOO_LARGE", "snapshot exceeds maximum size")
     sha = status.get("sha256")
-    if not isinstance(sha, str) or not HEX64_RE.fullmatch(sha):
+    if not isinstance(sha, str) or not SHA256_RE.fullmatch(sha):
         raise TransportError("BAD_STATUS", "status sha256 is invalid")
     return generation
 
@@ -318,14 +455,14 @@ def validate_status_envelope(raw: Mapping[str, Any], server: Server) -> dict[str
         raise TransportError("BAD_STATUS", "status server_id mismatch")
     if status.get("status") not in {"complete", "partial", "failed"}:
         raise TransportError("BAD_STATUS", "status value is invalid")
-    if not isinstance(status.get("config_digest"), str) or not HEX64_RE.fullmatch(status["config_digest"]):
+    if not isinstance(status.get("config_digest"), str) or not SHA256_RE.fullmatch(status["config_digest"]):
         raise TransportError("BAD_STATUS", "status config digest is invalid")
     if not isinstance(status.get("scan_finished_unix"), int) or isinstance(status.get("scan_finished_unix"), bool) or status["scan_finished_unix"] < 0:
         raise TransportError("BAD_STATUS", "status timestamp is invalid")
     if status["status"] in {"complete", "partial"}:
         if not isinstance(status.get("byte_size"), int) or isinstance(status.get("byte_size"), bool) or status["byte_size"] <= 0:
             raise TransportError("BAD_STATUS", "snapshot size is invalid")
-        if not isinstance(status.get("sha256"), str) or not HEX64_RE.fullmatch(status["sha256"]):
+        if not isinstance(status.get("sha256"), str) or not SHA256_RE.fullmatch(status["sha256"]):
             raise TransportError("BAD_STATUS", "status sha256 is invalid")
     return status
 

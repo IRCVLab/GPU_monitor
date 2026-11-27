@@ -11,12 +11,28 @@
  *     mutex: when the queue is empty and no worker is busy, all workers wake
  *     and exit. Each scan target runs as its own pass so per-mount stats and
  *     per-target st_dev boundaries stay isolated.
+ *   - The walk is descriptor-relative. The target root stays open for the
+ *     whole pass. Every other directory is opened with openat() relative to
+ *     its parent's descriptor (O_NOFOLLOW | O_DIRECTORY), and its fstat()
+ *     must match the (dev, ino) the parent's fstatat() saw. No syscall sees a
+ *     full path, so path length and depth are unbounded.
+ *   - A queued directory keeps its descriptor while the number of queued
+ *     descriptors is under a budget. Past it, the item is parked without a
+ *     descriptor and later reopened one component at a time from the pinned
+ *     root, checking each ancestor's (dev, ino). Tree nodes carry the name,
+ *     parent and identity, so the node chain is the component vector.
+ *   - A directory that vanished, was replaced or could not be reopened is a
+ *     scoped error row and counts toward the root's errors. A file that
+ *     vanished stays silent: its bytes are gone.
  *   - Directory entries are read with raw getdents64 into a 256KB buffer.
  *   - Hardlink dedup uses a per-thread (dev,ino) hash set for nlink>1 files,
  *     merged into a global set under a mutex; each inode's blocks count once.
  *   - The directory tree is built incrementally (each node protected by its
- *     own lock), then pruned bottom-up before JSON emission so memory stays
- *     bounded. Pruned children fold their bytes into the parent's other_bytes.
+ *     own lock), then pruned before JSON emission so memory stays bounded.
+ *     Pruned children fold their bytes into the parent's other_bytes. Rollup,
+ *     pruning, emission and freeing use explicit heap stacks, not recursion.
+ *   - Names that are not valid UTF-8 are emitted as a display string with
+ *     U+FFFD plus a <field>_b64 copy of the raw bytes.
  */
 
 #define _GNU_SOURCE
@@ -35,14 +51,13 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
+
 #include <sys/syscall.h>
 #include <sys/resource.h>
 #if defined(__linux__)
 #include <sys/sysmacros.h>
 #endif
 
-#define SCANNER_VERSION "0.1.0"
 #define SCHEMA_VERSION  1
 
 #define GETDENTS_BUFSZ  (256 * 1024)
@@ -53,6 +68,9 @@
 #define DEFAULT_PRUNE_HOME_MB 50
 #define DEFAULT_PRUNE_DATA_MB 100
 #define MAX_CHILDREN_PER_NODE 16384
+/* Longest path a row may carry: the agent and collector reject longer ones. */
+#define MAX_EMIT_PATH   4096
+#define MAX_FD_BUDGET   1024
 
 /* Linux dirent64 (not exposed by glibc headers). */
 struct linux_dirent64 {
@@ -93,19 +111,6 @@ static double now_monotonic(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
-
-/* Join dir + "/" + name into a freshly allocated string (handles trailing /). */
-static char *path_join(const char *dir, const char *name) {
-    size_t dl = strlen(dir);
-    size_t nl = strlen(name);
-    bool need_sep = (dl > 0 && dir[dl - 1] != '/');
-    char *p = xmalloc(dl + (need_sep ? 1 : 0) + nl + 1);
-    memcpy(p, dir, dl);
-    size_t off = dl;
-    if (need_sep) p[off++] = '/';
-    memcpy(p + off, name, nl + 1);
-    return p;
 }
 
 /* ----------------------------------------------------------------------- *
@@ -212,11 +217,13 @@ static pthread_mutex_t  g_hardlinks_lock = PTHREAD_MUTEX_INITIALIZER;
  * ----------------------------------------------------------------------- */
 
 struct node {
-    char           *name;
+    char           *name;         /* raw entry name; the target path at the root */
     uint64_t        bytes;        /* subtree block usage */
     uint64_t        files;        /* subtree file count  */
     uid_t           uid;          /* owner of this directory */
     int64_t         mtime;        /* directory mtime */
+    dev_t           dev;          /* identity seen by the parent's fstatat */
+    ino_t           ino;
     uint64_t        other_bytes;  /* bytes not represented by retained children */
     struct node    *parent;
     struct node   **children;
@@ -225,12 +232,14 @@ struct node {
     pthread_mutex_t lock;
 };
 
-static struct node *node_new(const char *name, uid_t uid, int64_t mtime,
+static struct node *node_new(const char *name, const struct stat *st,
                              struct node *parent) {
     struct node *n = xcalloc(1, sizeof *n);
     n->name = xstrdup(name);
-    n->uid = uid;
-    n->mtime = mtime;
+    n->uid = st->st_uid;
+    n->mtime = (int64_t)st->st_mtime;
+    n->dev = st->st_dev;
+    n->ino = st->st_ino;
     n->parent = parent;
     pthread_mutex_init(&n->lock, NULL);
     return n;
@@ -264,24 +273,66 @@ static void node_add_self_bytes(struct node *n, uint64_t bytes) {
     pthread_mutex_unlock(&n->lock);
 }
 
-/* Roll up subtree totals from leaves to root (called single-threaded after
- * the walk completes). Returns the node's final bytes/files. */
-static void node_rollup(struct node *n, uint64_t *out_bytes, uint64_t *out_files) {
-    uint64_t b = n->bytes;
-    uint64_t f = n->files;
-    for (size_t i = 0; i < n->nchildren; i++) {
-        uint64_t cb = 0, cf = 0;
-        node_rollup(n->children[i], &cb, &cf);
-        b += cb;
-        f += cf;
+/* Heap stack for depth-unbounded tree passes. `next` is the next child to
+ * visit; `levels` carries node_prune's preserve_levels. */
+struct frame {
+    struct node *n;
+    size_t       next;
+    unsigned     levels;
+};
+struct frames {
+    struct frame *a;
+    size_t        n, cap;
+};
+
+static void frames_push(struct frames *s, struct node *n, unsigned levels) {
+    if (s->n == s->cap) {
+        s->cap = s->cap ? s->cap * 2 : 64;
+        s->a = xrealloc(s->a, s->cap * sizeof *s->a);
     }
-    n->bytes = b;
-    n->files = f;
-    *out_bytes = b;
-    *out_files = f;
+    s->a[s->n++] = (struct frame){ .n = n, .next = 0, .levels = levels };
 }
 
-static void node_free(struct node *n);
+/* Roll up subtree totals from leaves to root (called single-threaded after
+ * the walk completes). */
+static void node_rollup(struct node *root) {
+    struct frames s = {0};
+    frames_push(&s, root, 0);
+    while (s.n) {
+        struct frame *f = &s.a[s.n - 1];
+        if (f->next < f->n->nchildren) {
+            frames_push(&s, f->n->children[f->next++], 0);
+            continue;
+        }
+        struct node *n = f->n;
+        s.n--;
+        if (s.n) {
+            n->parent->bytes += n->bytes;
+            n->parent->files += n->files;
+        }
+    }
+    free(s.a);
+}
+
+static void node_free(struct node *top) {
+    if (!top) return;
+    struct frames s = {0};
+    frames_push(&s, top, 0);
+    while (s.n) {
+        struct frame *f = &s.a[s.n - 1];
+        if (f->next < f->n->nchildren) {
+            frames_push(&s, f->n->children[f->next++], 0);
+            continue;
+        }
+        struct node *n = f->n;
+        s.n--;
+        free(n->children);
+        free(n->name);
+        pthread_mutex_destroy(&n->lock);
+        free(n);
+    }
+    free(s.a);
+}
 
 static int node_root_rank_cmp(const void *left, const void *right) {
     const struct node *a = *(const struct node * const *)left;
@@ -293,32 +344,37 @@ static int node_root_rank_cmp(const void *left, const void *right) {
 
 /* Prune children below threshold; bytes not represented by retained children
  * (direct entries plus pruned subtrees) fold into other_bytes. Must run after
- * node_rollup (final n->bytes). When preserve_levels > 0, retain the next
- * child level regardless of threshold (still sorted and capped), then resume
- * threshold pruning below it. */
-static void node_prune(struct node *n, uint64_t threshold,
+ * node_rollup (final n->bytes). While preserve_levels > 0, a level is retained
+ * regardless of threshold (still sorted and capped), then threshold pruning
+ * resumes below it. */
+static void node_prune(struct node *top, uint64_t threshold,
                        unsigned preserve_levels) {
-    if (n->nchildren > 1) {
-        qsort(n->children, n->nchildren, sizeof *n->children,
-              node_root_rank_cmp);
-    }
-    size_t keep = 0;
-    uint64_t retained_bytes = 0;
-    for (size_t i = 0; i < n->nchildren; i++) {
-        struct node *c = n->children[i];
-        bool retain = preserve_levels > 0 || c->bytes >= threshold;
-        if (retain && keep < MAX_CHILDREN_PER_NODE) {
-            unsigned child_preserve_levels =
-                preserve_levels > 0 ? preserve_levels - 1 : 0;
-            node_prune(c, threshold, child_preserve_levels);
-            n->children[keep++] = c;     /* retained: compact toward front */
-            retained_bytes += c->bytes;
-        } else {
-            node_free(c);
+    struct frames s = {0};
+    frames_push(&s, top, preserve_levels);
+    while (s.n) {
+        struct frame f = s.a[--s.n];
+        struct node *n = f.n;
+        if (n->nchildren > 1) {
+            qsort(n->children, n->nchildren, sizeof *n->children,
+                  node_root_rank_cmp);
         }
+        size_t keep = 0;
+        uint64_t retained_bytes = 0;
+        for (size_t i = 0; i < n->nchildren; i++) {
+            struct node *c = n->children[i];
+            bool retain = f.levels > 0 || c->bytes >= threshold;
+            if (retain && keep < MAX_CHILDREN_PER_NODE) {
+                n->children[keep++] = c;     /* retained: compact toward front */
+                retained_bytes += c->bytes;
+                frames_push(&s, c, f.levels > 0 ? f.levels - 1 : 0);
+            } else {
+                node_free(c);
+            }
+        }
+        n->nchildren = keep;
+        n->other_bytes = keep ? n->bytes - retained_bytes : 0;
     }
-    n->nchildren = keep;
-    n->other_bytes = keep ? n->bytes - retained_bytes : 0;
+    free(s.a);
 }
 
 /* Preserve every immediate directory below a selected scan root plus one more
@@ -326,33 +382,47 @@ static void node_prune(struct node *n, uint64_t threshold,
  * the real workspace layout. Size pruning still applies below those
  * navigation landmarks. */
 static void node_prune_below_root(struct node *root, uint64_t threshold) {
-    if (root->nchildren > 1) {
-        qsort(root->children, root->nchildren, sizeof *root->children,
-              node_root_rank_cmp);
-    }
-    size_t keep = root->nchildren;
-    if (keep > MAX_CHILDREN_PER_NODE) keep = MAX_CHILDREN_PER_NODE;
-
-    uint64_t retained_bytes = 0;
-    for (size_t i = 0; i < keep; i++) {
-        struct node *child = root->children[i];
-        node_prune(child, threshold, 1);
-        retained_bytes += child->bytes;
-    }
-    for (size_t i = keep; i < root->nchildren; i++) {
-        node_free(root->children[i]);
-    }
-    root->nchildren = keep;
-    root->other_bytes = keep ? root->bytes - retained_bytes : 0;
+    node_prune(root, threshold, 2);
 }
 
-static void node_free(struct node *n) {
-    if (!n) return;
-    for (size_t i = 0; i < n->nchildren; i++) node_free(n->children[i]);
-    free(n->children);
-    free(n->name);
-    pthread_mutex_destroy(&n->lock);
-    free(n);
+/* The path of `leaf` inside directory `dir` (or of `dir` itself when leaf is
+ * NULL), joined from the node chain for output only. When the path exceeds
+ * MAX_EMIT_PATH bytes: with `trim`, return the deepest ancestor that fits;
+ * otherwise return NULL. */
+static char *node_path(const struct node *dir, const char *leaf, bool trim) {
+    size_t depth = 1;
+    for (const struct node *p = dir; p->parent; p = p->parent) depth++;
+    size_t count = depth + (leaf ? 1 : 0);
+    const char **parts = xmalloc(count * sizeof *parts);
+    size_t i = depth;
+    for (const struct node *p = dir; p; p = p->parent) parts[--i] = p->name;
+    if (leaf) parts[depth] = leaf;
+
+    size_t root_len = strlen(parts[0]);
+    bool root_has_sep = root_len > 0 && parts[0][root_len - 1] == '/';
+    size_t len = root_len;
+    size_t used = 1;
+    for (; used < count; used++) {
+        size_t add = strlen(parts[used]) + ((used == 1 && root_has_sep) ? 0 : 1);
+        if (len + add > MAX_EMIT_PATH) break;
+        len += add;
+    }
+    if (used < count && !trim) {
+        free(parts);
+        return NULL;
+    }
+    char *out = xmalloc(len + 1);
+    memcpy(out, parts[0], root_len);
+    size_t off = root_len;
+    for (i = 1; i < used; i++) {
+        if (!(i == 1 && root_has_sep)) out[off++] = '/';
+        size_t pl = strlen(parts[i]);
+        memcpy(out + off, parts[i], pl);
+        off += pl;
+    }
+    out[off] = '\0';
+    free(parts);
+    return out;
 }
 
 /* ----------------------------------------------------------------------- *
@@ -361,7 +431,7 @@ static void node_free(struct node *n) {
 
 struct user_mount {
     char    *mount;       /* mount path (not owned; points into mounts array) */
-    uint64_t bytes;
+    uint64_t bytes, files;
     struct user_mount *next;
 };
 
@@ -399,6 +469,7 @@ static void user_add(uid_t uid, const char *mount, uint64_t bytes, uint64_t file
         u->mounts = m;
     }
     m->bytes += bytes;
+    m->files += files;
     pthread_mutex_unlock(&g_users_lock);
 }
 
@@ -445,11 +516,15 @@ static void heap_sift_down(struct minheap *h, size_t i) {
     }
 }
 
-static void heap_offer(struct minheap *h, const char *directory, const char *name,
+/* A file whose path exceeds MAX_EMIT_PATH is not offered: no consumer can
+ * take the row. Its bytes still count in the totals. */
+static void heap_offer(struct minheap *h, const struct node *dir, const char *name,
                        uint64_t bytes, uid_t uid, int64_t mtime, int age_days) {
     if (h->cap == 0 || (h->n == h->cap && bytes <= h->a[0].bytes)) return;
+    char *path = node_path(dir, name, false);
+    if (!path) return;
     struct file_rec record = {
-        .path = path_join(directory, name), .bytes = bytes, .uid = uid,
+        .path = path, .bytes = bytes, .uid = uid,
         .mtime = mtime, .age_days = age_days,
     };
     if (h->n < h->cap) {
@@ -484,13 +559,49 @@ static struct blocked_rec g_blocked[MAX_BLOCKED];
 static size_t g_blocked_n = 0;
 static pthread_mutex_t g_blocked_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void blocked_add(const char *path, int err) {
+/* Scoped error reasons. A directory that is VANISHED, REPLACED or
+ * REOPEN_FAILED leaves its subtree uncounted. */
+static const char R_VANISHED[] = "VANISHED";
+static const char R_REPLACED[] = "REPLACED";
+static const char R_REOPEN_FAILED[] = "FD_BUDGET_REOPEN_FAILED";
+
+static const char *errno_reason(int err) {
+    switch (err) {
+    case ENOENT:  return R_VANISHED;
+    case ENOTDIR: /* a directory became a file */
+    case ELOOP:   /* a directory became a symlink (O_NOFOLLOW) */
+    case ESTALE:  /* open_verified: (dev, ino) differs from the parent's stat */
+        return R_REPLACED;
+    case EACCES:
+    case EPERM:   return "EACCES";
+    case EIO:     return "EIO";
+    case EMFILE:  return "EMFILE";
+    case ENFILE:  return "ENFILE";
+    case ENOMEM:  return "ENOMEM";
+    case EOVERFLOW:
+    case ENAMETOOLONG: return "UNREPRESENTABLE";
+    default:      return "EIO";
+    }
+}
+
+static void blocked_add(const char *path, const char *reason) {
     pthread_mutex_lock(&g_blocked_lock);
     if (g_blocked_n < MAX_BLOCKED) {
         g_blocked[g_blocked_n].path = xstrdup(path);
-        g_blocked[g_blocked_n].reason = (err == EACCES) ? "EACCES"
-                                       : (err == EPERM)  ? "EPERM"
-                                       : strerror(err);
+        g_blocked[g_blocked_n].reason = reason;
+        g_blocked_n++;
+    }
+    pthread_mutex_unlock(&g_blocked_lock);
+}
+
+/* A path too long to emit is reported at its deepest ancestor that fits, so
+ * the row still lands under the right scan root. */
+static void blocked_add_node(const struct node *dir, const char *leaf,
+                             const char *reason) {
+    pthread_mutex_lock(&g_blocked_lock);
+    if (g_blocked_n < MAX_BLOCKED) {
+        g_blocked[g_blocked_n].path = node_path(dir, leaf, true);
+        g_blocked[g_blocked_n].reason = reason;
         g_blocked_n++;
     }
     pthread_mutex_unlock(&g_blocked_lock);
@@ -500,19 +611,16 @@ static void blocked_add(const char *path, int err) {
  *  Work queue (directories to scan)
  * ----------------------------------------------------------------------- */
 
+/* A queued directory. `fd` is its verified descriptor, or -1 when the item is
+ * parked and must be reopened from the pinned root through node->parent. */
 struct work_item {
-    char        *path;      /* absolute path of the directory (owned) */
-    struct node *node;      /* tree node for this directory */
+    struct node *node;
+    int          fd;
     struct work_item *next;
 };
-/*
- * Note: the queue stores directory PATHS, not open fds. A worker opens the
- * directory when it dequeues an item and closes it before taking the next one,
- * so the number of concurrently-open directory fds is bounded by the thread
- * count, not by the (unbounded) queue depth. This avoids RLIMIT_NOFILE/EMFILE
- * exhaustion on large trees.
- */
 
+/* Items holding a descriptor go to the head and parked items to the tail, so
+ * open descriptors are consumed first and return to the budget quickly. */
 struct queue {
     struct work_item *head, *tail;
     size_t            pending;   /* items in queue + items being processed */
@@ -538,10 +646,16 @@ static void queue_destroy(struct queue *q) {
 static void queue_push_new(struct queue *q, struct work_item *it) {
     pthread_mutex_lock(&q->lock);
     q->pending++;
-    it->next = NULL;
-    if (q->tail) q->tail->next = it;
-    else q->head = it;
-    q->tail = it;
+    if (it->fd >= 0) {
+        it->next = q->head;
+        q->head = it;
+        if (!q->tail) q->tail = it;
+    } else {
+        it->next = NULL;
+        if (q->tail) q->tail->next = it;
+        else q->head = it;
+        q->tail = it;
+    }
     pthread_cond_signal(&q->cond);
     pthread_mutex_unlock(&q->lock);
 }
@@ -577,6 +691,22 @@ static void queue_complete_one(struct queue *q) {
     pthread_mutex_unlock(&q->lock);
 }
 
+/* Descriptors held by queued and in-process directories, against a budget of
+ * min(MAX_FD_BUDGET, RLIMIT_NOFILE / 4). Each worker may also hold up to two
+ * unbudgeted descriptors while it reopens a parked item. */
+static long g_fd_budget = MAX_FD_BUDGET;
+static long g_fd_live = 0;
+
+static bool fd_budget_take(void) {
+    if (__atomic_add_fetch(&g_fd_live, 1, __ATOMIC_RELAXED) <= g_fd_budget) return true;
+    __atomic_sub_fetch(&g_fd_live, 1, __ATOMIC_RELAXED);
+    return false;
+}
+
+static void fd_budget_return(void) {
+    __atomic_sub_fetch(&g_fd_live, 1, __ATOMIC_RELAXED);
+}
+
 /* ----------------------------------------------------------------------- *
  *  Scan context (per-target pass)
  * ----------------------------------------------------------------------- */
@@ -586,14 +716,18 @@ struct mount_info {
     char  *fstype;
 };
 
+enum prune_class { PRUNE_DATA, PRUNE_HOME };
+
 struct target_spec {
-    const char *path;
-    bool        guarded;
-    dev_t       expected_dev;
+    const char      *path;
+    bool             guarded;
+    dev_t            expected_dev;
+    enum prune_class prune_class;
 };
 
 struct scan_ctx {
     struct queue queue;
+    int          root_fd;         /* pinned for the whole pass */
     dev_t        root_dev;        /* st_dev of the target root; stay within it */
     const char  *scan_root;       /* requested target path (for user_add) */
     int          stale_days;
@@ -605,6 +739,8 @@ struct scan_ctx {
     uint64_t     scanned_files;
     uint64_t     scanned_dirs;
     uint64_t     errors;
+    uint64_t     vanished_dirs;
+    uint64_t     reopened_dirs;
 };
 
 /* ----------------------------------------------------------------------- *
@@ -614,18 +750,19 @@ struct scan_ctx {
 /* Progress writes are optional, throttled and independent of the snapshot. */
 static const char *g_progress_path = NULL;
 static const char *g_progress_run_id = "";
-static const char *g_progress_root = "";
+static const char *g_progress_group = "";
 static int g_progress_roots_total = 0, g_progress_roots_done = 0;
 static uint64_t g_progress_bytes = 0, g_progress_files = 0, g_progress_dirs = 0;
-static double g_progress_last = -10;
-static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
-                           uint64_t dirs, bool force);
+static pthread_mutex_t progress_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t progress_changed;
+static bool progress_finished;
+static void progress_write(void);
 
 struct worker_arg {
     struct scan_ctx  *ctx;
     struct inode_set  local_links;   /* per-thread hardlink set */
     /* per-thread stat deltas to reduce lock contention */
-    uint64_t bytes, files, dirs, errs;
+    uint64_t bytes, files, dirs, errs, vanished, reopened;
     uid_t owner_uid;
     uint64_t owner_bytes, owner_files;
     bool owner_pending;
@@ -646,13 +783,12 @@ static void count_owner(struct worker_arg *w, uid_t uid, uint64_t bytes, uint64_
     w->owner_files += files;
 }
 
-/* Entries can legitimately disappear between directory enumeration and the
- * later stat/open while the scanned tree remains in active use. */
-static bool record_scan_error(struct worker_arg *w, const char *path, int err) {
-    if (err == ENOENT) return false;
+static void record_scan_error(struct worker_arg *w, const struct node *dir,
+                              const char *leaf, const char *reason) {
     w->errs++;
-    blocked_add(path, err);
-    return true;
+    if (reason == R_VANISHED || reason == R_REPLACED || reason == R_REOPEN_FAILED)
+        w->vanished++;
+    blocked_add_node(dir, leaf, reason);
 }
 
 static void ctx_flush_stats(struct scan_ctx *c, struct worker_arg *w) {
@@ -661,41 +797,108 @@ static void ctx_flush_stats(struct scan_ctx *c, struct worker_arg *w) {
     c->scanned_files += w->files;
     c->scanned_dirs  += w->dirs;
     c->errors        += w->errs;
-    progress_write("scanning", c->scanned_bytes, c->scanned_files, c->scanned_dirs, false);
+    c->vanished_dirs += w->vanished;
+    c->reopened_dirs += w->reopened;
+    pthread_mutex_lock(&progress_lock);
+    g_progress_bytes += w->bytes;
+    g_progress_files += w->files;
+    g_progress_dirs += w->dirs;
+    pthread_mutex_unlock(&progress_lock);
     pthread_mutex_unlock(&c->stat_lock);
-    w->bytes = w->files = w->dirs = w->errs = 0;
+    w->bytes = w->files = w->dirs = w->errs = w->vanished = w->reopened = 0;
+}
+
+/* Open directory `n` relative to its parent's descriptor without following
+ * symlinks, and require the (dev, ino) the parent's fstatat saw. Returns the
+ * descriptor, or -1 with *err set (ESTALE for an identity mismatch). */
+static int open_verified(int parent_fd, const struct node *n, int *err) {
+    int fd = openat(parent_fd, n->name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd == -1) {
+        *err = errno;
+        return -1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        *err = errno;
+        close(fd);
+        return -1;
+    }
+    if (st.st_dev != n->dev || st.st_ino != n->ino) {
+        *err = ESTALE;
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/* Reopen a parked directory one component at a time from the pinned root,
+ * verifying every ancestor's identity. A failure above the directory itself
+ * is REOPEN_FAILED: the directory was reachable when it was queued. */
+static int reopen_from_root(struct scan_ctx *c, const struct node *n,
+                            const char **reason) {
+    size_t depth = 0;
+    for (const struct node *p = n; p->parent; p = p->parent) depth++;
+    if (depth == 0) {
+        int fd = fcntl(c->root_fd, F_DUPFD_CLOEXEC, 0);
+        if (fd == -1) *reason = errno_reason(errno);
+        return fd;
+    }
+    const struct node **chain = xmalloc(depth * sizeof *chain);
+    size_t i = depth;
+    for (const struct node *p = n; p->parent; p = p->parent) chain[--i] = p;
+    int fd = c->root_fd;
+    for (i = 0; i < depth; i++) {
+        int err = 0;
+        int next = open_verified(fd, chain[i], &err);
+        if (fd != c->root_fd) close(fd);
+        fd = next;
+        if (fd == -1) {
+            if (err == EMFILE || err == ENFILE)
+                fprintf(stderr, "hstscan: WARNING fd exhaustion (%s) reopening a parked directory\n",
+                        strerror(err));
+            *reason = (i + 1 < depth) ? R_REOPEN_FAILED : errno_reason(err);
+            break;
+        }
+    }
+    free(chain);
+    return fd;
+}
+
+/* Queue a discovered child directory, opened relative to its parent while the
+ * descriptor budget allows, parked otherwise. A child that cannot be opened
+ * is a scoped error and is not queued. */
+static void queue_child(struct worker_arg *w, int parent_fd, struct node *child) {
+    int fd = -1;
+    if (fd_budget_take()) {
+        int err = 0;
+        fd = open_verified(parent_fd, child, &err);
+        if (fd == -1) {
+            fd_budget_return();
+            if (err != EMFILE && err != ENFILE) {
+                record_scan_error(w, child, NULL, errno_reason(err));
+                return;
+            }
+        }
+    }
+    struct work_item *ni = xmalloc(sizeof *ni);
+    ni->node = child;
+    ni->fd = fd;
+    queue_push_new(&w->ctx->queue, ni);
 }
 
 static void process_dir(struct worker_arg *w, struct work_item *it) {
     struct scan_ctx *c = w->ctx;
-
-    /* Open the directory by its absolute path. We open it here and close it at
-     * the end of this function, so at most one dir fd per worker is held at a
-     * time (plus transient openat-by-name checks, which we avoid). This keeps
-     * concurrently-open fds bounded by the thread count. */
-    int dirfd = open(it->path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    struct node *dir = it->node;
+    bool budgeted = it->fd >= 0;
+    int dirfd = it->fd;
     if (dirfd == -1) {
-        int e = errno;
-        record_scan_error(w, it->path, e);
-        if (e == EMFILE || e == ENFILE) {
-            /* Should not happen with the path-based queue; flag loudly if it
-             * ever does so an undercount is never silent. */
-            fprintf(stderr, "hstscan: WARNING fd exhaustion (%s) opening %s\n",
-                    strerror(e), it->path);
+        const char *reason = NULL;
+        dirfd = reopen_from_root(c, dir, &reason);
+        if (dirfd == -1) {
+            record_scan_error(w, dir, NULL, reason);
+            return;
         }
-        return;
-    }
-
-    struct stat dst;
-    if (fstat(dirfd, &dst) != 0) {
-        record_scan_error(w, it->path, errno);
-        close(dirfd);
-        return;
-    }
-    if (dst.st_dev != c->root_dev) {
-        record_scan_error(w, it->path, EXDEV);
-        close(dirfd);
-        return;
+        if (dir->parent) w->reopened++;
     }
 
     char *buf = xmalloc(GETDENTS_BUFSZ);
@@ -704,7 +907,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
         ctx_flush_stats(c, w);
         long nread = syscall(SYS_getdents64, dirfd, buf, GETDENTS_BUFSZ);
         if (nread == -1) {
-            record_scan_error(w, it->path, errno);
+            record_scan_error(w, dir, NULL, errno_reason(errno));
             break;
         }
         if (nread == 0) break;
@@ -724,9 +927,11 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
              * this is required for exact du parity. */
             struct stat st;
             if (fstatat(dirfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-                char *p = path_join(it->path, name);
-                record_scan_error(w, p, errno);
-                free(p);
+                int e = errno;
+                /* A file that vanished took its bytes with it. A directory
+                 * that vanished leaves a hole in the tree. */
+                if (e == ENOENT && d->d_type != DT_DIR) continue;
+                record_scan_error(w, dir, name, errno_reason(e));
                 continue;
             }
 
@@ -737,22 +942,18 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                 uint64_t dbytes = (uint64_t)st.st_blocks * 512;
 
                 /* Account the child directory's own inode blocks now (we have
-                 * its stat) and enqueue its PATH. The worker that dequeues it
-                 * will open it (or record it as blocked if unopenable); either
-                 * way the dir's own blocks are counted exactly once here. */
-                struct node *child = node_new(name, st.st_uid,
-                                              (int64_t)st.st_mtime, it->node);
+                 * its stat), then queue it. If it cannot be opened it is
+                 * recorded as an error; either way the dir's own blocks are
+                 * counted exactly once here. */
+                struct node *child = node_new(name, &st, dir);
                 child->bytes += dbytes;
-                node_add_child(it->node, child);
+                node_add_child(dir, child);
 
                 w->dirs++;
                 w->bytes += dbytes;
                 count_owner(w, st.st_uid, dbytes, 0);
 
-                struct work_item *ni = xmalloc(sizeof *ni);
-                ni->path = path_join(it->path, name);
-                ni->node = child;
-                queue_push_new(&c->queue, ni);
+                queue_child(w, dirfd, child);
             } else if (S_ISREG(st.st_mode)) {
                 uint64_t fbytes = (uint64_t)st.st_blocks * 512;
 
@@ -772,14 +973,14 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                 }
 
                 if (count_it) {
-                    node_add_file(it->node, fbytes);
+                    node_add_file(dir, fbytes);
                     w->files++;
                     w->bytes += fbytes;
                     count_owner(w, st.st_uid, fbytes, 1);
 
                     /* top-N */
                     pthread_mutex_lock(&g_top_lock);
-                    heap_offer(&g_top, it->path, name, fbytes,
+                    heap_offer(&g_top, dir, name, fbytes,
                                st.st_uid, (int64_t)st.st_mtime, 0);
                     pthread_mutex_unlock(&g_top_lock);
 
@@ -789,7 +990,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                         int age = (int)((nowt - st.st_mtime) / 86400);
                         if (age >= c->stale_days) {
                             pthread_mutex_lock(&g_stale_lock);
-                            heap_offer(&g_stale, it->path, name, fbytes,
+                            heap_offer(&g_stale, dir, name, fbytes,
                                        st.st_uid, (int64_t)st.st_mtime, age);
                             pthread_mutex_unlock(&g_stale_lock);
                         }
@@ -822,7 +1023,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
                 if (count_it) {
                     uint64_t sbytes = (uint64_t)st.st_blocks * 512;
                     if (sbytes) {
-                        node_add_self_bytes(it->node, sbytes);
+                        node_add_self_bytes(dir, sbytes);
                         w->bytes += sbytes;
                         count_owner(w, st.st_uid, sbytes, 0);
                     }
@@ -833,6 +1034,7 @@ static void process_dir(struct worker_arg *w, struct work_item *it) {
 
     free(buf);
     close(dirfd);
+    if (budgeted) fd_budget_return();
     if (w->bytes + w->files + w->dirs + w->errs > 100000)
         ctx_flush_stats(c, w);
 }
@@ -844,7 +1046,6 @@ static void *worker_main(void *argp) {
         struct work_item *it = queue_pop(&c->queue);
         if (!it) break;
         process_dir(w, it);
-        free(it->path);
         free(it);
         queue_complete_one(&c->queue);
     }
@@ -857,11 +1058,14 @@ static void *worker_main(void *argp) {
  *  Run one scan target (a single path within one filesystem)
  * ----------------------------------------------------------------------- */
 
+struct scan_counts {
+    uint64_t bytes, files, dirs, errors, vanished_dirs, reopened_dirs;
+};
+
 /* Returns root node of the scanned tree, or NULL on failure to open root. */
 static struct node *scan_target(const char *target, int nthreads, int stale_days,
                                 const dev_t *expected_dev,
-                                uint64_t *out_bytes, uint64_t *out_files,
-                                uint64_t *out_dirs, uint64_t *out_errors) {
+                                struct scan_counts *out) {
     struct stat rst;
     if (lstat(target, &rst) != 0 || !S_ISDIR(rst.st_mode)) {
         return NULL;
@@ -872,30 +1076,30 @@ static struct node *scan_target(const char *target, int nthreads, int stale_days
 
     int rootfd = open(target, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (rootfd == -1) {
-        blocked_add(target, errno);
+        blocked_add(target, errno_reason(errno));
         return NULL;
     }
     struct stat rootst;
     if (fstat(rootfd, &rootst) != 0) {
-        blocked_add(target, errno);
+        blocked_add(target, errno_reason(errno));
         close(rootfd);
         return NULL;
     }
     dev_t opened_root_dev = rootst.st_dev;
     if (expected_dev && opened_root_dev != *expected_dev) {
-        if (opened_root_dev != rst.st_dev) blocked_add(target, EXDEV);
+        if (opened_root_dev != rst.st_dev) blocked_add(target, R_REPLACED);
         close(rootfd);
         return NULL;
     }
     if (opened_root_dev != rst.st_dev) {
-        blocked_add(target, EXDEV);
+        blocked_add(target, R_REPLACED);
         close(rootfd);
         return NULL;
     }
-    close(rootfd);
 
     struct scan_ctx ctx;
     queue_init(&ctx.queue);
+    ctx.root_fd = rootfd;
     ctx.root_dev = rootst.st_dev;
     ctx.scan_root = target;
     ctx.stale_days = stale_days;
@@ -903,19 +1107,25 @@ static struct node *scan_target(const char *target, int nthreads, int stale_days
     pthread_mutex_init(&ctx.stat_lock, NULL);
     ctx.scanned_bytes = ctx.scanned_files = 0;
     ctx.scanned_dirs = ctx.errors = 0;
+    ctx.vanished_dirs = ctx.reopened_dirs = 0;
 
     /* root node */
     uint64_t root_blocks = (uint64_t)rootst.st_blocks * 512;
-    struct node *root = node_new(target, rootst.st_uid, (int64_t)rootst.st_mtime, NULL);
+    struct node *root = node_new(target, &rootst, NULL);
     root->bytes += root_blocks;
 
     ctx.scanned_dirs = 1;
     ctx.scanned_bytes = root_blocks;
+    pthread_mutex_lock(&progress_lock);
+    g_progress_bytes += root_blocks;
+    g_progress_dirs++;
+    pthread_mutex_unlock(&progress_lock);
     user_add(rootst.st_uid, target, root_blocks, 0);
 
+    /* Parked: process_dir duplicates the pinned root descriptor. */
     struct work_item *first = xmalloc(sizeof *first);
-    first->path = xstrdup(target);
     first->node = root;
+    first->fd = -1;
     queue_push_new(&ctx.queue, first);
 
     struct worker_arg *args = xcalloc(nthreads, sizeof *args);
@@ -931,11 +1141,14 @@ static struct node *scan_target(const char *target, int nthreads, int stale_days
     }
     free(args);
     free(tids);
+    close(rootfd);
 
-    *out_bytes  = ctx.scanned_bytes;
-    *out_files  = ctx.scanned_files;
-    *out_dirs   = ctx.scanned_dirs;
-    *out_errors = ctx.errors;
+    out->bytes         = ctx.scanned_bytes;
+    out->files         = ctx.scanned_files;
+    out->dirs          = ctx.scanned_dirs;
+    out->errors        = ctx.errors;
+    out->vanished_dirs = ctx.vanished_dirs;
+    out->reopened_dirs = ctx.reopened_dirs;
 
     queue_destroy(&ctx.queue);
     pthread_mutex_destroy(&ctx.stat_lock);
@@ -1109,12 +1322,46 @@ static void json_escape(FILE *f, const char *s) {
     fputc('"', f);
 }
 
-static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
-                           uint64_t dirs, bool force) {
-    if (!g_progress_path) return;
-    double now = now_monotonic();
-    if (!force && now - g_progress_last < 2.0) return;
-    g_progress_last = now;
+static bool utf8_valid(const char *s) {
+    for (const unsigned char *p = (const unsigned char *)s; *p; ) {
+        if (*p < 0x80) { p++; continue; }
+        size_t length = utf8_sequence_length(p);
+        if (!length) return false;
+        p += length;
+    }
+    return true;
+}
+
+static void base64_write(FILE *f, const char *s) {
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const unsigned char *p = (const unsigned char *)s;
+    size_t n = strlen(s);
+    fputc('"', f);
+    for (size_t i = 0; i < n; i += 3) {
+        uint32_t v = (uint32_t)p[i] << 16;
+        if (i + 1 < n) v |= (uint32_t)p[i + 1] << 8;
+        if (i + 2 < n) v |= p[i + 2];
+        fputc(alphabet[(v >> 18) & 63], f);
+        fputc(alphabet[(v >> 12) & 63], f);
+        fputc(i + 1 < n ? alphabet[(v >> 6) & 63] : '=', f);
+        fputc(i + 2 < n ? alphabet[v & 63] : '=', f);
+    }
+    fputc('"', f);
+}
+
+/* "key":"display" and, when the raw bytes are not valid UTF-8,
+ * ,"key_b64":"raw bytes" so byte-distinct names stay distinct. */
+static void json_text_field(FILE *f, const char *key, const char *s) {
+    fprintf(f, "\"%s\":", key);
+    json_escape(f, s);
+    if (!utf8_valid(s)) {
+        fprintf(f, ",\"%s_b64\":", key);
+        base64_write(f, s);
+    }
+}
+
+static void progress_write(void) {
     char tmp[PATH_MAX];
     if (snprintf(tmp, sizeof tmp, "%s.XXXXXX", g_progress_path) >= (int)sizeof tmp) return;
     int fd = mkstemp(tmp);
@@ -1122,12 +1369,11 @@ static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
     fchmod(fd, 0640);
     FILE *f = fdopen(fd, "w");
     if (!f) { close(fd); unlink(tmp); return; }
-    fputs("{\"phase\":", f); json_escape(f, phase);
-    fputs(",\"run_id\":", f); json_escape(f, g_progress_run_id);
-    fputs(",\"current_root\":", f); json_escape(f, g_progress_root);
-    fprintf(f, ",\"updated_unix\":%lld,\"scanned_bytes\":%llu,\"scanned_files\":%llu,\"scanned_dirs\":%llu,\"roots_completed\":%d,\"roots_total\":%d}\n",
-            (long long)time(NULL), (unsigned long long)(g_progress_bytes + bytes),
-            (unsigned long long)(g_progress_files + files), (unsigned long long)(g_progress_dirs + dirs),
+    fputs("{\"run_id\":", f); json_escape(f, g_progress_run_id);
+    fputs(",\"group\":", f); json_escape(f, g_progress_group);
+    fprintf(f, ",\"updated_unix\":%lld,\"bytes\":%llu,\"files\":%llu,\"dirs\":%llu,\"roots_completed\":%d,\"roots_total\":%d}\n",
+            (long long)time(NULL), (unsigned long long)g_progress_bytes,
+            (unsigned long long)g_progress_files, (unsigned long long)g_progress_dirs,
             g_progress_roots_done, g_progress_roots_total);
     bool ok = !ferror(f);
     if (fclose(f) != 0) ok = false;
@@ -1135,25 +1381,52 @@ static void progress_write(const char *phase, uint64_t bytes, uint64_t files,
     unlink(tmp);
 }
 
-static void emit_node(FILE *f, struct node *n, int indent) {
-    (void)indent;
+static void *progress_thread(void *unused) {
+    (void)unused;
+    pthread_mutex_lock(&progress_lock);
+    while (!progress_finished) {
+        progress_write();
+        struct timespec until;
+        clock_gettime(CLOCK_MONOTONIC, &until);
+        until.tv_sec += 2;
+        pthread_cond_timedwait(&progress_changed, &progress_lock, &until);
+    }
+    progress_write();
+    pthread_mutex_unlock(&progress_lock);
+    return NULL;
+}
+
+/* Writes a node's fields and, when it has children, opens its array. */
+static void emit_node_head(FILE *f, const struct node *n, bool capped) {
     fputc('{', f);
-    fputs("\"name\":", f); json_escape(f, n->name);
+    json_text_field(f, "name", n->name);
     fputs(",\"kind\":\"directory\"", f);
     fprintf(f, ",\"bytes\":%llu", (unsigned long long)n->bytes);
     fprintf(f, ",\"files\":%llu", (unsigned long long)n->files);
     fprintf(f, ",\"uid\":%u", (unsigned)n->uid);
     fprintf(f, ",\"mtime\":%lld", (long long)n->mtime);
-    fprintf(f, ",\"other_bytes\":%llu", (unsigned long long)n->other_bytes);
-    if (n->nchildren > 0) {
-        fputs(",\"children\":[", f);
-        for (size_t i = 0; i < n->nchildren; i++) {
-            if (i) fputc(',', f);
-            emit_node(f, n->children[i], indent + 1);
+    fprintf(f, ",\"other_bytes\":%llu", (unsigned long long)(capped ? n->bytes : n->other_bytes));
+    if (!capped && n->nchildren > 0) fputs(",\"children\":[", f);
+}
+
+static void emit_tree(FILE *f, struct node *root) {
+    struct frames s = {0};
+    emit_node_head(f, root, false);
+    frames_push(&s, root, 0);
+    while (s.n) {
+        struct frame *top = &s.a[s.n - 1];
+        if (s.n <= 128 && top->next < top->n->nchildren) {
+            if (top->next) fputc(',', f);
+            struct node *c = top->n->children[top->next++];
+            emit_node_head(f, c, s.n == 128);
+            frames_push(&s, c, 0);
+            continue;
         }
-        fputc(']', f);
+        if (s.n <= 128 && top->n->nchildren > 0) fputc(']', f);
+        fputc('}', f);
+        s.n--;
     }
-    fputc('}', f);
+    free(s.a);
 }
 
 /* ----------------------------------------------------------------------- *
@@ -1163,32 +1436,19 @@ static void emit_node(FILE *f, struct node *n, int indent) {
 struct mount_result {
     char    *path;
     char    *fstype;
+    enum prune_class prune_class;
     struct node *tree;
-    uint64_t scanned_bytes, scanned_files, scanned_dirs, errors;
-    /* df */
-    uint64_t df_total, df_used, df_avail;
-    int      df_use_pct;
+    uint64_t scanned_bytes, scanned_files, scanned_dirs, errors, vanished_dirs;
 };
-
-static void fill_df(const char *path, struct mount_result *mr) {
-    struct statvfs vfs;
-    if (statvfs(path, &vfs) == 0) {
-        uint64_t bs = vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize;
-        mr->df_total = (uint64_t)vfs.f_blocks * bs;
-        mr->df_avail = (uint64_t)vfs.f_bavail * bs;
-        uint64_t free_all = (uint64_t)vfs.f_bfree * bs;
-        mr->df_used  = mr->df_total - free_all;
-        uint64_t denom = mr->df_used + mr->df_avail;
-        mr->df_use_pct = denom ? (int)((mr->df_used * 100 + denom - 1) / denom) : 0;
-    }
-}
 
 static void usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [--threads N] [--prune-home MB] [--prune-data MB]\n"
-        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR] [--progress PATH]\n"
-        "          [--target PATH MAJOR:MINOR ...] [PATH ...]\n"
-        "       --target may be repeated; each consumes PATH and MAJOR:MINOR.\n"
+        "          [--top N] [--stale-days D] [--out PATH] [--out-dir DIR] [--run-id ID --group GROUP] [--progress PATH]\n"
+        "          [--target PATH MAJOR:MINOR CLASS ...] [PATH ...]\n"
+        "       --target may be repeated; each consumes PATH, MAJOR:MINOR and a\n"
+        "       prune CLASS: home (pruned with --prune-home) or data (--prune-data).\n"
+        "       Positional PATH targets use the data class.\n"
         "       Do not mix guarded --target arguments with positional PATH targets.\n"
         "       default output: data/<hostname>.json relative to the current directory\n",
         prog);
@@ -1205,6 +1465,12 @@ static bool parse_u32_decimal(const char *s, const char **endp, unsigned *out) {
     return true;
 }
 
+static bool parse_prune_class(const char *s, enum prune_class *out) {
+    if (strcmp(s, "home") == 0) { *out = PRUNE_HOME; return true; }
+    if (strcmp(s, "data") == 0) { *out = PRUNE_DATA; return true; }
+    return false;
+}
+
 static bool parse_major_minor_dev(const char *s, dev_t *out) {
     unsigned maj = 0, min = 0;
     const char *p = NULL;
@@ -1219,10 +1485,9 @@ static bool parse_major_minor_dev(const char *s, dev_t *out) {
     return true;
 }
 
-/* Defense in depth: raise the open-file soft limit to the hard limit (and, if
- * running as root, raise the hard limit too). The path-based queue already
- * bounds concurrently-open fds to ~thread count, so this is belt-and-braces.
- * Failures are ignored. */
+/* Raise the open-file soft limit to the hard limit (and, if running as root,
+ * raise the hard limit too), then size the queued-descriptor budget from the
+ * limit that holds. Failures leave the default budget. */
 static void raise_nofile_limit(void) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return;
@@ -1234,6 +1499,8 @@ static void raise_nofile_limit(void) {
     }
     rl.rlim_cur = rl.rlim_max;
     (void)setrlimit(RLIMIT_NOFILE, &rl);
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY) return;
+    if (rl.rlim_cur / 4 < MAX_FD_BUDGET) g_fd_budget = (long)(rl.rlim_cur / 4);
 }
 
 int main(int argc, char **argv) {
@@ -1266,20 +1533,25 @@ int main(int argc, char **argv) {
             stale_days = atoi(argv[++i]);
         } else if (strcmp(a, "--progress") == 0 && i+1 < argc) {
             g_progress_path = argv[++i];
-        } else if (strcmp(a, "--progress-run-id") == 0 && i+1 < argc) {
+        } else if (strcmp(a, "--run-id") == 0 && i+1 < argc) {
             g_progress_run_id = argv[++i];
+        } else if (strcmp(a, "--group") == 0 && i+1 < argc) {
+            g_progress_group = argv[++i];
         } else if (strcmp(a, "--out") == 0 && i+1 < argc) {
             out_path = argv[++i];
         } else if (strcmp(a, "--out-dir") == 0 && i+1 < argc) {
             out_dir = argv[++i];
         } else if (strcmp(a, "--target") == 0) {
-            if (positional_mode || i + 2 >= argc) {
+            if (positional_mode || i + 3 >= argc) {
                 usage(argv[0]); return 2;
             }
             const char *path = argv[++i];
             const char *major_minor = argv[++i];
+            const char *class_name = argv[++i];
             dev_t expected_dev;
-            if (path[0] != '/' || !parse_major_minor_dev(major_minor, &expected_dev)) {
+            enum prune_class prune_class;
+            if (path[0] != '/' || !parse_major_minor_dev(major_minor, &expected_dev) ||
+                !parse_prune_class(class_name, &prune_class)) {
                 usage(argv[0]); return 2;
             }
             guarded_mode = true;
@@ -1289,6 +1561,7 @@ int main(int argc, char **argv) {
             targets_buf[ntargets].path = path;
             targets_buf[ntargets].guarded = true;
             targets_buf[ntargets].expected_dev = expected_dev;
+            targets_buf[ntargets].prune_class = prune_class;
             ntargets++;
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
             usage(argv[0]); return 0;
@@ -1306,13 +1579,14 @@ int main(int argc, char **argv) {
             targets_buf[ntargets].path = a;
             targets_buf[ntargets].guarded = false;
             targets_buf[ntargets].expected_dev = 0;
+            targets_buf[ntargets].prune_class = PRUNE_DATA;
             ntargets++;
         }
     }
 
     const struct target_spec default_targets[] = {
-        { "/", false, 0 }, { "/data", false, 0 },
-        { "/data1", false, 0 }, { "/data3", false, 0 }
+        { "/", false, 0, PRUNE_HOME }, { "/data", false, 0, PRUNE_DATA },
+        { "/data1", false, 0, PRUNE_DATA }, { "/data3", false, 0, PRUNE_DATA }
     };
     const struct target_spec *targets;
     int target_count;
@@ -1342,13 +1616,28 @@ int main(int argc, char **argv) {
     /* Run each target; collect results. Targets that don't exist are skipped. */
     struct mount_result *results = xcalloc(target_count, sizeof *results);
     int nresults = 0;
+    uint64_t reopened_dirs = 0;
     g_progress_roots_total = target_count;
+    if (!g_progress_path && *g_progress_run_id) g_progress_path = "/run/storage-viz/progress.json";
+    pthread_t reporter;
+    bool reporting = false;
+    if (g_progress_path) {
+        pthread_condattr_t attr;
+        if (pthread_condattr_init(&attr) == 0) {
+            if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) == 0 &&
+                pthread_cond_init(&progress_changed, &attr) == 0) {
+                reporting = pthread_create(&reporter, NULL, progress_thread, NULL) == 0;
+                if (!reporting) pthread_cond_destroy(&progress_changed);
+            }
+            pthread_condattr_destroy(&attr);
+        }
+    }
 
     for (int i = 0; i < target_count; i++) {
         const char *tg = targets[i].path;
-        g_progress_root = tg;
+        pthread_mutex_lock(&progress_lock);
         g_progress_roots_done = i;
-        progress_write("scanning", 0, 0, 0, true);
+        pthread_mutex_unlock(&progress_lock);
         struct stat tst;
         if (lstat(tg, &tst) != 0) {
             continue;  /* target absent (e.g. /data not present): skip silently */
@@ -1356,37 +1645,39 @@ int main(int argc, char **argv) {
         const char *fstype = NULL;
         (void)mount_for_path(tg, &fstype);
 
-        uint64_t b=0,fl=0,d=0,e=0;
+        struct scan_counts counts = {0};
         struct node *tree = scan_target(tg, nthreads, stale_days,
                                         targets[i].guarded ? &targets[i].expected_dev : NULL,
-                                        &b, &fl, &d, &e);
+                                        &counts);
         if (!tree) continue;
 
-        /* Roll up subtree totals then prune. */
-        uint64_t rb=0, rf=0;
-        node_rollup(tree, &rb, &rf);
-
-        /* Prune threshold: "/" target uses prune-home, others prune-data. */
-        int prune_mb = (strcmp(tg, "/") == 0) ? prune_home_mb : prune_data_mb;
+        /* Roll up subtree totals then prune with the target's class. */
+        node_rollup(tree);
+        int prune_mb = targets[i].prune_class == PRUNE_HOME ? prune_home_mb : prune_data_mb;
         uint64_t threshold = (uint64_t)prune_mb * 1024 * 1024;
         node_prune_below_root(tree, threshold);
 
         struct mount_result *mr = &results[nresults++];
         mr->path = xstrdup(tg);
         mr->fstype = xstrdup(fstype ? fstype : "unknown");
+        mr->prune_class = targets[i].prune_class;
         mr->tree = tree;
-        mr->scanned_bytes = rb;
-        mr->scanned_files = rf;
-        mr->scanned_dirs  = d;
-        mr->errors        = e;
-        fill_df(tg, mr);
-        g_progress_bytes += b;
-        g_progress_files += fl;
-        g_progress_dirs += d;
+        mr->scanned_bytes = tree->bytes;
+        mr->scanned_files = tree->files;
+        mr->scanned_dirs  = counts.dirs;
+        mr->errors        = counts.errors;
+        mr->vanished_dirs = counts.vanished_dirs;
+        reopened_dirs += counts.reopened_dirs;
     }
-
-    g_progress_roots_done = target_count;
-    progress_write("publishing", 0, 0, 0, true);
+    if (reporting) {
+        pthread_mutex_lock(&progress_lock);
+        g_progress_roots_done = target_count;
+        progress_finished = true;
+        pthread_cond_signal(&progress_changed);
+        pthread_mutex_unlock(&progress_lock);
+        pthread_join(reporter, NULL);
+        pthread_cond_destroy(&progress_changed);
+    }
     double dur = now_monotonic() - t0;
 
     /* ---- Build output path ---- */
@@ -1407,7 +1698,6 @@ int main(int argc, char **argv) {
     fputs("{\n", f);
     fprintf(f, "\"schema_version\":%d,\n", SCHEMA_VERSION);
     fputs("\"hostname\":", f); json_escape(f, hostname); fputs(",\n", f);
-    fputs("\"scanner_version\":\"" SCANNER_VERSION "\",\n", f);
     fprintf(f, "\"scan_started_unix\":%lld,\n", (long long)scan_started);
     fprintf(f, "\"scan_duration_sec\":%.3f,\n", dur);
     fprintf(f, "\"run_as_root\":%s,\n", run_as_root ? "true" : "false");
@@ -1418,18 +1708,16 @@ int main(int argc, char **argv) {
         struct mount_result *mr = &results[i];
         if (i) fputc(',', f);
         fputs("\n{", f);
-        fputs("\"path\":", f); json_escape(f, mr->path);
+        json_text_field(f, "path", mr->path);
         fputs(",\"fstype\":", f); json_escape(f, mr->fstype);
-        fprintf(f, ",\"df_total\":%llu", (unsigned long long)mr->df_total);
-        fprintf(f, ",\"df_used\":%llu", (unsigned long long)mr->df_used);
-        fprintf(f, ",\"df_avail\":%llu", (unsigned long long)mr->df_avail);
-        fprintf(f, ",\"df_use_pct\":%d", mr->df_use_pct);
+        fprintf(f, ",\"prune_class\":\"%s\"", mr->prune_class == PRUNE_HOME ? "home" : "data");
         fprintf(f, ",\"scanned_bytes\":%llu", (unsigned long long)mr->scanned_bytes);
         fprintf(f, ",\"scanned_files\":%llu", (unsigned long long)mr->scanned_files);
         fprintf(f, ",\"scanned_dirs\":%llu", (unsigned long long)mr->scanned_dirs);
         fprintf(f, ",\"errors\":%llu", (unsigned long long)mr->errors);
+        fprintf(f, ",\"vanished_dirs\":%llu", (unsigned long long)mr->vanished_dirs);
         fputs(",\"tree\":", f);
-        emit_node(f, mr->tree, 0);
+        emit_tree(f, mr->tree);
         fputc('}', f);
     }
     fputs("\n],\n", f);
@@ -1454,7 +1742,17 @@ int main(int argc, char **argv) {
                 json_escape(f, m->mount);
                 fprintf(f, ":%llu", (unsigned long long)m->bytes);
             }
-            fputs("}}", f);
+            fputs("},\"root_usage\":[", f);
+            fm = true;
+            for (struct user_mount *m = u->mounts; m; m = m->next) {
+                if (!fm) fputc(',', f);
+                fm = false;
+                fputc('{', f);
+                json_text_field(f, "path", m->mount);
+                fprintf(f, ",\"bytes\":%llu,\"files\":%llu}", (unsigned long long)m->bytes,
+                        (unsigned long long)m->files);
+            }
+            fputs("]}", f);
         }
     }
     fputs("\n],\n", f);
@@ -1466,7 +1764,7 @@ int main(int argc, char **argv) {
         struct file_rec *r = &g_top.a[i];
         if (i) fputc(',', f);
         fputs("\n{", f);
-        fputs("\"path\":", f); json_escape(f, r->path);
+        json_text_field(f, "path", r->path);
         fputs(",\"kind\":\"file\"", f);
         fprintf(f, ",\"bytes\":%llu", (unsigned long long)r->bytes);
         fprintf(f, ",\"uid\":%u", (unsigned)r->uid);
@@ -1483,7 +1781,7 @@ int main(int argc, char **argv) {
         struct file_rec *r = &g_stale.a[i];
         if (i) fputc(',', f);
         fputs("\n{", f);
-        fputs("\"path\":", f); json_escape(f, r->path);
+        json_text_field(f, "path", r->path);
         fputs(",\"kind\":\"file\"", f);
         fprintf(f, ",\"bytes\":%llu", (unsigned long long)r->bytes);
         fprintf(f, ",\"uid\":%u", (unsigned)r->uid);
@@ -1499,7 +1797,7 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < g_blocked_n; i++) {
         if (i) fputc(',', f);
         fputs("\n{", f);
-        fputs("\"path\":", f); json_escape(f, g_blocked[i].path);
+        json_text_field(f, "path", g_blocked[i].path);
         fputs(",\"reason\":", f); json_escape(f, g_blocked[i].reason);
         fputc('}', f);
     }
@@ -1532,6 +1830,8 @@ int main(int argc, char **argv) {
         dur,
         (unsigned long long)tot_errors,
         out_path);
+    fprintf(stderr, "hstscan: %llu parked dir(s) reopened from the pinned root (fd budget %ld)\n",
+            (unsigned long long)reopened_dirs, g_fd_budget);
 
     /* free (best-effort; OS reclaims anyway) */
     for (int i = 0; i < nresults; i++) {

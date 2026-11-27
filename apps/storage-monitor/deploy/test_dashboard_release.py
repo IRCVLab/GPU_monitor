@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -66,35 +67,61 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
 
     def _write_fixture(self) -> None:
         runtime_files = {
-            "viewer/serve.py": "from collector.inventory import load_inventory\nfrom collector.jobs import RescanJobManager\nfrom collector.service import PollService\nfrom collector.store import CentralStore\nfrom collector.transport import OpenSshTransport\n",
-            "viewer/app.js": "console.log('app');\n",
-            "viewer/data-client.js": "export const dataClient = {};\n",
-            "viewer/debug.html": "<html>debug</html>\n",
+            "api/auth.py": "",
+            "api/fixtures.py": "",
+            "api/routes.py": "",
+            "api/server.py": "",
+            "viewer/serve.py": "from collector.inventory import load_inventory\nfrom collector.fleet import Fleet\nfrom collector.legacy import LegacyHost\nfrom collector.transport import OpenSshTransport\n",
+            "viewer/main.js": "console.log('app');\n",
+            "viewer/api.js": "export const dataClient = {};\n",
+            "viewer/effects.js": "export {};\n",
+            "viewer/format.js": "export {};\n",
+            "viewer/router.js": "export {};\n",
+            "viewer/state.js": "export {};\n",
+            "viewer/store.js": "export {};\n",
+            "viewer/views/files.js": "export {};\n",
+            "viewer/views/header.js": "export {};\n",
+            "viewer/views/selection-bar.js": "export {};\n",
+            "viewer/views/server.js": "export {};\n",
+            "viewer/views/theme.js": "export {};\n",
+            "viewer/views/notices.js": "export {};\n",
+            "viewer/views/users.js": "export {};\n",
             "viewer/echarts.min.js": "/*! echarts */\n",
-            "viewer/index.html": "<html><script src='app.js'></script></html>\n",
-            "viewer/overview.js": "export const overview = {};\n",
-            "viewer/scan-status.js": "export const scanStatus = {};\n",
-            "viewer/selection.js": "export const selection = {};\n",
+            "viewer/index.html": "<html><script type='module' src='main.js'></script></html>\n",
+            "viewer/views/overview.js": "export const overview = {};\n",
+            "viewer/views/scan-status.js": "export const scanStatus = {};\n",
+            "viewer/removal.js": "export const selection = {};\n",
             "viewer/styles.css": "body { color: black; }\n",
-            "viewer/tables.js": "export const tables = {};\n",
-            "viewer/treemap.js": "export const treemap = {};\n",
+            "viewer/columns.js": "export const tables = {};\n",
+            "viewer/views/treemap.js": "export const treemap = {};\n",
             "viewer/users-chart.js": "export const users = {};\n",
+            "api/__init__.py": "",
+            "api/errors.py": "STATUS = {}\n",
             "collector/__init__.py": "",
-            "collector/duration_history.py": "PLANS = ()\n",
-            "collector/inventory.py": "SERVER_ID_RE = None\ndef load_inventory(): pass\n",
-            "collector/jobs.py": "class RescanJobManager: pass\n",
-            "collector/live_capacity.py": "class LiveCapacity: pass\n",
-            "collector/service.py": "class PollService: pass\n",
-            "collector/scan_telemetry.py": "def empty_status(): return {}\n",
+            "collector/actor.py": "class ServerActor: pass\n",
+            "collector/errors.py": "class DomainError(Exception): pass\n",
+            "collector/fleet.py": "class Fleet: pass\n",
+            "collector/health.py": "class Link: pass\n",
+            "collector/legacy.py": "class LegacyHost: pass\n",
+            "collector/gate.py": "class GateHost: pass\n",
+            "collector/rollout.py": "class RolloutState: pass\n",
+            "collector/update.py": "class Update: pass\n",
+            "collector/view.py": "class ServerView: pass\n",
+            "storage_fstypes.py": "REMOTE_FSTYPES = frozenset()\n",
+            "collector/contract.py": "",
+            "collector/judge.py": "",
+            "collector/ids.py": "SERVER_ID_RE = None\n",
+            "collector/inventory.py": "def load_inventory(): pass\n",
+            "collector/jobs.py": "class Job: pass\n",
             "collector/snapshot.py": "class Snapshot: pass\n",
-            "collector/store.py": "class CentralStore: pass\n",
+            "collector/store.py": "class ServerStore: pass\n",
             "collector/transport.py": "class OpenSshTransport: pass\n",
             "config/servers.example.yaml": "servers: []\n",
             "docs/schema-v1.md": "# Schema\n",
             "deploy/direct_proxy.py": "print('proxy')\n",
         }
         excluded_files = {
-            "agent/scan_runner.py": "print('remote agent')\n",
+            "agent/storage_viz_agent/runner.py": "print('remote agent')\n",
             "scanner/hstscan.c": "int main(void){return 0;}\n",
             "deploy/install-agent.sh": "#!/bin/sh\n",
             "deploy/deploy-agent.sh": "#!/bin/sh\n",
@@ -102,10 +129,10 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "deploy/systemd/storage-viz-scan.timer": "scan\n",
             "deploy/test_direct_proxy.py": "test\n",
             "viewer/viewer.test.js": "test\n",
-            "viewer/test_serve.py": "test\n",
+            "api/test_auth.py": "test\n",
             "collector/test_store.py": "test\n",
-            "data/hosts.json": "[]\n",
-            "data/atlas.sample.json": "{}\n",
+            "tests/fixtures/fleet/hosts.json": "[]\n",
+            "tests/fixtures/fleet/atlas.json": "{}\n",
             "state/dashboard-state.json": "{}\n",
             "secrets/dashboard-token": "secret\n",
             ".env": "SECRET=1\n",
@@ -116,7 +143,6 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         }
         for rel, text in {**runtime_files, **excluded_files}.items():
             self._write(str(APP_ROOT / rel), text)
-        os.symlink("../data", self.repo / APP_ROOT / "viewer/data")
 
     def _run_builder(self, *extra: str) -> subprocess.CompletedProcess[str]:
         self.output_dir.mkdir(exist_ok=True)
@@ -156,8 +182,9 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertEqual(member_names[0], "storage-monitor/RELEASE-MANIFEST.json")
         self.assertIn("storage-monitor/viewer/serve.py", member_names)
         self.assertIn("storage-monitor/collector/store.py", member_names)
-        self.assertIn("storage-monitor/collector/scan_telemetry.py", member_names)
-        self.assertIn("storage-monitor/viewer/scan-status.js", member_names)
+        self.assertIn("storage-monitor/collector/actor.py", member_names)
+        self.assertIn("storage-monitor/api/errors.py", member_names)
+        self.assertIn("storage-monitor/viewer/views/scan-status.js", member_names)
         self.assertIn("storage-monitor/deploy/direct_proxy.py", member_names)
         self.assertIn("storage-monitor/config/servers.example.yaml", member_names)
         self.assertIn("storage-monitor/docs/schema-v1.md", member_names)
@@ -216,12 +243,12 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn("HEAD", mismatch.stderr)
 
-        self._write(str(APP_ROOT / "viewer/app.js"), "dirty\n")
+        self._write(str(APP_ROOT / "viewer/main.js"), "dirty\n")
         dirty = self._run_builder()
         self.assertNotEqual(dirty.returncode, 0)
         self.assertIn("clean", dirty.stderr.lower())
 
-        self._git("checkout", "--", str(APP_ROOT / "viewer/app.js"))
+        self._git("checkout", "--", str(APP_ROOT / "viewer/main.js"))
         self._write(str(APP_ROOT / "untracked.txt"), "untracked\n")
         untracked = self._run_builder()
         self.assertNotEqual(untracked.returncode, 0)
@@ -240,9 +267,9 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertIn(f"required tracked release file is missing: {schema}", failed.stderr)
 
     def test_rejects_required_tracked_symlinks_and_unsafe_paths(self) -> None:
-        (self.repo / APP_ROOT / "viewer/app.js").unlink()
-        os.symlink("serve.py", self.repo / APP_ROOT / "viewer/app.js")
-        self._git("add", str(APP_ROOT / "viewer/app.js"))
+        (self.repo / APP_ROOT / "viewer/main.js").unlink()
+        os.symlink("serve.py", self.repo / APP_ROOT / "viewer/main.js")
+        self._git("add", str(APP_ROOT / "viewer/main.js"))
         self._git("commit", "-q", "-m", "make required file symlink")
         self.sha = self._git("rev-parse", "HEAD").stdout.strip()
 
@@ -250,9 +277,9 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
         self.assertNotEqual(symlink.returncode, 0)
         self.assertIn("symlink", symlink.stderr.lower())
 
-        self._git("rm", "-q", str(APP_ROOT / "viewer/app.js"))
-        self._write(str(APP_ROOT / "viewer/app.js"), "console.log('restored');\n")
-        self._git("add", str(APP_ROOT / "viewer/app.js"))
+        self._git("rm", "-q", str(APP_ROOT / "viewer/main.js"))
+        self._write(str(APP_ROOT / "viewer/main.js"), "console.log('restored');\n")
+        self._git("add", str(APP_ROOT / "viewer/main.js"))
         self._git("commit", "-q", "-m", "restore app")
         self._write(str(APP_ROOT / "viewer/../evil.txt"), "evil\n")
         self._git("add", str(APP_ROOT / "evil.txt"))
@@ -382,27 +409,47 @@ class DashboardReleaseActivationTest(unittest.TestCase):
 
     def _runtime_files(self) -> dict[str, bytes]:
         return {
+            "api/__init__.py": b"",
+            "api/errors.py": b"",
+            "api/auth.py": b"",
+            "api/fixtures.py": b"",
+            "api/routes.py": b"",
+            "api/server.py": b"",
             "viewer/serve.py": b"print('serve')\n",
-            "viewer/app.js": b"console.log('ok');\n",
-            "viewer/data-client.js": b"export const dataClient = {};\n",
-            "viewer/debug.html": b"<html>debug</html>\n",
+            "viewer/main.js": b"console.log('ok');\n",
+            "viewer/api.js": b"export const dataClient = {};\n",
+            "viewer/effects.js": b"export {};\n",
+            "viewer/format.js": b"export {};\n",
+            "viewer/router.js": b"export {};\n",
+            "viewer/state.js": b"export {};\n",
+            "viewer/store.js": b"export {};\n",
+            "viewer/views/files.js": b"export {};\n",
+            "viewer/views/header.js": b"export {};\n",
+            "viewer/views/selection-bar.js": b"export {};\n",
+            "viewer/views/server.js": b"export {};\n",
+            "viewer/views/theme.js": b"export {};\n",
+            "viewer/views/notices.js": b"export {};\n",
+            "viewer/views/users.js": b"export {};\n",
             "viewer/echarts.min.js": b"/*! echarts */\n",
             "viewer/index.html": b"<html></html>\n",
-            "viewer/overview.js": b"export const overview = {};\n",
-            "viewer/scan-status.js": b"export const scanStatus = {};\n",
-            "viewer/selection.js": b"export const selection = {};\n",
+            "viewer/views/overview.js": b"export const overview = {};\n",
+            "viewer/views/scan-status.js": b"export const scanStatus = {};\n",
+            "viewer/removal.js": b"export const selection = {};\n",
             "viewer/styles.css": b"body { color: black; }\n",
-            "viewer/tables.js": b"export const tables = {};\n",
-            "viewer/treemap.js": b"export const treemap = {};\n",
+            "viewer/columns.js": b"export const tables = {};\n",
+            "viewer/views/treemap.js": b"export const treemap = {};\n",
             "viewer/users-chart.js": b"export const users = {};\n",
             "collector/__init__.py": b"",
-            "collector/duration_history.py": b"PLANS = ()\n",
+            "collector/actor.py": b"class ServerActor: pass\n",
+            "collector/fleet.py": b"class Fleet: pass\n",
             "collector/inventory.py": b"def load_inventory(): pass\n",
-            "collector/jobs.py": b"class RescanJobManager: pass\n",
-            "collector/service.py": b"class PollService: pass\n",
-            "collector/scan_telemetry.py": b"def empty_status(): return {}\n",
+            "collector/jobs.py": b"class Job: pass\n",
+            "collector/legacy.py": b"class LegacyHost: pass\n",
+            "collector/gate.py": b"class GateHost: pass\n",
+            "collector/rollout.py": b"class RolloutState: pass\n",
             "collector/snapshot.py": b"class Snapshot: pass\n",
-            "collector/store.py": b"class CentralStore: pass\n",
+            "collector/store.py": b"class ServerStore: pass\n",
+            "collector/view.py": b"class ServerView: pass\n",
             "collector/transport.py": b"class OpenSshTransport: pass\n",
             "config/servers.example.yaml": b"servers: []\n",
             "docs/schema-v1.md": b"# Schema\n",
@@ -547,7 +594,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             metadata_path=metadata,
         )
         release = Path(status["candidate_release"])
-        target = release / "viewer/app.js"
+        target = release / "viewer/main.js"
         external = self.root / "external-app.js"
         external.write_bytes(target.read_bytes())
         external.chmod(0o644)
@@ -645,7 +692,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)
         replacement_files = dict(original_files)
-        replacement_files["viewer/app.js"] = b"console.log('pw');\n"
+        replacement_files["viewer/main.js"] = b"console.log('pw');\n"
         replacement, _, _ = self._archive(files=replacement_files, directory=self.incoming / "replacement")
         original_start_state = self.module._current_start_state
 
@@ -656,8 +703,8 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         with mock.patch.object(self.module, "_current_start_state", side_effect=swap_source_after_validation):
             self._activate(archive, metadata, digest)
 
-        extracted = self.release_root / self.sha / "storage-monitor/viewer/app.js"
-        self.assertEqual(extracted.read_bytes(), original_files["viewer/app.js"])
+        extracted = self.release_root / self.sha / "storage-monitor/viewer/main.js"
+        self.assertEqual(extracted.read_bytes(), original_files["viewer/main.js"])
         unexpected_stages = {
             path for path in self.incoming.iterdir()
             if path.is_file() and path not in {archive, metadata}
@@ -668,7 +715,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         original_files = self._runtime_files()
         archive, metadata, digest = self._archive(files=original_files)
         replacement_files = dict(original_files)
-        replacement_files["viewer/app.js"] = b"console.log('pw');\n"
+        replacement_files["viewer/main.js"] = b"console.log('pw');\n"
         replacement, _, _ = self._archive(files=replacement_files, directory=self.incoming / "replacement")
         original_extract = self.module._extract_private
         observed_stage_modes: list[int] = []
@@ -685,23 +732,23 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         with mock.patch.object(self.module, "_extract_private", side_effect=replace_staged_entry):
             self._activate(archive, metadata, digest)
 
-        extracted = self.release_root / self.sha / "storage-monitor/viewer/app.js"
-        self.assertEqual(extracted.read_bytes(), original_files["viewer/app.js"])
+        extracted = self.release_root / self.sha / "storage-monitor/viewer/main.js"
+        self.assertEqual(extracted.read_bytes(), original_files["viewer/main.js"])
         self.assertEqual(observed_stage_modes, [0o600])
 
     def test_rejects_unsafe_archive_members_before_extraction(self) -> None:
         cases: list[tuple[str, tarfile.TarInfo]] = []
-        for name in ["storage-monitor/../evil", "/storage-monitor/viewer/app.js", "other-root/file"]:
+        for name in ["storage-monitor/../evil", "/storage-monitor/viewer/main.js", "other-root/file"]:
             info = tarfile.TarInfo(name)
             info.size = 1
             cases.append((name, info))
         link = tarfile.TarInfo("storage-monitor/viewer/link")
         link.type = tarfile.SYMTYPE
-        link.linkname = "app.js"
+        link.linkname = "main.js"
         cases.append(("symlink", link))
         hardlink = tarfile.TarInfo("storage-monitor/viewer/hard")
         hardlink.type = tarfile.LNKTYPE
-        hardlink.linkname = "storage-monitor/viewer/app.js"
+        hardlink.linkname = "storage-monitor/viewer/main.js"
         cases.append(("hardlink", hardlink))
         fifo = tarfile.TarInfo("storage-monitor/viewer/fifo")
         fifo.type = tarfile.FIFOTYPE
@@ -723,9 +770,9 @@ class DashboardReleaseActivationTest(unittest.TestCase):
                     self.fail("unsafe archive mutated app path")
 
     def test_rejects_duplicate_member_count_and_expanded_size_limits(self) -> None:
-        duplicate_a = tarfile.TarInfo("storage-monitor/viewer/app.js")
+        duplicate_a = tarfile.TarInfo("storage-monitor/viewer/main.js")
         duplicate_a.size = 1
-        duplicate_b = tarfile.TarInfo("storage-monitor/viewer/app.js")
+        duplicate_b = tarfile.TarInfo("storage-monitor/viewer/main.js")
         duplicate_b.size = 1
         archive, metadata, digest = self._archive(members=[duplicate_a, duplicate_b])
         with self.assertRaises(self.module.ActivationError):
@@ -768,7 +815,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(staged, set())
 
     def test_rejects_missing_runtime_file_and_manifest_file_hash_mismatch(self) -> None:
-        for missing in ["deploy/direct_proxy.py", "viewer/styles.css", "viewer/scan-status.js", "collector/scan_telemetry.py"]:
+        for missing in ["deploy/direct_proxy.py", "viewer/styles.css", "viewer/views/scan-status.js", "collector/actor.py"]:
             with self.subTest(missing=missing):
                 files = self._runtime_files()
                 files.pop(missing)
@@ -784,7 +831,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
 
         files = self._runtime_files()
         manifest = self._manifest(files)
-        manifest["files"]["viewer/app.js"] = "0" * 64
+        manifest["files"]["viewer/main.js"] = "0" * 64
         archive, metadata, digest = self._archive(files=files, manifest=manifest)
         with self.assertRaises(self.module.ActivationError):
             self._activate(archive, metadata, digest)
@@ -803,7 +850,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         backup = Path(status["legacy_backup"])
         self.assertTrue(backup.is_dir())
         self.assertEqual((backup / "legacy-sentinel.txt").read_bytes(), b"legacy bytes")
-        self.assertEqual((self.app_path / "viewer/app.js").stat().st_mode & 0o222, 0)
+        self.assertEqual((self.app_path / "viewer/main.js").stat().st_mode & 0o222, 0)
         persisted = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.assertEqual(persisted["source_sha"], self.sha)
         self.assertEqual(persisted["archive_digest"], digest)
@@ -843,7 +890,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "status": "prepared",
         })
         self.assertTrue(prepared.is_dir())
-        self.assertEqual((prepared / "viewer/app.js").stat().st_mode & 0o222, 0)
+        self.assertEqual((prepared / "viewer/main.js").stat().st_mode & 0o222, 0)
         self.assertFalse(self.app_path.is_symlink())
         self.assertEqual((self.app_path / "legacy-sentinel.txt").read_bytes(), b"legacy bytes")
         self.assertFalse(self.state_path.exists())
@@ -1335,7 +1382,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         self.assertEqual(status["status"], "active")
         self.assertEqual(self.restart_calls, ["activate"])
 
-        viewer_script = self.release_root / self.sha / "storage-monitor/viewer/app.js"
+        viewer_script = self.release_root / self.sha / "storage-monitor/viewer/main.js"
         viewer_script.chmod(0o755)
         with self.assertRaisesRegex(self.module.ActivationError, "existing release mode mismatch"):
             self._activate(archive, metadata, digest)
@@ -1448,7 +1495,7 @@ class DashboardReleaseActivationTest(unittest.TestCase):
         external = self.root / "external.js"
         external.write_text("shared", encoding="utf-8")
         external.chmod(0o644)
-        os.link(external, payload_dir / "app.js")
+        os.link(external, payload_dir / "main.js")
         payload_dir.chmod(0o555)
         payload_dir.parent.chmod(0o555)
         release.chmod(0o555)
@@ -1547,7 +1594,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             ("malformed", {"dashboard_extra":"export STORAGE_VIZ_PORT=8088\n"}),
             ("shell", {"proxy_overrides":{"STORAGE_VIZ_PROXY_PUBLIC_ORIGIN":"http://$(hostname):505"}}),
             ("missing", {"proxy_overrides":{"STORAGE_VIZ_PROXY_OPERATOR":None}}),
-            ("sample", {"dashboard_overrides":{"STORAGE_VIZ_DEV_SAMPLE_DIR":"/tmp/samples"}}),
+            ("development", {"dashboard_overrides":{"STORAGE_VIZ_ENV":"development"}}),
             ("direct", {"dashboard_overrides":{"STORAGE_VIZ_DIRECT_LOOPBACK_RESCAN":"1"}}),
             ("bad_origin", {"dashboard_overrides":{"STORAGE_VIZ_ALLOWED_ORIGINS":"http://166.104.167.11:8088"}}),
             ("bad_upstream_host", {"proxy_overrides":{"STORAGE_VIZ_PROXY_UPSTREAM_HOST":"127.0.0.2"}}),
@@ -1606,7 +1653,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             def getresponse(self): return FakeResponse()
             def close(self): pass
 
-        self.module._request(FakeConnection, contract, "GET", "/api/session")
+        self.module._request(FakeConnection, contract, "GET", "/api/v2/session")
 
         self.assertEqual(connections, [("192.168.0.3", 8088, 5)])
         self.assertEqual(contract.public_origin, "http://166.104.167.11:505")
@@ -1629,7 +1676,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             def getresponse(self): return FakeResponse()
             def close(self): pass
 
-        self.module._request(FakeConnection, contract, "GET", "/api/session")
+        self.module._request(FakeConnection, contract, "GET", "/api/v2/session")
 
         self.assertEqual(connections, [("166.104.167.11", 505, 5)])
 
@@ -1654,8 +1701,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         class FakeConnection:
             responses = [
                 FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie":"storage_viz_session=abc; Path=/"}),
-                FakeResponse(200, {"data_mode":"inventory", "servers":[{"id":"atlas"},{"id":"hinton"}]}),
-                FakeResponse(404, {"error":"UNKNOWN_SERVER"}),
+                FakeResponse(200, {"rollout": {"phase": "idle"}, "policy":{}, "servers":[{"server_id":"atlas"},{"server_id":"hinton"}]}),
+                FakeResponse(404, {"error":{"code":"UNKNOWN_SERVER"}}),
             ]
             def __init__(self, host, port, timeout):
                 self.host = host; self.port = port; self.timeout = timeout
@@ -1665,14 +1712,68 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             def close(self): pass
         self.module.run_health_check(contract, runner=runner, connection_factory=FakeConnection, sleep=lambda _: None)
         self.assertEqual(calls, [["systemctl", "is-active", "storage-viz-dashboard.service"], ["systemctl", "is-active", "storage-viz-proxy.service"]])
-        self.assertEqual([r[0:2] for r in requests], [("GET", "/api/session"), ("GET", "/api/servers"), ("POST", requests[2][1])])
-        self.assertRegex(requests[2][1], r"^/api/servers/[A-Za-z0-9_.-]{1,128}/rescan$")
+        self.assertEqual([r[0:2] for r in requests], [("GET", "/api/v2/session"), ("GET", "/api/v2/fleet"), ("POST", requests[2][1])])
+        self.assertRegex(requests[2][1], r"^/api/v2/servers/[A-Za-z0-9_.-]{1,128}/rescan$")
         self.assertNotIn(requests[2][1].split("/")[3], contract.enabled_server_ids)
         self.assertEqual(requests[2][3], b"{}")
         self.assertEqual(requests[2][2]["Cookie"], "storage_viz_session=abc")
         self.assertEqual(requests[2][2]["X-CSRF-Token"], "csrf")
         self.assertEqual(requests[2][2]["Host"], "166.104.167.11:505")
         self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
+
+    def test_rolled_back_pre_redesign_release_is_checked_with_its_own_routes(self):
+        # --rollback-state can put a release from before the redesign back on /opt. It
+        # serves only the legacy routes, so the installed checker must use those for it.
+        from unittest.mock import patch
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+        legacy_release = Path(self.tempdir.name) / "legacy-release"
+        (legacy_release / "viewer").mkdir(parents=True)
+        (legacy_release / "collector").mkdir(parents=True)
+        (legacy_release / "collector/service.py").write_text("class PollService: pass\n", encoding="utf-8")
+        for unknown in (Path(self.tempdir.name) / "missing", Path(self.tempdir.name) / "empty-release"):
+            if unknown.name == "empty-release":
+                unknown.mkdir()
+            with self.assertRaises(self.module.HealthCheckError):
+                self.module.probes_for(unknown)
+        dangling = Path(self.tempdir.name) / "dangling"
+        dangling.symlink_to(Path(self.tempdir.name) / "nowhere")
+        with self.assertRaises(self.module.HealthCheckError):
+            self.module.probes_for(dangling)
+        current_release = Path(self.tempdir.name) / "current-release"
+        (current_release / "api").mkdir(parents=True)
+        (current_release / "api/routes.py").write_text("ROUTES = ()\n", encoding="utf-8")
+        self.assertIs(self.module.probes_for(legacy_release), self.module.LEGACY_PROBES)
+        self.assertIs(self.module.probes_for(current_release), self.module.V2_PROBES)
+
+        ids = contract.enabled_server_ids
+        legacy_answers = {
+            ("GET", "/api/session"): (200, {"Set-Cookie": "storage_viz_session=a"}, {"can_rescan": True, "csrf_token": "x"}),
+            ("GET", "/api/servers"): (200, {}, {"data_mode": "inventory", "servers": [{"id": sid} for sid in ids]}),
+        }
+        seen = []
+
+        def legacy_dashboard(_factory, _contract, method, path, **_kwargs):
+            seen.append((method, path))
+            if method == "POST" and re.fullmatch(r"/api/servers/hc-[A-Za-z0-9_]{24}/rescan", path):
+                return 404, {}, {"error": "UNKNOWN_SERVER"}
+            return legacy_answers.get((method, path), (404, {}, {"error": "NOT_FOUND"}))
+
+        with patch.object(self.module, "_request", side_effect=legacy_dashboard):
+            self.module.run_health_check(contract, skip_service_check=True, ready_attempts=1, probes=self.module.LEGACY_PROBES)
+            self.assertEqual([path.split("/hc-")[0] for _, path in seen], ["/api/session", "/api/servers", "/api/servers"])
+            with self.assertRaisesRegex(self.module.HealthCheckError, "session probe failed"):
+                self.module.run_health_check(contract, skip_service_check=True, ready_attempts=1, probes=self.module.V2_PROBES)
+
+    def test_fixture_fleet_with_matching_ids_fails_health_check(self):
+        from unittest.mock import patch
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+        session = (200, {"Set-Cookie": "storage_viz_session=a"}, {"can_rescan": True, "csrf_token": "x"})
+        fixture_fleet = {"policy": {}, "rollout": None, "servers": [{"server_id": sid} for sid in contract.enabled_server_ids]}
+        with patch.object(self.module, "_request", side_effect=[session, (200, {}, fixture_fleet)]):
+            with self.assertRaisesRegex(self.module.HealthCheckError, "sample mode"):
+                self.module.run_health_check(contract, skip_service_check=True, ready_attempts=1)
 
     def test_probe_waits_for_dashboard_readiness_after_initial_proxy_502s(self) -> None:
         dash, proxy, _ = self._write_envs()
@@ -1700,8 +1801,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             for _ in range(4)
         ] + [
             FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie": "storage_viz_session=abc; Path=/"}),
-            FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
-            FakeResponse(404, {"error": "UNKNOWN_SERVER"}),
+            FakeResponse(200, {"rollout": {"phase": "idle"}, "policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
+            FakeResponse(404, {"error": {"code": "UNKNOWN_SERVER"}}),
         ]
 
         class FakeConnection:
@@ -1796,8 +1897,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
 
         responses = [
             FakeResponse(200, {"can_rescan": True, "csrf_token": "candidate-csrf"}, {"Set-Cookie": "storage_viz_session=candidate; Path=/"}),
-            FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
-            FakeResponse(404, {"error": "UNKNOWN_SERVER"}),
+            FakeResponse(200, {"rollout": {"phase": "idle"}, "policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
+            FakeResponse(404, {"error": {"code": "UNKNOWN_SERVER"}}),
         ]
 
         class FakeConnection:
@@ -1826,8 +1927,8 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
 
         self.assertEqual(connections, [("127.0.0.1", 1505, 5)] * 3)
         self.assertEqual([request[:2] for request in requests], [
-            ("GET", "/api/session"),
-            ("GET", "/api/servers"),
+            ("GET", "/api/v2/session"),
+            ("GET", "/api/v2/fleet"),
             ("POST", requests[2][1]),
         ])
         self.assertTrue(all(request[2]["Host"] == "166.104.167.11:505" for request in requests))
@@ -1887,7 +1988,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
                         {"can_rescan": True, "csrf_token": "csrf"},
                         {"Set-Cookie": "storage_viz_session=abc; Path=/"},
                     ),
-                    FakeResponse(200, {"data_mode": "inventory", "servers": [{"id": "atlas"}, {"id": "hinton"}]}),
+                    FakeResponse(200, {"rollout": {"phase": "idle"}, "policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
                     FakeResponse(404, {"code": "UNKNOWN_SERVER"}),
                 ]
             )
@@ -1945,7 +2046,10 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
             state_path=state,
             app_path=self.root / "opt/storage-viz-dashboard",
         )
+        cfg.app_path.parent.mkdir(parents=True)
+        cfg.app_path.symlink_to(target.parents[1])
         self.assertEqual(self.module.validate_proxy_target(target, cfg), target.resolve())
+        cfg.app_path.unlink()
 
         backup = self.root / "legacy_backup"
         backup_proxy = backup / "deploy/direct_proxy.py"
@@ -1982,20 +2086,57 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
                 with self.assertRaises(self.module.LauncherError):
                     self.module.validate_proxy_target(bad, cfg)
 
-    def test_launch_without_target_resolves_active_proxy_from_activation_state(self) -> None:
-        target = self._target()
-        state = self.root / "state.json"
-        state.write_text(json.dumps({"status": "active", "release": str(target.parents[1])}), encoding="utf-8")
+    def _linked_config(self, linked: Path, state: dict) -> object:
+        state_path = self.root / "state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
         cfg = self.module.LauncherConfig(
             release_root=self.root / "srv/storage-viz-dashboard/releases",
-            state_path=state,
+            state_path=state_path,
             app_path=self.root / "opt/storage-viz-dashboard",
         )
+        cfg.app_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg.app_path.symlink_to(linked)
+        return cfg
+
+    def _launched(self, cfg) -> str:
         calls: list[tuple[str, list[str]]] = []
-
         self.module.launch([], config=cfg, execv=lambda exe, argv: calls.append((exe, argv)))
+        return calls[0][1][-1]
 
-        self.assertEqual(calls[0][1][-1], str(target.resolve()))
+    def test_launch_without_target_resolves_the_proxy_of_the_linked_release(self) -> None:
+        target = self._target()
+        cfg = self._linked_config(target.parents[1], {"status": "active", "release": str(target.parents[1])})
+        self.assertEqual(self._launched(cfg), str(target.resolve()))
+
+    def test_proxy_under_activation_health_check_is_the_new_release(self) -> None:
+        # The activator links the new release and restarts both services before it writes
+        # the state, so the state still names the previous release during the health check.
+        previous = self._target("1" * 40)
+        candidate = self._target("2" * 40)
+        cfg = self._linked_config(candidate.parents[1], {"status": "active", "release": str(previous.parents[1])})
+        self.assertEqual(self._launched(cfg), str(candidate.resolve()))
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(previous, cfg)
+
+    def test_rollback_state_to_a_managed_release_starts_its_proxy(self) -> None:
+        previous = self._target("1" * 40)
+        current = self._target("2" * 40)
+        restored = str(previous.parents[1])
+        cfg = self._linked_config(previous.parents[1], {
+            "status": "rolled_back", "release": restored, "current": restored, "restored": restored,
+            "source_sha": "1" * 40, "previous": None, "legacy_backup": None,
+        })
+        self.assertEqual(self._launched(cfg), str(previous.resolve()))
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(current, cfg)
+
+    def test_link_outside_the_release_root_is_refused(self) -> None:
+        elsewhere = self.root / "tmp/storage-monitor"
+        (elsewhere / "deploy").mkdir(parents=True)
+        (elsewhere / "deploy/direct_proxy.py").write_text("print('proxy')\n", encoding="utf-8")
+        cfg = self._linked_config(elsewhere, {"status": "active", "release": str(elsewhere)})
+        with self.assertRaises(self.module.LauncherError):
+            self.module.resolve_proxy_target(cfg)
 
     def test_recovery_state_accepts_only_exact_safe_real_legacy_proxy(self) -> None:
         app = self.root / "opt/storage-viz-dashboard"

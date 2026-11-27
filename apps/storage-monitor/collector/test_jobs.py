@@ -1,308 +1,333 @@
-import errno
-import pathlib
-import tempfile
-import threading
-import time
-import unittest
-from unittest import mock
+from dataclasses import replace
 
-from collector.inventory import Server
-from collector.jobs import RescanJobManager
-from collector.store import CentralStore
+from collector import jobs
+from collector.jobs import (
+    Dispatch, DispatchReturned, Job, Observed, RescanReplied, Restarted, Scan, Tick, Traced, admit, reduce,
+)
+from tests.machine_check import assert_table_total, run_random_events
+
+IDLE_AFTER_R0 = Scan(run_id="r0", run_state="complete", run_full=True, generation="g0")
 
 
-def make_server(server_id="alpha-1"):
-    return Server(
-        id=server_id,
-        display_name=server_id,
-        order=1,
-        host=f"{server_id}.example.test",
-        port=22,
-        enabled=True,
-        username="monitoring",
-        identity_file=pathlib.PurePosixPath(f"/etc/storage-viz/{server_id}.key"),
-        known_hosts_file=pathlib.PurePosixPath("/etc/storage-viz/known_hosts"),
-        scanner={"server_id": server_id},
-        scanner_digest="a" * 64,
-    )
+def observe(job, scan, at=10, accepted="g0", rejected=frozenset()):
+    return reduce(job, Observed(at=at, scan=scan, accepted=accepted, rejected=rejected))
 
 
-class FakeClock:
-    def __init__(self, now=1719200000): self.now = now
-    def time(self): return self.now
+def running_manual(run_id="r1", run_state="running"):
+    return Scan(invocation="inv-1", full=True, run_id=run_id, run_state=run_state, run_full=True)
 
 
-class BlockingService:
-    def __init__(self, servers, store):
-        self.servers = tuple(servers)
-        self.store = store
-        self.entered = threading.Event()
-        self.release = threading.Event()
-        self.calls = []
-        self.active_state = "inactive"
-        self.active_state_calls = []
-        self.active_state_error = None
-    def scan_active_state(self, server_id):
-        self.active_state_calls.append(server_id)
-        if self.active_state_error:
-            raise self.active_state_error
-        return self.active_state
-    def manual_rescan(self, server_id):
-        self.calls.append(server_id)
-        self.entered.set()
-        self.release.wait(2)
-        return self.store.load_state(server_id)
+def dispatched():
+    job, effects = observe(admit("q" * 32, "operator", 0), IDLE_AFTER_R0)
+    assert (job.state, job.dispatches, effects) == ("dispatching", 1, (Dispatch(),))
+    return job
 
 
-class JobsTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.store = CentralStore(pathlib.Path(self.tmp.name) / "state")
-        self.clock = FakeClock()
-
-    def test_one_active_job_per_server_and_global_concurrency_are_enforced_and_audited(self):
-        a = make_server("alpha-1"); b = make_server("beta-2")
-        svc = BlockingService([a, b], self.store)
-        jobs = RescanJobManager(svc, clock=self.clock, max_concurrent=1)
-
-        first = jobs.request_rescan("alpha-1", "operator-1")
-        self.assertEqual(first[0], 202)
-        self.assertTrue(svc.entered.wait(2))
-        duplicate = jobs.request_rescan("alpha-1", "operator-1")
-        self.assertEqual(duplicate[0], 409)
-        global_busy = jobs.request_rescan("beta-2", "operator-1")
-        self.assertEqual(global_busy[0], 429)
-        self.assertEqual([e["result_code"] for e in jobs.audit_events()], ["ACCEPTED", "ACTIVE_JOB", "GLOBAL_CONCURRENCY"])
-        self.assertEqual(self.store.load_state("alpha-1")["active_job"]["state"], "running")
-        svc.release.set()
-        jobs.wait_for_idle(timeout=2)
+def test_rescan_succeeds_only_after_its_publication_is_accepted():
+    job, _ = observe(dispatched(), running_manual())
+    assert (job.state, job.invocation, job.agent_run) == ("running", "inv-1", "r1")
+    job, _ = reduce(job, DispatchReturned(at=20, ok=True))
+    assert job.state == "running", "the SSH exit status decided the job"
+    job, _ = observe(job, Scan(run_id="r1", run_state="complete", run_full=True, generation="g1"), at=30)
+    assert (job.state, job.generation) == ("collecting", "g1")
+    job, _ = observe(job, Scan(run_id="r1", run_state="complete", generation="g1"), at=40, accepted="g1")
+    assert (job.state, job.result_code, job.finished_unix) == ("succeeded", "OK", 40)
 
 
-    def test_blocked_preflight_leaves_spare_slot_for_another_host(self):
-        alpha, beta, gamma = make_server(), make_server("beta-2"), make_server("gamma-3")
-        svc = BlockingService([alpha, beta, gamma], self.store)
-        jobs = RescanJobManager(svc, clock=self.clock, max_concurrent=2)
-        preflight_entered = threading.Event()
-        release_preflight = threading.Event()
-        beta_admitted = threading.Event()
-        results = {}
-        probe = svc.scan_active_state
-
-        def block_alpha(server_id):
-            active_state = probe(server_id)
-            if server_id == alpha.id:
-                preflight_entered.set()
-                release_preflight.wait(3)
-            return active_state
-
-        def request_alpha():
-            results["alpha"] = jobs.request_rescan(alpha.id, "operator")
-
-        def request_beta():
-            results["beta"] = jobs.request_rescan(beta.id, "operator")
-            beta_admitted.set()
-
-        with mock.patch.object(svc, "scan_active_state", side_effect=block_alpha):
-            slow = threading.Thread(target=request_alpha)
-            independent = threading.Thread(target=request_beta)
-            slow.start()
-            try:
-                self.assertTrue(preflight_entered.wait(1))
-                independent.start()
-                self.assertTrue(beta_admitted.wait(1), "another server must not wait for the blocked probe")
-                self.assertEqual(results["beta"][0], 202)
-                self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 409)
-                self.assertEqual(jobs.request_rescan(gamma.id, "operator")[0], 429)
-                self.assertEqual(svc.active_state_calls, [alpha.id, beta.id])
-            finally:
-                release_preflight.set()
-                svc.release.set()
-                slow.join(3)
-                if independent.ident is not None:
-                    independent.join(3)
-                jobs.wait_for_idle(timeout=3)
-        self.assertEqual(results["alpha"][0], 202)
-
-    def test_remote_active_scan_rejects_without_consuming_cooldown_or_starting_job(self):
-        a = make_server("alpha-1")
-        svc = BlockingService([a], self.store); svc.release.set(); svc.active_state = "active"
-        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=900)
-
-        active = jobs.request_rescan("alpha-1", "operator-1")
-
-        self.assertEqual(active[0], 409)
-        self.assertEqual(active[1]["error"], "ACTIVE_JOB")
-        self.assertEqual(svc.active_state_calls, ["alpha-1"])
-        self.assertEqual(svc.calls, [])
-        self.assertIsNone(self.store.load_state("alpha-1").get("active_job"))
-        self.assertEqual(jobs.audit_events()[-1]["result_code"], "ACTIVE_JOB")
-        svc.active_state = "inactive"
-        accepted = jobs.request_rescan("alpha-1", "operator-1")
-        self.assertEqual(accepted[0], 202)
-        jobs.wait_for_idle(timeout=2)
-
-    def test_remote_active_scan_guard_allows_inactive_and_blocks_unknown_query_result(self):
-        from collector.transport import TransportError
-        a = make_server("alpha-1")
-        svc = BlockingService([a], self.store); svc.release.set(); svc.active_state = "inactive"
-        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0)
-        accepted = jobs.request_rescan("alpha-1", "operator-1")
-        self.assertEqual(accepted[0], 202)
-        jobs.wait_for_idle(timeout=2)
-        self.assertEqual(svc.calls, ["alpha-1"])
-
-        svc.active_state_error = TransportError("BAD_ACTIVE_STATE", "bad state")
-        failed = jobs.request_rescan("alpha-1", "operator-1")
-        self.assertEqual(failed[0], 503)
-        self.assertEqual(failed[1]["error"], "ACTIVE_STATE_FAILED")
-        self.assertEqual(svc.calls, ["alpha-1"])
-
-        svc.active_state_error = None
-        recovered = jobs.request_rescan("alpha-1", "operator-1")
-        self.assertEqual(recovered[0], 202)
-        jobs.wait_for_idle(timeout=2)
-
-    def test_restart_reconciles_persisted_running_job_to_failed_and_restores_cooldown(self):
-        a = make_server("alpha-1")
-        self.store.update_state("alpha-1", active_job={"id":"job-1","server_id":"alpha-1","kind":"rescan","state":"running","actor":"operator-1","requested_unix":self.clock.now - 100,"started_unix":self.clock.now - 99,"finished_unix":None,"result_code":None})
-        svc = BlockingService([a], self.store); svc.release.set()
-        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=900)
-        active = self.store.load_state("alpha-1")["active_job"]
-        self.assertEqual(active["state"], "failed")
-        self.assertEqual(active["result_code"], "INTERRUPTED")
-        cooldown = jobs.request_rescan("alpha-1", "operator-1")
-        self.assertEqual(cooldown[0], 429)
-        self.assertEqual(cooldown[1]["error"], "COOLDOWN")
-
-    def test_contended_terminal_write_keeps_job_owned_and_other_host_can_finish(self):
-        from collector import store
-
-        alpha, beta = make_server(), make_server("beta-2")
-        for server in (alpha, beta):
-            self.store.update_state(server.id, latest_pull_status="succeeded", latest_scan_result="complete")
-        svc = BlockingService([alpha, beta], self.store)
-        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0, max_concurrent=2)
-        self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 202)
-        self.assertTrue(svc.entered.wait(2))
-        self.addCleanup(jobs.wait_for_idle, 3)
-        self.addCleanup(svc.release.set)
-        contended = threading.Event()
-        beta_finished = threading.Event()
-        update_state = self.store.update_state
-
-        def observe_write(server_id, **updates):
-            try:
-                state = update_state(server_id, **updates)
-            except BlockingIOError:
-                contended.set()
-                raise
-            if server_id == beta.id and state["active_job"]["state"] == "succeeded":
-                beta_finished.set()
-            return state
-
-        lock_path = self.store.root / alpha.id / "store.lock"
-        with mock.patch.object(self.store, "update_state", side_effect=observe_write):
-            with lock_path.open("rb") as lock:
-                store.fcntl.flock(lock, store.fcntl.LOCK_EX | store.fcntl.LOCK_NB)
-                svc.release.set()
-                self.assertTrue(contended.wait(2))
-                self.assertEqual(jobs.active_thread_count(), 1)
-                self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 409)
-                self.assertEqual(jobs.request_rescan(beta.id, "operator")[0], 202)
-                self.assertTrue(beta_finished.wait(2))
-                self.assertEqual(jobs.job_for(alpha.id)[1]["job"]["state"], "running")
-            jobs.wait_for_idle(timeout=3)
-        self.assertEqual(jobs.job_for(alpha.id)[1]["job"]["state"], "succeeded")
-        self.assertEqual(jobs.request_rescan(alpha.id, "operator")[0], 202)
-        jobs.wait_for_idle(timeout=3)
-
-    def test_host_stays_owned_until_terminal_store_call_returns(self):
-        server = make_server()
-        self.store.update_state(server.id, latest_pull_status="succeeded", latest_scan_result="complete")
-        svc = BlockingService([server], self.store)
-        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0, max_concurrent=2)
-        published = threading.Event()
-        release_write = threading.Event()
-        update_state = self.store.update_state
-
-        def hold_after_publish(server_id, **updates):
-            state = update_state(server_id, **updates)
-            if state["active_job"]["state"] == "succeeded":
-                published.set()
-                release_write.wait(3)
-            return state
-
-        with mock.patch.object(self.store, "update_state", side_effect=hold_after_publish):
-            try:
-                self.assertEqual(jobs.request_rescan(server.id, "operator")[0], 202)
-                svc.release.set()
-                self.assertTrue(published.wait(2))
-                self.assertEqual(jobs.job_for(server.id)[1]["job"]["state"], "succeeded")
-                self.assertEqual(jobs.request_rescan(server.id, "operator")[0], 409)
-            finally:
-                release_write.set()
-                jobs.wait_for_idle(timeout=3)
-        self.assertEqual(jobs.request_rescan(server.id, "operator")[0], 202)
-        jobs.wait_for_idle(timeout=3)
-
-    def test_terminal_io_error_is_reported_and_restart_recovers_job(self):
-        from collector import store
-
-        server = make_server()
-        svc = BlockingService([server], self.store)
-        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0)
-        code, response = jobs.request_rescan(server.id, "operator")
-        self.assertEqual(code, 202)
-        self.assertTrue(svc.entered.wait(2))
-        with self.assertLogs("collector.jobs", level="ERROR") as logs:
-            with mock.patch.object(store.os, "replace", side_effect=OSError(errno.EIO, "write failed")) as replace:
-                svc.release.set()
-                jobs.wait_for_idle(timeout=3)
-        self.assertEqual(replace.call_count, 1)
-        self.assertIn(response["job"]["id"], logs.output[0])
-        self.assertEqual(jobs.audit_events()[-1]["result_code"], "JOB_STATE_WRITE_FAILED")
-        self.assertEqual(jobs.audit_events()[-1]["job_id"], response["job"]["id"])
-        self.assertEqual(jobs.request_rescan(server.id, "operator")[0], 409)
-        restarted_store = CentralStore(self.store.root)
-        restarted_svc = BlockingService([server], restarted_store)
-        restarted = RescanJobManager(restarted_svc, clock=self.clock, cooldown_seconds=0)
-        job = restarted.job_for(server.id)[1]["job"]
-        self.assertEqual(job["id"], response["job"]["id"])
-        self.assertEqual((job["state"], job["result_code"]), ("failed", "INTERRUPTED"))
-        restarted_svc.release.set()
-        self.assertEqual(restarted.request_rescan(server.id, "operator")[0], 202)
-        restarted.wait_for_idle(timeout=3)
-
-    def test_completed_threads_are_removed_from_bounded_bookkeeping(self):
-        a = make_server("alpha-1")
-        svc = BlockingService([a], self.store); svc.release.set()
-        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=0)
-        for i in range(3):
-            self.clock.now += 1
-            self.assertEqual(jobs.request_rescan("alpha-1", "operator-1")[0], 202)
-            jobs.wait_for_idle(timeout=2)
-            self.assertLessEqual(jobs.active_thread_count(), 0)
-
-    def test_unknown_server_cooldown_and_bounded_audit_fields(self):
-        a = make_server("alpha-1")
-        svc = BlockingService([a], self.store)
-        svc.release.set()
-        jobs = RescanJobManager(svc, clock=self.clock, cooldown_seconds=900)
-
-        self.assertEqual(jobs.request_rescan("../bad", "operator-1")[0], 404)
-        accepted = jobs.request_rescan("alpha-1", "operator-1")
-        self.assertEqual(accepted[0], 202)
-        jobs.wait_for_idle(timeout=2)
-        self.clock.now += 899
-        cooldown = jobs.request_rescan("alpha-1", "bad actor /tmp/secret" + "x" * 200)
-        self.assertEqual(cooldown[0], 429)
-        self.assertEqual(cooldown[1]["error"], "COOLDOWN")
-        self.assertEqual(svc.active_state_calls, [a.id])
-        event = jobs.audit_events()[-1]
-        self.assertLessEqual(len(event["actor"]), 128)
-        self.assertNotIn("/", event["actor"])
-        self.assertLessEqual(len(event["job_id"]), 128)
+def test_exit_zero_without_receipt_is_unconfirmed():
+    job, _ = reduce(dispatched(), DispatchReturned(at=20, ok=True))
+    assert job.state == "reconciling"
+    job, _ = observe(job, IDLE_AFTER_R0, at=30)
+    assert job.state == "reconciling"
+    job, _ = reduce(job, Tick(at=20 + jobs.RECONCILE_DEADLINE_SECONDS))
+    assert (job.state, job.result_code) == ("unconfirmed", "NO_TRACE")
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_c4_scheduled_scan_during_request_stays_pending():
+    # Preflight saw an idle host. A partial scheduled scan then took the lock, so the manual start lost it.
+    job, _ = reduce(dispatched(), DispatchReturned(at=20, ok=False, code="RESCAN_FAILED"))
+    scheduled = Scan(invocation="inv-s", full=False, run_id="r1", run_state="running")
+    job, effects = observe(job, scheduled, at=30)
+    assert job.state == "pending", f"C4 scheduled scan left accepted rescan {job.state}"
+    assert effects == ()
+    job, effects = observe(job, Scan(run_id="r1", run_state="complete", generation="g1"), at=40)
+    assert (job.state, job.dispatches, effects) == ("dispatching", 2, (Dispatch(),))
+
+
+def test_running_full_scan_satisfies_the_request_without_a_second_scan():
+    scan = Scan(invocation="inv-s", full=True, run_id="r1", run_state="running", run_full=True)
+    job = admit("q" * 32, "operator", 0)
+    job, effects = observe(job, scan)
+    assert (job.state, job.invocation, job.agent_run, effects) == ("running", "inv-s", "r1", ())
+
+
+def test_tied_scan_failure_fails_the_job_with_the_agent_code():
+    job, _ = observe(dispatched(), running_manual())
+    job, _ = observe(job, Scan(run_id="r1", run_state="failed", error_code="SCANNER_FAILED"), at=50)
+    assert (job.state, job.result_code) == ("failed", "SCANNER_FAILED")
+
+
+def test_run_replaced_before_we_saw_its_end_is_unconfirmed():
+    job, _ = observe(dispatched(), running_manual())
+    job, _ = observe(job, Scan(invocation="inv-2", full=False, run_id="r2", run_state="running"), at=50)
+    assert (job.state, job.result_code) == ("unconfirmed", "RUN_UNCORRELATED")
+
+
+def test_rejected_publication_fails_the_job():
+    job, _ = observe(dispatched(), running_manual())
+    job, _ = observe(job, Scan(run_id="r1", run_state="partial", generation="g1"), rejected=frozenset({"g1"}))
+    assert (job.state, job.result_code) == ("failed", "CAPTURE_REJECTED")
+
+
+def test_deadlines_end_waiting_states():
+    pending = Job("q" * 32, "op", 0, 0, state="pending")
+    assert reduce(pending, Tick(at=7199))[0].state == "pending"
+    assert reduce(pending, Tick(at=7200))[0].result_code == "RESCAN_NOT_STARTED"
+    running = Job("q" * 32, "op", 0, 0, state="running", invocation="i")
+    assert reduce(running, Tick(at=3 * 3600 - 1, run_deadline_seconds=jobs.run_deadline_seconds(3600)))[0].state == "running"
+    assert reduce(running, Tick(at=9 * 3600, run_deadline_seconds=jobs.run_deadline_seconds(3 * 3600)))[0].result_code == "RESCAN_TIMEOUT"
+    collecting = Job("q" * 32, "op", 0, 0, state="collecting", generation="g1")
+    assert reduce(collecting, Tick(at=jobs.COLLECT_DEADLINE_SECONDS))[0].result_code == "PULL_FAILED"
+
+
+def test_restart_makes_an_in_flight_dispatch_ambiguous():
+    assert reduce(dispatched(), Restarted(at=5))[0].state == "reconciling"
+    fresh = admit("q" * 32, "operator", 0)
+    assert reduce(fresh, Restarted(at=5))[0] == fresh
+
+
+# ------------------------------------------------------------------ receipt jobs (v2 hosts)
+
+
+def requested():
+    """A v2 job whose rescan <request_id> the host answered ``received``."""
+    job, effects = reduce(admit("q" * 32, "operator", 0, "receipt"), Traced(at=5))
+    assert (job.state, effects) == ("dispatching", (Dispatch(),))
+    job, _ = reduce(job, RescanReplied(at=6, outcome="received"))
+    assert job.state == "pending"
+    return job
+
+
+def test_receipt_complete_succeeds_the_job_once_its_captures_are_held():
+    job, _ = reduce(requested(), Traced(at=10, running=True))
+    assert job.state == "running"
+    job, _ = reduce(job, Traced(at=20, receipt="complete", captures="fetching"))
+    assert job.state == "collecting"
+    job, _ = reduce(job, Traced(at=30, receipt="complete", captures="current"))
+    assert (job.state, job.result_code, job.finished_unix) == ("succeeded", "OK", 30)
+
+
+def test_receipt_interrupted_fails_the_job_with_a_code():
+    job, _ = reduce(requested(), Traced(at=10, running=True))
+    job, _ = reduce(job, Traced(at=20, receipt="interrupted"))
+    assert (job.state, job.result_code) == ("failed", "SCAN_INTERRUPTED")
+    job, _ = reduce(requested(), Traced(at=20, receipt="failed"))
+    assert (job.state, job.result_code) == ("failed", "SCAN_FAILED")
+
+
+def test_request_id_in_run_json_keeps_the_job_running():
+    job, _ = reduce(requested(), Traced(at=10, running=True))
+    for at in range(20, 2000, 60):
+        job, effects = reduce(job, Traced(at=at, running=True))
+        assert (job.state, effects) == ("running", ())
+    job, effects = reduce(job, Traced(at=3000))
+    assert (job.state, effects) == ("running", ()), "run.json gone before the receipt arrived is not an ending"
+
+
+def test_c4_scheduled_scan_while_the_request_waits_keeps_it_pending():
+    job = requested()
+    for at in range(10, 600, 5):
+        job, effects = reduce(job, Traced(at=at, pending=True))
+        assert (job.state, effects) == ("pending", ()), f"C4 scheduled scan moved the request to {job.state}"
+    job, _ = reduce(job, Traced(at=700, running=True))
+    assert job.state == "running"
+
+
+def test_a_delivered_request_is_never_sent_again():
+    # M5a review F2: an id in the mailbox read as idle, so three sends went out within seconds.
+    job = requested()
+    for at in range(10, 4000, 5):
+        job, effects = reduce(job, Traced(at=at, pending=True))
+        assert (job.state, effects) == ("pending", ()), "a delivered request was sent again"
+
+
+def test_a_request_with_no_trace_is_resent_once_per_idle_interval():
+    job = requested()
+    sent = job.last_dispatch_unix
+    job, effects = reduce(job, Traced(at=sent + jobs.RESEND_INTERVAL_SECONDS - 1))
+    assert effects == ()
+    job, effects = reduce(job, Traced(at=sent + jobs.RESEND_INTERVAL_SECONDS))
+    assert (effects, job.dispatches, job.request_id) == ((Dispatch(),), 2, "q" * 32)
+
+
+def test_unknown_receipts_are_ignored():
+    for state in ("dispatching", "pending", "running", "reconciling", "collecting"):
+        job = Job("q" * 32, "op", 0, 0, state=state, dispatches=1, protocol="receipt")
+        for trace in ({}, {"pending": True}, {"running": True}):
+            unknown = reduce(job, Traced(at=10, receipt="vanished", **trace))
+            assert unknown == reduce(job, Traced(at=10, **trace)), f"an unknown receipt changed a {state} job"
+            assert unknown[0].state not in jobs.TERMINAL
+
+
+def test_ambiguous_reply_reconciles_by_observation_and_resends_the_same_id():
+    job, _ = reduce(admit("q" * 32, "operator", 0, "receipt"), Traced(at=5))
+    job, _ = reduce(job, RescanReplied(at=6, outcome="ambiguous", code="TIMEOUT"))
+    assert job.state == "reconciling"
+    job, effects = reduce(job, Traced(at=10))
+    assert (job.state, effects, job.dispatches) == ("reconciling", (), 1), "resent before the idle interval"
+    job, effects = reduce(job, Traced(at=5 + jobs.RESEND_INTERVAL_SECONDS))
+    assert (job.state, effects, job.dispatches) == ("reconciling", (Dispatch(),), 2)
+    job, _ = reduce(job, Traced(at=200, receipt="partial"))
+    assert (job.state, job.result_code) == ("succeeded", "OK")
+
+
+def test_rejected_request_fails_and_reconcile_deadline_is_unconfirmed():
+    job, _ = reduce(admit("q" * 32, "operator", 0, "receipt"), Traced(at=5))
+    failed, _ = reduce(job, RescanReplied(at=6, outcome="rejected", code="TOO_MANY_PENDING"))
+    assert (failed.state, failed.result_code) == ("failed", "TOO_MANY_PENDING")
+    job, _ = reduce(job, RescanReplied(at=6, outcome="ambiguous"))
+    job, _ = reduce(job, Tick(at=6 + jobs.RECONCILE_DEADLINE_SECONDS))
+    assert (job.state, job.result_code) == ("unconfirmed", "NO_TRACE")
+
+
+def test_receipt_with_a_rejected_capture_fails_the_job():
+    job, _ = reduce(requested(), Traced(at=10, receipt="complete", captures="rejected"))
+    assert (job.state, job.result_code) == ("failed", "CAPTURE_REJECTED")
+
+
+def test_receipt_resends_are_bounded():
+    job, starts = requested(), 1
+    for at in range(10, 1000, 5):
+        job, effects = reduce(job, Traced(at=at))
+        starts += len(effects)
+        if job.state in jobs.TERMINAL:
+            break
+    assert starts == jobs.MAX_DISPATCHES
+    assert (job.state, job.result_code) == ("failed", "RESCAN_NOT_STARTED")
+    job, _ = reduce(admit("q" * 32, "operator", 0, "receipt"), Traced(at=5))
+    job, _ = reduce(job, RescanReplied(at=6, outcome="ambiguous"))
+    for at in range(10, 1000, 5):
+        job, _ = reduce(job, Traced(at=at))
+        if job.state in jobs.TERMINAL:
+            break
+    assert (job.state, job.result_code, job.dispatches) == ("unconfirmed", "NO_TRACE", jobs.MAX_DISPATCHES)
+
+
+def test_a_receipt_job_ends_at_the_deadline_from_admission():
+    limit = jobs.job_deadline_seconds(jobs.MIN_RUN_DEADLINE_SECONDS)
+    job, _ = reduce(requested(), Traced(at=limit - 60, running=True))
+    assert reduce(job, Tick(at=limit - 1))[0].state == "running"
+    assert reduce(job, Tick(at=limit))[0].result_code == "RESCAN_TIMEOUT"
+
+
+def test_each_protocol_ignores_the_other_protocols_events():
+    receipt = requested()
+    assert reduce(receipt, Observed(10, Scan(invocation="i", full=True, run_id="r1", run_state="running")))[0] == receipt
+    assert reduce(receipt, DispatchReturned(10, True))[0] == receipt
+    invocation = dispatched()
+    assert reduce(invocation, Traced(10, receipt="complete"))[0] == invocation
+    assert reduce(invocation, RescanReplied(10, "received"))[0] == invocation
+
+
+def test_job_table_total():
+    assert_table_total(jobs.TRANSITIONS, jobs.STATES, jobs.EVENT_KINDS)
+
+
+def test_job_random_events():
+    runs = ("r0", "r1", "r2", None)
+
+    def scan(rng):
+        active = rng.random() < 0.5
+        return Scan(
+            invocation=rng.choice(("inv-1", "inv-2")) if active else None,
+            full=rng.random() < 0.5,
+            run_id=rng.choice(runs),
+            run_state=rng.choice(("running", "complete", "partial", "failed", None)),
+            run_full=rng.random() < 0.5,
+            generation=rng.choice(("g0", "g1", "g2")),
+        )
+
+    def event(rng, job, index):
+        at = index * 1800
+        kind = rng.randrange(6)
+        if kind == 0:
+            return Observed(at, scan(rng), rng.choice(("g0", "g1", None)), frozenset(rng.sample(("g1", "g2"), rng.randrange(3))))
+        if kind == 1:
+            return DispatchReturned(at, rng.random() < 0.5)
+        if kind == 2:
+            return Tick(at, jobs.run_deadline_seconds(rng.choice((None, 600, 7200))))
+        if kind == 3:
+            return Traced(at, pending=rng.random() < 0.3, running=rng.random() < 0.3,
+                          receipt=rng.choice((None, None, "complete", "partial", "failed", "interrupted", "nothing_due", "bogus")),
+                          captures=rng.choice(("current", "fetching", "rejected")))
+        if kind == 4:
+            return RescanReplied(at, rng.choice(("received", "already_received", "rejected", "ambiguous")), "CODE")
+        return Restarted(at)
+
+    def check(before, event, after, effects):
+        assert after.state in jobs.STATES
+        assert after.protocol == before.protocol
+        if before.state in jobs.TERMINAL:
+            assert after == before, "a terminal job changed"
+        if after.state == "succeeded" and before.state != "succeeded" and after.protocol == "invocation":
+            assert after.generation is not None and before.state in ("running", "reconciling", "collecting")
+            assert isinstance(event, Observed) and event.accepted == after.generation, "succeeded without its publication"
+        if after.state == "succeeded" and before.state != "succeeded" and after.protocol == "receipt":
+            assert isinstance(event, Traced) and event.receipt in ("complete", "partial"), "I24 succeeded without a receipt"
+            assert event.captures == "current", "succeeded before its captures were held"
+        if isinstance(event, (Traced, RescanReplied)) and after.protocol == "invocation":
+            assert after == before, "a receipt event moved an invocation job"
+        if isinstance(event, (Observed, DispatchReturned)) and after.protocol == "receipt":
+            assert after == before, "an invocation event moved a receipt job"
+        if isinstance(event, Traced) and event.receipt not in jobs.RECEIPT_SUCCEEDS | set(jobs.RECEIPT_FAILS):
+            assert reduce(before, replace(event, receipt=None)) == (after, effects), "an unknown receipt changed the outcome"
+        if effects and after.protocol == "receipt":
+            assert after.last_dispatch_unix == event.at
+            assert before.last_dispatch_unix is None or event.at - before.last_dispatch_unix >= jobs.RESEND_INTERVAL_SECONDS, \
+                "a receipt job resent within the idle interval"
+            assert not (isinstance(event, Traced) and event.pending and before.dispatches), "a delivered request was sent again"
+        if effects:
+            assert effects == (Dispatch(),)
+            assert after.state == "dispatching" or (after.protocol == "receipt" and after.state in ("pending", "reconciling"))
+            assert after.dispatches == before.dispatches + 1, "dispatched twice for one attempt"
+        assert after.request_id == before.request_id, "a second request id for one admitted job"
+        assert after.dispatches <= jobs.MAX_DISPATCHES, "the scan was started without limit"
+        if isinstance(event, Tick) and event.at - after.requested_unix >= jobs.job_deadline_seconds(event.run_deadline_seconds):
+            assert after.state in jobs.TERMINAL, "a job outlived its deadline from admission"
+
+    run_random_events(lambda rng: admit("q" * 32, "op", 0, rng.choice(jobs.PROTOCOLS)), event, reduce, check)
+
+
+def test_a_job_restarts_its_scan_a_bounded_number_of_times():
+    # M2b review: every lost-lock round started the scan again, without limit.
+    job = dispatched()
+    starts = 1
+    for index in range(1, 10):
+        job, _ = reduce(job, DispatchReturned(at=index * 100, ok=False, code="RESCAN_FAILED"))
+        scheduled = Scan(run_id=f"s{index}", run_state="complete", run_full=False, generation=f"g{index}")
+        job, effects = observe(job, scheduled, at=index * 100 + 50)
+        starts += len(effects)
+        if job.state in jobs.TERMINAL:
+            break
+    assert starts == jobs.MAX_DISPATCHES
+    assert (job.state, job.result_code) == ("failed", "RESCAN_NOT_STARTED")
+
+
+def test_state_changes_never_postpone_the_deadline_from_admission():
+    # M2b review: each transition reset since_unix, so a job that kept changing state never timed out.
+    job = dispatched()
+    limit = jobs.job_deadline_seconds(jobs.MIN_RUN_DEADLINE_SECONDS)
+    job, _ = observe(job, Scan(invocation="inv-s", full=False, run_id="s1", run_state="running"), at=limit - 60)
+    assert job.state == "pending"
+    assert reduce(job, Tick(at=limit - 1))[0].state == "pending"
+    assert reduce(job, Tick(at=limit))[0].result_code == "RESCAN_NOT_STARTED"
+
+
+def test_a_finished_run_seen_while_the_unit_starts_is_not_the_jobs_run():
+    # M2b review: a job admitted without an observation had no baseline, so any finished run was "new".
+    job = admit("q" * 32, "operator", 0)
+    starting = Scan(invocation="inv-1", full=True, run_id="r0", run_state="complete", run_full=True, generation="g0")
+    job, _ = observe(job, starting)
+    assert job.state == "running"
+    job, _ = observe(job, IDLE_AFTER_R0, at=20)
+    assert (job.state, job.result_code) == ("unconfirmed", "RUN_UNCORRELATED")

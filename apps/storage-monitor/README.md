@@ -26,13 +26,14 @@ Run the local sample dashboard from `apps/storage-monitor`:
 
 ```bash
 cd apps/storage-monitor
-STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data" \
 STORAGE_VIZ_BIND=127.0.0.1 \
 STORAGE_VIZ_PORT=8088 \
-python3 viewer/serve.py
+python3 -m api.server --fixtures tests/fixtures/fleet
 ```
 
-Open `http://127.0.0.1:8088`. Development sample mode is explicit: `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and the four tracked sample servers appear in deterministic order: `hinton`, `atlas`, `orion`, `zeus`. Production inventory mode reads `/etc/storage-viz/servers.json` and is not sample data.
+Open `http://127.0.0.1:8088`. With `--fixtures`, `/api/v2/fleet` lists the sample servers in order: `hinton`, `atlas`, `orion`, `zeus`. Production inventory mode reads `/etc/storage-viz/servers.json` and is not sample data.
+
+To create a fixture from a v1 capture, run `python3 tools/scrub_fixture.py snapshot.json > demo.json`. Place the result in a fixture directory and add its synthetic server ID and the file token `demo` to that directory’s `hosts.json`.
 
 ## Capacity and media shown in the overview
 
@@ -100,7 +101,7 @@ Interactive bootstrap is through `shchoi` only when the exact rule is missing or
 
 Publish the loopback dashboard through a reverse proxy that authenticates users. Operator rescans require exact `STORAGE_VIZ_ALLOWED_ORIGINS`, proxy identity, allowlist membership, signed session cookie, and CSRF token. Do not store or document password values; use SSH identity files and known-host entries.
 
-For an isolated internal HTTP deployment without individual accounts, `deploy/direct_proxy.py` can expose a single fixed operator identity. This mode is opt-in and forwards only `POST /api/servers/<configured-id>/rescan` with exact-origin, session, CSRF, bounded-body, and empty-JSON checks; every other write remains blocked. See `docs/operations.md` for the paired dashboard/proxy environment.
+For an isolated internal HTTP deployment without individual accounts, `deploy/direct_proxy.py` can expose a single fixed operator identity. This mode is opt-in and forwards only `POST /api/v2/servers/<configured-id>/rescan` with exact-origin, session, CSRF, bounded-body, and empty-JSON checks; every other write remains blocked. See `docs/operations.md` for the paired dashboard/proxy environment.
 
 The cleanup workflow is copy-only. The UI may prepare commands for human review, but it does not execute destructive cleanup actions.
 

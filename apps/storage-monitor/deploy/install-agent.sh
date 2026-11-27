@@ -62,8 +62,9 @@ require_source() {
   [[ -e "$path" ]] || { echo "ERROR: missing required source: $path" >&2; exit 1; }
 }
 
-require_source "$REPO_ROOT/agent/scan_runner.py"
-require_source "$REPO_ROOT/agent/mount_policy.py"
+require_source "$REPO_ROOT/agent/storage_viz_agent/runner.py"
+require_source "$REPO_ROOT/agent/storage_viz_agent/mount_policy.py"
+require_source "$REPO_ROOT/storage_fstypes.py"
 require_source "$REPO_ROOT/scanner/hstscan.c"
 require_source "$SCRIPT_DIR/systemd/storage-viz-scan.service.in"
 require_source "$SCRIPT_DIR/systemd/storage-viz-scan.timer"
@@ -122,7 +123,7 @@ if [[ -e "$CONFIG_FILE" || -L "$CONFIG_FILE" ]]; then
 import sys
 
 sys.path.insert(0, sys.argv[1])
-from agent.scan_runner import load_config
+from agent.storage_viz_agent.config import load_config
 
 try:
     print(load_config(sys.argv[2]).server_id)
@@ -154,7 +155,9 @@ if [[ "$DRY_RUN" != "1" ]]; then
 fi
 
 mkdir -p "$OPT_DIR/agent" "$OPT_DIR/scanner" "$CONFIG_DIR" "$DATA_DIR" "$SNAPSHOT_DIR" "$RUN_DIR" "$UNIT_DIR" "$SUDOERS_DIR"
+install -m 0644 "$REPO_ROOT/storage_fstypes.py" "$OPT_DIR/storage_fstypes.py"
 copy_tree "$REPO_ROOT/agent" "$OPT_DIR/agent" 0644
+copy_tree "$REPO_ROOT/agent/storage_viz_agent" "$OPT_DIR/agent/storage_viz_agent" 0644
 install -m 0644 "$REPO_ROOT/scanner/hstscan.c" "$OPT_DIR/scanner/hstscan.c"
 if [[ "$DRY_RUN" == "1" ]]; then
   atomic_write "$SCANNER_BIN" 0755 <<'STUB'

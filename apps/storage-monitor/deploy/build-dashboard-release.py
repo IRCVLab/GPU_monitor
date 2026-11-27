@@ -17,11 +17,11 @@ from pathlib import Path
 
 if (Path(__file__).resolve().parent / "server" / "storage_dashboard_release.py").is_file():
     from server.storage_dashboard_release import (
-        APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION,
+        AGENT_BUNDLE_FILES, APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION,
     )
 else:
     from storage_dashboard_release import (
-        APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION,
+        AGENT_BUNDLE_FILES, APPLICATION_NAME, ARTIFACT_FORMAT_VERSION, BUILD_RELEASE_FILES, SCHEMA_VERSION,
     )
 
 
@@ -129,7 +129,18 @@ def _archive_bytes(source_sha: str, archive_name: str, files: dict[str, bytes], 
     return buffer.getvalue()
 
 
-def build(repo: Path, source_sha: str, output_dir: Path) -> tuple[Path, Path]:
+def _load_agent_bundle(agent_dir: Path) -> dict[str, bytes]:
+    """The verified agent bundle files the puller placed in agent_dir."""
+    files = {}
+    for rel_path in sorted(AGENT_BUNDLE_FILES):
+        path = agent_dir / PurePosixPath(rel_path).name
+        if path.is_symlink() or not path.is_file():
+            raise ReleaseError(f"agent bundle file is missing: {path}")
+        files[rel_path] = path.read_bytes()
+    return files
+
+
+def build(repo: Path, source_sha: str, output_dir: Path, agent_dir: Path | None = None) -> tuple[Path, Path]:
     _ensure_clean_head(repo, source_sha)
     files: dict[str, bytes] = {}
     modes: dict[str, int] = {}
@@ -137,6 +148,10 @@ def build(repo: Path, source_sha: str, output_dir: Path) -> tuple[Path, Path]:
         data, mode = _load_tracked_file(repo, source_sha, rel_path)
         files[rel_path] = data
         modes[rel_path] = mode
+    if agent_dir is not None:
+        for rel_path, data in _load_agent_bundle(agent_dir).items():
+            files[rel_path] = data
+            modes[rel_path] = 0o644
 
     output_dir.mkdir(parents=True, exist_ok=True)
     archive_name = f"storage-monitor-dashboard-{source_sha}.tar.gz"
@@ -163,6 +178,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True, help="exact 40-character git commit SHA to package")
     parser.add_argument("--output-dir", required=True, type=Path, help="directory for release artifact outputs")
+    parser.add_argument("--agent-bundle-dir", type=Path, help="verified signed agent bundle to include under agent/")
     args = parser.parse_args(argv)
     if not SHA_RE.fullmatch(args.sha):
         parser.error("--sha must be exactly 40 hexadecimal characters")
@@ -173,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     repo = Path.cwd()
     try:
-        archive_path, metadata_path = build(repo, args.sha, args.output_dir)
+        archive_path, metadata_path = build(repo, args.sha, args.output_dir, args.agent_bundle_dir)
     except (ReleaseError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

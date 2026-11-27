@@ -26,7 +26,7 @@ The Storage release path is independent from the GPU application. Storage uses i
 
 Expected Live convergence is roughly CI/build time plus one five-minute puller cadence. A timer run that finds `current-live-sha` already equal to the current `main` SHA exits `already-current` after only reading the GitHub main ref; it does not build, restart, or touch dashboard/proxy services. If a built artifact digest already matches the active release digest, the puller records the new SHA and clears failed-release state without activation.
 
-A failed checkout, build, authorization, activation, or health check writes `/var/lib/storage-viz-dashboard/puller/failed-release.json` and backs off retries from 15 minutes up to 6 hours. A newer `main` SHA clears that failed-SHA backoff automatically. To intentionally retry the same failed SHA after fixing local server conditions, remove only `failed-release.json` and start one puller run. Do not remove `current-live-sha`.
+A failed checkout, build, authorization, activation, or health check writes `/var/lib/storage-viz-dashboard/puller/failed-release.json` and backs off retries from 15 minutes up to 6 hours. A newer `main` SHA clears that failed-SHA backoff automatically. To intentionally retry the same failed SHA after fixing local server conditions, remove only `failed-release.json` and start one puller run. Rerunning the installer removes `failed-release.json` too, because new tools can make the same SHA succeed. Do not remove `current-live-sha`, except to roll forward after a manual rollback.
 
 Automatic central deployment never changes the GPU application and never changes remote Storage scan agents, inventories, SSH keys, scan data, or `storage-viz-scan.service`/`storage-viz-scan.timer` on storage servers. The timer and manual scan service installed on each remote agent control remote collection.
 
@@ -54,6 +54,152 @@ sudo /usr/local/libexec/storage-dashboard-activate.py \
   --restart-argv /usr/bin/systemctl restart storage-viz-dashboard.service storage-viz-proxy.service
 sudo /usr/local/libexec/storage-dashboard-health-check.py
 ```
+
+The health checker probes the routes of the release that `/opt/storage-viz-dashboard` links to, so it also checks a rolled-back release from before the redesign.
+
+## Redesign deploy (one-time)
+
+This procedure moves the central host from the pre-redesign release (`06cdd5f`) to the redesign release that PR #16 merges into `main`. The owner runs every command. Commands that start with `sudo` need root on the central host. `deploy/e2e/run-dashboard-upgrade-rehearsal.sh` rehearses the dashboard part of this procedure, from the tools installed today to the new release, in docker containers.
+
+The order matters for one reason. A release does not update the deploy tools in `/usr/local/libexec`. Only the installer does. The installed tools come from commit `c09a7c2`, and their validator rejects the new tree. When the puller of today sees the merge, it fails with `invalid Storage release archive: manifest missing required runtime files: collector/scan_telemetry.py, ...` and backs off that SHA. The live release keeps serving. Rerunning the installer clears that backoff, so even this order recovers, but stopping the timer first avoids the failed attempt.
+
+### Before the deploy
+
+The dashboard can go out without the agent update channel. Steps 1 and 3 to 6 below set up that channel. Each one is optional for the first deploy. Without them, the puller logs `no agent release key is pinned in /etc/storage-viz/agent-allowed-signers; releasing the dashboard without an agent bundle` and deploys the dashboard alone. The hosts keep today's agent, and the dashboard reads them over SFTP (shim S2).
+
+1. Optional: generate the agent release signing key on an offline machine.
+
+	```bash
+	ssh-keygen -t ed25519 -N '' -C storage-viz-release-2026 -f storage-viz-release
+	```
+
+2. Name the person who holds the offline backup of that key (owner decision, target design §8 question 6). Make this decision before step 1.
+3. Optional: commit the public half to `apps/storage-monitor/agent/bootstrap/allowed_signers` as one line, and merge that commit before or with PR #16.
+
+	```text
+	storage-viz-release namespaces="storage-viz-agent" ssh-ed25519 AAAA... storage-viz-release-2026
+	```
+
+4. Optional: in the GitHub repository settings, create the environment `agent-signing`. Restrict its deployment branches to `main`. Add the secret `AGENT_SIGNING_KEY` with the content of the private key file `storage-viz-release`.
+5. Optional: provision a read-only GitHub token on the central host. Use a fine-grained token for `IRCVLab/GPU_monitor` with only **Actions: Read**.
+
+	```bash
+	sudo sh -c 'umask 077; cat > /etc/storage-viz/github-token'
+	```
+
+	Paste the token, then press Ctrl-D. The installer creates this file empty when it is missing and never overwrites it.
+6. Optional: set `"canary": true` on exactly one server in `/etc/storage-viz/servers.json` (`sudo` to edit). The dashboard reads the inventory when it starts, and the activation in step 5 of the deploy restarts it. Without the flag, the canary is the server with the lowest `order`.
+
+To add the agent channel after the deploy, do steps 1 to 6 and then repeat deploy steps 1 to 6 below with the commit that changes `allowed_signers`. The installer pins the new key on the central host, and the puller then builds that SHA with its signed agent bundle.
+
+### Deploy the dashboard
+
+Check the starting state. Expect three `active` lines, the live SHA `06cdd5f773fcee96bde41997a4ab83ea684ca59c`, and `healthy`.
+
+```bash
+systemctl is-active storage-monitor-release-puller.timer storage-viz-dashboard.service storage-viz-proxy.service
+sudo cat /var/lib/storage-viz-dashboard/puller/current-live-sha
+sudo /usr/local/libexec/storage-dashboard-health-check.py && echo healthy
+```
+
+1. Stop the puller timer.
+
+	```bash
+	sudo systemctl stop storage-monitor-release-puller.timer
+	systemctl is-active storage-monitor-release-puller.timer storage-monitor-release-puller.service
+	```
+
+	Expect `inactive` twice. If the service is still `activating`, wait until it is `inactive`.
+2. Merge PR #16 on GitHub. Wait until the `ci` workflow of the merge commit on `main` succeeds. The puller releases only a `main` SHA with a successful `ci.yml` push run and a successful `ci/required` check.
+3. Rerun the installer from a checkout of the new `main`.
+
+	```bash
+	git -C ~/GPU_monitor fetch origin
+	git -C ~/GPU_monitor checkout --detach origin/main
+	cd ~/GPU_monitor/apps/storage-monitor
+	sudo ./deploy/server/install-dashboard-deployer.sh
+	for f in /usr/local/libexec/storage*.py; do sha256sum -c "$f.sha256"; done
+	```
+
+	Expect an `install file:` line for each of the seven tools, the last line `dashboard deployer installed; release puller timer intentionally not enabled until an approved release passes health`, and `OK` for each tool. Do not run `install.sh` from the new checkout. It copies the app into `/opt/storage-viz-dashboard`, which is now a link to an immutable release.
+4. Confirm that no backoff is pending. The installer removes `failed-release.json` itself and prints `reset puller backoff: removed ...` when one existed.
+
+	```bash
+	sudo test ! -e /var/lib/storage-viz-dashboard/puller/failed-release.json && echo no backoff
+	```
+
+5. Start the puller once. The command returns when the release is built, validated, activated, and checked, which takes a few minutes.
+
+	```bash
+	sudo systemctl start storage-monitor-release-puller.service
+	sudo journalctl -u storage-monitor-release-puller.service -n 30 -o cat | grep -v pam_unix
+	sudo python3 -m json.tool /var/lib/storage-viz-dashboard/activation-state.json
+	sudo /usr/local/libexec/storage-dashboard-health-check.py && echo healthy
+	```
+
+	Expect the journal to end with `activated`. The activation state shows `"status": "active"`, the merge SHA as `source_sha`, and `previous` ending in `06cdd5f773fcee96bde41997a4ab83ea684ca59c/storage-monitor`.
+6. Start the timer again, and confirm it is enabled and active.
+
+	```bash
+	sudo systemctl start storage-monitor-release-puller.timer
+	systemctl is-enabled storage-monitor-release-puller.timer
+	systemctl is-active storage-monitor-release-puller.timer
+	```
+
+Then check what the new release did with the old data.
+
+- The old store was imported once and nothing was downloaded again (C8). Each server's new record holds the snapshot SHA of its old store:
+
+	```bash
+	sudo python3 - <<'PY'
+	import json, pathlib
+	state = pathlib.Path("/var/lib/storage-viz-dashboard/state")
+	for record in sorted(state.glob("servers/*/record.json")):
+	    sid = record.parent.name
+	    old = json.loads((state / sid / "current.json").read_text())["snapshot"] if (state / sid / "current.json").exists() else None
+	    new = json.loads(record.read_text())["accepted"].get("legacy")
+	    print(sid, "imported" if old and old[len("snapshot-v2-"):-len(".json")] == new else f"not imported (old {old}, new {new})")
+	PY
+	```
+
+- Open the dashboard at its public URL. Every inventory server is listed as fresh, with the capacity of each scanned mount.
+- Start a rescan on one server. Its job ends `succeeded`. A server whose last rescan under the old release is recent stays in cooldown until that cooldown ends.
+
+### Bootstrap the canary host, then the fleet
+
+This part needs the agent channel. The dashboard rehearsal does not cover it. `deploy/e2e/run-agent-channel-e2e.sh` covers the host side. Confirm that the active release carries the signed bundle:
+
+```bash
+ls /opt/storage-viz-dashboard/agent/
+```
+
+Expect `storage-viz-agent.json`, `storage-viz-agent.tar.gz`, and `storage-viz-agent.tar.gz.sig`. Then bootstrap the canary from the central host, as an admin account that has `sudo` on that host. The script uses the bundle under `/opt/storage-viz-dashboard/agent` by default.
+
+```bash
+cd ~/GPU_monitor/apps/storage-monitor
+./deploy/bootstrap-agent.sh --central-speaks-gate --admin <admin> <canary-host>
+```
+
+Expect the script to print an `observe` reply with `"schema": "storage-viz.observe/1"`. Within a few minutes the dashboard switches that server to the gate transport by itself. The canary's agent shows the bundle's release SHA, the update goes through probation, and the rollout moves from `canary` to `fleet` once probation passes. If probation fails, the dashboard rolls the canary back and halts the rollout.
+
+Bootstrap the other hosts one at a time with the same command. Check that each host is on the gate and healthy before the next one.
+
+### Roll back at each stage
+
+| Stage | What to do |
+| --- | --- |
+| Timer stopped, nothing merged | `sudo systemctl start storage-monitor-release-puller.timer`. |
+| Merged, installer not rerun | Nothing on the central host has changed. Keep the timer stopped until you continue. If the timer runs, the puller of today fails on the new tree, backs off, and leaves the live release alone. |
+| Installer rerun, puller not started | The new tools run the live release. To stay on it, keep the timer stopped, because the new puller deploys the merge on its next run. |
+| Step 5 fails | The activator puts `06cdd5f` back and restarts both services itself, and the puller writes `failed-release.json`. Read the error with `sudo journalctl -u storage-monitor-release-puller.service -n 50 -o cat`. After a fix, run `sudo rm /var/lib/storage-viz-dashboard/puller/failed-release.json` or rerun the installer, then repeat step 5. |
+| New release active | Run the manual rollback in [Storage Live automatic deployment](#storage-live-automatic-deployment). `06cdd5f` reads its old store, which the new release never writes (R1), and the health checker passes against it. The next puller runs answer `already-current` and keep the rollback until `main` advances. Keep the timer stopped if `main` may move. |
+| Roll forward after a rollback | `sudo rm /var/lib/storage-viz-dashboard/puller/current-live-sha`, then `sudo systemctl start storage-monitor-release-puller.service`. The journal ends with `activated`. |
+| Hosts bootstrapped | A bootstrapped host answers only the gate, which `06cdd5f` cannot read. Before a dashboard rollback to `06cdd5f`, revert each bootstrapped host with `./deploy/bootstrap-agent.sh --revert --admin <admin> <host>`. Between redesign releases, a dashboard rollback moves the desired agent back by itself. |
+
+### After the deploy
+
+- Cleanup releases remove the shims as the fleet moves (target design §6.2). S2 goes once every host reports the gate transport. S3, S4, the central callers of S7, and S8 go once every host runs the v2 agent. S9 and the S7 verbs go in M9.
+- One week after the deploy, M9 deletes the old store `STATE_DIR/<sid>/` and `scan-duration-history/` with a one-shot script that the owner runs. It is the only data deletion in the plan and it cannot be undone. After it, a rollback to `06cdd5f` no longer has its old data.
 
 ## One-time bootstrap cutover
 
@@ -276,13 +422,13 @@ Keep `STORAGE_VIZ_BIND=127.0.0.1`. This mode rejects sample data, non-loopback b
 Run the deterministic sample dashboard from the repository root when you need a browser demo without production inventory:
 
 ```bash
-STORAGE_VIZ_DEV_SAMPLE_DIR="$(pwd)/data" \
+cd apps/storage-monitor
 STORAGE_VIZ_BIND=127.0.0.1 \
 STORAGE_VIZ_PORT=8088 \
-python3 viewer/serve.py
+python3 -m api.server --fixtures tests/fixtures/fleet
 ```
 
-Use `http://127.0.0.1:8088`. `STORAGE_VIZ_DEV_SAMPLE_DIR` must point at the repository `data` directory. In this mode `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and `data/hosts.json` keeps the four generated sample servers in this exact order: `hinton`, `atlas`, `orion`, `zeus`. This mode is read-only sample data for local development. Production inventory mode is separate, reports `data_mode: "inventory"`, and does not imply production storage is sample data.
+Use `http://127.0.0.1:8088`. In this mode `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and `tests/fixtures/fleet/hosts.json` keeps the four generated sample servers in this exact order: `hinton`, `atlas`, `orion`, `zeus`. This mode is read-only sample data for local development. Production inventory mode is separate, reports `data_mode: "inventory"`, and does not imply production storage is sample data.
 
 ## Server inventory and SSH material
 

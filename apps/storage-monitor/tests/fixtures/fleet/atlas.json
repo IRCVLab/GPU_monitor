@@ -1,0 +1,87 @@
+{
+  "schema": "storage-viz.manifest/2",
+  "server_id": "atlas",
+  "hostname": "atlas",
+  "seq": 1,
+  "written_unix": 1719200145,
+  "agent": {
+    "release_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_seq": 1,
+    "config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "volumes": [
+    {
+      "volume_id": "v-ef5413d956c67047",
+      "identity": "uuid",
+      "diagnostic": null,
+      "mountpoint": "/srv/atlas/vol1",
+      "fstype": "xfs",
+      "media": "ssd",
+      "media_confidence": "resolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/srv/atlas/vol1",
+          "binding": "b-ff263850a1079c93",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 5281950780620,
+        "used": 528195078062,
+        "avail": 4753755702558,
+        "observed_unix": 1719200142,
+        "status": "ok"
+      },
+      "capture": {
+        "sha256": "9e07561d319b02777c16aba67065c478f310260937ba668875efa076d5b7335d",
+        "bytes": 729,
+        "scan_started_unix": 1719200100,
+        "scan_finished_unix": 1719200142,
+        "outcome": "complete"
+      },
+      "last_attempt": null
+    },
+    {
+      "volume_id": "v-67f454d0f2912e4f",
+      "identity": "uuid",
+      "diagnostic": null,
+      "mountpoint": "/srv/atlas/vol2",
+      "fstype": "xfs",
+      "media": "ssd",
+      "media_confidence": "resolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/srv/atlas/vol2",
+          "binding": "b-a281e8cd69d18911",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 879735008580,
+        "used": 721382707036,
+        "avail": 158352301544,
+        "observed_unix": 1719200142,
+        "status": "ok"
+      },
+      "capture": {
+        "sha256": "f0a3063ba6436ba796ea7704cc8f376916114f089deee3f6215089ffc5dc24e1",
+        "bytes": 716,
+        "scan_started_unix": 1719200100,
+        "scan_finished_unix": 1719200142,
+        "outcome": "complete"
+      },
+      "last_attempt": null
+    }
+  ],
+  "mount_table": {
+    "status": "ok",
+    "observed_unix": 1719200142,
+    "within_roots": []
+  },
+  "last_run": null,
+  "requests": []
+}

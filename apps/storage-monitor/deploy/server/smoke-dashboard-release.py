@@ -14,10 +14,11 @@ import subprocess
 import sys
 import tempfile
 from threading import Thread
+import selectors
 from urllib.parse import quote
 from unittest.mock import patch
 
-from storage_dashboard_release import VIEWER_PAGES, viewer_asset_paths
+from storage_dashboard_release import REQUIRED_RELEASE_FILES, VIEWER_PAGES, viewer_asset_paths
 
 
 @contextmanager
@@ -30,6 +31,27 @@ def serve(runtime):
         finally:
             server.shutdown()
             thread.join()
+
+
+@contextmanager
+def packaged_dashboard(release):
+    with subprocess.Popen([sys.executable, release / "viewer/serve.py", "0"], cwd=release,
+                          stdout=subprocess.PIPE, text=True) as proc:
+        try:
+            with selectors.DefaultSelector() as ready:
+                ready.register(proc.stdout, selectors.EVENT_READ)
+                if not ready.select(10):
+                    raise RuntimeError("packaged dashboard failed to start within 10 seconds")
+                line = proc.stdout.readline()
+            if not line.startswith("storage-viz serving "):
+                raise RuntimeError(f"packaged dashboard did not start: {line}")
+            yield int(line.rsplit(":", 1)[1])
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def fetch(port: int, path: str) -> bytes:
@@ -62,12 +84,11 @@ def smoke(root: Path, release: Path) -> None:
     }
     sys.dont_write_bytecode = True
     with patch.dict(os.environ, environment, clear=True):
-        dashboard = runpy.run_path(str(release / "viewer/serve.py"))
-        with serve(dashboard) as dashboard_port:
+        with packaged_dashboard(release) as dashboard_port:
             os.environ["STORAGE_VIZ_PROXY_UPSTREAM_PORT"] = str(dashboard_port)
             proxy = runpy.run_path(str(release / "deploy/direct_proxy.py"))
             with serve(proxy) as proxy_port:
-                if json.loads(fetch(proxy_port, "/api/servers")) != {"data_mode": "inventory", "servers": []}:
+                if json.loads(fetch(proxy_port, "/api/v2/fleet")).get("servers") != []:
                     raise RuntimeError("packaged dashboard returned unexpected inventory")
                 assets = set()
                 for page in VIEWER_PAGES:
@@ -76,7 +97,8 @@ def smoke(root: Path, release: Path) -> None:
                     if html != (release / page).read_bytes():
                         raise RuntimeError(f"packaged dashboard returned unexpected bytes for {page}")
                     assets.update(viewer_asset_paths(html))
-                for asset in sorted(assets | {"echarts.min.js", "users-chart.js"}):
+                assets.update(path.removeprefix("viewer/") for path in REQUIRED_RELEASE_FILES if path.startswith("viewer/") and path.endswith(".js"))
+                for asset in sorted(assets):
                     if fetch(proxy_port, "/" + quote(asset)) != (release / "viewer" / asset).read_bytes():
                         raise RuntimeError(f"packaged dashboard returned unexpected bytes for {asset}")
 

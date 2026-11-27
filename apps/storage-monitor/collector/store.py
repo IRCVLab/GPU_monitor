@@ -1,559 +1,359 @@
-"""Central per-server snapshot/state persistence with atomic current manifest."""
+"""Per-server central store: ``STATE_DIR/servers/<sid>/record.json`` plus ``captures/``.
+
+Only the server's own actor calls ``commit``, so the store takes no lock.
+A capture is written before the record that names it, and both are atomic,
+so a crash leaves either the old record or the new one with its capture.
+"""
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass
-import fcntl
+from dataclasses import asdict, dataclass, field
 import json
 import logging
 import os
 import pathlib
 import re
 import tempfile
-from typing import Any, Dict, Iterator, Mapping, Optional, TextIO
-from uuid import uuid4
+import types
+import typing
+from typing import Any, Collection, Mapping, Optional, Tuple
 
-from collector import snapshot
+from collector import contract, jobs, update
+from collector.errors import CaptureGone, StoreUnavailable
+from collector.health import LEGACY_VOLUME, LINK_STATES, Data, LegacyPublication, Link
+from collector.ids import SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE
+from collector.jobs import Job
+from collector.update import Update
 
 _LOG = logging.getLogger(__name__)
 
-SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-SNAPSHOT_BASENAME_RE = re.compile(r"^snapshot-[A-Za-z0-9_.-]+\.json$")
-STATE_BASENAME_RE = re.compile(r"^state-[A-Za-z0-9_.-]+\.json$")
-# The older release's names are excluded from automatic cleanup.
-_MANAGED_GENERATION = r"(?:state-v2-[a-f0-9]{32}|snapshot-v2-[a-f0-9]{64})"
-MANAGED_GENERATION_RE = re.compile(rf"{_MANAGED_GENERATION}\.json")
-STAGED_WRITE_RE = re.compile(rf"\.(?:{_MANAGED_GENERATION}|current|previous)\.json\.[a-z0-9_]{{8}}\.tmp")
-Manifest = dict[str, Optional[str]]
-EMPTY_MANIFEST: Manifest = {"snapshot": None, "state": None}
-STATE_DEFAULTS = {
-    "snapshot_availability": "absent",
-    "freshness": "unknown",
-    "latest_pull_status": "not_installed",
-    "latest_scan_result": "failed",
-    "configuration_sync": "unknown",
-    "active_job": None,
-    "last_error_code": None,
-    "last_error_message": None,
-    "last_error_unix": None,
-}
-ENUMS = {
-    "snapshot_availability": {"available", "absent"},
-    "freshness": {"fresh", "stale", "unknown"},
-    "latest_pull_status": {"succeeded", "unreachable", "invalid_snapshot", "not_installed"},
-    "latest_scan_result": {"complete", "partial", "failed"},
-    "configuration_sync": {"in_sync", "drifted", "unknown"},
-}
-ERROR_CODE_RE = re.compile(r"^[A-Z0-9_:-]{1,128}$")
-SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-MAX_TS = 4_102_444_800
-
-
-class StoreLockedError(BlockingIOError):
-    pass
-
-
-class _IncompleteGeneration(ValueError):
-    pass
-
-
-class AtomicWriteDurabilityUncertain(Exception):
-    pass
+RECORD_SCHEMA = "storage-viz.server-record/3"
+RECORD_KEYS = frozenset({"schema", "server_id", "manifest", "manifest_sha256", "accepted", "rejected", "link", "job",
+                         "last_job", "update", "durations"})
+RECORD_V2_SCHEMA = "storage-viz.server-record/2"
+"""M2b's record. Read and upgraded, never written (design §2.3)."""
+DURATION_PLANS = ("full", "ssd")
+DURATION_LIMIT = 5
 
 
 @dataclass(frozen=True)
-class ApplyResult:
-    accepted: bool
-    error_code: Optional[str] = None
-    message: Optional[str] = None
+class Record:
+    link: Link = Link()
+    data: Data = Data()
+    job: Optional[Job] = None
+    last_job: Optional[Job] = None
+    update: Update = Update()
+    durations: Mapping[str, Any] = field(default_factory=dict)
+    """Recent completed scan durations per plan: {"full": [[finished_unix, seconds], ...]}."""
 
 
-SnapshotRevision = tuple[str, int, int, int, int, int]
+class ServerStore:
+    def __init__(self, state_root: str | os.PathLike, server_id: str) -> None:
+        if not isinstance(server_id, str) or not SERVER_ID_RE.fullmatch(server_id) or server_id in {".", ".."}:
+            raise ValueError("server id is unsafe")
+        self.state_root = pathlib.Path(state_root)
+        self.server_id = server_id
+        self.directory = self.state_root / "servers" / server_id
+        self.captures = self.directory / "captures"
+        self.record_path = self.directory / "record.json"
 
-
-@dataclass(frozen=True)
-class OpenSnapshot:
-    revision: SnapshotRevision
-    stream: TextIO
-
-    def read(self) -> Dict[str, Any]:
-        return _decode_json(self.stream, "snapshot")
-
-
-class CentralStore:
-    def __init__(self, state_root: str | pathlib.Path):
-        self.root = pathlib.Path(state_root)
-        if not self.root.is_absolute():
-            raise ValueError("state root must be absolute")
-        _ensure_dir(self.root, 0o700)
-        if self.root.is_symlink():
-            raise ValueError("state root must not be a symlink")
-        _fsync_dir(self.root.parent)
-
-    def apply_download(self, server_id: str, status: Mapping[str, Any], downloaded: bytes, desired: snapshot.DesiredServer) -> ApplyResult:
-        sid = self._server_id(server_id)
+    def load(self) -> Optional[Record]:
+        """The committed record, or None when the server has none yet."""
         try:
-            valid = snapshot.validate_download(status, downloaded, desired)
-            if valid.server_id != sid:
-                raise ValueError("validated server_id mismatch")
-        except Exception as exc:
-            try:
-                with self._locked(sid):
-                    self._merge_state_best_effort(sid, {
-                        "snapshot_availability": "available" if self._load_committed(sid)[0].get("snapshot") else "absent",
-                        "latest_pull_status": "invalid_snapshot",
-                        "latest_scan_result": "failed",
-                        "configuration_sync": "unknown",
-                        **_safe_error("INVALID", str(exc)),
-                    })
-            except BlockingIOError:
-                raise
-            except Exception as store_error:
-                return ApplyResult(False, "WRITE_ERROR", _safe_message(str(store_error)))
-            return ApplyResult(False, "INVALID", _safe_message(str(exc)))
-        return self.commit_snapshot(valid)
-
-    def commit_snapshot(self, valid: snapshot.ValidatedSnapshot, *, freshness: str | None = None) -> ApplyResult:
-        sid = self._server_id(valid.server_id)
-        state_patch = {
-            "snapshot_availability": "available",
-            "latest_pull_status": "succeeded",
-            "latest_scan_result": _scan_result(valid.payload),
-            "configuration_sync": valid.config_sync,
-            "last_error_code": None,
-            "last_error_message": None,
-            "last_error_unix": None,
-        }
-        if freshness is not None:
-            state_patch["freshness"] = freshness
-        try:
-            with self._locked(sid):
-                _, durability_uncertain = self._commit_pair(
-                    sid, state_updates=state_patch,
-                    snapshot_name=f"snapshot-v2-{valid.digest}.json",
-                    snapshot_payload=valid.payload,
-                )
-            if durability_uncertain:
-                return ApplyResult(True, "DURABILITY_UNCERTAIN", "current manifest visible but directory fsync failed")
-            return ApplyResult(True)
-        except BlockingIOError:
+            _reject_symlinks(self.state_root / "servers", self.directory, self.record_path)
+            if not self.record_path.exists():
+                return None
+            raw = json.loads(self.record_path.read_bytes())
+            return _parse_record(raw, self.server_id)
+        except StoreUnavailable:
             raise
-        except Exception as exc:
-            return ApplyResult(False, "WRITE_ERROR", _safe_message(str(exc)))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise StoreUnavailable(f"record unreadable: {type(exc).__name__}") from exc
 
-    def has_snapshot_digest(self, server_id: str, digest: str) -> bool:
-        sid = self._server_id(server_id)
-        directory = self._server_dir(sid)
-        if not directory.exists():
-            return False
-        with _generation_lock(directory, fcntl.LOCK_SH):
-            manifest, _, _ = self._load_committed(sid)
-            return manifest["snapshot"] == f"snapshot-v2-{digest}.json"
-
-    def update_state(self, server_id: str, **updates: Any) -> Dict[str, Any]:
-        sid = self._server_id(server_id)
-        with self._locked(sid):
-            state, _ = self._commit_pair(sid, state_updates=updates)
-            return state
-
-    def load_snapshot(self, server_id: str) -> Optional[Dict[str, Any]]:
-        with self.open_snapshot(server_id) as selected:
-            return selected.read() if selected is not None else None
-
-    @contextmanager
-    def open_snapshot(self, server_id: str) -> Iterator[OpenSnapshot | None]:
-        sid = self._server_id(server_id)
-        directory = self._server_dir(sid)
-        if (directory / "snapshot.json").is_symlink():
-            raise ValueError("snapshot file must not be a symlink")
-        stream = None
-        if directory.exists():
-            with _generation_lock(directory, fcntl.LOCK_SH):
-                manifest, _, _ = self._load_committed(sid)
-                name = manifest["snapshot"]
-                if name is not None:
-                    path = directory / name
-                    _reject_symlink(path, "snapshot")
-                    stream = path.open(encoding="utf-8")
-        if stream is None:
-            yield None
-            return
-        # The open descriptor pins the selected snapshot while its name may be pruned.
-        with stream:
-            info = os.fstat(stream.fileno())
-            revision = (name, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-            yield OpenSnapshot(revision, stream)
-
-    def load_state(self, server_id: str) -> Dict[str, Any]:
-        sid = self._server_id(server_id)
-        d = self._server_dir(sid)
-        legacy = d / "state.json"
-        if legacy.is_symlink():
-            raise ValueError("state file must not be a symlink")
-        if not d.exists():
-            return dict(STATE_DEFAULTS)
-        with _generation_lock(d, fcntl.LOCK_SH):
-            _, state, _ = self._load_committed(sid)
-            return state
-
-    def _server_id(self, server_id: str) -> str:
-        if not isinstance(server_id, str) or not SERVER_ID_RE.match(server_id) or server_id in {".", ".."} or len(server_id) > 128:
-            raise ValueError("server_id must be safe")
-        return server_id
-
-    def _server_dir(self, sid: str) -> pathlib.Path:
-        path = self.root / sid
-        if path.exists() and path.is_symlink():
-            raise ValueError("server state directory must not be a symlink")
-        return path
-
-    def _ensure_server_dir(self, sid: str) -> pathlib.Path:
-        d = self._server_dir(sid)
-        _ensure_dir(d, 0o700)
-        _fsync_dir(self.root)
-        return d
-
-    @contextmanager
-    def _locked(self, sid: str) -> Iterator[None]:
-        d = self._ensure_server_dir(sid)
-        lock_path = d / "store.lock"
-        flags = os.O_CREAT | os.O_RDWR
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        fd = os.open(lock_path, flags, 0o600)
+    def read_capture(self, volume_id: str, sha: str) -> bytes:
+        path = self._capture_path(volume_id, sha)
         try:
-            os.fchmod(fd, 0o600)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise StoreLockedError("store locked") from exc
-            yield
-        finally:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            finally:
-                os.close(fd)
+            _reject_symlinks(path)
+            return path.read_bytes()
+        except OSError as exc:
+            raise StoreUnavailable("capture unreadable") from exc
 
-    def _load_manifest(self, sid: str, filename: str) -> Optional[Manifest]:
-        d = self._server_dir(sid)
+    def open_capture(self, volume_id: str, sha: str):
+        path = self._capture_path(volume_id, sha)
         try:
-            manifest = _read_json_file(d / filename, "manifest")
-        except FileNotFoundError:
-            return None
-        if not isinstance(manifest, dict) or set(manifest) != {"snapshot", "state"}:
-            raise _IncompleteGeneration("STORE_INCOHERENT: invalid manifest structure")
-        for label, validate_name in (("snapshot", _safe_snapshot_basename), ("state", _safe_state_basename)):
-            name = manifest[label]
-            if name is not None:
-                path = d / validate_name(name, f"manifest {label}")
-                _reject_symlink(path, label)
-                if not path.is_file():
-                    raise _IncompleteGeneration(f"STORE_INCOHERENT: missing {label} generation")
-        return manifest
+            _reject_symlinks(self.state_root / "servers", self.directory, self.captures, path)
+            return path.open("rb")
+        except FileNotFoundError as exc:
+            # Pruning follows the durable commit. An HTTP reader may still hold the previous view.
+            record = self.load()
+            if record and record.data.accepted.get(volume_id) != sha:
+                raise CaptureGone() from exc
+            raise StoreUnavailable("accepted capture is missing") from exc
+        except (OSError, ValueError) as exc:
+            raise StoreUnavailable("capture unreadable") from exc
 
-    def _load_committed(self, sid: str) -> tuple[Manifest, Dict[str, Any], bool]:
-        error = None
+    def commit(self, record: Record, capture: Optional[Tuple[str, str, bytes]] = None, *, prune: bool = True) -> None:
+        """Write the capture if any, then the record; with ``prune``, then delete captures the record does not name.
+        ``capture`` is (volume_id, sha256, bytes exactly as fetched)."""
         try:
-            manifest = self._load_manifest(sid, "current.json")
-            if manifest is not None:
-                return manifest, self._read_state(sid, manifest), False
-        except (_IncompleteGeneration, FileNotFoundError) as exc:
-            error = exc
+            for directory in (self.state_root / "servers", self.directory, self.captures):
+                directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                _reject_symlinks(directory)
+            if capture is not None:
+                _write_atomic(self._capture_path(capture[0], capture[1]), capture[2])
+            _write_atomic(self.record_path, _encode_record(record, self.server_id))
+            if prune:
+                self._prune(record)
+        except (OSError, ValueError) as exc:
+            raise StoreUnavailable(f"record not writable: {type(exc).__name__}") from exc
 
-        previous = self._load_manifest(sid, "previous.json")
-        if previous is not None:
-            return previous, self._read_state(sid, previous), True
-        if error is not None:
-            raise error
-        return EMPTY_MANIFEST, dict(STATE_DEFAULTS), False
+    def _capture_path(self, volume_id: str, sha: str) -> pathlib.Path:
+        if not isinstance(sha, str) or not SHA256_RE.fullmatch(sha):
+            raise ValueError("capture name is not a sha256")
+        # SHIM(M2b..M5c) S3: a v1 snapshot is plain JSON, so it keeps a .json name.
+        return self.captures / (f"{sha}.json" if volume_id == LEGACY_VOLUME else f"{sha}.json.gz")
 
-    def _read_state(self, sid: str, manifest: Manifest) -> Dict[str, Any]:
-        name = manifest["state"]
-        if name is None:
-            return dict(STATE_DEFAULTS)
-        return _validate_state(_read_json_file(self._server_dir(sid) / name, "state"), sid)
-
-    def _commit_pair(
-        self, sid: str, *, state_updates: Mapping[str, Any],
-        snapshot_name: Optional[str] = None, snapshot_payload: Optional[Mapping[str, Any]] = None,
-    ) -> tuple[Dict[str, Any], bool]:
-        d = self._server_dir(sid)
-        current, current_state, recovered = self._load_committed(sid)
-        new_state = _validate_state({**current_state, **state_updates}, sid)
-        new_snapshot_name = snapshot_name or current["snapshot"]
-        same_snapshot = new_snapshot_name == current["snapshot"]
-        same_state = new_state == current_state
-        if same_snapshot and same_state and not recovered:
-            # A retry may see a previous manifest rename whose directory sync failed.
-            if current != EMPTY_MANIFEST:
-                try:
-                    _fsync_dir(d)
-                except OSError:
-                    return current_state, True
-            return current_state, False
-
-        try:
-            previous = self._load_manifest(sid, "previous.json") or EMPTY_MANIFEST
-        except _IncompleteGeneration:
-            previous = EMPTY_MANIFEST
-        # Discard abandoned staging files before starting another attempt.
-        _prune_generations(d, current, previous)
-
-        if not same_snapshot and snapshot_payload is not None:
-            _write_json_atomic(d / _safe_snapshot_basename(new_snapshot_name, "new snapshot"), snapshot_payload)
-        state_name = current["state"]
-        if not same_snapshot or not same_state:
-            state_name = f"state-v2-{uuid4().hex}.json"
-            _write_json_atomic(d / state_name, new_state)
-        manifest = {"snapshot": new_snapshot_name, "state": state_name}
-
-        if current not in (EMPTY_MANIFEST, previous):
-            _write_json_atomic(d / "previous.json", current)
-        try:
-            _write_json_atomic(d / "current.json", manifest)
-        except AtomicWriteDurabilityUncertain:
-            if not self._visible_manifest_matches(sid, manifest):
-                raise
-            return new_state, True
-
-        _prune_generations(d, manifest, current)
-        return new_state, False
-
-    def _visible_manifest_matches(self, sid: str, intended: Manifest) -> bool:
-        try:
-            manifest = self._load_manifest(sid, "current.json")
-            if manifest is None or manifest != intended:
-                return False
-            d = self._server_dir(sid)
-            if manifest["snapshot"] is not None:
-                _read_json_file(d / manifest["snapshot"], "snapshot")
-            self._read_state(sid, manifest)
-            return True
-        except Exception:
-            return False
-
-    def _merge_state_best_effort(self, sid: str, updates: Mapping[str, Any]) -> None:
-        try:
-            self._commit_pair(sid, state_updates=updates)
-        except Exception:
-            pass
-
-
-@contextmanager
-def _generation_lock(directory: pathlib.Path, operation: int) -> Iterator[None]:
-    # Publication is atomic. Only cleanup must wait for readers of old names.
-    fd = os.open(directory / "generations.lock", os.O_CREAT | os.O_RDONLY | os.O_NOFOLLOW, 0o600)
-    try:
-        fcntl.flock(fd, operation)
-        yield
-    finally:
-        os.close(fd)
-
-
-def _prune_generations(directory: pathlib.Path, *manifests: Manifest) -> None:
-    keep = {name for manifest in manifests for name in manifest.values() if name is not None}
-    try:
-        obsolete = [
-            path for path in directory.iterdir()
-            if path.name not in keep and (MANAGED_GENERATION_RE.fullmatch(path.name) or STAGED_WRITE_RE.fullmatch(path.name))
-        ]
-        if not obsolete:
-            return
-        # A previous attempt may have published a visible but unsynced current pointer.
-        _fsync_dir(directory)
-        with _generation_lock(directory, fcntl.LOCK_EX):
-            for path in obsolete:
+    def _prune(self, record: Record) -> None:
+        keep = {self._capture_path(volume_id, sha).name for volume_id, sha in record.data.accepted.items()}
+        for path in self.captures.iterdir():
+            if path.name not in keep:
                 path.unlink(missing_ok=True)
-            _fsync_dir(directory)
-    except OSError as exc:
-        _LOG.warning("Unable to prune storage generations for server %s (errno=%s)", directory.name, exc.errno)
+
+    def import_legacy(self) -> Optional[Tuple[Record, Optional[Tuple[str, str, bytes]]]]:
+        """SHIM(M2b..M9) R1, S6: seed a new record from the old store, read only.
+
+        Takes the old store's current snapshot with its verified digest, its last job and
+        ``scan-duration-history/<sid>.json``, so the cutover downloads nothing again and the
+        ETA keeps its history. Runs only while no record exists, so a crash before the
+        record commit just repeats it.
+        """
+        durations = _old_durations(self.state_root / "scan-duration-history" / f"{self.server_id}.json")
+        old = self.state_root / self.server_id
+        try:
+            manifest = _old_manifest(old)
+        except (OSError, ValueError) as exc:
+            _LOG.warning("old store for %s not imported: %s", self.server_id, type(exc).__name__)
+            manifest = None
+        if manifest is None:
+            return (Record(durations=durations), None) if durations else None
+        capture = None
+        data = Data()
+        last_job = None
+        try:
+            if manifest.get("snapshot"):
+                capture, data = _old_capture(old / manifest["snapshot"], self.server_id)
+            if manifest.get("state"):
+                last_job = _old_job(json.loads((old / manifest["state"]).read_bytes()).get("active_job"))
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            _LOG.warning("old store for %s not imported: %s", self.server_id, type(exc).__name__)
+            return (Record(durations=durations), None) if durations else None
+        return Record(data=data, last_job=last_job, durations=durations), capture
 
 
-def _scan_result(payload: Mapping[str, Any]) -> str:
-    statuses = {root.get("status") for root in payload.get("selected_roots", []) if isinstance(root, Mapping) and root.get("status") != "skipped"}
-    if statuses <= {"complete"}:
-        return "complete"
-    return "partial"
+def _reject_symlinks(*paths: pathlib.Path) -> None:
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError("store path must not be a symlink")
 
 
-def _validate_state(state: Any, server_id: Optional[str] = None) -> Dict[str, Any]:
-    if not isinstance(state, dict):
-        raise ValueError("state must be an object")
-    result = dict(STATE_DEFAULTS)
-    result.update(state)
-    unknown = set(result) - set(STATE_DEFAULTS)
-    if unknown:
-        raise ValueError(f"unknown state key(s): {', '.join(sorted(unknown))}")
-    for key, allowed in ENUMS.items():
-        if result[key] not in allowed:
-            raise ValueError(f"{key} has invalid state value")
-    active = result["active_job"]
-    if active is not None:
-        _validate_active_job(active, server_id)
-    _validate_error_fields(result)
-    return result
-
-
-def _validate_error_fields(result: Mapping[str, Any]) -> None:
-    code = result["last_error_code"]
-    message = result["last_error_message"]
-    ts = result["last_error_unix"]
-    if code is None and message is None and ts is None:
-        return
-    if code is None or message is None:
-        raise ValueError("last_error fields must include code and message together")
-    if not isinstance(code, str) or not ERROR_CODE_RE.match(code):
-        raise ValueError("last_error_code is invalid")
-    if not isinstance(message, str) or len(message) > 200:
-        raise ValueError("last_error_message is invalid")
-    if "/" in message or "Traceback" in message or "PRIVATE KEY" in message:
-        raise ValueError("last_error_message contains sensitive detail")
-    if ts is not None and (not isinstance(ts, int) or isinstance(ts, bool) or ts < 0 or ts >= MAX_TS):
-        raise ValueError("last_error_unix is invalid")
-
-
-def _validate_active_job(active: Any, server_id: Optional[str]) -> None:
-    allowed_keys = {"id", "server_id", "kind", "state", "actor", "requested_unix", "started_unix", "finished_unix", "result_code"}
-    if not isinstance(active, dict) or set(active) - allowed_keys:
-        raise ValueError("active_job has unknown keys")
-    required = {"id", "server_id", "kind", "state", "actor", "requested_unix"}
-    missing = required - set(active)
-    if missing:
-        raise ValueError(f"active_job missing required field(s): {', '.join(sorted(missing))}")
-    for key in ("id", "server_id", "actor"):
-        if not isinstance(active.get(key), str) or not SAFE_ID_RE.match(active[key]):
-            raise ValueError(f"active_job {key} must be safe bounded identifier")
-    if server_id is not None and active["server_id"] != server_id:
-        raise ValueError("active_job server_id must match outer server_id")
-    if active.get("kind") != "rescan":
-        raise ValueError("active_job kind must be rescan")
-    state = active.get("state")
-    if state not in {"requested", "running", "succeeded", "failed"}:
-        raise ValueError("active_job state must be requested|running|succeeded|failed")
-    requested = _job_timestamp(active.get("requested_unix"), "requested_unix", required=True)
-    started = _job_timestamp(active.get("started_unix"), "started_unix", required=False)
-    finished = _job_timestamp(active.get("finished_unix"), "finished_unix", required=False)
-    result_code = active.get("result_code")
-    if result_code is not None and (not isinstance(result_code, str) or not ERROR_CODE_RE.match(result_code)):
-        raise ValueError("active_job result_code must be null or safe bounded code")
-    if started is not None and started < requested:
-        raise ValueError("active_job started_unix must be >= requested_unix")
-    if finished is not None:
-        if started is None:
-            raise ValueError("active_job finished_unix requires started_unix")
-        if finished < started:
-            raise ValueError("active_job finished_unix must be >= started_unix")
-    if state == "requested":
-        if started is not None or finished is not None:
-            raise ValueError("active_job requested state must not have started/finished timestamps")
-        if result_code is not None:
-            raise ValueError("active_job requested state must not have result_code")
-    elif state == "running":
-        if started is None:
-            raise ValueError("active_job running state requires started_unix")
-        if finished is not None:
-            raise ValueError("active_job running state must not have finished_unix")
-        if result_code is not None:
-            raise ValueError("active_job running state must not have result_code")
-    else:
-        if started is None or finished is None:
-            raise ValueError("active_job terminal state requires started_unix and finished_unix")
-        if result_code is None:
-            raise ValueError("active_job terminal state requires result_code")
-
-
-def _job_timestamp(value: Any, label: str, *, required: bool) -> Optional[int]:
-    if value is None:
-        if required:
-            raise ValueError(f"active_job {label} is required")
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value >= MAX_TS:
-        raise ValueError(f"active_job {label} timestamp must be bounded integer")
-    return value
-
-
-def _write_json_atomic(path: pathlib.Path, data: Mapping[str, Any]) -> None:
-    directory = path.parent
-    if directory.is_symlink() or path.is_symlink():
-        raise ValueError("final path must not be a symlink")
-    encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(directory))
+def _write_atomic(path: pathlib.Path, data: bytes) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(encoded)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp_name, 0o600)
-        os.replace(tmp_name, path)
-        os.chmod(path, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
         try:
-            _fsync_dir(directory)
-        except Exception as exc:
-            raise AtomicWriteDurabilityUncertain(str(exc)) from exc
-    except Exception:
-        try:
-            os.unlink(tmp_name)
+            os.unlink(tmp)
         except OSError:
             pass
         raise
-
-
-def _read_json_file(path: pathlib.Path, label: str) -> Any:
-    _reject_symlink(path, label)
-    with path.open(encoding="utf-8") as stream:
-        return _decode_json(stream, label)
-
-
-def _decode_json(stream: TextIO, label: str) -> Any:
+    directory = os.open(path.parent, os.O_RDONLY)
     try:
-        return json.load(stream)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise _IncompleteGeneration(f"STORE_INCOHERENT: invalid {label} JSON") from exc
-
-
-def _reject_symlink(path: pathlib.Path, label: str) -> None:
-    if path.is_symlink():
-        raise ValueError(f"STORE_INCOHERENT: {label} file is a symlink")
-
-
-def _safe_snapshot_basename(value: Any, label: str) -> str:
-    return _typed_basename(value, label, SNAPSHOT_BASENAME_RE)
-
-
-def _safe_state_basename(value: Any, label: str) -> str:
-    return _typed_basename(value, label, STATE_BASENAME_RE)
-
-
-def _typed_basename(value: Any, label: str, pattern: re.Pattern[str]) -> str:
-    if not isinstance(value, str) or not pattern.match(value) or "/" in value or "\\" in value or value in {".", ".."}:
-        raise ValueError(f"STORE_INCOHERENT: unsafe {label} basename")
-    return value
-
-
-def _ensure_dir(path: pathlib.Path, mode: int) -> None:
-    path.mkdir(parents=True, exist_ok=True, mode=mode)
-    if path.is_symlink():
-        raise ValueError("directory must not be a symlink")
-    os.chmod(path, mode)
-
-
-def _fsync_dir(path: pathlib.Path) -> None:
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(fd)
+        os.fsync(directory)
     finally:
-        os.close(fd)
+        os.close(directory)
 
 
-def _safe_error(code: str, message: str) -> Dict[str, Optional[str]]:
-    return {"last_error_code": code, "last_error_message": _safe_message(message), "last_error_unix": None}
+def _encode_record(record: Record, server_id: str) -> bytes:
+    data = record.data
+    manifest = data.manifest
+    value = {
+        "schema": RECORD_SCHEMA,
+        "server_id": server_id,
+        "manifest": manifest.envelope if isinstance(manifest, LegacyPublication) else (manifest.raw if manifest else None),
+        # The sha of the manifest bytes the host wrote; the verbatim object no longer hashes to it.
+        "manifest_sha256": manifest.sha256 if isinstance(manifest, contract.HostManifest) else None,
+        "accepted": dict(data.accepted),
+        "rejected": data.rejected,
+        "link": asdict(record.link),
+        "job": asdict(record.job) if record.job else None,
+        "last_job": asdict(record.last_job) if record.last_job else None,
+        "update": asdict(record.update),
+        "durations": record.durations,
+    }
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
-def _safe_message(message: str) -> str:
-    text = str(message).splitlines()[0]
-    text = re.sub(r"/[^\s]+", "[path]", text)
-    text = text.replace("Traceback", "error")
-    if "PRIVATE KEY" in text or "ssh-" in text:
-        text = "sensitive error redacted"
-    return text[:200]
+def _upgrade_v2(raw: Any) -> Any:
+    """A /2 record has no manifest_sha256 and its jobs no protocol or last_dispatch_unix: it only ever held v1 hosts."""
+    if not isinstance(raw, dict) or raw.get("schema") != RECORD_V2_SCHEMA or "manifest_sha256" in raw:
+        return raw
+    jobs_v3 = {key: {**raw[key], "protocol": "invocation", "last_dispatch_unix": None} if isinstance(raw.get(key), dict) else raw.get(key)
+               for key in ("job", "last_job") if key in raw}
+    return {**raw, **jobs_v3, "schema": RECORD_SCHEMA, "manifest_sha256": None}
+
+
+UPDATE_FIELDS_SINCE_M3B = {"requested_host_unix": None, "requests": 0, "probation_manifest": None, "trial": None,
+                           "verified": None, "seen": None}
+
+
+def _upgrade_update(raw: Any) -> Any:
+    """Records before M3b have none of the update-request fields: no update request was ever sent."""
+    if isinstance(raw, dict) and isinstance(raw.get("update"), dict):
+        return {**raw, "update": {**UPDATE_FIELDS_SINCE_M3B, **raw["update"]}}
+    return raw
+
+
+def _parse_record(raw: Any, server_id: str) -> Record:
+    raw = _upgrade_update(_upgrade_v2(raw))
+    if not isinstance(raw, dict) or set(raw) != RECORD_KEYS:
+        raise ValueError("record keys differ from the schema")
+    if raw["schema"] != RECORD_SCHEMA or raw["server_id"] != server_id:
+        raise ValueError("record belongs to another schema or server")
+    accepted = raw["accepted"]
+    if not isinstance(accepted, dict) or not all(
+            (key == LEGACY_VOLUME or VOLUME_ID_RE.fullmatch(key)) and isinstance(sha, str) and SHA256_RE.fullmatch(sha)
+            for key, sha in accepted.items()):
+        raise ValueError("record accepted is malformed")
+    rejected = raw["rejected"]
+    if not isinstance(rejected, dict) or not all(SHA256_RE.fullmatch(key) and isinstance(value, dict) for key, value in rejected.items()):
+        raise ValueError("record rejected is malformed")
+    if raw["manifest"] is not None and not isinstance(raw["manifest"], dict):
+        raise ValueError("record manifest is malformed")
+    if raw["manifest_sha256"] is not None:
+        manifest = contract.parse_manifest_object(raw["manifest"], raw["manifest_sha256"])
+    else:
+        manifest = LegacyPublication(raw["manifest"]) if raw["manifest"] is not None else None
+    active_states = frozenset(jobs.STATES) - jobs.TERMINAL
+    return Record(
+        link=_dataclass(Link, raw["link"], LINK_STATES),
+        data=Data(manifest=manifest, accepted=accepted, rejected=rejected),
+        job=_dataclass(Job, raw["job"], active_states) if raw["job"] is not None else None,
+        last_job=_dataclass(Job, raw["last_job"], jobs.TERMINAL) if raw["last_job"] is not None else None,
+        update=_dataclass(Update, raw["update"], update.STATES),
+        durations=_parse_durations(raw["durations"]),
+    )
+
+
+def _dataclass(kind, value: Any, states: Collection[str]):
+    """Build ``kind`` from a JSON object whose keys, field types and state match its definition."""
+    hints = typing.get_type_hints(kind)
+    if not isinstance(value, dict) or set(value) != set(hints):
+        raise ValueError(f"record {kind.__name__} is malformed")
+    for name, hint in hints.items():
+        if not _has_type(value[name], hint):
+            raise ValueError(f"record {kind.__name__}.{name} is malformed")
+    if value["state"] not in states:
+        raise ValueError(f"record {kind.__name__}.state is not allowed here")
+    return kind(**value)
+
+
+def _has_type(value: Any, hint: Any) -> bool:
+    if typing.get_origin(hint) in (typing.Union, types.UnionType):
+        return any(_has_type(value, arg) for arg in typing.get_args(hint))
+    if hint in (int, str, type(None)):
+        return type(value) is hint
+    raise TypeError(f"record field type {hint} has no check")
+
+
+def _parse_durations(value: Any) -> dict:
+    """The shipped ETA history rule: at most 5 [finished_unix, seconds] pairs per plan, oldest first."""
+    if not isinstance(value, dict) or not set(value) <= set(DURATION_PLANS):
+        raise ValueError("durations are malformed")
+    result = {}
+    for plan, entries in value.items():
+        if not isinstance(entries, list) or len(entries) > DURATION_LIMIT:
+            raise ValueError("durations are malformed")
+        previous = 0
+        for entry in entries:
+            if not (isinstance(entry, list) and len(entry) == 2 and all(type(x) is int for x in entry)
+                    and entry[0] > previous and entry[1] >= 0):
+                raise ValueError("durations are malformed")
+            previous = entry[0]
+        result[plan] = [list(entry) for entry in entries]
+    return result
+
+
+# ------------------------------------------------- SHIM(M2b..M9) old store import (R1, S6)
+
+_OLD_SNAPSHOT_RE = re.compile(r"^snapshot-v2-([0-9a-f]{64})\.json$")
+_OLD_STATE_RE = re.compile(r"^state-v2-[0-9a-f]{32}\.json$")
+
+
+def _old_durations(path: pathlib.Path) -> dict:
+    try:
+        _reject_symlinks(path.parent, path)
+        return _parse_durations(json.loads(path.read_bytes()))
+    except (OSError, ValueError):
+        return {}
+
+
+def _old_manifest(old: pathlib.Path) -> Optional[dict]:
+    if not old.is_dir() or old.is_symlink():
+        return None
+    for name in ("current.json", "previous.json"):
+        path = old / name
+        if not path.exists():
+            continue
+        try:
+            manifest = json.loads(path.read_bytes())
+        except ValueError:
+            continue
+        if not isinstance(manifest, dict) or set(manifest) != {"snapshot", "state"}:
+            continue
+        if manifest["snapshot"] is not None and not _OLD_SNAPSHOT_RE.fullmatch(manifest["snapshot"]):
+            continue
+        if manifest["state"] is not None and not _OLD_STATE_RE.fullmatch(manifest["state"]):
+            continue
+        if all((old / name).is_file() and not (old / name).is_symlink() for name in manifest.values() if name):
+            return manifest
+    return None
+
+
+def _old_capture(path: pathlib.Path, server_id: str) -> Tuple[Tuple[str, str, bytes], Data]:
+    sha = _OLD_SNAPSHOT_RE.fullmatch(path.name).group(1)
+    data = path.read_bytes()
+    payload = json.loads(data)
+    if payload.get("server_id") != server_id:
+        raise ValueError("old snapshot belongs to another server")
+    roots = {root.get("status") for root in payload.get("selected_roots", []) if root.get("status") != "skipped"}
+    # The old store kept the payload re-encoded, so its bytes no longer hash to the
+    # digest the agent published. The digest is what tells the host's publication apart.
+    manifest = {
+        "generation": f"{payload['scan_generation']}.json",  # SHIM(M2b..M5c) S3
+        "sha256": sha,
+        "byte_size": None,
+        "server_id": server_id,
+        "status": "complete" if roots <= {"complete"} else "partial",
+        "scan_finished_unix": payload["scan_finished_unix"],
+        "config_digest": payload["config_digest"],
+    }
+    return (LEGACY_VOLUME, sha, data), Data(manifest=LegacyPublication(manifest), accepted={LEGACY_VOLUME: sha})
+
+
+def _old_job(active: Any) -> Optional[Job]:
+    if not isinstance(active, dict):
+        return None
+    requested = active["requested_unix"]
+    if active["state"] == "running":
+        # The old release reconciled a job that a restart interrupted the same way.
+        state, finished, code = "failed", requested, "INTERRUPTED"
+    else:
+        state, finished, code = active["state"], active.get("finished_unix") or requested, active.get("result_code")
+    job = Job(
+        request_id=str(active["id"]), actor=str(active["actor"]), requested_unix=requested,
+        since_unix=finished, state=state, finished_unix=finished, result_code=code,
+    )
+    return _dataclass(Job, asdict(job), jobs.TERMINAL)

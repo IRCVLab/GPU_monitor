@@ -1,244 +1,396 @@
-"""Bounded per-server manual rescan job coordination."""
+"""The durable rescan job: a pure reducer over host scan observations.
+
+A job succeeds only when the publication its scan produced is accepted, never on an
+SSH exit status alone (I24). Anything that cannot be tied to the job ends ``unconfirmed``.
+
+A ``receipt`` job (a v2 host) sends ``rescan <request_id>`` and follows that id: in the
+request mailbox, in run.json, then as a receipt in the manifest (design §3.3).
+
+SHIM(M2b..M5c) S4: an ``invocation`` job (a v1 host, which writes no receipts)
+correlates by the scan unit's systemd InvocationID and the agent run id in its
+lifecycle file.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
-import logging
-import re
-import threading
-import time
-from typing import Any, Mapping, Protocol
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
-from collector.store import AtomicWriteDurabilityUncertain, StoreLockedError
+COOLDOWN_SECONDS = 15 * 60
+MAX_ACTIVE_JOBS = 2
+DISPATCH_DEADLINE_SECONDS = 10 * 60
+RECONCILE_DEADLINE_SECONDS = 10 * 60
+COLLECT_DEADLINE_SECONDS = 15 * 60
+MIN_RUN_DEADLINE_SECONDS = 2 * 3600
+MAX_DISPATCHES = 3
+RESEND_INTERVAL_SECONDS = 60
+"""The idle observe interval: a receipt job sends its id again at most this often."""
 
-_LOG = logging.getLogger(__name__)
-_TERMINAL_WRITE_RETRY_SECONDS = 2.0
-_TERMINAL_WRITE_RETRY_INTERVAL_SECONDS = 0.025
-
-SERVER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
-SAFE_FIELD_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
-ACTIVE_SCAN_STATES = frozenset({"active", "activating", "reloading"})
-DEFAULT_COOLDOWN_SECONDS = 15 * 60
-DEFAULT_MAX_CONCURRENT_JOBS = 2
-MAX_AUDIT_EVENTS = 100
-
-
-class Clock(Protocol):
-    def time(self) -> float: ...
-
-
-class Store(Protocol):
-    def load_state(self, server_id: str) -> dict[str, Any]: ...
-    def update_state(self, server_id: str, **updates: Any) -> dict[str, Any]: ...
-
-
-class Service(Protocol):
-    servers: tuple[Any, ...]
-    store: Store
-    def scan_active_state(self, server_id: str) -> str: ...
-    def manual_rescan(self, server_id: str) -> dict[str, Any]: ...
+STATES = ("dispatching", "pending", "running", "reconciling", "collecting", "succeeded", "failed", "unconfirmed")
+TERMINAL = frozenset({"succeeded", "failed", "unconfirmed"})
+FINISHED_RUN = frozenset({"complete", "partial", "failed"})
+PROTOCOLS = ("invocation", "receipt")
+RECEIPT_SUCCEEDS = frozenset({"complete", "partial"})
+RECEIPT_FAILS = {"failed": "SCAN_FAILED", "interrupted": "SCAN_INTERRUPTED"}
+REPLY_OUTCOMES = frozenset({"received", "already_received", "rejected"})
 
 
 @dataclass(frozen=True)
-class _ServerRef:
-    id: str
+class Job:
+    request_id: str
+    actor: str
+    requested_unix: int
+    since_unix: int
+    state: str = "dispatching"
+    dispatches: int = 0
+    baseline_run: Optional[str] = None
+    """The agent run the observation before the last start showed; any other run started after it."""
+    invocation: Optional[str] = None
+    """InvocationID of the scan unit the job is tied to."""
+    agent_run: Optional[str] = None
+    """Agent run id seen while that invocation ran."""
+    generation: Optional[str] = None
+    """The publication the job waits to see accepted."""
+    finished_unix: Optional[int] = None
+    result_code: Optional[str] = None
+    protocol: str = "invocation"
+    """``receipt`` for a v2 host; ``invocation`` is SHIM(M2b..M5c) S4."""
+    last_dispatch_unix: Optional[int] = None
+    """When a receipt job last sent its id, so resends are spaced in time."""
 
 
-class RescanJobManager:
-    """Coordinates manual rescans without accepting arbitrary commands/paths."""
-
-    def __init__(self, service: Service, *, clock: Clock | None = None, cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS, max_concurrent: int = DEFAULT_MAX_CONCURRENT_JOBS) -> None:
-        self.service = service
-        self.store = service.store
-        self.clock = clock or time
-        self.cooldown_seconds = _bounded_int(cooldown_seconds, "cooldown", 0, 24 * 60 * 60)
-        self.max_concurrent = _bounded_int(max_concurrent, "max_concurrent", 1, 16)
-        self._servers = {s.id: _ServerRef(s.id) for s in service.servers if getattr(s, "enabled", True)}
-        self._lock = threading.RLock()
-        self._active_jobs: dict[str, dict[str, Any]] = {}
-        self._preflights: dict[str, object] = {}
-        self._last_requested: dict[str, int] = {}
-        self._threads: list[threading.Thread] = []
-        self._audit: list[dict[str, Any]] = []
-        self._counter = 0
-        self._reconcile_persisted_jobs()
-
-    def request_rescan(self, server_id: str, actor: str) -> tuple[int, dict[str, Any]]:
-        now = int(self.clock.time())
-        sid = _safe_server_id(server_id)
-        actor_id = _safe_field(actor or "anonymous")
-        if sid is None or sid not in self._servers:
-            event = self._record(now, actor_id, sid or "unknown", "UNKNOWN_SERVER", None)
-            return 404, {"error": "UNKNOWN_SERVER", "audit": event}
-        with self._lock:
-            self._prune_threads_locked()
-            if sid in self._preflights:
-                event = self._record(now, actor_id, sid, "ACTIVE_JOB", None)
-                return 409, {"error": "ACTIVE_JOB", "audit": event}
-            current = self._active_jobs.get(sid) or self.store.load_state(sid).get("active_job")
-            if isinstance(current, Mapping) and current.get("state") in {"requested", "running"}:
-                event = self._record(now, actor_id, sid, "ACTIVE_JOB", _safe_field(current.get("id", "job")))
-                return 409, {"error": "ACTIVE_JOB", "job": dict(current), "audit": event}
-            last = self._last_requested.get(sid)
-            if last is not None and now - last < self.cooldown_seconds:
-                event = self._record(now, actor_id, sid, "COOLDOWN", None)
-                return 429, {"error": "COOLDOWN", "retry_after_seconds": self.cooldown_seconds - (now - last), "audit": event}
-            if len(self._active_jobs) + len(self._preflights) >= self.max_concurrent:
-                event = self._record(now, actor_id, sid, "GLOBAL_CONCURRENCY", None)
-                return 429, {"error": "GLOBAL_CONCURRENCY", "audit": event}
-            reservation = object()
-            self._preflights[sid] = reservation
-
-        try:
-            try:
-                remote_state = self.service.scan_active_state(sid)
-            except Exception as exc:
-                code = _safe_code(getattr(exc, "code", "ACTIVE_STATE_FAILED"))
-                event = self._record(now, actor_id, sid, "ACTIVE_STATE_FAILED", None)
-                return 503, {"error": "ACTIVE_STATE_FAILED", "code": code, "audit": event}
-            if remote_state in ACTIVE_SCAN_STATES:
-                event = self._record(now, actor_id, sid, "ACTIVE_JOB", None)
-                return 409, {"error": "ACTIVE_JOB", "remote_active_state": _safe_field(remote_state), "audit": event}
-            with self._lock:
-                return self._start_rescan_locked(sid, actor_id, now)
-        finally:
-            with self._lock:
-                if self._preflights.get(sid) is reservation:
-                    del self._preflights[sid]
-
-    def _start_rescan_locked(self, sid: str, actor_id: str, now: int) -> tuple[int, dict[str, Any]]:
-        self._counter += 1
-        job_id = _safe_field(f"rescan-{sid}-{now}-{self._counter}")
-        job = {"id": job_id, "server_id": sid, "kind": "rescan", "state": "running", "actor": actor_id, "requested_unix": now, "started_unix": now, "finished_unix": None, "result_code": None}
-        self.store.update_state(sid, active_job=job)
-        self._last_requested[sid] = now
-        self._active_jobs[sid] = job
-        del self._preflights[sid]
-        event = self._record(now, actor_id, sid, "ACCEPTED", job_id)
-        thread = threading.Thread(target=self._run, args=(sid, job), daemon=True)
-        self._threads.append(thread)
-        thread.start()
-        return 202, {"status": "started", "job": job, "audit": event}
-
-    def job_for(self, server_id: str) -> tuple[int, dict[str, Any]]:
-        sid = _safe_server_id(server_id)
-        if sid is None or sid not in self._servers:
-            return 404, {"error": "UNKNOWN_SERVER"}
-        return 200, {"job": self.store.load_state(sid).get("active_job")}
-
-    def audit_events(self) -> list[dict[str, Any]]:
-        with self._lock:
-            return [dict(e) for e in self._audit]
-
-    def wait_for_idle(self, timeout: float | None = None) -> None:
-        deadline = None if timeout is None else time.time() + timeout
-        for thread in list(self._threads):
-            remaining = None if deadline is None else max(0.0, deadline - time.time())
-            thread.join(remaining)
-        with self._lock:
-            self._prune_threads_locked()
-
-    def active_thread_count(self) -> int:
-        with self._lock:
-            self._prune_threads_locked()
-            return len(self._threads)
-
-    def _reconcile_persisted_jobs(self) -> None:
-        now = int(self.clock.time())
-        for sid in self._servers:
-            state = self.store.load_state(sid)
-            active = state.get("active_job")
-            if not isinstance(active, Mapping):
-                continue
-            requested = active.get("requested_unix")
-            if isinstance(requested, int) and not isinstance(requested, bool) and now - requested < self.cooldown_seconds:
-                self._last_requested[sid] = requested
-            if active.get("state") not in {"requested", "running"}:
-                continue
-            started = active.get("started_unix")
-            if not isinstance(started, int) or isinstance(started, bool):
-                started = max(requested if isinstance(requested, int) and not isinstance(requested, bool) else now, now)
-            terminal = {
-                "id": _safe_field(active.get("id", f"rescan-{sid}-{now}")),
-                "server_id": sid,
-                "kind": "rescan",
-                "state": "failed",
-                "actor": _safe_field(active.get("actor", "unknown")),
-                "requested_unix": requested if isinstance(requested, int) and not isinstance(requested, bool) else now,
-                "started_unix": started,
-                "finished_unix": max(now, started),
-                "result_code": "INTERRUPTED",
-            }
-            self._persist_terminal(sid, terminal)
-
-    def _prune_threads_locked(self) -> None:
-        self._threads = [thread for thread in self._threads if thread.is_alive()]
-
-    def _run(self, sid: str, job: dict[str, Any]) -> None:
-        result_code = "OK"
-        state = "succeeded"
-        try:
-            result = self.service.manual_rescan(sid)
-            if result.get("latest_pull_status") != "succeeded" or result.get("latest_scan_result") == "failed":
-                state = "failed"
-                result_code = _safe_code(result.get("last_error_code") or result.get("latest_pull_status") or "FAILED")
-        except Exception:
-            state = "failed"
-            result_code = "RESCAN_FAILED"
-        finished = max(int(self.clock.time()), job["started_unix"])
-        terminal = dict(job, state=state, finished_unix=finished, result_code=result_code)
-        try:
-            self._persist_terminal(sid, terminal)
-        finally:
-            with self._lock:
-                self._active_jobs.pop(sid, None)
-                self._prune_threads_locked()
-
-    def _persist_terminal(self, sid: str, terminal: dict[str, Any]) -> None:
-        deadline = time.monotonic() + _TERMINAL_WRITE_RETRY_SECONDS
-        while True:
-            try:
-                self.store.update_state(sid, active_job=terminal)
-                return
-            except StoreLockedError as exc:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    failure = exc
-                    break
-                time.sleep(min(remaining, _TERMINAL_WRITE_RETRY_INTERVAL_SECONDS))
-            except (OSError, ValueError, AtomicWriteDurabilityUncertain) as exc:
-                failure = exc
-                break
-        # The persisted running state keeps this server reserved until reconciliation.
-        self._record(int(self.clock.time()), terminal["actor"], sid, "JOB_STATE_WRITE_FAILED", terminal["id"])
-        _LOG.error(
-            "Failed to persist terminal rescan state for server %s, job %s, result %s (%s, errno=%s)",
-            sid, terminal["id"], terminal["result_code"], type(failure).__name__, getattr(failure, "errno", None),
-        )
-
-    def _record(self, ts: int, actor: str, server_id: str, result_code: str, job_id: str | None) -> dict[str, Any]:
-        event = {"timestamp_unix": ts, "actor": _safe_field(actor), "server_id": _safe_field(server_id), "result_code": _safe_field(result_code), "job_id": _safe_field(job_id or "none")}
-        with self._lock:
-            self._audit.append(event)
-            del self._audit[:-MAX_AUDIT_EVENTS]
-        return dict(event)
+@dataclass(frozen=True)
+class Scan:
+    """Host scan facts from one observation."""
+    invocation: Optional[str] = None
+    """InvocationID of the active scan unit; None when no scan unit is active."""
+    full: bool = False
+    """The active scan covers every root, so it satisfies a rescan request."""
+    run_id: Optional[str] = None
+    run_state: Optional[str] = None
+    run_full: bool = False
+    generation: Optional[str] = None
+    error_code: Optional[str] = None
 
 
-def _safe_server_id(value: Any) -> str | None:
-    if not isinstance(value, str) or not SERVER_ID_RE.fullmatch(value) or value in {".", ".."}:
+@dataclass(frozen=True)
+class Observed:
+    at: int
+    scan: Scan
+    accepted: Optional[str] = None
+    """Generation of the capture the store holds."""
+    rejected: frozenset = frozenset()
+    """Generations the data reducer rejected."""
+
+
+@dataclass(frozen=True)
+class Traced:
+    """What one observation of a v2 host shows of the job's request id."""
+    at: int
+    pending: bool = False
+    """The id waits in ``requests/``: delivered, so never sent again."""
+    running: bool = False
+    """run.json lists the id: the running scan serves it."""
+    receipt: Optional[str] = None
+    """The outcome of the manifest receipt for the id, as written. Unknown outcomes are ignored."""
+    captures: str = "current"
+    """The accepted manifest's captures: current, fetching or rejected."""
+
+
+@dataclass(frozen=True)
+class RescanReply:
+    """The host's answer to ``rescan <request_id>``. A timeout or unparsable answer is a TransportError."""
+    outcome: str
+    """received, already_received or rejected."""
+    code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class RescanReplied:
+    at: int
+    outcome: str
+    """received, already_received, rejected, or ambiguous (timeout, exit 255, unparsable reply)."""
+    code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DispatchReturned:
+    """The blocking ``systemctl start`` returned. Its status proves nothing on its own."""
+    at: int
+    ok: bool
+    code: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class Tick:
+    at: int
+    run_deadline_seconds: int = MIN_RUN_DEADLINE_SECONDS
+
+
+@dataclass(frozen=True)
+class Restarted:
+    at: int
+
+
+@dataclass(frozen=True)
+class Dispatch:
+    pass
+
+
+Event = Union[Observed, DispatchReturned, Traced, RescanReplied, Tick, Restarted]
+EVENT_KINDS = ("Observed", "DispatchReturned", "Traced", "RescanReplied", "Tick", "Restarted")
+Result = Tuple[Job, Tuple[Dispatch, ...]]
+
+
+def admit(request_id: str, actor: str, at: int, protocol: str = "invocation") -> Job:
+    """The baseline run comes from the first observation after admission, never from an older one."""
+    return Job(request_id=request_id, actor=actor, requested_unix=at, since_unix=at, protocol=protocol)
+
+
+def run_deadline_seconds(longest_sec: Optional[int]) -> int:
+    return max(MIN_RUN_DEADLINE_SECONDS, 3 * longest_sec) if longest_sec else MIN_RUN_DEADLINE_SECONDS
+
+
+def job_deadline_seconds(run_deadline: int) -> int:
+    """Time from admission to a terminal state: a scheduled scan to wait out, our own run, then the pull."""
+    return 2 * run_deadline + RECONCILE_DEADLINE_SECONDS + COLLECT_DEADLINE_SECONDS
+
+
+def _to(job: Job, state: str, at: int, **fields) -> Job:
+    return replace(job, state=state, since_unix=at if state != job.state else job.since_unix, **fields)
+
+
+def _finish(job: Job, state: str, at: int, code: str) -> Job:
+    return _to(job, state, at, finished_unix=at, result_code=code)
+
+
+def _ignore(job: Job, event: Event) -> Result:
+    return job, ()
+
+
+def _new_run(job: Job, scan: Scan) -> Optional[str]:
+    return scan.run_id if scan.run_id is not None and scan.run_id != job.baseline_run else None
+
+
+def _correlate(job: Job, event: Observed) -> Job:
+    scan = event.scan
+    if scan.run_state == "running":
+        return _to(job, "running", event.at, invocation=scan.invocation, agent_run=_new_run(job, scan))
+    # The unit has not written its lifecycle yet, so the run shown finished before it started.
+    return _to(job, "running", event.at, invocation=scan.invocation, agent_run=None, baseline_run=scan.run_id)
+
+
+def _collect(job: Job, event: Observed) -> Result:
+    if job.generation is not None and job.generation == event.accepted:
+        return _finish(job, "succeeded", event.at, "OK"), ()
+    if job.generation in event.rejected:
+        return _finish(job, "failed", event.at, "CAPTURE_REJECTED"), ()
+    return job, ()
+
+
+def _run_ended(job: Job, event: Observed) -> Result:
+    """The tied scan ended. Its lifecycle tells how, unless a newer run already replaced it."""
+    scan = event.scan
+    if (job.agent_run or _new_run(job, scan)) != scan.run_id or scan.run_state not in FINISHED_RUN:
+        return _finish(job, "unconfirmed", event.at, "RUN_UNCORRELATED"), ()
+    if scan.run_state == "failed":
+        return _finish(job, "failed", event.at, scan.error_code or "SCAN_FAILED"), ()
+    return _collect(_to(job, "collecting", event.at, agent_run=scan.run_id, generation=scan.generation), event)
+
+
+def _dispatch(job: Job, event: Observed) -> Result:
+    """Start the scan unit. No unit is active, so the run this observation shows is not ours."""
+    if job.dispatches >= MAX_DISPATCHES:
+        return _finish(job, "failed", event.at, "RESCAN_NOT_STARTED"), ()
+    return _to(job, "dispatching", event.at, baseline_run=event.scan.run_id, dispatches=job.dispatches + 1), (Dispatch(),)
+
+
+def _dispatching_observed(job: Job, event: Observed) -> Result:
+    scan = event.scan
+    if scan.invocation is not None:
+        return (_correlate(job, event), ()) if scan.full else (_to(job, "pending", event.at), ())
+    if job.dispatches == 0:
+        return _dispatch(job, event)
+    return job, ()
+
+
+def _pending_observed(job: Job, event: Observed) -> Result:
+    scan = event.scan
+    if scan.invocation is not None:
+        return (_correlate(job, event), ()) if scan.full else (job, ())
+    return _dispatch(job, event)
+
+
+def _running_observed(job: Job, event: Observed) -> Result:
+    scan = event.scan
+    if scan.invocation != job.invocation:
+        return _run_ended(job, event)
+    if job.agent_run is None and scan.run_state == "running" and _new_run(job, scan):
+        return replace(job, agent_run=scan.run_id), ()
+    return job, ()
+
+
+def _reconciling_observed(job: Job, event: Observed) -> Result:
+    scan = event.scan
+    if scan.invocation is not None:
+        return (_correlate(job, event), ()) if scan.full else (_to(job, "pending", event.at), ())
+    if _new_run(job, scan) is None or scan.run_state not in FINISHED_RUN:
+        return job, ()
+    # A run that started after our start and failed before it chose a plan is ours failing.
+    if scan.run_full or scan.run_state == "failed":
+        return _run_ended(job, event)
+    # A partial scheduled run held the lock, so our start lost it (C4). Start again.
+    return _dispatch(job, event)
+
+
+def _after(seconds: Callable[[Job, Tick], int], state: str, code: str):
+    """End the state after its own wait, and any state at the job deadline that no transition moves."""
+    def handler(job: Job, event: Tick) -> Result:
+        if (event.at - job.since_unix < seconds(job, event)
+                and event.at - job.requested_unix < job_deadline_seconds(event.run_deadline_seconds)):
+            return job, ()
+        return _finish(job, state, event.at, code), ()
+    return handler
+
+
+def _to_reconciling(job: Job, event: Event) -> Result:
+    return _to(job, "reconciling", event.at), ()
+
+
+def _restart_dispatching(job: Job, event: Restarted) -> Result:
+    # The start that was in flight died with the process; whether it reached the host is unknown.
+    return _to_reconciling(job, event) if job.dispatches else (job, ())
+
+
+# ------------------------------------------------------------------ receipt jobs (v2 hosts)
+
+
+def _send(job: Job, event: Traced) -> Result:
+    return replace(job, dispatches=job.dispatches + 1, last_dispatch_unix=event.at), (Dispatch(),)
+
+
+def _resend(job: Job, event: Traced) -> Result:
+    """The id shows nowhere on the host: send it again, at most once per idle observe interval.
+
+    The host answers already_received for an id it holds, so a resend never scans twice.
+    Bounded like the invocation job's starts: after the last send, a job the host accepted
+    is RESCAN_NOT_STARTED, and one it never acknowledged is unconfirmed.
+    """
+    if job.last_dispatch_unix is not None and event.at - job.last_dispatch_unix < RESEND_INTERVAL_SECONDS:
+        return job, ()
+    if job.dispatches >= MAX_DISPATCHES:
+        if job.state == "reconciling":
+            return _finish(job, "unconfirmed", event.at, "NO_TRACE"), ()
+        return _finish(job, "failed", event.at, "RESCAN_NOT_STARTED"), ()
+    return _send(job, event)
+
+
+def _receipt(job: Job, event: Traced) -> Optional[Result]:
+    """Decide on the manifest receipt for the id, if there is one the job understands."""
+    if event.receipt in RECEIPT_FAILS:
+        return _finish(job, "failed", event.at, RECEIPT_FAILS[event.receipt]), ()
+    if event.receipt not in RECEIPT_SUCCEEDS:
         return None
-    return value
+    collecting = _to(job, "collecting", event.at)
+    if event.captures == "rejected":
+        return _finish(collecting, "failed", event.at, "CAPTURE_REJECTED"), ()
+    if event.captures == "current":
+        return _finish(collecting, "succeeded", event.at, "OK"), ()
+    return collecting, ()
 
 
-def _safe_field(value: Any) -> str:
-    text = SAFE_FIELD_RE.sub("_", str(value))[:128].strip("._:-")
-    return text or "unknown"
+def _traced(job: Job, event: Traced, *, unseen: Callable[[Job, Traced], Result]) -> Result:
+    """The receipt, then run.json, then the mailbox decide. ``unseen`` handles no trace of the id."""
+    decided = _receipt(job, event)
+    if decided is not None:
+        return decided
+    if event.running:
+        return _to(job, "running", event.at), ()
+    if event.pending:
+        # Delivered and waiting: the host starts it, or the scan holding the lock serves it (C4).
+        return _to(job, "pending", event.at), ()
+    return unseen(job, event)
 
 
-def _safe_code(value: Any) -> str:
-    return re.sub(r"[^A-Z0-9_:-]+", "_", str(value).upper())[:128].strip("_:-") or "FAILED"
+def _dispatching_traced(job: Job, event: Traced) -> Result:
+    if job.dispatches == 0:
+        return _send(job, event)
+    return _traced(job, event, unseen=_ignore)  # the reply to the send in flight decides
 
 
-def _bounded_int(value: Any, label: str, lo: int, hi: int) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < lo or value > hi:
-        raise ValueError(f"{label} must be an integer between {lo} and {hi}")
-    return value
+def _pending_traced(job: Job, event: Traced) -> Result:
+    return _traced(job, event, unseen=_resend)
+
+
+def _running_traced(job: Job, event: Traced) -> Result:
+    return _receipt(job, event) or (job, ())
+
+
+def _reconciling_traced(job: Job, event: Traced) -> Result:
+    return _traced(job, event, unseen=_resend)
+
+
+def _collecting_traced(job: Job, event: Traced) -> Result:
+    return _receipt(job, event) or (job, ())
+
+
+def _replied(on_received: Callable[[Job, RescanReplied], Result]):
+    def handler(job: Job, event: RescanReplied) -> Result:
+        if event.outcome == "rejected":
+            return _finish(job, "failed", event.at, event.code or "RESCAN_REJECTED"), ()
+        if event.outcome in ("received", "already_received"):
+            return on_received(job, event)
+        # Ambiguous: the request may or may not have reached the host. Observation decides.
+        return (_to(job, "reconciling", event.at), ()) if job.state == "dispatching" else (job, ())
+    return handler
+
+
+def _to_pending(job: Job, event: Event) -> Result:
+    return _to(job, "pending", event.at), ()
+
+
+def _only(protocol: str, handler: Callable[[Job, Any], Result]) -> Callable[[Job, Any], Result]:
+    """An event of one protocol leaves a job of the other unchanged."""
+    def guarded(job: Job, event: Event) -> Result:
+        return handler(job, event) if job.protocol == protocol else (job, ())
+    return guarded
+
+
+_RUN_DEADLINE = lambda job, event: event.run_deadline_seconds  # noqa: E731
+
+TRANSITIONS: Dict[Tuple[str, str], Callable[[Job, Event], Result]] = {
+    ("dispatching", "Observed"): _only("invocation", _dispatching_observed),
+    ("dispatching", "DispatchReturned"): _only("invocation", _to_reconciling),
+    ("dispatching", "Traced"): _only("receipt", _dispatching_traced),
+    ("dispatching", "RescanReplied"): _only("receipt", _replied(_to_pending)),
+    ("dispatching", "Tick"): _after(lambda job, event: DISPATCH_DEADLINE_SECONDS, "unconfirmed", "NO_TRACE"),
+    ("dispatching", "Restarted"): _restart_dispatching,
+    ("pending", "Observed"): _only("invocation", _pending_observed),
+    ("pending", "DispatchReturned"): _ignore,
+    ("pending", "Traced"): _only("receipt", _pending_traced),
+    ("pending", "RescanReplied"): _only("receipt", _replied(_ignore)),
+    ("pending", "Tick"): _after(_RUN_DEADLINE, "failed", "RESCAN_NOT_STARTED"),
+    ("pending", "Restarted"): _ignore,
+    ("running", "Observed"): _only("invocation", _running_observed),
+    ("running", "DispatchReturned"): _ignore,
+    ("running", "Traced"): _only("receipt", _running_traced),
+    ("running", "RescanReplied"): _ignore,
+    ("running", "Tick"): _after(_RUN_DEADLINE, "failed", "RESCAN_TIMEOUT"),
+    ("running", "Restarted"): _ignore,
+    ("reconciling", "Observed"): _only("invocation", _reconciling_observed),
+    ("reconciling", "DispatchReturned"): _ignore,
+    ("reconciling", "Traced"): _only("receipt", _reconciling_traced),
+    ("reconciling", "RescanReplied"): _only("receipt", _replied(_to_pending)),
+    ("reconciling", "Tick"): _after(lambda job, event: RECONCILE_DEADLINE_SECONDS, "unconfirmed", "NO_TRACE"),
+    ("reconciling", "Restarted"): _ignore,
+    ("collecting", "Observed"): _only("invocation", _collect),
+    ("collecting", "DispatchReturned"): _ignore,
+    ("collecting", "Traced"): _only("receipt", _collecting_traced),
+    ("collecting", "RescanReplied"): _ignore,
+    ("collecting", "Tick"): _after(lambda job, event: COLLECT_DEADLINE_SECONDS, "failed", "PULL_FAILED"),
+    ("collecting", "Restarted"): _ignore,
+    **{(state, kind): _ignore for state in TERMINAL for kind in EVENT_KINDS},
+}
+
+
+def reduce(job: Job, event: Event) -> Result:
+    return TRANSITIONS[(job.state, type(event).__name__)](job, event)

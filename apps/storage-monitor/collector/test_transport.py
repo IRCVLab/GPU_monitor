@@ -31,6 +31,7 @@ class FakeRunner:
         self.fail_next = None
         self.returncode_next = None
         self.ssh_stdout_next = b""
+        self.ssh_stderr_next = b"ignored /secret/path"
         self.truncate_to_cap_on_nonzero = False
         self.seen_temp_modes = []
         self.seen_temp_is_regular = []
@@ -46,7 +47,7 @@ class FakeRunner:
         if argv[0] == "ssh":
             code = self.returncode_next if self.returncode_next is not None else 0
             self.returncode_next = None
-            return Completed(returncode=code, stdout=self.ssh_stdout_next, stderr=b"ignored /secret/path")
+            return Completed(returncode=code, stdout=self.ssh_stdout_next, stderr=self.ssh_stderr_next)
         if argv[:4] != [sys.executable, "-I", "-S", "-c"] or argv[6] != "sftp":
             raise AssertionError(argv)
         limit = int(argv[5])
@@ -184,45 +185,32 @@ class OpenSshTransportTests(unittest.TestCase):
         self.assertIn("User=monitoring", "\0".join(argv))
         self.assertFalse(fake.calls[0]["shell"])
 
-    def test_scan_active_state_uses_fixed_unprivileged_systemctl_show_command(self):
-        from collector.transport import OpenSshTransport
-
-        fake = FakeRunner()
-        fake.ssh_stdout_next = b"inactive\n\nactivating\n"
-        state = OpenSshTransport(runner=fake, active_state_timeout_seconds=7).scan_active_state(server())
-
-        self.assertEqual(state, "activating")
-        argv = fake.calls[0]["argv"]
-        dash_index = argv.index("--")
-        self.assertEqual(argv[dash_index + 1], "alpha.example.test")
-        self.assertEqual(argv[dash_index + 2:], ["/usr/bin/systemctl", "show", "--property=ActiveState", "--value", "storage-viz-scan.service", "storage-viz-scheduled-scan.service"])
-        self.assertIn("User=monitoring", "\0".join(argv))
-        self.assertNotIn("sudo", argv[dash_index + 2:])
-        self.assertFalse(fake.calls[0]["shell"])
-
-    def test_scan_active_state_rejects_malformed_or_failed_bounded_output(self):
+    def test_ssh_exit_255_is_classified_as_auth_or_transport_failure(self):
         from collector.transport import OpenSshTransport, TransportError
-
-        fake = FakeRunner(); fake.ssh_stdout_next = b"active\nextra\n"
-        with self.assertRaises(TransportError) as ctx:
-            OpenSshTransport(runner=fake).scan_active_state(server())
-        self.assertEqual(ctx.exception.code, "BAD_ACTIVE_STATE")
-
-        fake = FakeRunner(); fake.returncode_next = 1
-        with self.assertRaises(TransportError) as ctx:
-            OpenSshTransport(runner=fake).scan_active_state(server())
-        self.assertEqual(ctx.exception.code, "ACTIVE_STATE_FAILED")
+        runner = FakeRunner()
+        tx = OpenSshTransport(runner=runner)
+        for stderr, code in ((b"monitoring@alpha: Permission denied (publickey).", "AUTH_FAILED"),
+                             (b"Host key verification failed.", "AUTH_FAILED"),
+                             (b"ssh: connect to host alpha port 2222: Connection refused", "UNREACHABLE")):
+            runner.returncode_next, runner.ssh_stderr_next = 255, stderr
+            with self.assertRaises(TransportError) as raised:
+                tx.run_probe(server())
+            self.assertEqual(raised.exception.code, code)
+        runner.returncode_next = 1
+        with self.assertRaises(TransportError) as raised:
+            tx.run_probe(server())
+        self.assertEqual(raised.exception.code, "TELEMETRY_UNAVAILABLE")
 
     def test_snapshot_size_is_checked_before_download_and_generation_must_match_server(self):
         from collector.transport import MAX_SNAPSHOT_BYTES, OpenSshTransport, TransportError
 
         good = dict(status_for(base_payload())[0])
-        for bad_size in [True, -1, 0, MAX_SNAPSHOT_BYTES + 1]:
+        for bad_size, code in [(True, "BAD_STATUS"), (-1, "BAD_STATUS"), (0, "BAD_STATUS"), (MAX_SNAPSHOT_BYTES + 1, "SNAPSHOT_TOO_LARGE")]:
             fake = FakeRunner(); fake.statuses = [dict(good, byte_size=bad_size)]
             with self.subTest(bad_size=bad_size):
                 with self.assertRaises(TransportError) as ctx:
                     OpenSshTransport(runner=fake).fetch_snapshot(server())
-                self.assertIn(ctx.exception.code, {"BAD_STATUS", "SNAPSHOT_TOO_LARGE"})
+                self.assertEqual(ctx.exception.code, code)
                 self.assertEqual(len(fake.calls), 1)
 
         fake = FakeRunner(); fake.statuses = [dict(good, generation="beta-2-1719200000-v1.json")]
@@ -245,10 +233,12 @@ class OpenSshTransportTests(unittest.TestCase):
             OpenSshTransport(runner=fake, max_status_bytes=10).fetch_status(server())
         self.assertEqual(ctx.exception.code, "STATUS_TOO_LARGE")
 
+        # The cap is the declared byte_size, so a file that outgrows it disagrees with its publication:
+        # one clean retry, not a permanent size rejection (M2b review).
         fake = FakeRunner(); fake.statuses = [dict(status)]; fake.snapshots[status["generation"]] = data; fake.returncode_next = -signal.SIGXFSZ
         with self.assertRaises(TransportError) as ctx:
             OpenSshTransport(runner=fake).fetch_snapshot(server(), expected_status=status)
-        self.assertEqual(ctx.exception.code, "SNAPSHOT_TOO_LARGE")
+        self.assertEqual(ctx.exception.code, "SIZE_MISMATCH")
 
     @unittest.skipIf(os.name != "posix", "RLIMIT_FSIZE is POSIX-only")
     def test_threaded_transfers_enforce_the_file_cap_without_a_fork_callback(self):
@@ -281,7 +271,7 @@ with open(destination, "wb", buffering=0) as output:
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     self.assertEqual(list(pool.map(lambda _: fetch(), range(8))), ["STATUS_TOO_LARGE"] * 8)
 
-    def test_nonzero_sftp_at_cap_maps_to_limit_but_below_cap_stays_unreachable(self):
+    def test_nonzero_sftp_at_cap_is_a_limit_for_status_but_a_transfer_error_for_snapshots(self):
         from collector.transport import OpenSshTransport, TransportError
 
         payload = base_payload(); status, data = status_for(payload)
@@ -291,11 +281,12 @@ with open(destination, "wb", buffering=0) as output:
             OpenSshTransport(runner=fake, max_status_bytes=10).fetch_status(server())
         self.assertEqual(ctx.exception.code, "STATUS_TOO_LARGE")
 
+        # A snapshot transfer that failed after writing its declared size is a transfer error (M2b review).
         fake = FakeRunner(); fake.statuses = [dict(status)]; fake.snapshots[status["generation"]] = data
         fake.returncode_next = 1; fake.truncate_to_cap_on_nonzero = True
         with self.assertRaises(TransportError) as ctx:
             OpenSshTransport(runner=fake).fetch_snapshot(server(), expected_status=status)
-        self.assertEqual(ctx.exception.code, "SNAPSHOT_TOO_LARGE")
+        self.assertEqual(ctx.exception.code, "UNREACHABLE")
 
         fake = FakeRunner(); fake.statuses = [dict(status)]; fake.returncode_next = 1
         with self.assertRaises(TransportError) as ctx:
@@ -369,3 +360,51 @@ with open(destination, "wb", buffering=0) as output:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V2FileTests(unittest.TestCase):
+    """manifest.json and captures/<vid>/<sha>.json.gz over the same SFTP path (SHIM(M2b..M3b) S2)."""
+
+    class Runner(FakeRunner):
+        def run(self, argv, **kwargs):
+            if argv[0] != "ssh":
+                remote = shlex.split(kwargs["input"].decode())[1]
+                name = pathlib.PurePosixPath(remote).name
+                if name not in self.snapshots:
+                    self.calls.append({"argv": list(argv), "input": kwargs["input"], "remote": remote})
+                    return Completed(returncode=1, stderr=f'File "{remote}" not found.\n'.encode())
+                self.remote = remote
+            return super().run(argv, **kwargs)
+
+    def test_manifest_and_capture_are_read_from_their_fixed_paths_within_the_cap(self):
+        from collector.transport import OpenSshTransport
+        fake = self.Runner()
+        sha = "c" * 64
+        fake.snapshots = {"manifest.json": b'{"seq": 1}', f"{sha}.json.gz": b"gz"}
+        tx = OpenSshTransport(runner=fake)
+        self.assertEqual(tx.fetch_manifest(server()), b'{"seq": 1}')
+        self.assertEqual(fake.remote, "/var/lib/storage-viz/manifest.json")
+        self.assertEqual(fake.calls[-1]["limit_bytes"], 64 * 1024)
+        self.assertEqual(tx.fetch_volume_capture(server(), "v-000000000000000a", sha, 2), b"gz")
+        self.assertEqual(fake.remote, f"/var/lib/storage-viz/captures/v-000000000000000a/{sha}.json.gz")
+        self.assertEqual(fake.calls[-1]["limit_bytes"], 2)
+
+    def test_missing_files_and_unsafe_names_are_typed(self):
+        from collector.transport import OpenSshTransport, TransportError
+        tx = OpenSshTransport(runner=self.Runner())
+        for call, code in ((lambda: tx.fetch_manifest(server()), "MANIFEST_MISSING"),
+                           (lambda: tx.fetch_volume_capture(server(), "v-000000000000000a", "c" * 64, 10), "CAPTURE_GONE"),
+                           (lambda: tx.fetch_volume_capture(server(), "../../etc", "c" * 64, 10), "BAD_PATH"),
+                           (lambda: tx.fetch_volume_capture(server(), "v-000000000000000a", "c" * 63 + "/", 10), "BAD_PATH")):
+            with self.assertRaises(TransportError) as info:
+                call()
+            self.assertEqual(info.exception.code, code)
+
+    def test_a_capture_larger_than_its_declared_size_is_too_large(self):
+        from collector.transport import OpenSshTransport, TransportError
+        fake = self.Runner()
+        sha = "c" * 64
+        fake.snapshots = {f"{sha}.json.gz": b"0123456789"}
+        with self.assertRaises(TransportError) as info:
+            OpenSshTransport(runner=fake).fetch_volume_capture(server(), "v-000000000000000a", sha, 4)
+        self.assertEqual(info.exception.code, "CAPTURE_TOO_LARGE")

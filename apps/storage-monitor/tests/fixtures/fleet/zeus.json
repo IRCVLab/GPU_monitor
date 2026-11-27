@@ -1,0 +1,93 @@
+{
+  "schema": "storage-viz.manifest/2",
+  "server_id": "zeus",
+  "hostname": "zeus",
+  "seq": 1,
+  "written_unix": 1719200345,
+  "agent": {
+    "release_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_seq": 1,
+    "config_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "volumes": [
+    {
+      "volume_id": "v-4329ab3aaba33ab5",
+      "identity": "uuid",
+      "diagnostic": null,
+      "mountpoint": "/srv/zeus/vol1",
+      "fstype": "xfs",
+      "media": "mixed",
+      "media_confidence": "resolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/srv/zeus/vol1",
+          "binding": "b-aaf7fe0f77e8fa1e",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 1361602245725,
+        "used": 1198209976238,
+        "avail": 163392269487,
+        "observed_unix": 1719200342,
+        "status": "ok"
+      },
+      "capture": {
+        "sha256": "3ad97ecf3c25fc3f2a9d38f643239d3b24d9ca61557d18809ec6c067114cd0ed",
+        "bytes": 734,
+        "scan_started_unix": 1719200300,
+        "scan_finished_unix": 1719200342,
+        "outcome": "complete"
+      },
+      "last_attempt": {
+        "run_id": "ffffffffffffffffffffffffffffffff",
+        "started_unix": 1719200343,
+        "finished_unix": 1719200344,
+        "outcome": "failed",
+        "error_code": "SCANNER_FAILED"
+      }
+    },
+    {
+      "volume_id": "x-aa52daba02bf8b39",
+      "identity": "ambiguous",
+      "diagnostic": "AMBIGUOUS",
+      "mountpoint": "/srv/zeus/vol2",
+      "fstype": "xfs",
+      "media": "unknown",
+      "media_confidence": "unresolved",
+      "group": "slow",
+      "cadence_sec": 10800,
+      "roots": [
+        {
+          "scan_root": "/srv/zeus/vol2",
+          "binding": "b-fecd9ce7a48da2a0",
+          "prune_class": "data"
+        }
+      ],
+      "capacity": {
+        "total": 1449372505429,
+        "used": 1391397605212,
+        "avail": 57974900217,
+        "observed_unix": 1719200342,
+        "status": "failed"
+      },
+      "capture": {
+        "sha256": "e47ec704cc4ba39e47dcd068e23f50fbda4cbb5981b951b0df3793fad36a9e71",
+        "bytes": 716,
+        "scan_started_unix": 1719200300,
+        "scan_finished_unix": 1719200342,
+        "outcome": "complete"
+      },
+      "last_attempt": null
+    }
+  ],
+  "mount_table": {
+    "status": "ok",
+    "observed_unix": 1719200342,
+    "within_roots": []
+  },
+  "last_run": null,
+  "requests": []
+}

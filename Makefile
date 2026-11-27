@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-puller-test storage-release-puller-test release-script-test archive-ref-test build-gpu-release build-storage-release test-gpu build-gpu test-storage verify diff-check
+.PHONY: test layout-test history-test impact-test policy-test deploy-readiness-test release-auth-test release-puller-test storage-release-puller-test release-script-test archive-ref-test build-gpu-release build-storage-release agent-bundle-signed test-gpu build-gpu test-storage verify diff-check
 
 test: layout-test history-test release-puller-test storage-release-puller-test
 	$(MAKE) impact-test
@@ -46,6 +46,13 @@ build-gpu-release:
 build-storage-release:
 	python3.12 apps/storage-monitor/deploy/build-dashboard-release.py --sha "$$(git rev-parse HEAD)" --output-dir "$${OUTPUT_DIR:-apps/storage-monitor/dist/releases}"
 
+# CI only: .github/workflows/agent-bundle.yml runs this after ci passes on main,
+# with AGENT_SIGNING_KEY from the agent-signing environment.
+agent-bundle-signed:
+	@test -n "$(OUTPUT_DIR)" || { echo 'OUTPUT_DIR is required' >&2; exit 2; }
+	python3 apps/storage-monitor/deploy/build-agent-release.py --sha "$$(git rev-parse HEAD)" --output-dir "$(OUTPUT_DIR)"
+	bash apps/storage-monitor/deploy/sign-agent-release.sh "$(OUTPUT_DIR)"
+
 test-gpu:
 	cd apps/gpu-monitor/frontend && npm run check
 	cd apps/gpu-monitor/frontend && npm run build
@@ -71,10 +78,14 @@ test-storage:
 	  "$$storage_verify/repo/apps/storage-monitor/"; \
 	cd "$$storage_verify/repo/apps/storage-monitor"; \
 	PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider; \
-	find viewer -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check; \
-	node viewer/viewer.test.js; \
-	node viewer/viewer_regression_test.js; \
-	node viewer/scan-status.test.js; \
+	find viewer -name '*.js' -print0 | xargs -0 -n1 node --check; \
+	node --test viewer/test/*.test.js; \
+	node viewer/browser/stale-select-hit.test.js tests/fixtures/fleet; \
+	python3 tools/check_bug_coverage.py; \
+	python3 tools/check_shims.py; \
+	python3 tools/lint_ids.py; \
+	python3 tools/lint_viewer_judgments.py; \
+	python3 tools/lint_owners.py; \
 	bash deploy/test_deploy_scripts.sh; \
 	test ! -e scanner/hstscan || { printf '%s\n' 'FAIL: deploy tests left scanner/hstscan behind'; exit 1; }; \
 	test ! -e output/verification/linux-verification.txt || { printf '%s\n' 'FAIL: deploy tests left a verification artifact behind'; exit 1; }; \

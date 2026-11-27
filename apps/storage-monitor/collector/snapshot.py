@@ -8,9 +8,9 @@ import os
 import re
 from typing import Any, Dict, Mapping, Optional, Set
 
-SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+from collector.ids import SERVER_ID_RE, SHA256_RE
+
 GENERATION_RE = re.compile(r"^[A-Za-z0-9_.-]+-\d+-v1\.json$")
-HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_COUNTER = 10**18
 MAX_TIME = 4_102_444_800
 MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
@@ -90,7 +90,7 @@ def validate_download(status: Mapping[str, Any], downloaded: bytes, desired: Des
     status_digest = _required_digest(status.get("config_digest"), "status config_digest")
     try:
         payload = json.loads(bytes(downloaded).decode("utf-8"))
-    except Exception as exc:
+    except (ValueError, RecursionError) as exc:
         raise ValueError("snapshot payload must be a JSON object") from exc
     _validate_payload(payload, server_id, generation, status_finished, status_value, status_digest)
     config_sync = "in_sync" if status_digest == desired_digest else "drifted"
@@ -124,8 +124,8 @@ def _validate_payload(payload: Any, server_id: str, generation_filename: str, st
     expected_generation = f"{server_id}-{started}-v1"
     if generation_filename != expected_generation + ".json":
         raise ValueError("generation must bind server_id, scan_started_unix, and v1")
-    if payload.get("scan_generation") != expected_generation:
-        raise ValueError("embedded scan_generation must bind server_id, scan_started_unix, and v1")
+    if payload.get("scan_generation") != expected_generation:  # SHIM(M2b..M5c) S3
+        raise ValueError("embedded scan_generation must bind server_id, scan_started_unix, and v1")  # SHIM(M2b..M5c) S3
 
     roots = payload.get("selected_roots")
     if not isinstance(roots, list) or not roots:
@@ -228,8 +228,6 @@ def _validate_mount_shape(mount: Any, budget: _Budget) -> None:
     for key in ("df_total", "df_used", "df_avail", "scanned_bytes", "scanned_files", "scanned_dirs", "errors"):
         _counter(mount.get(key), f"mount.{key}")
     _int(mount.get("df_use_pct"), "mount.df_use_pct", 0, 101)
-    if "df_observed_unix" in mount:
-        _int(mount["df_observed_unix"], "mount.df_observed_unix", 0, MAX_TIME + 1)
     if mount["df_used"] + mount["df_avail"] > mount["df_total"]:
         raise ValueError("mount df values violate total invariant")
     tree = mount.get("tree")
@@ -281,7 +279,7 @@ def _validate_media_fields(
         raise ValueError(f"{label} media fields require storage_media and storage_media_confidence")
     if "capacity_id" in present:
         capacity_id = _bounded_string(record.get("capacity_id"), f"{label}.capacity_id", 31, budget)
-        if not CAPACITY_ID_RE.match(capacity_id) or capacity_id == "dev-0-0":
+        if not CAPACITY_ID_RE.fullmatch(capacity_id) or capacity_id == "dev-0-0":
             raise ValueError(f"{label}.capacity_id must match dev-major-minor")
         if canonical_capacity_id is not False and capacity_id != canonical_capacity_id:
             raise ValueError(f"{label}.capacity_id must match canonical major_minor")
@@ -405,19 +403,19 @@ def _validate_blocked(blocked: Any, all_roots: Set[str], budget: _Budget) -> Non
 
 
 def _generation_filename(value: Any) -> str:
-    if not isinstance(value, str) or "/" in value or "\\" in value or value in {".", ".."} or not GENERATION_RE.match(value):
+    if not isinstance(value, str) or "/" in value or "\\" in value or value in {".", ".."} or not GENERATION_RE.fullmatch(value):
         raise ValueError("generation must be a safe immutable basename")
     return value
 
 
 def _required_digest(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not HEX64_RE.match(value):
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise ValueError(f"{label} must be lowercase 64-hex")
     return value
 
 
 def _safe_id(value: str, label: str) -> str:
-    if not SAFE_ID_RE.match(value) or value in {".", ".."} or len(value) > 128:
+    if not SERVER_ID_RE.fullmatch(value) or value in {".", ".."} or len(value) > 128:
         raise ValueError(f"{label} must be safe")
     return value
 

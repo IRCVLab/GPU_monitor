@@ -62,17 +62,28 @@ def _immutable_file(path: Path) -> Path:
     return resolved
 
 
-def _active_release_target(resolved: Path, config: LauncherConfig, state: dict[str, object]) -> bool:
-    release_root = config.release_root.resolve(strict=False)
+def _linked_release(config: LauncherConfig) -> Path | None:
+    """The release the app path links to, or None when the app path is a legacy directory.
+
+    The activator switches this link before it restarts the dashboard and the proxy, and
+    writes the activation state only after the health check passes. Following the link
+    starts the proxy of the release under health check, the same one the dashboard runs.
+    """
+    if not config.app_path.is_symlink():
+        return None
     try:
-        rel = resolved.relative_to(release_root)
-    except ValueError:
-        return False
-    parts = rel.parts
-    if len(parts) != 4 or not SHA_RE.fullmatch(parts[0]) or parts[1:] != ("storage-monitor", "deploy", "direct_proxy.py"):
-        return False
-    active_release = state.get("release")
-    return isinstance(active_release, str) and resolved.parents[1] == Path(active_release).resolve(strict=False)
+        release = config.app_path.resolve(strict=True)
+        parts = release.relative_to(config.release_root.resolve(strict=True)).parts
+    except (OSError, ValueError) as exc:
+        raise LauncherError("app path links outside the release root") from exc
+    if len(parts) != 2 or not SHA_RE.fullmatch(parts[0]) or parts[1] != "storage-monitor":
+        raise LauncherError("app path does not link to a storage release")
+    return release
+
+
+def _active_release_target(resolved: Path, config: LauncherConfig) -> bool:
+    release = _linked_release(config)
+    return release is not None and resolved == release / "deploy/direct_proxy.py"
 
 
 def _safe_legacy_app(app_path: Path) -> Path:
@@ -177,22 +188,22 @@ def _legacy_target(resolved: Path, config: LauncherConfig, state: dict[str, obje
 
 def validate_proxy_target(target: str | Path, config: LauncherConfig = LauncherConfig()) -> Path:
     resolved = _regular_file(Path(target))
-    state = _state(config)
-    if _active_release_target(resolved, config, state):
+    if _active_release_target(resolved, config):
         return _immutable_file(resolved)
-    if _legacy_target(resolved, config, state):
+    if _legacy_target(resolved, config, _state(config)):
         return resolved
     raise LauncherError("proxy target is not the active storage release or recorded legacy backup")
 
 
 def resolve_proxy_target(config: LauncherConfig = LauncherConfig()) -> Path:
-    state = _state(config)
-    if state.get("status") == "active" and isinstance(state.get("release"), str):
-        target = Path(str(state["release"])) / "deploy/direct_proxy.py"
-    elif state.get("status") == "rolled_back" and isinstance(state.get("managed_legacy_proxy_target"), str):
-        target = Path(str(state["managed_legacy_proxy_target"]))
+    release = _linked_release(config)
+    if release is not None:
+        target = release / "deploy/direct_proxy.py"
     else:
-        raise LauncherError("activation state does not select a proxy target")
+        state = _state(config)
+        if state.get("status") != "rolled_back" or not isinstance(state.get("managed_legacy_proxy_target"), str):
+            raise LauncherError("activation state does not select a proxy target")
+        target = Path(str(state["managed_legacy_proxy_target"]))
     return validate_proxy_target(target, config)
 
 

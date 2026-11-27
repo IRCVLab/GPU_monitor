@@ -20,36 +20,69 @@ APPLICATION_NAME = "storage-monitor"
 SCHEMA_VERSION = 1
 ARTIFACT_FORMAT_VERSION = 1
 MANIFEST_PATH = "storage-monitor/RELEASE-MANIFEST.json"
-VIEWER_PAGES = ("viewer/index.html", "viewer/debug.html")
+VIEWER_PAGES = ("viewer/index.html",)
 PACKAGED_DOCUMENTATION = frozenset({"docs/schema-v1.md"})
 REQUIRED_RELEASE_FILES = PACKAGED_DOCUMENTATION | frozenset(VIEWER_PAGES) | frozenset(
     {
+        "api/__init__.py",
+        "api/errors.py",
+        "api/auth.py",
+        "api/fixtures.py",
+        "api/routes.py",
+        "api/server.py",
         "viewer/serve.py",
-        "viewer/app.js",
-        "viewer/data-client.js",
+        "viewer/api.js",
+        "viewer/columns.js",
         "viewer/echarts.min.js",
-        "viewer/overview.js",
-        "viewer/selection.js",
-        "viewer/scan-status.js",
+        "viewer/effects.js",
+        "viewer/format.js",
+        "viewer/main.js",
+        "viewer/removal.js",
+        "viewer/router.js",
+        "viewer/state.js",
+        "viewer/store.js",
         "viewer/styles.css",
-        "viewer/tables.js",
-        "viewer/treemap.js",
         "viewer/users-chart.js",
+        "viewer/views/files.js",
+        "viewer/views/header.js",
+        "viewer/views/notices.js",
+        "viewer/views/overview.js",
+        "viewer/views/scan-status.js",
+        "viewer/views/selection-bar.js",
+        "viewer/views/server.js",
+        "viewer/views/theme.js",
+        "viewer/views/treemap.js",
+        "viewer/views/users.js",
         "collector/__init__.py",
-        "collector/duration_history.py",
+        "collector/actor.py",
+        "collector/fleet.py",
+        "collector/gate.py",
         "collector/inventory.py",
         "collector/jobs.py",
-        "collector/service.py",
-        "collector/scan_telemetry.py",
+        "collector/legacy.py",
+        "collector/rollout.py",
         "collector/snapshot.py",
         "collector/store.py",
         "collector/transport.py",
+        "collector/view.py",
         "config/servers.example.yaml",
         "deploy/direct_proxy.py",
     }
 )
 
-BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {"collector/live_capacity.py"}
+# The signed host agent bundle for the same SHA (target-design §4.5). The
+# puller fetches it from CI, verifies it and requires it in every release it
+# activates; `fleet.desired_agent()` reads it from the active release.
+AGENT_BUNDLE_FILES = frozenset({
+    "agent/storage-viz-agent.tar.gz",
+    "agent/storage-viz-agent.tar.gz.sig",
+    "agent/storage-viz-agent.json",
+})
+
+BUILD_RELEASE_FILES = REQUIRED_RELEASE_FILES | {
+    "collector/contract.py", "collector/errors.py", "collector/health.py", "collector/ids.py", "collector/judge.py",
+    "collector/update.py", "storage_fstypes.py",
+}
 
 
 class ActivationError(RuntimeError):
