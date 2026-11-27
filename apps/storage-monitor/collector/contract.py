@@ -269,6 +269,8 @@ class GateObservation:
     """Id, ActiveState and InvocationID of the scan, scheduled-scan and update units."""
     legacy: Mapping[str, Any]
     """SHIM(M3b..M5c) S7: the v1 telemetry section, checked by ``legacy.parse_telemetry``."""
+    cron: bool = False
+    """The host runs the agent from cron with no units (``scheduler: cron``, the TrueNAS gate's ``--no-units``)."""
 
 
 OBSERVE_SCHEMA = "storage-viz.observe/1"
@@ -308,7 +310,7 @@ def parse_observation(data: bytes) -> GateObservation:
     units, legacy = raw["units"], raw["legacy"]
     if not isinstance(units, dict) or not isinstance(legacy, dict):
         raise ContractError(BAD_FIELD, "units or legacy is not an object")
-    return GateObservation(pointer, host_run, raw["progress"], facts, units, legacy)
+    return GateObservation(pointer, host_run, raw["progress"], facts, units, legacy, raw.get("scheduler") == "cron")
 
 
 def _attempt(update: Any) -> Optional[Attempt]:

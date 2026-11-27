@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from agent.bootstrap import gate
@@ -146,6 +147,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual(report["requests_pending"], [REQUEST])
         self.assertEqual(report["legacy"]["published"], {"generation": "h-1-v1.json"})
         self.assertEqual(set(report["units"]), set(gate.UNITS))
+        self.assertNotIn("scheduler", report, "a systemd host's observe is unchanged")
         self.assertLess(len(json.dumps(report)), 64 * 1024)
 
     def test_observe_degrades_per_field_instead_of_refusing(self):
@@ -280,6 +282,106 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.host.started, ["storage-viz-agent-update.service"] * 2)
         self.host.start_ok = False
         self.assertEqual(self.serve(f"activate-update {SHA}")[:2], (1, "storage-viz-gate/1 err START_FAILED"))
+
+
+class TrueNasGateTest(unittest.TestCase):
+    """`gate.py --root DIR --no-units`, the forced command on the TrueNAS host."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="sv-gate-truenas."))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.paths, self.host = gate.options(["--root", str(self.root), "--no-units"])
+        for directory in (self.paths.requests, self.paths.captures, self.paths.run):
+            directory.mkdir(parents=True, exist_ok=True)
+        self.paths.scan_lock.touch()
+        self.spawned = []
+        real_run = subprocess.run
+
+        def no_subprocess(argv, *args, **kwargs):
+            self.spawned.append(list(argv))
+            return real_run(["false"], check=False)
+        patcher = unittest.mock.patch.object(gate.subprocess, "run", no_subprocess)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def serve(self, command, stdin=b""):
+        out = io.BytesIO()
+        code = gate.serve(command, self.paths, self.host, io.BytesIO(stdin), out)
+        header, _, body = out.getvalue().partition(b"\n")
+        return code, header.decode(), body
+
+    def test_root_maps_every_path_under_the_dataset(self):
+        self.assertEqual((self.paths.data, self.paths.run, self.paths.opt, self.paths.etc),
+                         (self.root / "data", self.root / "run", self.root / "opt", self.root))
+        self.assertEqual((self.paths.requests, self.paths.scan_lock), (self.root / "data/requests", self.root / "run/scan.lock"))
+
+    def test_defaults_stay_the_fixed_paths_and_units(self):
+        paths, host = gate.options([])
+        self.assertEqual((paths.data, paths.run, paths.opt, paths.etc), (
+            Path("/var/lib/storage-viz"), Path("/run/storage-viz"), Path("/opt/storage-viz"), Path("/etc/storage-viz")))
+        self.assertIs(type(host), gate.Host)
+        self.assertTrue(host.units)
+        paths, host = gate.options(["--root", "/mnt/tank/storage-viz"])
+        self.assertTrue(host.units)
+        self.assertEqual(paths.data, Path("/mnt/tank/storage-viz/data"))
+
+    def test_malformed_forced_command_arguments_are_usage(self):
+        for argv in (["--root"], ["--root", "relative"], ["--root", "/a/../b"], ["--root", "/a/"], ["--no-units", "--no-units"],
+                     ["--root", "/a", "--root", "/b"], ["--units"], ["observe"]):
+            with self.subTest(argv=argv):
+                with self.assertRaises(gate.Usage):
+                    gate.options(argv)
+
+    def test_flags_in_ssh_original_command_are_not_options(self):
+        for command in ("--root /tmp observe", "observe --no-units", "--no-units rescan " + REQUEST):
+            with self.subTest(command=command):
+                self.assertEqual(self.serve(command)[:2], (2, "storage-viz-gate/1 err USAGE"))
+
+    def test_rescan_writes_the_request_and_starts_no_unit(self):
+        self.assertEqual(self.serve("rescan " + REQUEST), (0, "storage-viz-gate/1 ok 9", b"received\n"))
+        self.assertEqual((self.paths.requests / REQUEST).read_text(), REQUEST + "\n")
+        self.assertEqual(self.serve("rescan " + REQUEST)[2], b"already_received\n")
+        self.assertEqual(self.spawned, [])
+
+    def test_observe_reports_no_units_and_sees_the_lock_under_the_root(self):
+        code, _, body = self.serve("observe")
+        report = json.loads(body)
+        self.assertEqual((code, report["units"], report["scan"]["state"], report["scheduler"]), (0, {}, "idle", "cron"))
+        self.assertEqual(report["agent"], {"release_sha": None, "health": "missing"})
+        fd = os.open(self.paths.scan_lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.assertEqual(json.loads(self.serve("observe")[2])["scan"]["state"], "running")
+        finally:
+            os.close(fd)
+        self.assertEqual(self.spawned, [], "no systemctl under --no-units")
+
+    def test_observe_checks_the_agent_config_in_the_dataset(self):
+        entry = self.paths.opt / "current/bin/storage-viz-agent"
+        entry.parent.mkdir(parents=True)
+        entry.touch()
+        json.loads(self.serve("observe")[2])
+        self.assertEqual(self.spawned, [[str(entry), "check-config", "--config", str(self.root / "agent.yaml")]])
+
+    def test_update_verbs_refuse_without_side_effects(self):
+        before = sorted(str(p) for p in self.root.rglob("*"))
+        for command in (f"stage-update {SHA} 3", f"activate-update {SHA}", f"rollback-update {SHA}"):
+            with self.subTest(command=command):
+                self.assertEqual(self.serve(command, b"abcsig"), (1, "storage-viz-gate/1 err UPDATES_MANUAL", b""))
+        self.assertEqual(sorted(str(p) for p in self.root.rglob("*")), before)
+        self.assertEqual(self.spawned, [])
+
+    def test_script_takes_flags_from_its_own_argv(self):
+        env = dict(os.environ, SSH_ORIGINAL_COMMAND="observe")
+        script = [sys.executable, gate.__file__, "--root", str(self.root), "--no-units"]
+        done = _real_run(script, env=env, stdout=subprocess.PIPE, timeout=30, check=False)
+        header, _, body = done.stdout.partition(b"\n")
+        self.assertEqual((done.returncode, json.loads(body)["units"]), (0, {}))
+        done = _real_run(script[:2] + ["--bogus"], env=env, stdout=subprocess.PIPE, timeout=30, check=False)
+        self.assertEqual((done.returncode, done.stdout), (2, b"storage-viz-gate/1 err USAGE\n"))
+
+
+_real_run = subprocess.run
 
 
 class SudoersTest(unittest.TestCase):

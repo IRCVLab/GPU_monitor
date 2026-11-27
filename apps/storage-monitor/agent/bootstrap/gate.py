@@ -12,6 +12,10 @@ refusal from data and detect a truncated body. Exit status: 0 ok, 1 err, 2 usage
 
 Standard library only, Python 3.8. Installed root-owned at
 /usr/local/lib/storage-viz/gate; the update channel never replaces it.
+
+Arguments come only from the forced command line itself. On a TrueNAS host it is
+`gate.py --root DIR --no-units`: the paths live under one dataset, and with no
+systemd units the agent's cron job serves rescans and updates are manual.
 """
 from __future__ import annotations
 
@@ -41,6 +45,7 @@ SCAN_UNIT = "storage-viz-scan.service"
 UPDATE_UNIT = "storage-viz-agent-update.service"
 UNITS = (SCAN_UNIT, "storage-viz-scheduled-scan.service", UPDATE_UNIT)
 TIMER = "storage-viz-scan.timer"
+UPDATE_VERBS = frozenset({"stage-update", "activate-update", "rollback-update"})
 ENV = {"LC_ALL": "C", "TZ": "UTC", "PATH": "/usr/bin:/bin"}
 
 SHA40 = re.compile(r"[0-9a-f]{40}")
@@ -77,13 +82,23 @@ class Usage(Exception):
 
 
 class Paths:
-    """Host paths of target-design §2.2. Tests pass a temporary root."""
+    """Host paths of target-design §2.2. Tests pass a temporary root.
 
-    def __init__(self, root: Path = Path("/")) -> None:
-        self.data = root / "var/lib/storage-viz"
-        self.run = root / "run/storage-viz"
-        self.opt = root / "opt/storage-viz"
-        self.etc = root / "etc/storage-viz"
+    ``dataset`` is the one-directory layout of a host whose system paths do not
+    survive an update (TrueNAS): DIR/data, DIR/run, DIR/opt and DIR/agent.yaml.
+    """
+
+    def __init__(self, root: Path = Path("/"), dataset: Optional[Path] = None) -> None:
+        if dataset is None:
+            self.data = root / "var/lib/storage-viz"
+            self.run = root / "run/storage-viz"
+            self.opt = root / "opt/storage-viz"
+            self.etc = root / "etc/storage-viz"
+        else:
+            self.data = dataset / "data"
+            self.run = dataset / "run"
+            self.opt = dataset / "opt"
+            self.etc = dataset
         self.requests = self.data / "requests"
         self.captures = self.data / "captures"
         self.update = self.data / "update"
@@ -93,6 +108,9 @@ class Paths:
 
 class Host:
     """Side effects outside the data directories. Tests replace it."""
+
+    units = True
+    """The host runs the agent from systemd units and updates it through the channel."""
 
     def start_unit(self, unit: str) -> bool:
         argv = ["/usr/bin/sudo", "-n", "/usr/bin/systemctl", "start", "--no-block", unit]
@@ -107,6 +125,22 @@ class Host:
             return "missing"
         config = str(paths.etc / "agent.yaml")
         return "ok" if _run([str(entry), "check-config", "--config", config], 20) is not None else "broken"
+
+
+class UnitlessHost(Host):
+    """``--no-units``: the agent runs from cron (TrueNAS), which also serves rescans.
+
+    No systemctl call: a rescan request waits for the next cron run, observe shows
+    no units, and agent updates are installed by hand (deploy/bootstrap-truenas.py).
+    """
+
+    units = False
+
+    def start_unit(self, unit: str) -> bool:
+        return True
+
+    def show(self, units: Sequence[str], properties: str) -> str:
+        return ""
 
 
 def _run(argv: List[str], timeout: int) -> Optional[str]:
@@ -212,7 +246,8 @@ def observe(paths: Paths, host: Host) -> bytes:
     except OSError:
         boot_id = None
     current = paths.opt / "current"
-    report = {
+    report: Dict[str, object] = {} if host.units else {"scheduler": "cron"}
+    report.update({
         "schema": "storage-viz.observe/1",
         "bootstrap_version": BOOTSTRAP_VERSION,
         "now": time.time(),
@@ -239,7 +274,7 @@ def observe(paths: Paths, host: Host) -> bytes:
             "remote_unix": time.time(),
             "remote_monotonic": time.clock_gettime(time.CLOCK_MONOTONIC),
         },
-    }
+    })
     return _fit(report, VERBS["observe"][1])
 
 
@@ -384,6 +419,8 @@ def serve(command: Optional[str], paths: Paths, host: Host, stdin: BinaryIO, out
     cap = VERBS[verb][1]
     os.umask(0o027)
     try:
+        if verb in UPDATE_VERBS and not host.units:
+            raise Refused("UPDATES_MANUAL")
         if verb == "get-capture":
             _stream_file(paths.captures / args[0] / f"{args[1]}.json.gz", cap, "CAPTURE_GONE", out)
             return 0
@@ -417,11 +454,36 @@ def serve(command: Optional[str], paths: Paths, host: Host, stdin: BinaryIO, out
     return 0
 
 
-def main() -> int:
-    code = serve(os.environ.get("SSH_ORIGINAL_COMMAND"), Paths(), Host(), sys.stdin.buffer, sys.stdout.buffer)
+def options(argv: Sequence[str]) -> Tuple[Paths, Host]:
+    """The forced command's own arguments, set by the host's authorized_keys line.
+
+    Never read from SSH_ORIGINAL_COMMAND: the client cannot choose the layout or the host.
+    """
+    dataset: Optional[Path] = None
+    units = True
+    args = list(argv)
+    while args:
+        arg = args.pop(0)
+        if arg == "--no-units" and units:
+            units = False
+        elif arg == "--root" and dataset is None and args and os.path.isabs(args[0]) and os.path.normpath(args[0]) == args[0]:
+            dataset = Path(args.pop(0))
+        else:
+            raise Usage()
+    return Paths(dataset=dataset), Host() if units else UnitlessHost()
+
+
+def main(argv: Sequence[str] = ()) -> int:
+    try:
+        paths, host = options(argv)
+    except Usage:
+        sys.stdout.buffer.write(_header("err USAGE"))
+        sys.stdout.flush()
+        return 2
+    code = serve(os.environ.get("SSH_ORIGINAL_COMMAND"), paths, host, sys.stdin.buffer, sys.stdout.buffer)
     sys.stdout.flush()
     return code
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
