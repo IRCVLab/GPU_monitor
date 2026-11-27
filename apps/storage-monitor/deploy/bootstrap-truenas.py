@@ -222,6 +222,8 @@ def agent_config() -> dict:
         "host_profile": "truenas",
         "volume_aliases": {path: f"{SERVER_ID}-{path.rsplit('/', 1)[1]}" for path in USER_DATASETS},
         "volume_media": {path: "ssd" for path in USER_DATASETS},
+        # Clients mount tank as /nexus (/nexus/datasets, /nexus/workspace): publish those paths.
+        "display_prefixes": {"/mnt/tank": "/nexus"},
         "threads": 4, "prune_home_mb": 50, "prune_data_mb": 100, "top": 200, "stale_days": 180,
     }
 

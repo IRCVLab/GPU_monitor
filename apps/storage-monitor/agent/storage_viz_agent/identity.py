@@ -12,6 +12,14 @@ def display_path(path):
     return "".join("\ufffd" if 0xdc80 <= ord(ch) <= 0xdcff else ch for ch in path)
 
 
+def shown(path, prefixes):
+    """Rename a host path by the longest matching display prefix (whole components only)."""
+    for real in sorted(prefixes, key=len, reverse=True):
+        if path == real or path.startswith(real + "/"):
+            return prefixes[real] + path[len(real):]
+    return path
+
+
 def digest(prefix, *parts):
     return prefix + hashlib.sha256(b"\0".join(os.fsencode(p) for p in parts)).hexdigest()[:16]
 
@@ -30,9 +38,13 @@ class Root:
     media_confidence: str
 
     diagnostic: Optional[str] = None
+    volume_mountpoint: Optional[str] = None
+    """Set when the volume is wider than this root's mount: a ZFS pool shown as one volume."""
+    shown_path: Optional[str] = None
+    """The path users see for this root, when display_prefixes renames it."""
 
     def descriptor(self):
-        return dict(scan_root=display_path(self.path), binding=self.binding, prune_class=self.prune_class)
+        return dict(scan_root=display_path(self.shown_path or self.path), binding=self.binding, prune_class=self.prune_class)
 
 
 def device_uuid(device, sysfs, devfs, udev):
@@ -58,7 +70,7 @@ def device_uuid(device, sysfs, devfs, udev):
 
 
 def resolve(mounts, aliases, config_digest, media_resolver, sysfs=Path("/sys"),
-            devfs=Path("/dev"), udev=Path("/run/udev/data"), boot_id=None, devices=()):
+            devfs=Path("/dev"), udev=Path("/run/udev/data"), boot_id=None, devices=(), zfs_pool_volumes=False):
     boot_id = boot_id or Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     uuids = {dev: device_uuid(dev, sysfs, devfs, udev)
              for dev in set(devices) | {m.entry.major_minor for m in mounts}}
@@ -80,6 +92,18 @@ def resolve(mounts, aliases, config_digest, media_resolver, sysfs=Path("/sys"),
         dev = entry.major_minor
         subpath = os.path.normpath(os.path.join(entry.root, os.path.relpath(path, entry.mountpoint)))
         diagnostic = None
+        pool = entry.source.split("/", 1)[0] if zfs_pool_volumes and entry.fstype == "zfs" and "/" in entry.source else None
+        if pool:
+            # One ZFS pool is one space: its datasets share the pool's free space, so they are
+            # roots of one volume, the way /home and /data are roots of the root filesystem.
+            identity = "alias"
+            vid = digest("v-", identity, "zfs-pool:" + pool)
+            prune = "home" if path == "/home" else "data"
+            binding = digest("b-", vid, entry.source + ":" + subpath, prune, config_digest, "storage-viz.capture/2")
+            media = media_resolver.resolve(dev)
+            resolved.append(Root(path, entry.mountpoint, dev, vid, identity, binding, prune, entry.fstype,
+                                 media.media, media.confidence, None, "/mnt/" + pool))
+            continue
         if len(labels[dev]) > 1 or any(len(alias_devices[name]) > 1 for name in labels[dev]):
             diagnostic = "VOLUME_ALIAS_CONFLICT"
         if labels[dev] and not diagnostic:
