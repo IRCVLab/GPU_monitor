@@ -215,5 +215,27 @@ class InventoryTests(unittest.TestCase):
             inventory.parse_inventory(cfg)
 
 
+    def test_agent_updates_defaults_to_auto_and_a_manual_server_is_never_the_canary(self):
+        cfg = self.valid_config()
+        self.assertEqual(inventory.parse_inventory(cfg).servers[0].agent_updates, "auto")
+        nexus = json.loads(json.dumps(cfg["servers"][0]))
+        nexus.update(id="nexus", order=0, transport="gate", agent_updates="manual", scanner={**nexus["scanner"], "server_id": "nexus"})
+        cfg["servers"].append(nexus)
+        parsed = inventory.parse_inventory(cfg)
+        self.assertEqual([s.agent_updates for s in parsed.servers], ["auto"] * (len(parsed.servers) - 1) + ["manual"])
+        auto = min((s for s in parsed.servers if s.id != "nexus"), key=lambda s: s.order).id
+        self.assertEqual(inventory.canary_of(parsed.servers), auto, "the lowest order among auto servers, not nexus at 0")
+        self.assertEqual(inventory.manual_updates(parsed.servers), frozenset({"nexus"}))
+        self.assertIsNone(inventory.canary_of(parsed.servers[-1:]), "a fleet of manual servers has no canary")
+        cfg["servers"][-1]["canary"] = True
+        with self.assertRaisesRegex(ValueError, "manual cannot be the canary: nexus"):
+            inventory.parse_inventory(cfg)
+        cfg["servers"][-1]["canary"] = False
+        for bad in ("Manual", "", None, True, ["manual"]):
+            cfg["servers"][-1]["agent_updates"] = bad
+            with self.assertRaisesRegex(ValueError, "agent_updates"):
+                inventory.parse_inventory(cfg)
+
+
 if __name__ == "__main__":
     unittest.main()

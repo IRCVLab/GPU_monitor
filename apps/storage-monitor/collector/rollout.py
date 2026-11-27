@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import json
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, FrozenSet, Optional, Tuple, Union
 
 from collector.ids import RELEASE_SHA_RE, SERVER_ID_RE
 
@@ -39,6 +39,9 @@ class RolloutState:
     reason: Optional[str] = None
     passed: Tuple[Passed, ...] = ()
     """The last MAX_PASSED shas that cleared the canary, oldest first."""
+    manual: FrozenSet[str] = frozenset()
+    """Hosts with ``agent_updates: manual``: never staged, never the canary, and their events change nothing.
+    Like ``canary`` the inventory decides it; unlike ``canary`` it is not in rollout.json."""
 
 
 @dataclass(frozen=True)
@@ -76,7 +79,7 @@ EVENT_KINDS = ("DesiredChanged", "HostInSync", "HostFailed", "HostRolledBack")
 
 def allows(state: RolloutState, host: str) -> bool:
     """Whether ``host`` may stage the desired sha now (the staging-slot count is fleet.Rollout's)."""
-    if state.desired_sha is None:
+    if state.desired_sha is None or host in state.manual:
         return False
     return state.phase == "fleet" or (state.phase == "canary" and host == state.canary)
 
@@ -143,6 +146,8 @@ TRANSITIONS: Dict[Tuple[str, str], Callable[[RolloutState, Any], RolloutState]] 
 
 
 def reduce(state: RolloutState, event: Event) -> RolloutState:
+    if getattr(event, "host", None) in state.manual:
+        return state  # a manually updated host takes no part in the rollout
     return TRANSITIONS[(state.phase, type(event).__name__)](state, event)
 
 
