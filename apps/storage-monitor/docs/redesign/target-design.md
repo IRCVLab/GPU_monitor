@@ -912,7 +912,7 @@ Every shim carries a `SHIM(Mx..My)` marker that `tools/check_shims.py` checks (I
 | S6 | One-shot import of `scan-duration-history/` into `record.durations` | M2b | M9 |
 | S7 | Gate verbs `get-snapshot` and `get-status` | M3 | central callers M5c; verbs M9 (`bootstrap_version 2`) |
 | S8 | New agent keeps the v1 files on hosts for rollback | M5b | M5c |
-| S9 | Installed health checker probes the session, ordered inventory IDs and an authenticated POST for a nonexistent hc- server. Release proxy forwards this probe until the checker is reinstalled. | M8 | M9 |
+| S9 | Installed health checker probes the session, ordered inventory IDs and an authenticated POST for a nonexistent hc- server. Release proxy forwards this probe until the checker is reinstalled. The reinstalled checker probes a rolled-back pre-redesign release the same way. | M8 | M9 |
 | R1 | Old store `STATE_DIR/<sid>/` kept for rollback (retained data, no code) | M2b | M9 |
 
 ## 7. Alternatives considered and rejected
