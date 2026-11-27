@@ -2001,7 +2001,10 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
             state_path=state,
             app_path=self.root / "opt/storage-viz-dashboard",
         )
+        cfg.app_path.parent.mkdir(parents=True)
+        cfg.app_path.symlink_to(target.parents[1])
         self.assertEqual(self.module.validate_proxy_target(target, cfg), target.resolve())
+        cfg.app_path.unlink()
 
         backup = self.root / "legacy_backup"
         backup_proxy = backup / "deploy/direct_proxy.py"
@@ -2038,20 +2041,57 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
                 with self.assertRaises(self.module.LauncherError):
                     self.module.validate_proxy_target(bad, cfg)
 
-    def test_launch_without_target_resolves_active_proxy_from_activation_state(self) -> None:
-        target = self._target()
-        state = self.root / "state.json"
-        state.write_text(json.dumps({"status": "active", "release": str(target.parents[1])}), encoding="utf-8")
+    def _linked_config(self, linked: Path, state: dict) -> object:
+        state_path = self.root / "state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
         cfg = self.module.LauncherConfig(
             release_root=self.root / "srv/storage-viz-dashboard/releases",
-            state_path=state,
+            state_path=state_path,
             app_path=self.root / "opt/storage-viz-dashboard",
         )
+        cfg.app_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg.app_path.symlink_to(linked)
+        return cfg
+
+    def _launched(self, cfg) -> str:
         calls: list[tuple[str, list[str]]] = []
-
         self.module.launch([], config=cfg, execv=lambda exe, argv: calls.append((exe, argv)))
+        return calls[0][1][-1]
 
-        self.assertEqual(calls[0][1][-1], str(target.resolve()))
+    def test_launch_without_target_resolves_the_proxy_of_the_linked_release(self) -> None:
+        target = self._target()
+        cfg = self._linked_config(target.parents[1], {"status": "active", "release": str(target.parents[1])})
+        self.assertEqual(self._launched(cfg), str(target.resolve()))
+
+    def test_proxy_under_activation_health_check_is_the_new_release(self) -> None:
+        # The activator links the new release and restarts both services before it writes
+        # the state, so the state still names the previous release during the health check.
+        previous = self._target("1" * 40)
+        candidate = self._target("2" * 40)
+        cfg = self._linked_config(candidate.parents[1], {"status": "active", "release": str(previous.parents[1])})
+        self.assertEqual(self._launched(cfg), str(candidate.resolve()))
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(previous, cfg)
+
+    def test_rollback_state_to_a_managed_release_starts_its_proxy(self) -> None:
+        previous = self._target("1" * 40)
+        current = self._target("2" * 40)
+        restored = str(previous.parents[1])
+        cfg = self._linked_config(previous.parents[1], {
+            "status": "rolled_back", "release": restored, "current": restored, "restored": restored,
+            "source_sha": "1" * 40, "previous": None, "legacy_backup": None,
+        })
+        self.assertEqual(self._launched(cfg), str(previous.resolve()))
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(current, cfg)
+
+    def test_link_outside_the_release_root_is_refused(self) -> None:
+        elsewhere = self.root / "tmp/storage-monitor"
+        (elsewhere / "deploy").mkdir(parents=True)
+        (elsewhere / "deploy/direct_proxy.py").write_text("print('proxy')\n", encoding="utf-8")
+        cfg = self._linked_config(elsewhere, {"status": "active", "release": str(elsewhere)})
+        with self.assertRaises(self.module.LauncherError):
+            self.module.resolve_proxy_target(cfg)
 
     def test_recovery_state_accepts_only_exact_safe_real_legacy_proxy(self) -> None:
         app = self.root / "opt/storage-viz-dashboard"
