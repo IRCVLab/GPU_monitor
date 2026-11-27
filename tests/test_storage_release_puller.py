@@ -1174,3 +1174,29 @@ class CiPendingTest(unittest.TestCase):
             result = puller.run_once(cfg, get_json=running, run_command=no_commands, download=github.download)
             self.assertEqual(result, "waiting-for-ci")
             self.assertFalse((cfg.state_dir / "failed-release.json").exists())
+
+
+class AuthenticatedApiTest(unittest.TestCase):
+    """The puller spends the token's API budget, not the host IP's shared 60 calls per hour."""
+
+    def test_api_calls_carry_the_token_when_one_is_installed(self):
+        puller = load_puller()
+        seen = []
+
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+            def read(self): return b'{"object": {"sha": "%s"}}' % SHA1.encode()
+
+        def fake_urlopen(request, timeout=None):
+            seen.append(dict(request.header_items()))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(puller.urllib.request, "urlopen", fake_urlopen):
+            token_file = Path(tmp) / "github-token"
+            token_file.write_text("tok-123\n", encoding="utf-8")
+            puller.default_get_json("/x", puller.read_github_token(token_file))
+            puller.default_get_json("/x", puller.read_github_token(Path(tmp) / "missing"))
+        self.assertEqual(seen[0].get("Authorization"), "Bearer tok-123")
+        self.assertNotIn("Authorization", seen[1])
