@@ -897,8 +897,7 @@ class AgentBundleTest(unittest.TestCase):
     def test_running_signing_job_waits_without_backoff_or_build(self):
         github = FakeGitHub(SHA1, agent_runs=[{"id": 1, "event": "workflow_run", "head_branch": "main",
                                                "head_sha": SHA1, "status": "in_progress", "conclusion": None}])
-        with self.assertRaisesRegex(self.puller.PullError, "still running"):
-            self.pull(github)
+        self.assertEqual(self.pull(github), "waiting-for-agent-bundle")
         self.assertFalse((self.cfg.state_dir / "failed-release.json").exists())
         self.assertEqual(self.builds, [])
 
@@ -915,9 +914,9 @@ class AgentBundleTest(unittest.TestCase):
             return payload
 
         ci_done = datetime(2026, 11, 27, 10, 0, tzinfo=timezone.utc).timestamp()
-        with self.assertRaisesRegex(self.puller.PullError, "has not started yet"):
-            self.puller.run_once(self.cfg, get_json=get_json, run_command=self.run_command,
-                                 download=github.download, now_fn=lambda: ci_done + 60)
+        self.assertEqual(self.puller.run_once(self.cfg, get_json=get_json, run_command=self.run_command,
+                                              download=github.download, now_fn=lambda: ci_done + 60),
+                         "waiting-for-agent-bundle")
         self.assertEqual(self.builds, [])
         result = self.puller.run_once(self.cfg, get_json=get_json, run_command=self.run_command,
                                       download=github.download, now_fn=lambda: ci_done + 3600)

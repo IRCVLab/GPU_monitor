@@ -491,7 +491,7 @@ def _iso_seconds(value: object) -> float | None:
 
 
 def plan_agent_bundle(config: Config, sha: str, ci_run: dict[str, object], get_json=default_get_json, now: float = 0.0) -> AgentPlan:
-    """Decide the agent bundle for sha. Raises PullError only to wait for a running signing job."""
+    """Decide the agent bundle for sha. Raises CiPending to wait for a signing job not yet finished."""
     validate_sha(sha)
     disabled = agent_channel_disabled(config)
     if disabled:
@@ -508,11 +508,11 @@ def plan_agent_bundle(config: Config, sha: str, ci_run: dict[str, object], get_j
     if not runs:
         ci_done = _iso_seconds(ci_run.get("updated_at"))
         if ci_done is not None and now - ci_done < AGENT_RUN_GRACE_SECONDS:
-            raise PullError("agent-bundle run for current SHA has not started yet")
+            raise CiPending("agent-bundle run for current SHA has not started yet")
         return AgentPlan("previous", "no agent-bundle run for current SHA")
     run = runs[0]
     if run.get("status") != "completed":
-        raise PullError("agent-bundle run for current SHA is still running")
+        raise CiPending("agent-bundle run for current SHA is still running")
     if run.get("conclusion") != "success":
         return AgentPlan("previous", f"agent-bundle run concluded {run.get('conclusion')}")
     artifacts = get_json(f"/repos/{config.repository}/actions/runs/{run['id']}/artifacts?per_page=100")
@@ -905,7 +905,10 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
         except CiPending:
             return "waiting-for-ci"
         authorize(config, sha, workflow_run, check_runs, run_command)
-        plan = plan_agent_bundle(config, sha, workflow_run, get_json, now)
+        try:
+            plan = plan_agent_bundle(config, sha, workflow_run, get_json, now)
+        except CiPending:
+            return "waiting-for-agent-bundle"
         try:
             agent_files = obtain_agent_bundle(config, plan, download, run_command)
             agent_dir = stage_agent_bundle(config, agent_files) if agent_files else None
