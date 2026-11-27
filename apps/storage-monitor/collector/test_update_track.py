@@ -51,6 +51,9 @@ class FakeChannel:
     def confirmed(self, server_id, sha):
         self.reports.append((server_id, "confirmed", sha))
 
+    def passed(self, sha):
+        return False
+
 
 def gate_collector(tmp_path, channel=None, release=OLD, **options):
     """A v2 host on ``release`` behind the gate, after one observe with no desired release yet."""
@@ -130,7 +133,7 @@ def test_no_desired_agent_and_s2_hosts_leave_the_track_idle(tmp_path):
     collector, host, channel = gate_collector(tmp_path, channel=FakeChannel(sha=None))
     for _ in range(3):
         collector.tick()
-    assert calls(collector) == [] and track(collector) == updates.Update(since_unix=None)
+    assert calls(collector) == [] and track(collector) == updates.Update(since_unix=None, seen=OLD)
     channel.current = Desired(NEW)
     collector.host.delivers_request_ids = False  # the host answers over S2
     for _ in range(3):

@@ -190,6 +190,10 @@ class Rollout:
                 self._current()
                 self._apply(event)
 
+    def passed(self, sha: Optional[str]) -> bool:
+        with self._lock:
+            return sha is not None and any(entry.sha == sha for entry in self._current().passed)
+
     def confirmed(self, server_id: str, sha: str) -> None:
         with self._lock:
             self._current()

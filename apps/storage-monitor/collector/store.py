@@ -191,7 +191,8 @@ def _upgrade_v2(raw: Any) -> Any:
     return {**raw, **jobs_v3, "schema": RECORD_SCHEMA, "manifest_sha256": None}
 
 
-UPDATE_FIELDS_SINCE_M3B = {"requested_host_unix": None, "requests": 0, "probation_manifest": None}
+UPDATE_FIELDS_SINCE_M3B = {"requested_host_unix": None, "requests": 0, "probation_manifest": None, "trial": None,
+                           "verified": None, "seen": None}
 
 
 def _upgrade_update(raw: Any) -> Any:

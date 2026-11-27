@@ -89,7 +89,9 @@ class Channel(Protocol):
     def reported(self, server_id: str, before: updates.Update, after: updates.Update) -> None:
         """A committed change of this host's update track."""
     def confirmed(self, server_id: str, sha: str) -> None:
-        """The host runs ``sha`` in sync, and its accepted manifest shows a good real run by it."""
+        """The host runs ``sha``, which passed probation here, and its accepted manifest shows a good real run by it."""
+    def passed(self, sha: Optional[str]) -> bool:
+        """Whether ``sha`` is in the rollout's ``passed``."""
 
 
 class NoChannel:
@@ -115,6 +117,9 @@ class NoChannel:
 
     def confirmed(self, server_id: str, sha: str) -> None:
         pass
+
+    def passed(self, sha: Optional[str]) -> bool:
+        return False
 
 
 def spawn_thread(work: Callable[[], None], name: str) -> None:
@@ -245,7 +250,7 @@ def probation_verdict(update: updates.Update, data: health.Data) -> Optional[Tup
     """
     if update.requested_host_unix is None:
         return None
-    return run_verdict(update.desired, data, since=update.requested_host_unix)
+    return run_verdict(update.trial, data, since=update.requested_host_unix)
 
 
 def run_verdict(release: Optional[str], data: health.Data, since: Optional[int] = None) -> Optional[Tuple[bool, Optional[str]]]:
@@ -838,7 +843,8 @@ class ServerActor:
                 at, observation.host_now, agent.release_sha, idle=not observation.run.present,
                 job_active=record.job is not None, allowed=allowed, permitted=permitted, broken=agent.broken,
                 attempt=agent.attempt, cadence_sec=_cadence(record.data),
-                manifest_sha=observation.manifest.sha256 if observation.manifest is not None else None))
+                manifest_sha=observation.manifest.sha256 if observation.manifest is not None else None,
+                release_passed=self.channel.passed(agent.release_sha)))
         return self._judge_probation(replace(record, update=update), at, refused, effects)
 
     def _judge_probation(self, record: Record, at: int, refused: Optional[Refusal], effects: tuple) -> tuple:
@@ -858,10 +864,10 @@ class ServerActor:
             self.channel.release(self.server.id)
         if after != before:
             self.channel.reported(self.server.id, before, after)
-        if (after.state == "in_sync" and self._transport == "gate" and self._agent.release_sha == after.desired
+        if (after.state == "in_sync" and self._transport == "gate" and self._agent.release_sha == after.desired == after.verified
                 and run_verdict(after.desired, self._record.data) == (False, None)):
-            # A host already on the desired release with a good real run by it, such as a canary
-            # bootstrapped onto the desired bundle: it counts as in sync for the rollout.
+            # A host whose release passed probation here and shows a good real run by it, such as the
+            # canary after rollout.json was lost: it counts as in sync for the rollout.
             self.channel.confirmed(self.server.id, after.desired)
         for effect in effects:
             self._start_update(effect)

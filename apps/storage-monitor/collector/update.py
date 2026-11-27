@@ -26,6 +26,12 @@ back-off go to ``refused``. A failed attempt (signature, digest, self-test) back
 never ``activate-update``: only the rollback makes the host mark the release bad.
 A host the rollout no longer permits stops before activation and returns to
 ``in_sync`` on the release it runs.
+
+The track never shows ``in_sync`` on the desired sha unless that sha passed probation
+on this host or is in the rollout's ``passed``. A host seen running a sha the track did
+not see pass (a queued activation that ran after a halt, an operator's switch, a
+bootstrap onto the desired bundle) enters probation for that sha from the observed
+activation time; a failure rolls back to the release seen before the switch.
 """
 from __future__ import annotations
 
@@ -71,6 +77,12 @@ class Update:
     """Sends of the current request."""
     probation_manifest: Optional[str] = None
     """sha256 of the manifest the host showed when probation began: the old release wrote it."""
+    trial: Optional[str] = None
+    """The sha on probation: the desired one, or one the host switched to unexpectedly."""
+    verified: Optional[str] = None
+    """The last sha that passed probation on this host. Kept across desired-release changes."""
+    seen: Optional[str] = None
+    """The release the last observe showed."""
 
 
 @dataclass(frozen=True)
@@ -106,6 +118,8 @@ class Observed:
     """The longest scan cadence the host's manifest declares."""
     manifest_sha: Optional[str] = None
     """sha256 of the manifest.json the host shows now."""
+    release_passed: bool = False
+    """The release the host runs is in the rollout's ``passed``."""
 
 
 @dataclass(frozen=True)
@@ -211,6 +225,38 @@ def _answer(update: Update, event: Observed, action: str, sha: Optional[str]) ->
     return attempt
 
 
+def _activated_at(event: Observed, sha: str) -> int:
+    """Host time the host switched to ``sha``: the updater's activation if it reports one, else now."""
+    attempt = event.attempt
+    if attempt is not None and attempt.action == "activate" and attempt.sha == sha and attempt.outcome in ("activated", "already_active"):
+        return attempt.finished_unix
+    return event.host_at
+
+
+def _probation(update: Update, event: Observed, sha: str, previous: Optional[str]) -> Result:
+    return _to(update, "probation", event.at, trial=sha, previous=previous, requested_host_unix=_activated_at(event, sha),
+               requests=0, last_error=None, probation_manifest=event.manifest_sha), ()
+
+
+def _unproven(update: Update, event: Observed) -> Optional[Result]:
+    """Probation for a sha the host runs that did not pass here and is not passed: None when there is none."""
+    release = event.release_sha
+    if release is None or release in (update.verified, update.trial) or event.release_passed:
+        return None  # passed here or in the rollout, or already judged: a failed trial is never retried
+    switched = update.seen is not None and release != update.seen
+    if switched:
+        return _probation(update, event, release, update.seen)
+    if release == update.desired:
+        return _probation(update, event, release, update.previous)
+    return None
+
+
+def _watched(handler: Callable[[Update, Observed], Result]) -> Callable[[Update, Observed], Result]:
+    def guarded(update: Update, event: Observed) -> Result:
+        return _unproven(update, event) or handler(update, event)
+    return guarded
+
+
 def _stop(update: Update, at: int) -> Result:
     """The rollout no longer permits this host: stop before activation, on the release it runs."""
     return _to(update, "in_sync", at, last_error=ROLLOUT_STOPPED, requests=0), ()
@@ -258,8 +304,8 @@ def _activating_observed(update: Update, event: Observed) -> Result:
     if event.release_sha == update.desired:
         # Probation counts from the activation on the host clock: a run started after it is the new release's.
         started = answer.finished_unix if answer is not None and answer.outcome in ("activated", "already_active") else event.host_at
-        return _to(update, "probation", event.at, requested_host_unix=started, last_error=None, requests=0,
-                   probation_manifest=event.manifest_sha), ()
+        return _to(update, "probation", event.at, trial=update.desired, requested_host_unix=started, last_error=None,
+                   requests=0, probation_manifest=event.manifest_sha), ()
     if answer is not None and answer.outcome == "refused":
         return _to(update, "refused", event.at, last_error=answer.code, requests=0), ()
     if answer is not None and answer.outcome == "failed":
@@ -290,7 +336,7 @@ def _probation_observed(update: Update, event: Observed) -> Result:
 
 def _probation_judged(update: Update, event: ProbationJudged) -> Result:
     if not event.fault:
-        return _to(update, "in_sync", event.at, attempts=0, next_try_unix=None, last_error=None), ()
+        return _to(update, "in_sync", event.at, attempts=0, next_try_unix=None, last_error=None, verified=update.trial), ()
     return _roll_back(update, event.at, event.host_at, event.code)
 
 
@@ -311,15 +357,18 @@ def _rolling_back_sent(update: Update, event: Sent) -> Result:
 def _desired_changed(update: Update, event: DesiredChanged) -> Result:
     if event.sha == update.desired:
         return update, ()
-    return Update(desired=event.sha, state="in_sync", since_unix=event.at), ()
+    return Update(desired=event.sha, state="in_sync", since_unix=event.at, verified=update.verified, seen=update.seen), ()
 
 
 TRANSITIONS: Dict[Tuple[str, str], Callable[[Update, Event], Result]] = {
     **{(state, kind): _ignore for state in STATES for kind in EVENT_KINDS},
     **{(state, "DesiredChanged"): _desired_changed for state in STATES},
-    ("in_sync", "Observed"): _start,
-    ("backoff", "Observed"): _backoff_observed,
-    ("staging", "Observed"): _staging_observed,
+    ("in_sync", "Observed"): _watched(_start),
+    ("backoff", "Observed"): _watched(_backoff_observed),
+    ("staging", "Observed"): _watched(_staging_observed),
+    ("refused", "Observed"): _watched(_ignore),
+    ("rolled_back", "Observed"): _watched(_ignore),
+    ("rollback_failed", "Observed"): _watched(_ignore),
     ("staging", "Sent"): _staging_sent,
     ("activating", "Observed"): _activating_observed,
     ("activating", "Sent"): _activating_sent,
@@ -331,4 +380,7 @@ TRANSITIONS: Dict[Tuple[str, str], Callable[[Update, Event], Result]] = {
 
 
 def reduce(update: Update, event: Event) -> Result:
-    return TRANSITIONS[(update.state, type(event).__name__)](update, event)
+    after, effects = TRANSITIONS[(update.state, type(event).__name__)](update, event)
+    if isinstance(event, Observed) and event.release_sha is not None and after.seen != event.release_sha:
+        after = replace(after, seen=event.release_sha)
+    return after, effects

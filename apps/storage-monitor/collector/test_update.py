@@ -8,10 +8,10 @@ OLD, NEW, OTHER = "1" * 40, "2" * 40, "3" * 40
 
 
 def observed(at, sha, idle=True, job=False, allowed=True, broken=False, attempt=None, host_at=None, cadence=3600,
-             permitted=True, manifest=None):
+             permitted=True, manifest=None, release_passed=False):
     return Observed(at=at, host_at=at if host_at is None else host_at, release_sha=sha, idle=idle, job_active=job,
                     allowed=allowed, permitted=permitted, broken=broken, attempt=attempt, cadence_sec=cadence,
-                    manifest_sha=manifest)
+                    manifest_sha=manifest, release_passed=release_passed)
 
 
 def answer(action, sha, outcome, code=None, at=0):
@@ -54,9 +54,9 @@ def test_update_happy_path_stages_activates_and_leaves_probation_in_sync():
 
 def test_staging_waits_for_an_idle_host_without_job_and_rollout_permission():
     for event in (observed(1, OLD, idle=False), observed(1, OLD, job=True), observed(1, OLD, allowed=False)):
-        assert reduce(Update(desired=NEW), event) == (Update(desired=NEW), ())
-    assert reduce(Update(desired=None), observed(1, OLD)) == (Update(desired=None), ()), "no desired agent: idle"
-    assert reduce(Update(desired=NEW), observed(1, NEW)) == (Update(desired=NEW), ())
+        assert reduce(Update(desired=NEW), event) == (Update(desired=NEW, seen=OLD), ())
+    assert reduce(Update(desired=None), observed(1, OLD)) == (Update(desired=None, seen=OLD), ()), "no desired agent: idle"
+    assert reduce(Update(desired=NEW, verified=NEW), observed(1, NEW)) == (Update(desired=NEW, verified=NEW, seen=NEW), ())
 
 
 def test_f1_a_stage_result_that_never_comes_is_staged_again_after_the_resend_window():
@@ -130,7 +130,7 @@ def test_floor_and_bootstrap_refusals_are_terminal_for_the_sha():
         assert (track.state, track.last_error, effects) == ("refused", code, ())
         for later in range(21, 40):
             assert reduce(track, observed(later * 1000, OLD)) == (track, ()), "no retry loop after a refusal"
-        assert reduce(track, DesiredChanged(99, OTHER))[0] == Update(desired=OTHER, since_unix=99)
+        assert reduce(track, DesiredChanged(99, OTHER))[0] == Update(desired=OTHER, since_unix=99, seen=OLD)
 
 
 def test_a_failed_self_test_backs_off_15_min_doubling_to_6_h_then_restages():
@@ -197,7 +197,8 @@ def test_update_random_events():
         kind = rng.randrange(4)
         if kind == 0:
             return Observed(at, at + rng.randrange(-500, 500), rng.choice(shas), rng.random() < 0.7, rng.random() < 0.2,
-                            rng.random() < 0.8, rng.random() < 0.9, rng.random() < 0.1, attempt(rng))
+                            rng.random() < 0.8, rng.random() < 0.9, rng.random() < 0.1, attempt(rng),
+                            release_passed=rng.random() < 0.2)
         if kind == 1:
             sha = rng.choice(shas[:3])
             effect = rng.choice((Stage(sha), Activate(sha), Rollback(sha)))
@@ -231,6 +232,29 @@ def test_update_random_events():
         if before.state == "probation" and after.state not in ("probation", "in_sync", "rolling_back", "refused"):
             assert isinstance(event, DesiredChanged), "probation left without a verdict or a desired change"
         if before.state in ("refused", "rolled_back", "rollback_failed") and after.state != before.state:
-            assert isinstance(event, DesiredChanged), "a terminal answer was retried"
+            unproven = isinstance(event, Observed) and event.release_sha not in (None, before.verified, before.trial) \
+                and not event.release_passed and after.state == "probation" and after.trial == event.release_sha
+            assert isinstance(event, DesiredChanged) or unproven, "a terminal answer was retried"
+        if isinstance(event, Observed) and after.state == "in_sync" and event.release_sha is not None \
+                and event.release_sha == after.desired:
+            assert after.verified == event.release_sha or event.release_passed, \
+                "in_sync on a sha without a completed probation on this host or the sha in passed"
 
     run_random_events(lambda rng: Update(desired=rng.choice(shas)), event, reduce, check)
+
+
+def test_a_host_seen_on_an_unproven_sha_enters_probation_from_its_activation_and_never_shows_in_sync():
+    stopped, _ = reduce(Update(desired=NEW), observed(1, OLD))
+    stopped, _ = reduce(stopped, sent(2, Stage(NEW), permitted=False))  # halted before activation
+    assert (stopped.state, stopped.seen) == ("in_sync", OLD)
+    late = answer("activate", NEW, "activated", at=500)  # the queued request ran anyway
+    track, effects = reduce(stopped, observed(600, NEW, attempt=late, permitted=False))
+    assert (track.state, track.trial, track.previous, track.requested_host_unix, effects) == ("probation", NEW, OLD, 500, ())
+    track, effects = reduce(track, ProbationJudged(700, 700, fault=True, code="INTERNAL_X"))
+    assert (track.state, effects) == ("rolling_back", (Rollback(OLD),)), "a halted rollout still rolls the host back"
+    switched, _ = reduce(Update(desired=NEW, verified=NEW, seen=NEW), observed(10, OTHER))
+    assert (switched.state, switched.trial, switched.previous) == ("probation", OTHER, NEW), "an unexpected switch is tried"
+    assert reduce(Update(desired=NEW, seen=OLD), observed(10, NEW, release_passed=True))[0].state == "in_sync", \
+        "a sha in passed needs no probation here"
+    passed, _ = reduce(Update(desired=NEW), observed(10, NEW, allowed=False))
+    assert (passed.state, passed.trial) == ("probation", NEW), "bootstrapped onto an unproven desired sha"

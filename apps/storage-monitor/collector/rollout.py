@@ -150,16 +150,17 @@ def host_event(host: str, before: Any, after: Any) -> Optional[Event]:
     """The rollout event a committed update-track change means, if any (``before``/``after``: update.Update).
 
     Probation failing is the host rolling back, reported when the track leaves probation, so the
-    rollout halts before the host has even answered the rollback.
+    rollout halts before the host has even answered the rollback. Probation outcomes name the sha
+    on trial, which may be one the host switched to unexpectedly.
     """
+    if before.state == "probation" and after.state == "in_sync" and after.verified == before.trial is not None:
+        return HostInSync(host, before.trial)
+    if before.state == "probation" and after.state in ("rolling_back", "refused") and before.trial is not None:
+        return HostRolledBack(host, before.trial, after.last_error)
     sha = after.desired
     if sha is None or before.desired != sha or before.state == after.state and before.attempts == after.attempts:
         return None
-    if before.state == "probation" and after.state == "in_sync":
-        return HostInSync(host, sha)
-    if before.state == "probation" and after.state in ("rolling_back", "refused"):
-        return HostRolledBack(host, sha, after.last_error)
-    if after.state == "refused" and before.state != "rolling_back":
+    if after.state == "refused" and before.state not in ("rolling_back", "probation"):
         return HostFailed(host, sha, after.last_error)
     if after.state == "backoff" and after.attempts >= 3 > before.attempts:
         return HostFailed(host, sha, f"BACKOFF_3:{after.last_error}")

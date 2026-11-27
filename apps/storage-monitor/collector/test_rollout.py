@@ -107,15 +107,15 @@ def test_rollout_random_events():
 
 
 def test_track_changes_map_to_rollout_events():
-    probation = Update(desired=B, state="probation", previous=A)
-    assert host_event(OTHER, probation, Update(desired=B, state="in_sync")) == HostInSync(OTHER, B)
+    probation = Update(desired=B, state="probation", previous=A, trial=B)
+    assert host_event(OTHER, probation, Update(desired=B, state="in_sync", verified=B)) == HostInSync(OTHER, B)
     assert host_event(OTHER, probation, Update(desired=B, state="rolling_back", last_error="AGENT_BROKEN")) == \
         HostRolledBack(OTHER, B, "AGENT_BROKEN"), "a failed probation halts at once, not after the host answers"
     assert host_event(OTHER, Update(desired=B, state="activating"), Update(desired=B, state="refused", last_error="FLOOR")) == \
         HostFailed(OTHER, B, "FLOOR")
     assert host_event(OTHER, Update(desired=B, state="staging", attempts=2), Update(desired=B, state="backoff", attempts=3)).host == OTHER
     assert host_event(OTHER, Update(desired=B, state="staging", attempts=0), Update(desired=B, state="backoff", attempts=1)) is None
-    assert host_event(OTHER, Update(desired=A, state="probation"), Update(desired=B, state="in_sync")) is None, "a desired change is no verdict"
+    assert host_event(OTHER, Update(desired=A, state="probation"), Update(desired=B, state="in_sync", verified=B)) is None, "a desired change is no verdict"
     assert host_event(OTHER, Update(desired=B, state="rolling_back"), Update(desired=B, state="rolled_back")) is None
 
 
@@ -169,7 +169,7 @@ def test_a_metadata_change_is_desired_changed_and_rollout_json_persists_it(tmp_p
     assert channel.desired().sha == B
     assert (channel.view().phase, channel.view().canary) == ("canary", CANARY), "no flag: the lowest order is the canary"
     assert rollout.parse((tmp_path / "state" / "rollout.json").read_bytes()).desired_sha == B
-    channel.reported(CANARY, Update(desired=B, state="probation"), Update(desired=B, state="in_sync"))
+    channel.reported(CANARY, Update(desired=B, state="probation", trial=B), Update(desired=B, state="in_sync", verified=B))
     write_agent(tmp_path / "agent", C, seq=8, bundle=b"other-bundle")
     assert (channel.view().desired_sha, channel.view().phase) == (C, "canary")
     write_agent(tmp_path / "agent", B)  # dashboard rollback to the release that passed
@@ -181,12 +181,12 @@ def test_staging_slots_canary_alone_then_two_at_a_time_and_none_while_halted(tmp
     channel = Rollout(tmp_path / "state", servers(CANARY, OTHER, THIRD, "s4", canary=THIRD), tmp_path / "agent" / "storage-viz-agent.json")
     assert not channel.acquire(CANARY) and channel.acquire(THIRD), "the inventory's canary flag decides"
     channel.release(THIRD)
-    channel.reported(THIRD, Update(desired=B, state="probation"), Update(desired=B, state="in_sync"))
+    channel.reported(THIRD, Update(desired=B, state="probation", trial=B), Update(desired=B, state="in_sync", verified=B))
     assert channel.acquire(CANARY) and channel.acquire(OTHER) and channel.acquire(CANARY)
     assert not channel.acquire("s4"), "at most two hosts stage at once in the fleet phase"
     channel.release(OTHER)
     assert channel.acquire("s4")
-    channel.reported(OTHER, Update(desired=B, state="probation"), Update(desired=B, state="rolling_back", last_error="X"))
+    channel.reported(OTHER, Update(desired=B, state="probation", trial=B), Update(desired=B, state="rolling_back", last_error="X"))
     channel.release(CANARY)
     channel.release("s4")
     assert channel.view().phase == "halted" and not channel.acquire(CANARY)
@@ -374,7 +374,7 @@ def test_f3_a_failed_rollout_json_write_is_visible(tmp_path, monkeypatch):
     collector.tick()
     assert collector.fleet.rollout_view()["error"] == "ROLLOUT_WRITE_FAILED: No space left on device"
     monkeypatch.setattr("collector.fleet.os.replace", real)
-    collector.fleet.rollout.reported("s1", Update(desired=B, state="probation"), Update(desired=B, state="in_sync"))
+    collector.fleet.rollout.reported("s1", Update(desired=B, state="probation", trial=B), Update(desired=B, state="in_sync", verified=B))
     assert collector.fleet.rollout_view()["error"] is None
 
 
@@ -422,7 +422,7 @@ def test_a_halt_stops_hosts_mid_update(tmp_path):
     collector.tick()
     assert states(collector, ("s2", "s3")) == {"s2": "activating", "s3": "activating"}
     # Another host fails probation on B: the rollout halts.
-    collector.fleet.rollout.reported("s9", Update(desired=B, state="probation"), Update(desired=B, state="rolling_back", last_error="X"))
+    collector.fleet.rollout.reported("s9", Update(desired=B, state="probation", trial=B), Update(desired=B, state="rolling_back", last_error="X"))
     assert collector.fleet.rollout_view()["phase"] == "halted"
     sends = len(collector.host.update_calls)
     for _ in range(5):
@@ -459,3 +459,30 @@ def test_a_rolled_back_sha_leaves_passed_and_must_pass_the_canary_again():
     assert (halted.phase, halted.passed) == ("halted", (Passed(A, 1),))
     assert reduce(reduce(halted, DesiredChanged(C, 3)), DesiredChanged(B, 2)).phase == "canary"
     assert reduce(state(phase="halted", passed=(Passed(B, 2),)), HostRolledBack(OTHER, B)).passed == ()
+
+
+def test_a_queued_activation_that_runs_after_a_halt_goes_to_probation_and_rolls_back_on_a_fault(tmp_path):
+    ids = ("s1", "s2", "s3")
+    collector = fleet(tmp_path, ids)
+    for sid in ("s2", "s3"):
+        collector.host.agents[sid].answers[B] = ("busy", "BUSY")
+    collector.tick()
+    pass_probation(collector, "s1")
+    collector.tick()
+    collector.tick()
+    with collector.fleet.rollout._lock:  # another host fails probation on B: the rollout halts
+        collector.fleet.rollout._apply(HostRolledBack("s9", B, "X"))
+    collector.tick(600)
+    assert collector.fleet.view("s2").update.state == "in_sync" and collector.fleet.rollout_view()["phase"] == "halted"
+    updater = collector.host.agents["s2"]
+    del updater.answers[B]
+    updater.request("activate", B, int(collector.clock.now))  # the request the host kept from its BUSY answer runs now
+    for _ in range(3):
+        collector.tick(60)
+        track = collector.fleet.view("s2").update
+        assert not (track.state == "in_sync" and collector.fleet.view("s2").release_sha == B), \
+            "in_sync on a sha that never passed probation here and is not passed"
+    assert (track.state, track.trial, track.previous) == ("probation", B, A)
+    collector.host.agents["s2"].broken = True
+    collector.tick(60)
+    assert ("s2", "rollback-update", A) in collector.host.update_calls
