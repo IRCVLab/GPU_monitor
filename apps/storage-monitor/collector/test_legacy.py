@@ -234,3 +234,25 @@ class LegacyVolumeTest(unittest.TestCase):
         self.assertEqual([volume.mountpoint for volume in manifest.volumes], ["/", "/archive"])
         self.assertEqual([volume.capacity.total if volume.capacity else None for volume in manifest.volumes], [100, None])
         self.assertEqual(len(captures), 1)
+
+    def test_roots_on_one_filesystem_are_one_volume(self):
+        # Real v1 snapshots (turing, lecun, ace, neo) scan /home and /data on the root
+        # filesystem. They are one volume with two roots: one capacity, counted once.
+        import copy
+        from collector.test_snapshot import base_payload
+        payload = base_payload()
+        root, mount = payload["selected_roots"][0], payload["mounts"][0]
+        root["capacity_id"] = "dev-8-1"
+        data_mount = copy.deepcopy(mount)
+        data_mount.update(path="/data", mount_id="data", scan_root="/data")
+        payload["mounts"].append(data_mount)
+        payload["selected_roots"].append({**root, "mount_id": "data", "scan_root": "/data"})
+        for user in payload["users"]:
+            user["by_mount"] = {**user["by_mount"], "/data": 0}
+        manifest, captures, _ = legacy.legacy_volume(payload, "c" * 64)
+        self.assertEqual([volume.mountpoint for volume in manifest.volumes], ["/"])
+        volume = manifest.volumes[0]
+        self.assertEqual([r.scan_root for r in volume.roots], ["/home", "/data"])
+        self.assertEqual(volume.capacity.total, 100)
+        sha, capture = captures[volume.volume_id]
+        self.assertEqual(sorted(r.scan_root for r in capture.roots), ["/data", "/home"])

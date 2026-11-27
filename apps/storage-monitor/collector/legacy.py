@@ -421,51 +421,66 @@ def legacy_volume(payload, original_sha):
 
     finished = payload["scan_finished_unix"]
     mounts = {m["mount_id"]: m for m in payload["mounts"]}
-    refs, volumes, captures, blobs = [], [], {}, {}
+    # Roots on one filesystem (same capacity_id, e.g. /home and /data on /) are one
+    # volume with several roots, as the v2 agent publishes them; one volume per root
+    # would show the filesystem twice and count its capacity twice.
+    groups = {}
     for source in payload["selected_roots"]:
         if source["status"] == "skipped":
             continue  # a mount the v1 policy declined, such as /proc: not managed storage
-        path = source["scan_root"]
-        vid = "v-" + hashlib.sha256(encode([payload["server_id"], source["mount_id"]])).hexdigest()[:16]
-        binding = "b-" + hashlib.sha256(encode([source.get(k) for k in (
-            "major_minor", "mount_source", "mount_root", "mountpoint", "scan_root", "prune_class")])).hexdigest()[:16]
-        ref = {"binding": binding, "scan_root": path, "prune_class": "legacy"}
-        mount = mounts.get(source["mount_id"])
-        capacity = pointer = attempt = None
-        if mount:
-            def inside(row):
-                return row["path"] == path or row["path"].startswith(path.rstrip("/") + "/")
+        key = source.get("capacity_id") or source.get("major_minor") or source["mount_id"]
+        groups.setdefault(key, []).append(source)
+    refs, volumes, captures, blobs = [], [], {}, {}
+    for key, sources in groups.items():
+        vid = "v-" + hashlib.sha256(encode([payload["server_id"], key])).hexdigest()[:16]
+        root_refs, roots, capacity, attempt = [], [], None, None
+        for source in sources:
+            path = source["scan_root"]
+            binding = "b-" + hashlib.sha256(encode([source.get(k) for k in (
+                "major_minor", "mount_source", "mount_root", "mountpoint", "scan_root", "prune_class")])).hexdigest()[:16]
+            ref = {"binding": binding, "scan_root": path, "prune_class": "legacy"}
+            root_refs.append(ref)
+            mount = mounts.get(source["mount_id"])
+            if mount:
+                def inside(row, path=path):
+                    return row["path"] == path or row["path"].startswith(path.rstrip("/") + "/")
 
-            rows = {}
-            for key in ("top_files", "stale"):
-                rows[key] = [{k: ("dir" if k == "kind" and v == "directory" else v) for k, v in row.items()
-                              if k in {"path", "uid", "mtime", "bytes", "path_b64"} or (key == "stale" and k == "kind")}
-                             for row in payload.get(key, []) if inside(row)]
-            errors = [{"path": r["path"], "reason": r["reason"]} for r in payload.get("blocked", [])
-                      if inside(r) and r["reason"] in contract.ERROR_REASONS]
-            root = {**ref, **rows, "outcome": source["status"], "tree": tree(mount["tree"]),
-                    "counts": {"bytes": mount["scanned_bytes"], "files": mount["scanned_files"],
-                               "dirs": mount["scanned_dirs"], "errors": mount["errors"], "vanished_dirs": 0},
-                    "errors": errors, "users": [{"uid": u["uid"], "name": u["name"], "bytes": u["by_mount"][path],
-                                                 "files": u["files"] if len(u["by_mount"]) == 1 else 0}
-                                                for u in payload["users"] if path in u["by_mount"]]}
+                rows = {}
+                for name in ("top_files", "stale"):
+                    rows[name] = [{k: ("dir" if k == "kind" and v == "directory" else v) for k, v in row.items()
+                                   if k in {"path", "uid", "mtime", "bytes", "path_b64"} or (name == "stale" and k == "kind")}
+                                  for row in payload.get(name, []) if inside(row)]
+                errors = [{"path": r["path"], "reason": r["reason"]} for r in payload.get("blocked", [])
+                          if inside(r) and r["reason"] in contract.ERROR_REASONS]
+                roots.append({**ref, **rows, "outcome": source["status"], "tree": tree(mount["tree"]),
+                              "counts": {"bytes": mount["scanned_bytes"], "files": mount["scanned_files"],
+                                         "dirs": mount["scanned_dirs"], "errors": mount["errors"], "vanished_dirs": 0},
+                              "errors": errors, "users": [{"uid": u["uid"], "name": u["name"], "bytes": u["by_mount"][path],
+                                                           "files": u["files"] if len(u["by_mount"]) == 1 else 0}
+                                                          for u in payload["users"] if path in u["by_mount"]]})
+                if capacity is None:
+                    capacity = judge.ScanCapacity(mount["df_total"], mount["df_used"], mount["df_avail"],
+                                                  source.get("scan_finished_unix", finished), "ok", mount["df_use_pct"])
+            elif source["status"] == "failed":
+                attempt = {"finished_unix": finished, "outcome": "failed", "error_code": source["error_code"]}
+        pointer = None
+        if roots:
+            outcome = "complete" if all(r["outcome"] == "complete" for r in roots) else "partial"
             doc = dict(schema=contract.CAPTURE_SCHEMA, volume_id=vid, run_id=original_sha[:32], group="legacy",
-                       roots=[root], outcome=root["outcome"], scan_started_unix=payload["scan_started_unix"],
+                       roots=roots, outcome=outcome, scan_started_unix=payload["scan_started_unix"],
                        scan_finished_unix=finished)
             raw = gzip.compress(encode(doc), mtime=0)
             sha = hashlib.sha256(raw).hexdigest()
-            expected = contract.Expected(vid, sha, frozenset([(path, binding)]))
+            expected = contract.Expected(vid, sha, frozenset((r["scan_root"], r["binding"]) for r in root_refs))
             captures[vid] = (sha, contract.parse_capture(raw, expected))
             blobs[vid] = raw
-            pointer = contract.CaptureRef(sha, len(raw), doc["scan_started_unix"], finished, root["outcome"])
-            capacity = judge.ScanCapacity(mount["df_total"], mount["df_used"], mount["df_avail"],
-                                          source.get("scan_finished_unix", finished), "ok", mount["df_use_pct"])
-        elif source["status"] == "failed":
-            attempt = {"finished_unix": finished, "outcome": "failed", "error_code": source["error_code"]}
-        refs.append({"roots": [ref], "last_attempt": attempt})
-        volumes.append(contract.Volume(vid, "legacy", None, source["mountpoint"], source["fstype"],
-                        source.get("storage_media", "unknown"), source.get("storage_media_confidence", "unresolved"),
-                        "legacy", judge.LOCAL_SCAN_CADENCE_SECONDS, (contract.RootRef(**ref),), capacity, pointer))
+            pointer = contract.CaptureRef(sha, len(raw), doc["scan_started_unix"], finished, outcome)
+        first = sources[0]
+        refs.append({"roots": root_refs, "last_attempt": attempt})
+        volumes.append(contract.Volume(vid, "legacy", None, first["mountpoint"], first["fstype"],
+                        first.get("storage_media", "unknown"), first.get("storage_media_confidence", "unresolved"),
+                        "legacy", judge.LOCAL_SCAN_CADENCE_SECONDS, tuple(contract.RootRef(**r) for r in root_refs),
+                        capacity, pointer))
     table = {"status": "unreadable", "observed_unix": finished, "within_roots": []}
     manifest = contract.HostManifest(original_sha, {"volumes": refs}, payload["server_id"], payload["hostname"],
         0, finished, payload["config_digest"], tuple(volumes), table, None, ())

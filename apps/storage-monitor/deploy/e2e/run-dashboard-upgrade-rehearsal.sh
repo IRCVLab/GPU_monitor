@@ -153,8 +153,14 @@ set_main() { in_c "$1" "git --git-dir /srv/fake-github/GPU_monitor.git update-re
 health() {  # health CID CHECKER: exit status of a health checker against the running release
   in_c "$1" "$2" >/dev/null 2>&1
 }
-store_digest() {  # store_digest CID: digest of the old store STATE_DIR/<sid>/ and the duration history
-  in_c "$1" "cd /var/lib/storage-viz-dashboard/state && find ${HOSTS[*]} scan-duration-history -type f 2>/dev/null | sort | xargs sha256sum | sha256sum | cut -c1-16"
+store_digest() {  # store_digest CID [SAVE]: digest of the old store STATE_DIR/<sid>/ and the duration history
+  # With SAVE, the per-file sums are kept in /root/old-store.sums so a later mismatch can name the files.
+  local keep=""
+  [[ -n "${2:-}" ]] && keep=" | tee /root/old-store.sums"
+  in_c "$1" "cd /var/lib/storage-viz-dashboard/state && find ${HOSTS[*]} scan-duration-history -type f 2>/dev/null | sort | xargs sha256sum$keep | sha256sum | cut -c1-16"
+}
+store_changes() {  # store_changes CID: files of the old store that differ from the saved sums
+  in_c "$1" "cd /var/lib/storage-viz-dashboard/state && find ${HOSTS[*]} scan-duration-history -type f 2>/dev/null | sort | xargs sha256sum | diff /root/old-store.sums - || true"
 }
 scan_starts() {  # scan_starts HOST: how many times storage-viz-scan.service has started on HOST
   in_c "${HOST_CID[$1]}" "journalctl -q -u storage-viz-scan.service -o cat | grep -c '^Starting storage-viz local filesystem scan' || true"
@@ -338,6 +344,11 @@ set_main "$C" "$MERGE_SHA"                                                      
 in_c "$C" "rm -rf /root/new-main"; docker cp "$WORK/src-new" "$C:/root/new-main"
 in_c "$C" 'bash /root/new-main/apps/storage-monitor/deploy/server/install-dashboard-deployer.sh >/root/install-new.log'   # step 3
 in_c "$C" 'test ! -e /var/lib/storage-viz-dashboard/puller/failed-release.json' || fail "proposed: a backoff is pending before the first run"  # step 4
+# The live release keeps updating its own store until the activator stops it, so the
+# R1 baseline is taken with the live dashboard stopped; from here on only the new
+# release could change those files. (The activator starts the dashboard again.)
+in_c "$C" 'systemctl stop storage-viz-dashboard.service'
+OLD_STORE="$(store_digest "$C" save)"
 CUTOVER="$(in_c "$C" 'date +%s')"
 out="$(puller "$C")" || fail "proposed: puller failed: $out"                                                       # step 5
 [[ "$out" == *activated* ]] || fail "proposed: puller did not activate: $out"
@@ -388,7 +399,7 @@ note "proposed: rescan $(json_get '{"post": d["post_status"], "polls": d["polls"
 pass "proposed: a rescan POST on a v1 host started storage-viz-scan.service and its job ended succeeded by InvocationID correlation (S4)"
 
 # -- 6. rollback and roll-forward ------------------------------------------------------------
-[[ "$(store_digest "$C")" == "$OLD_STORE" ]] || fail "rollback: the new release changed the old store"
+[[ "$(store_digest "$C")" == "$OLD_STORE" ]] || fail "rollback: the new release changed the old store: $(store_changes "$C" | tr '\n' ' ')"
 # The runbook keeps the timer stopped around a rollback; here it also keeps timer runs out of the checks.
 in_c "$C" 'systemctl stop storage-monitor-release-puller.timer'
 in_c "$C" '/usr/local/libexec/storage-dashboard-activate.py --rollback-state --restart-argv /usr/bin/systemctl restart storage-viz-dashboard.service storage-viz-proxy.service' >/dev/null
