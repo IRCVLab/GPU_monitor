@@ -167,14 +167,17 @@ def server_bytes(view, mono, thresholds, *, detail=False):
     now = host_now(view, mono)
     volumes = []
     freshness = []
+    activity = activity_body(view, mono)
+    running_group = (activity["activity"]["progress"].get("group")
+                     if activity["activity"]["state"] == "running" else None)
     if manifest:
         for vol, prefix in zip(manifest.volumes, pub.volumes):
             head = pub.captures.get(vol.volume_id)
             capacity, severity = judge.volume_capacity(vol.capacity, now, thresholds)
-            fresh = judge.volume_freshness(head and head["scan_finished_unix"], vol.cadence_sec, now)
+            fresh = judge.volume_freshness(head and head["scan_finished_unix"], vol.cadence_sec, now,
+                                           scanning=running_group is not None and running_group == vol.group)
             freshness.append(fresh)
             volumes.append(prefix + b"," + encode({"freshness": fresh, "capacity": capacity, "severity": severity})[1:])
-    activity = activity_body(view, mono)
     dynamic = {"activity": activity["activity"], "eta": activity["eta"], "job": activity["job"],
                "freshness": judge.worst_freshness(*freshness) if freshness else "unknown"}
     fields = [view.summary, encode(dynamic)[1:-1], b'"volumes":[' + b",".join(volumes) + b"]",

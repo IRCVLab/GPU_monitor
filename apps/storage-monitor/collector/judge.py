@@ -92,10 +92,19 @@ def progress_stale(updated_unix: Optional[int], now: int) -> bool:
     return updated_unix is not None and now - updated_unix > 30
 
 
-def volume_freshness(finished, cadence, now):
+def volume_freshness(finished, cadence, now, scanning=False):
+    """A volume's data is fresh until its next scan is overdue.
+
+    The agent checks due groups only on its hourly timer, so a volume that comes due
+    just after a tick waits up to one more timer period before its scan starts. A
+    volume whose group is being scanned right now is not stale: a large HDD scan can
+    run for hours past its cadence.
+    """
     if finished is None or now is None:
         return "unknown"
-    return "stale" if now > finished + cadence + VOLUME_GRACE_SECONDS else "fresh"
+    if scanning:
+        return "fresh"
+    return "stale" if now > finished + cadence + AGENT_TIMER_INTERVAL_SECONDS + VOLUME_GRACE_SECONDS else "fresh"
 
 
 @dataclass(frozen=True)

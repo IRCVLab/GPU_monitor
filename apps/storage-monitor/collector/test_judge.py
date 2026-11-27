@@ -33,11 +33,26 @@ def test_v5_age_same_reference(elapsed, expected):
 @pytest.mark.parametrize("cadence", [3600, 10800])
 def test_host_clock_skew(skew, cadence):
     capture = 100000 + skew
-    deadline = cadence + judge.VOLUME_GRACE_SECONDS
+    deadline = cadence + judge.AGENT_TIMER_INTERVAL_SECONDS + judge.VOLUME_GRACE_SECONDS
     assert judge.volume_freshness(capture, cadence, judge.host_now(None, None, 99)) == "unknown"
     for elapsed, expected in [(deadline, "fresh"), (deadline + 1, "stale")]:
         now = judge.host_now(capture, 99, 99 + elapsed)
         assert judge.volume_freshness(capture, cadence, now) == expected
+
+
+def test_a_volume_due_just_after_a_timer_tick_is_not_stale_before_the_next_tick():
+    # Live: fast volumes showed "오래됨" between hourly runs. A volume that comes due
+    # right after a tick is scanned only on the next one, an hour later.
+    finished = 100000
+    next_tick_scan_done = finished + 3600 + judge.AGENT_TIMER_INTERVAL_SECONDS
+    assert judge.volume_freshness(finished, 3600, next_tick_scan_done) == "fresh"
+
+
+def test_a_volume_being_scanned_is_not_stale():
+    finished = 100000
+    long_after = finished + 10800 + 6 * 3600
+    assert judge.volume_freshness(finished, 10800, long_after) == "stale"
+    assert judge.volume_freshness(finished, 10800, long_after, scanning=True) == "fresh"
 
 
 @pytest.mark.parametrize("observations,agent,expected", [

@@ -180,8 +180,9 @@ def test_capacity_from_a_new_manifest_updates_the_mount_without_a_download(tmp_p
 def test_freshness_reads_each_volume_cadence_from_the_manifest(tmp_path):
     collector, host = v2_collector(tmp_path)
     finished = host.collector.clock.now - 61 - 600
-    # VB has cadence 3600 and VA 10800, so VB decides. Grace: two idle observes plus the timer delay.
-    deadline = finished + 3600 + 2 * 60 + 360
+    # VB has cadence 3600 and VA 10800, so VB decides. Grace: one hourly timer period,
+    # two idle observes and the timer delay.
+    deadline = finished + 3600 + 3600 + 2 * 60 + 360
     collector.tick(deadline - collector.clock.now)
     assert collector.summary()["freshness"] == "fresh"
     collector.tick(1)
