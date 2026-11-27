@@ -237,5 +237,11 @@ class InventoryTests(unittest.TestCase):
                 inventory.parse_inventory(cfg)
 
 
+    def test_example_inventory_parses_and_shows_the_truenas_entry(self):
+        parsed = inventory.load_inventory(pathlib.Path(__file__).resolve().parents[1] / "config/servers.example.yaml")
+        nexus = next(server for server in parsed.servers if server.id == "nexus")
+        self.assertEqual((nexus.transport, nexus.agent_updates, nexus.enabled), ("gate", "manual", False))
+
+
 if __name__ == "__main__":
     unittest.main()

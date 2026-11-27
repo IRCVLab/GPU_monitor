@@ -51,6 +51,30 @@
         "top": 200,
         "stale_days": 180
       }
+    },
+    {
+      "id": "nexus",
+      "display_name": "Nexus (TrueNAS)",
+      "order": 80,
+      "host": "nexus.example.test",
+      "port": 22,
+      "enabled": false,
+      "username": "monitoring",
+      "identity_file": "/etc/storage-viz/keys/nexus_ed25519",
+      "known_hosts_file": "/etc/storage-viz/known_hosts",
+      "transport": "gate",
+      "agent_updates": "manual",
+      "scanner": {
+        "server_id": "nexus",
+        "scanner_path": "/mnt/tank/storage-viz/opt/current/bin/hstscan",
+        "data_dir": "/mnt/tank/storage-viz/data",
+        "run_dir": "/mnt/tank/storage-viz/run",
+        "threads": 4,
+        "prune_home_mb": 50,
+        "prune_data_mb": 100,
+        "top": 200,
+        "stale_days": 180
+      }
     }
   ]
 }
