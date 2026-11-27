@@ -181,7 +181,7 @@ def test_servers_show_each_transport_the_agent_update_track_and_the_rollout(coll
                                 "canary": "alpha-1", "passed": []}
 
 
-def test_capture_contract_and_retention(collector_api):
+def test_capture_contract_and_retention(collector_api, monkeypatch):
     from collector.test_volumes import VA, BA, VB, BB, SID, V2Host, capture, sha
     host, request, _ = collector_api
     agent = V2Host(host)
@@ -192,7 +192,13 @@ def test_capture_contract_and_retention(collector_api):
     host.tick()
     base = f"/api/v2/servers/{SID}"
     url = f"{base}/volumes/{VA}/captures/{sha(first)}"
-    code, raw, headers = request("GET", url)
+    previous = host.fleet.view(SID)
+    with monkeypatch.context() as patch:
+        from pathlib import Path
+        def no_full_read(path):
+            raise AssertionError(f"capture served by reading the entire file {path}")
+        patch.setattr(Path, "read_bytes", no_full_read)
+        code, raw, headers = request("GET", url)
     assert code == 200 and raw == first
     assert headers["Content-Length"] == str(len(first))
     assert headers["ETag"] == f'"{sha(first)}"'
@@ -219,6 +225,8 @@ def test_capture_contract_and_retention(collector_api):
     agent.publish()
     host.tick()
     assert request("GET",url)[0] == 410
+    monkeypatch.setattr(host.fleet, "view", lambda sid: previous)
+    assert request("GET", url)[0] == 410  # Old reader after the durable record changed and pruned its file.
 
 
 def test_installed_health_probe_has_no_rescan_side_effect(collector_api):

@@ -277,7 +277,9 @@ def run_health_check(
             if not cookie.startswith("storage_viz_session="):
                 raise HealthCheckError("session cookie missing")
             status, _, servers = _request(connection_factory, contract, "GET", "/api/v2/fleet", headers={"Cookie": cookie, "X-Forwarded-User": FIXED_PROXY_OPERATOR})
-            if status != 200 or not isinstance(servers, Mapping) or not isinstance(servers.get("policy"), Mapping):
+            # Inventory fleets publish rollout state even with no desired agent. Fixture fleets return null.
+            if (status != 200 or not isinstance(servers, Mapping) or not isinstance(servers.get("policy"), Mapping)
+                    or not isinstance(servers.get("rollout"), Mapping)):
                 raise HealthCheckError("servers probe failed or sample mode")
             observed = [s.get("server_id") for s in servers.get("servers", []) if isinstance(s, Mapping)]
             if observed != contract.enabled_server_ids:

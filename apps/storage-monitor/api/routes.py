@@ -5,6 +5,8 @@ from pathlib import Path
 import posixpath
 import re
 import logging
+import os
+from typing import BinaryIO
 
 from api.errors import RequestError
 from collector.fleet import Fleet
@@ -62,6 +64,7 @@ class Response:
     status: int = 200
     headers: dict = field(default_factory=dict)
     content_type: str = "application/json"
+    stream: BinaryIO | None = None
 
 
 def json_response(obj, status=200, headers=None):
@@ -160,14 +163,17 @@ def capture(handler, sid, vid, sha):
         raise RequestError("UNKNOWN_VOLUME")
     if pub.captures.get(vid, {}).get("sha256") != sha:
         raise RequestError("CAPTURE_GONE")
+    headers = {"Content-Encoding": "gzip", "ETag": f'"{sha}"',
+               "Cache-Control": "private, max-age=31536000, immutable"}
+    if pub.legacy_bytes:
+        return Response([pub.legacy_bytes[vid]], headers=headers)
+    stream = source.open_capture(sid, vid, sha)
     try:
-        data = pub.legacy_bytes[vid] if pub.legacy_bytes else source.read_capture(sid, vid, sha)
-    except StoreUnavailable:
-        if source.view(sid).data.accepted.get(vid) != sha:
-            raise RequestError("CAPTURE_GONE") from None
-        raise
-    return Response([data], headers={"Content-Encoding": "gzip", "ETag": f'"{sha}"',
-                                     "Cache-Control": "private, max-age=31536000, immutable"})
+        headers["Content-Length"] = str(os.fstat(stream.fileno()).st_size)
+    except OSError:
+        stream.close()
+        raise StoreUnavailable() from None
+    return Response([], headers=headers, stream=stream)
 
 
 ROUTES = (

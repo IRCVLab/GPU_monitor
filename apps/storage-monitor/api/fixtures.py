@@ -10,7 +10,7 @@ from collector.errors import RescanDisabled, UnknownServer
 from collector.legacy import legacy_volume
 from collector.snapshot import validate_download, DesiredServer
 from collector.health import Data, Link
-from collector.contract import parse_manifest, parse_capture
+from collector.contract import decode_json, parse_manifest, parse_capture
 from collector.ids import SERVER_ID_RE
 from collector.inventory import Server as InventoryServer
 from collector.store import Record
@@ -87,7 +87,7 @@ class FixtureFleet:
 
     def _build_view(self, server: InventoryServer) -> ServerView:
         data = self._bytes(self._files[server.id])
-        doc = json.loads(data)
+        doc = decode_json(data)
         if isinstance(doc, dict) and doc.get("schema_version") == 1:
             sha = hashlib.sha256(data).hexdigest()
             status = {"server_id": server.id, "generation": f"{server.id}-{doc['scan_started_unix']}-v1.json",
@@ -118,6 +118,12 @@ class FixtureFleet:
         if path.is_symlink() or not path.is_file():
             raise ValueError(f"missing or unsafe fixture: {filename}")
         return path.read_bytes()
+
+    def open_capture(self, sid, vid, sha):
+        path = self.root / (sha + ".json.gz")
+        if path.is_symlink():
+            raise ValueError("unsafe fixture capture")
+        return path.open("rb")
 
     def read_capture(self, sid, vid, sha):
         return self._bytes(sha + ".json.gz")

@@ -256,8 +256,8 @@ class Fleet:
         self.lookup(server_id)
         return self.actors[server_id].view
 
-    def read_capture(self, sid, vid, sha):
-        return self.actors[sid].store.read_capture(vid, sha)
+    def open_capture(self, sid, vid, sha):
+        return self.actors[sid].store.open_capture(vid, sha)
 
     def views(self) -> List[ServerView]:
         return [self.actors[server.id].view for server in self.servers]

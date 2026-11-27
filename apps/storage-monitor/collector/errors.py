@@ -17,6 +17,10 @@ class UnknownServer(DomainError):
     code = "UNKNOWN_SERVER"
 
 
+class CaptureGone(DomainError):
+    code = "CAPTURE_GONE"
+
+
 class StoreUnavailable(DomainError):
     code = "STORE_UNAVAILABLE"
 

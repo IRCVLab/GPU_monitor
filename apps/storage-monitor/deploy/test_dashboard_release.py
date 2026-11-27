@@ -1700,7 +1700,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         class FakeConnection:
             responses = [
                 FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie":"storage_viz_session=abc; Path=/"}),
-                FakeResponse(200, {"policy":{}, "servers":[{"server_id":"atlas"},{"server_id":"hinton"}]}),
+                FakeResponse(200, {"rollout": {"phase": "idle"}, "policy":{}, "servers":[{"server_id":"atlas"},{"server_id":"hinton"}]}),
                 FakeResponse(404, {"error":{"code":"UNKNOWN_SERVER"}}),
             ]
             def __init__(self, host, port, timeout):
@@ -1719,6 +1719,16 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         self.assertEqual(requests[2][2]["X-CSRF-Token"], "csrf")
         self.assertEqual(requests[2][2]["Host"], "166.104.167.11:505")
         self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
+
+    def test_fixture_fleet_with_matching_ids_fails_health_check(self):
+        from unittest.mock import patch
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+        session = (200, {"Set-Cookie": "storage_viz_session=a"}, {"can_rescan": True, "csrf_token": "x"})
+        fixture_fleet = {"policy": {}, "rollout": None, "servers": [{"server_id": sid} for sid in contract.enabled_server_ids]}
+        with patch.object(self.module, "_request", side_effect=[session, (200, {}, fixture_fleet)]):
+            with self.assertRaisesRegex(self.module.HealthCheckError, "sample mode"):
+                self.module.run_health_check(contract, skip_service_check=True, ready_attempts=1)
 
     def test_probe_waits_for_dashboard_readiness_after_initial_proxy_502s(self) -> None:
         dash, proxy, _ = self._write_envs()
@@ -1746,7 +1756,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
             for _ in range(4)
         ] + [
             FakeResponse(200, {"can_rescan": True, "csrf_token": "csrf"}, {"Set-Cookie": "storage_viz_session=abc; Path=/"}),
-            FakeResponse(200, {"policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
+            FakeResponse(200, {"rollout": {"phase": "idle"}, "policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
             FakeResponse(404, {"error": {"code": "UNKNOWN_SERVER"}}),
         ]
 
@@ -1842,7 +1852,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
 
         responses = [
             FakeResponse(200, {"can_rescan": True, "csrf_token": "candidate-csrf"}, {"Set-Cookie": "storage_viz_session=candidate; Path=/"}),
-            FakeResponse(200, {"policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
+            FakeResponse(200, {"rollout": {"phase": "idle"}, "policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
             FakeResponse(404, {"error": {"code": "UNKNOWN_SERVER"}}),
         ]
 
@@ -1933,7 +1943,7 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
                         {"can_rescan": True, "csrf_token": "csrf"},
                         {"Set-Cookie": "storage_viz_session=abc; Path=/"},
                     ),
-                    FakeResponse(200, {"policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
+                    FakeResponse(200, {"rollout": {"phase": "idle"}, "policy": {}, "servers": [{"server_id": "atlas"}, {"server_id": "hinton"}]}),
                     FakeResponse(404, {"code": "UNKNOWN_SERVER"}),
                 ]
             )

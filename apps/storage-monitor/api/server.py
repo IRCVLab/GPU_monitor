@@ -2,6 +2,7 @@
 import argparse
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import shutil
 import logging
 import os
 from pathlib import Path
@@ -58,20 +59,27 @@ class Handler(auth.Auth, BaseHTTPRequestHandler):
             if status == 500:
                 logging.exception("storage-viz request %s failed", request_id)
             response = routes.json_response(body, status, headers)
-        self.send_response(response.status)
-        self.send_header("X-Request-Id", request_id)
-        if "Cache-Control" not in response.headers:
-            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")
-        self.send_header("Content-Type", response.content_type)
-        self.send_header("Content-Length", str(sum(map(len, response.chunks))))
-        for name, value in response.headers.items():
-            self.send_header(name, value)
-        self.end_headers()
-        if self.command != "HEAD":
-            for chunk in response.chunks:
-                self.wfile.write(chunk)
+        try:
+            self.send_response(response.status)
+            self.send_header("X-Request-Id", request_id)
+            if "Cache-Control" not in response.headers:
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+            self.send_header("Content-Type", response.content_type)
+            if response.stream is None:
+                self.send_header("Content-Length", str(sum(map(len, response.chunks))))
+            for name, value in response.headers.items():
+                self.send_header(name, value)
+            self.end_headers()
+            if self.command != "HEAD":
+                if response.stream is not None:
+                    shutil.copyfileobj(response.stream, self.wfile, length=64 * 1024)
+                for chunk in response.chunks:
+                    self.wfile.write(chunk)
+        finally:
+            if response.stream is not None:
+                response.stream.close()
 
     def __getattr__(self, name):
         # BaseHTTPRequestHandler dispatches verbs by looking up do_<method>.
