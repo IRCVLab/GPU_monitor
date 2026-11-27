@@ -18,7 +18,7 @@ import typing
 from typing import Any, Collection, Mapping, Optional, Tuple
 
 from collector import contract, jobs, update
-from collector.errors import StoreUnavailable
+from collector.errors import CaptureGone, StoreUnavailable
 from collector.health import LEGACY_VOLUME, LINK_STATES, Data, LegacyPublication, Link
 from collector.ids import SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE
 from collector.jobs import Job
@@ -75,6 +75,20 @@ class ServerStore:
             _reject_symlinks(path)
             return path.read_bytes()
         except OSError as exc:
+            raise StoreUnavailable("capture unreadable") from exc
+
+    def open_capture(self, volume_id: str, sha: str):
+        path = self._capture_path(volume_id, sha)
+        try:
+            _reject_symlinks(self.state_root / "servers", self.directory, self.captures, path)
+            return path.open("rb")
+        except FileNotFoundError as exc:
+            # Pruning follows the durable commit. An HTTP reader may still hold the previous view.
+            record = self.load()
+            if record and record.data.accepted.get(volume_id) != sha:
+                raise CaptureGone() from exc
+            raise StoreUnavailable("accepted capture is missing") from exc
+        except (OSError, ValueError) as exc:
             raise StoreUnavailable("capture unreadable") from exc
 
     def commit(self, record: Record, capture: Optional[Tuple[str, str, bytes]] = None, *, prune: bool = True) -> None:

@@ -1,15 +1,18 @@
-"""Exact dashboard URLs and v1 projections (S5, until M8)."""
-from dataclasses import dataclass, field
+"""Versioned dashboard routes and the release asset allowlist."""
+from dataclasses import asdict, dataclass, field
 import json
 from pathlib import Path
 import posixpath
 import re
 import logging
+import os
+from typing import BinaryIO
 
 from api.errors import RequestError
-from collector.contract import snapshot_response
-from collector.errors import RescanDisabled, SnapshotAbsent, StoreUnavailable
-from collector.view import error_row_v1, job_v1, scan_status_v1, snapshot_v1_chunks, summary_v1
+from collector.fleet import Fleet
+from collector.ids import SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE
+from collector.view import activity_body, server_bytes, encode
+from collector.errors import RescanDisabled, StoreUnavailable
 
 VIEWER_DIR = Path(__file__).resolve().parents[1] / "viewer"
 
@@ -61,27 +64,11 @@ class Response:
     status: int = 200
     headers: dict = field(default_factory=dict)
     content_type: str = "application/json"
+    stream: BinaryIO | None = None
 
 
 def json_response(obj, status=200, headers=None):
     return Response([json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()], status, headers or {})
-
-
-def overview(runtime, server_id, value):
-    if runtime.live_capacity is not None:
-        value = runtime.live_capacity.project(server_id, value)
-    return snapshot_response(value, runtime.capacity_thresholds)
-
-
-def summary(runtime, view, now):
-    try:
-        row = summary_v1(view, now)
-        if row["overview_snapshot"] is not None:
-            row["overview_snapshot"] = overview(runtime, view.server.id, row["overview_snapshot"])
-        return row
-    except Exception:
-        logging.exception("storage-viz fleet row failed for %s", view.server.id)
-        return error_row_v1(view.server, "INTERNAL")
 
 
 def session(handler):
@@ -89,89 +76,117 @@ def session(handler):
     return json_response(body, headers={"Set-Cookie": cookie} if cookie else {})
 
 
-def servers(handler):
+def health_inventory(handler):
+    # SHIM(M8..M9) S9: the installed health checker validates inventory order.
     runtime = handler.server.runtime
-    now = runtime.fleet.clock.monotonic()
-    return json_response({"data_mode": runtime.data_mode, "rollout": runtime.fleet.rollout_view(),
-                          "servers": [summary(runtime, v, now) for v in runtime.fleet.views()]})
-
-
-def scan_status(handler, server_id):
-    runtime = handler.server.runtime
-    view = runtime.fleet.view(server_id)
-    status = scan_status_v1(view, runtime.fleet.clock.monotonic())
-    if runtime.live_capacity is not None and view.snapshot is not None:
-        value = view.snapshot.overview
-        status["capacity"] = {"scan_generation": value["scan_generation"], "mounts": overview(runtime, server_id, value)["mounts"]}  # SHIM(M2b..M8) S5
-    return json_response(status)
-
-
-def snapshot(handler, server_id):
-    runtime = handler.server.runtime
-    view = runtime.fleet.view(server_id)
-    if view.snapshot is None:
-        raise StoreUnavailable() if view.error == StoreUnavailable.code else SnapshotAbsent()
-    sample = runtime.live_capacity.sample_for(server_id) if runtime.live_capacity is not None else None
-    return Response(snapshot_v1_chunks(view.snapshot, sample, runtime.capacity_thresholds))
-
-
-def job(handler, server_id):
-    view = handler.server.runtime.fleet.view(server_id)
-    return json_response({"job": job_v1(view.job, server_id)})
+    return json_response({"data_mode": "inventory" if isinstance(runtime.fleet, Fleet) else "sample",
+                          "servers": [{"id": s.id} for s in runtime.fleet.servers]})
 
 
 def rescan(handler, server_id):
     try:
         length = int(handler.headers.get("Content-Length", "0") or "0")
     except ValueError:
-        raise RequestError("BAD_LENGTH") from None
+        raise RequestError("BAD_REQUEST") from None
     if length < 0:
-        raise RequestError("BAD_LENGTH")
+        raise RequestError("BAD_REQUEST")
     if length > 1024:
         raise RequestError("BODY_TOO_LARGE")
     if not length:
-        raise RequestError("BAD_BODY")
+        raise RequestError("BAD_REQUEST")
     try:
-        text = handler.rfile.read(length).decode()
+        text = handler.rfile.read(length).decode().lstrip()
         body, end = json.JSONDecoder().raw_decode(text)
         if text[end:].strip():
             raise ValueError
     except (ValueError, RecursionError):
-        raise RequestError("BAD_JSON") from None
+        raise RequestError("BAD_REQUEST") from None
     if body != {}:
-        raise RequestError("BAD_BODY")
+        raise RequestError("BAD_REQUEST")
     actor = handler._require_post_auth()
     runtime = handler.server.runtime
     if runtime.fleet is None:
         raise RescanDisabled()
+    if handler.health_probe:
+        # SHIM(M8..M9) S9: the old checker submits a random absent hc- id.
+        runtime.fleet.lookup(server_id)
+        raise RequestError("NOT_FOUND")
     if not runtime.runs_actors:
         runtime.fleet.lookup(server_id)
-        raise RescanDisabled(code="EXECUTION_DISABLED")
-    return json_response(runtime.fleet.request_rescan(server_id, actor), 202)
+        raise RescanDisabled()
+    result = runtime.fleet.request_rescan(server_id, actor)
+    return json_response({"job": result["job"]}, 202)
 
 
-def capabilities(handler):
-    return json_response({"rescan": False, "message": "Manual rescan only: use the bounded per-server API behind a trusted proxy."})
+def fleet(handler):
+    runtime = handler.server.runtime
+    source = runtime.fleet
+    now = source.clock.monotonic()
+    rows = []
+    for view in source.views():
+        try:
+            rows.append(server_bytes(view, now, runtime.capacity_thresholds))
+        except Exception:
+            logging.exception("failed to render server %s", view.server.id)
+            rows.append(encode({"server_id": view.server.id, "status": "error", "error": {"code": "INTERNAL"}}))
+    header = encode({"generated_unix": int(source.clock.time()), "rollout": source.rollout_view(),
+                     "policy": {"capacity_thresholds": asdict(runtime.capacity_thresholds)}})
+    return Response([header[:-1], b',"servers":[', b",".join(rows), b"]}"])
 
 
-def rescan_status(handler):
-    return json_response({"supported": False, "scanning": False, "message": "Legacy local rescan endpoint is disabled."})
+def checked_view(source, sid):
+    view = source.view(sid)
+    if view.error and view.publication is None:
+        if view.error == StoreUnavailable.code:
+            raise StoreUnavailable()
+        raise RequestError(view.error)
+    return view
 
 
-def legacy_rescan(handler):
-    raise RequestError("LEGACY_DISABLED", body={"supported": False, "error": "Legacy local rescan endpoint is disabled."})
+def detail(handler, sid):
+    runtime = handler.server.runtime
+    view = checked_view(runtime.fleet, sid)
+    return Response([server_bytes(view, runtime.fleet.clock.monotonic(), runtime.capacity_thresholds, detail=True)])
+
+
+def activity(handler, sid):
+    source = handler.server.runtime.fleet
+    return json_response(activity_body(checked_view(source, sid), source.clock.monotonic()))
+
+
+def capture(handler, sid, vid, sha):
+    source = handler.server.runtime.fleet
+    view = checked_view(source, sid)
+    pub = view.publication
+    manifest = pub.manifest if pub else None
+    if manifest is None or manifest.volume(vid) is None:
+        raise RequestError("UNKNOWN_VOLUME")
+    if pub.captures.get(vid, {}).get("sha256") != sha:
+        raise RequestError("CAPTURE_GONE")
+    headers = {"Content-Encoding": "gzip", "ETag": f'"{sha}"',
+               "Cache-Control": "private, max-age=31536000, immutable"}
+    if pub.legacy_bytes:
+        return Response([pub.legacy_bytes[vid]], headers=headers)
+    stream = source.open_capture(sid, vid, sha)
+    try:
+        headers["Content-Length"] = str(os.fstat(stream.fileno()).st_size)
+    except OSError:
+        stream.close()
+        raise StoreUnavailable() from None
+    return Response([], headers=headers, stream=stream)
 
 
 ROUTES = (
+    ("GET", r"/api/v2/session", session, "session"),
+    ("GET", r"/api/v2/fleet", fleet, "read"),
+    ("GET", r"/api/v2/servers/([^/]+)", detail, "read"),
+    ("GET", r"/api/v2/servers/([^/]+)/activity", activity, "read"),
+    ("GET", r"/api/v2/servers/([^/]+)/volumes/([^/]+)/captures/([^/]+)", capture, "read"),
+    ("POST", r"/api/v2/servers/([^/]+)/rescan", rescan, "rescan"),
+    # SHIM(M8..M9) S9: only the three installed health-check requests.
     ("GET", r"/api/session", session, "session"),
-    ("GET", r"/api/servers", servers, "read"),
-    ("GET", r"/api/servers/([^/]+)/scan-status", scan_status, "read"),
-    ("GET", r"/api/servers/([^/]+)/snapshot", snapshot, "read"),
-    ("GET", r"/api/servers/([^/]+)/job", job, "read"),
-    ("POST", r"/api/servers/([^/]+)/rescan", rescan, "rescan"),
-    ("GET", r"/capabilities", capabilities, "public"),
-    ("GET", r"/rescan-status", rescan_status, "public"),
-    ("POST", r"/rescan", legacy_rescan, "public"),
+    ("GET", r"/api/servers", health_inventory, "read"),
+    ("POST", r"/api/servers/(hc-[A-Za-z0-9_]{24})/rescan", rescan, "rescan"),
 )
 
 
@@ -186,10 +201,14 @@ def dispatch(handler, target):
             continue
         if handler.command != method:
             raise RequestError("METHOD_NOT_ALLOWED", headers={"Allow": method})
-        handler.v1_route = True
+        handler.health_probe = not path.startswith("/api/v2/")
+        if not handler.health_probe:
+            if "?" in target or any(not regex.fullmatch(param) for regex, param in
+                                    zip((SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE), match.groups())):
+                raise RequestError("BAD_REQUEST")
         if auth == "read":
             handler._require_read_auth()
             if handler.server.runtime.fleet is None:
-                raise RequestError("UNCONFIGURED", body={"error": "api not configured"})
+                raise StoreUnavailable()
         return action(handler, *match.groups())
     return static(handler, path)

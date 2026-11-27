@@ -120,7 +120,9 @@ function validateCleanupSelection(snapshot, candidate) {
     return { accepted: false, path, kind, reason: cleanupBoundedReason("top_level_root", "One-segment top-level paths are too broad for cleanup commands.") };
   }
 
-  const matchingRoot = cleanupLongestMatchingRoot(selectedRoots, path);
+  const roots = selectedRoots.filter(root =>
+    (!candidate.volume_id || root.volume_id === candidate.volume_id) && (!candidate.binding || root.binding === candidate.binding));
+  const matchingRoot = cleanupLongestMatchingRoot(roots, path);
   if (!matchingRoot) {
     return { accepted: false, path, kind, reason: cleanupBoundedReason("outside_selected_roots", "The snapshot path is outside the selected scan roots for this server.") };
   }
@@ -134,9 +136,9 @@ function validateCleanupSelection(snapshot, candidate) {
     };
   }
 
-  if (kind === "directory" && snapshot.mount_table) {
-    const table = snapshot.mount_table;
-    if (table.status === "unreadable" || (table.within_roots || []).some(m => cleanupPathWithinRoot(m.mountpoint ?? m.path ?? m, path))) {
+  if (kind === "directory" && (snapshot.host || snapshot.mount_table)) {
+    const table = snapshot.host?.mount_table ?? snapshot.mount_table;
+    if (!table || table.status === "unreadable" || (table.within_roots || []).some(m => cleanupPathWithinRoot(m.mountpoint ?? m.path ?? m, path))) {
       return {accepted:false, path, kind, reason:cleanupBoundedReason("mount_guard", "Mounts under this directory could not be ruled out.")};
     }
   }

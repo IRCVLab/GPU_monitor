@@ -17,6 +17,10 @@ class UnknownServer(DomainError):
     code = "UNKNOWN_SERVER"
 
 
+class CaptureGone(DomainError):
+    code = "CAPTURE_GONE"
+
+
 class StoreUnavailable(DomainError):
     code = "STORE_UNAVAILABLE"
 
@@ -41,11 +45,6 @@ class Cooldown(DomainError):
 
 class GlobalConcurrency(DomainError):
     code = "GLOBAL_CONCURRENCY"
-
-
-class SnapshotAbsent(DomainError):
-    """SHIM(M2b..M8) S5: the v1 snapshot route's answer for a known server with no data."""
-    code = "SNAPSHOT_ABSENT"
 
 
 class RescanUnavailable(DomainError):

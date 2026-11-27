@@ -183,8 +183,10 @@ class E2E:
         return pathlib.PurePosixPath(self.docker("readlink", "/opt/storage-viz/current").strip()).name
 
     def summary(self) -> dict:
-        from collector.view import summary_v1
-        return summary_v1(self.actor.view, self.fleet.clock.monotonic())
+        from collector.contract import decode_json
+        from collector.inventory import CapacityThresholds
+        from collector.view import server_bytes
+        return decode_json(server_bytes(self.actor.view, self.fleet.clock.monotonic(), CapacityThresholds()))
 
     # ------------------------------------------------------------ phases
 
@@ -199,10 +201,10 @@ class E2E:
 
         digest = self.seed(last_run=self.run_doc(self.release()))
         self.until("seeded capture accepted", lambda: self.record.data.accepted.get(VOLUME) == digest, timeout=60)
-        rows = {row["mount_id"]: row for row in self.actor.view.snapshot.overview["mounts"]}
+        rows = {row["volume_id"]: row for row in self.summary()["volumes"]}
         if "get-manifest" not in self.verbs or f"get-capture {VOLUME} {digest}" not in self.verbs or VOLUME not in rows:
             fail(f"v2 data path: verbs={self.verbs} mounts={list(rows)}")
-        print("PASS: collector get-manifest and get-capture of seeded v2 files over the gate; the volume shows as a v1 mount")
+        print("PASS: collector get-manifest and get-capture of seeded v2 files over the gate; the volume appears in the server summary")
 
         request_id = uuid.uuid4().hex
         ask = Ask()

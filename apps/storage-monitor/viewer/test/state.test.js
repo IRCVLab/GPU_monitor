@@ -6,8 +6,8 @@ import {removal} from '../removal.js';
 
 const route = parseUrl('/?server=hinton&tab=stale&mount=/data&owner=1&path=proj');
 const detail = {
-  hostname:'hinton', scan_generation:'old',
-  selected_roots:[{mount_id:'v', binding:'before', scan_root:'/data', status:'complete'}],
+  host:{hostname:'hinton',mount_table:{status:'ok',within_roots:[]}}, revision:'old',
+  selected_roots:[{volume_id:'v', binding:'before', scan_root:'/data', status:'complete'}],
   top_files:[{kind:'file',path:'/data/a',bytes:100}], mounts:[]
 };
 function loaded(state,data,requestId) {
@@ -26,7 +26,7 @@ test('V1 refresh keeps drill, filters and picks and blocks stale commands until 
     [{top_files:[{...detail.top_files[0],kind:'directory'}]},'changed'],
     [{selected_roots:[{...detail.selected_roots[0],binding:'after'}]},'changed']
   ]) {
-    const data = {...detail,...patch,scan_generation:'new'};
+    const data = {...detail,...patch,revision:'new'};
     const next = loaded(state,data,2);
     assert.deepEqual(next.route,route);
     assert.deepEqual(next.ui,state.ui);
@@ -99,4 +99,42 @@ test('flagged picks require explicit review even if the old head returns; removi
   state = reducer(state,{type:'PopState',route});
   state = reducer(state,{type:'Unselect',path:'/data/a'});
   assert.equal(state.selection.hinton.length,0);
+});
+
+test('a treemap pick reconciles against the next capture by volume, binding, kind and raw path', () => {
+  const volumeId = 'v-0000000000000001', binding = 'b-0000000000000001';
+  const root = {volume_id:volumeId,binding,scan_root:'/data',path:'/data',status:'complete'};
+  const data = sha256 => ({host:{hostname:'hinton',mount_table:{status:'ok',within_roots:[]}},
+    volumes:[{volume_id:volumeId,capture:{sha256}}],mounts:[root],selected_roots:[root],top_files:[],stale:[]});
+  const captured = (state,sha,kind,bytes) => {
+    const key = 'capture/'+sha, requestId=3;
+    const data = {roots:[{binding,counts:{bytes},tree:{kind:'directory',children:[{name:'a',kind,bytes}]}}]};
+    return reducer(reducer(state,{type:'DataRequested',key,requestId}),{type:'DataLoaded',key,requestId,data});
+  };
+  let state = captured(loaded(initialState(route),data('old'),1),'old','file',10);
+  state = reducer(state,{type:'Select',item:{volume_id:volumeId,binding,path:'/data/a',kind:'file',bytes:10}});
+  state = loaded(state,data('new'),2);
+  assert.equal(removal(data('new'),state.selection.hinton).command,'');
+  const replaced = captured(state,'new','file',20);
+  assert.equal(replaced.selection.hinton[0].bytes,20);
+  assert.equal(replaced.selection.hinton[0].flag,null);
+  assert.equal(captured(state,'new','directory',20).selection.hinton[0].flag,'changed');
+});
+
+test('50 accepted revisions retain only captures referenced by the held details', () => {
+  let state = initialState(route), requestId = 0;
+  function load(key,data) {
+    ++requestId;
+    state = reducer(state,{type:'DataRequested',key,requestId});
+    state = reducer(state,{type:'DataLoaded',key,requestId,data});
+  }
+  const keys = () => Object.keys(state.resources).filter(key => key.startsWith('capture/'));
+  for (let revision=0;revision<50;revision++) {
+    const sha = revision.toString(16).padStart(64,'0');
+    load('detail/hinton',{volumes:[{volume_id:'v',capture:{sha256:sha}}],mounts:[]});
+    load('capture/'+sha,{roots:[]});
+    assert.deepEqual(keys(),['capture/'+sha]);
+  }
+  load('fleet',{servers:[]});
+  assert.deepEqual(keys(),[]);
 });

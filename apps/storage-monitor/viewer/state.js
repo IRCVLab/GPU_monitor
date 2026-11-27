@@ -8,7 +8,26 @@ export const serverSelection = (state,id) => Object.hasOwn(state.selection,id) ?
 export const detailKey = id => 'detail/' + id;
 export const mountId = mount => mount.volume_id ?? mount.mount_id ?? mount.path;
 export function selectedMount(detail, route) {
-  return detail?.mounts?.find(m => mountId(m) === route.volumeId) ?? detail?.mounts?.[0];
+  const mounts = detail?.mounts ?? [];
+  const id = route.volumeId ?? mountId(mounts[0] ?? {});
+  const roots = mounts.filter(m => mountId(m) === id);
+  if (roots.length <= 1) return roots[0];
+  const tree = {kind:'directory',name:'/',children:[],bytes:0};
+  for (const root of roots) {
+    if (!root.tree) continue;
+    let parent = tree;
+    const parts = root.path.split('/').filter(Boolean);
+    for (const [index,name] of parts.entries()) {
+      parent.bytes += root.tree.bytes;
+      if (index === parts.length-1) parent.children.push({...root.tree,name});
+      else {
+        let child = parent.children.find(n => n.name === name);
+        if (!child) parent.children.push(child = {kind:'directory',name,bytes:0,children:[]});
+        parent = child;
+      }
+    }
+  }
+  return {volume_id:id, path:'/', tree, scanned_bytes:tree.bytes};
 }
 export function drillStack(detail, route) {
   const mount = selectedMount(detail, route);
@@ -25,11 +44,9 @@ function selectionEntry(detail,item) {
   const checked = validateCleanupSelection(detail,item);
   if (!checked.accepted) return null;
   const root = checked.selectedRoot;
-  const volumeId = item.volume_id ?? root.volume_id ?? root.mount_id;
-  if (!volumeId) return null;
-  // Legacy v1 snapshots describe the binding by its constituent mount fields.
-  const binding = item.binding ?? root.binding ?? JSON.stringify([root.capacity_id, root.major_minor, root.mount_source,
-    root.mount_root, root.mountpoint, root.scan_root, root.prune_class]);
+  const volumeId = item.volume_id ?? root.volume_id;
+  const binding = item.binding ?? root.binding;
+  if (!volumeId || !binding) return null;
   return {...item, volumeId, binding, rawPath:item.raw_path ?? item.path.split('/').slice(1).map(name => rawSegment({name})), flag:null};
 }
 function lookup(detail, entry) {
@@ -62,18 +79,50 @@ export function reducer(state, event) {
         {status:'error',code:event.code,problem:event.problem,data:event.code === 'UNKNOWN_SERVER' ? undefined : remote.data};
       const next = {...state,resources:{...state.resources,[key]:value}};
       if (type === 'DataLoaded' && key === 'fleet') {
-        const configured = new Set(data.servers.map(row => row.id));
+        const configured = new Set(data.servers.map(row => row.server_id));
         for (const name of Object.keys(next.resources)) {
           const [,server] = name.split('/');
-          if (server && !configured.has(server)) delete next.resources[name];
+          if (server && !name.startsWith("capture/") && !configured.has(server)) delete next.resources[name];
         }
       }
-      if (type === 'DataLoaded' && key.startsWith('detail/')) {
-        const server = key.slice(7);
-        if (Object.hasOwn(state.selection,server)) {
-          const selected = state.selection[server];
-          const updated = selected.map(entry => lookup(data,entry));
-          if (updated.some((entry,i) => entry !== selected[i])) next.selection = {...state.selection,[server]:updated};
+      if (type === 'DataLoaded' && (key.startsWith('capture/') || key.startsWith('detail/'))) {
+        for (const [name,remote] of Object.entries(next.resources)) {
+          if (!name.startsWith('detail/') || !remote.data) continue;
+          const server = name.slice(7);
+          let detail = remote.data;
+          if (detail.volumes) {
+            if (key !== name && !detail.volumes.some(v => 'capture/'+v.capture?.sha256 === key)) continue;
+            const mounts = detail.mounts.map(m => {
+              const volume = detail.volumes.find(v => v.volume_id === m.volume_id);
+              const capture = next.resources['capture/'+volume.capture?.sha256]?.data;
+              const root = capture?.roots.find(r => r.binding === m.binding);
+              return root ? {...m, tree:root.tree, scanned_bytes:root.counts.bytes} : m;
+            });
+            detail = {...detail,mounts};
+            next.resources[name] = {...remote,data:detail};
+          } else if (name !== key) continue;
+          const selected = serverSelection(state,server);
+          const updated = selected.map(entry => {
+            const volume = detail.volumes?.find(v => v.volume_id === entry.volumeId);
+            const previous = entry.pending ? {...entry,flag:entry.priorFlag,pending:false} : entry;
+            const match = lookup(detail,previous);
+            if (match.flag === 'missing' && volume?.capture && !next.resources['capture/'+volume.capture.sha256]?.data)
+              return {...entry, flag:'missing', pending:true, priorFlag:previous.flag};
+            return match;
+          });
+          if (updated.some((entry,i) => entry !== selected[i])) next.selection = {...next.selection,[server]:updated};
+        }
+      }
+      if (key === 'fleet' || key.startsWith('detail/')) {
+        const captures = new Set();
+        for (const [name,resource] of Object.entries(next.resources)) {
+          if (!name.startsWith('detail/')) continue;
+          for (const volume of resource.data?.volumes ?? []) {
+            if (volume.capture) captures.add('capture/' + volume.capture.sha256);
+          }
+        }
+        for (const name of Object.keys(next.resources)) {
+          if (name.startsWith('capture/') && !captures.has(name)) delete next.resources[name];
         }
       }
       return next;

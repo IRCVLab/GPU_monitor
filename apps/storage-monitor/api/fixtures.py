@@ -1,4 +1,5 @@
-"""Read-only fleet backed by v1 fixture snapshots."""
+"""Read-only fleet backed by manifest and volume capture fixtures."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -6,11 +7,14 @@ import time
 from typing import Any, Mapping
 
 from collector.errors import RescanDisabled, UnknownServer
-from collector.health import Data, LegacyPublication
+from collector.legacy import legacy_volume
+from collector.snapshot import validate_download, DesiredServer
+from collector.health import Data, Link
+from collector.contract import decode_json, parse_manifest, parse_capture
 from collector.ids import SERVER_ID_RE
 from collector.inventory import Server as InventoryServer
 from collector.store import Record
-from collector.view import ServerView, build_view, render_snapshot
+from collector.view import ServerView, build_view, publication, ObservationView
 
 
 class FixtureFleet:
@@ -82,9 +86,47 @@ class FixtureFleet:
         return servers
 
     def _build_view(self, server: InventoryServer) -> ServerView:
-        snapshot = render_snapshot(self._read(self._files[server.id]))
-        manifest = {"status": snapshot.scan_result, "config_digest": server.scanner_digest}
-        return build_view(server, Record(data=Data(manifest=LegacyPublication(manifest))), snapshot, None, None, None)
+        data = self._bytes(self._files[server.id])
+        doc = decode_json(data)
+        if isinstance(doc, dict) and doc.get("schema_version") == 1:
+            sha = hashlib.sha256(data).hexdigest()
+            status = {"server_id": server.id, "generation": f"{server.id}-{doc['scan_started_unix']}-v1.json",
+                      "status": "complete" if all(r["status"] == "complete" for r in doc["selected_roots"]) else "partial",
+                      "byte_size": len(data), "sha256": sha, "scan_finished_unix": doc["scan_finished_unix"],
+                      "config_digest": doc["config_digest"]}
+            payload = validate_download(status, data, DesiredServer(server.id, server.scanner_digest)).payload
+            manifest, held, blobs = legacy_volume(payload, sha)
+            pub = publication(manifest, held, blobs, user_file_totals={u["uid"]: u["files"] for u in payload["users"]})
+            mono = self.clock.monotonic()
+            return build_view(server, Record(link=Link(state="ok")), pub, ObservationView({"state":"idle"}, mono),
+                              (manifest.written_unix, mono), None, "legacy")
+        manifest = parse_manifest(data)
+        if manifest.server_id != server.id:
+            raise ValueError("fixture manifest server mismatch")
+        held = {}
+        for volume in manifest.volumes:
+            if volume.capture:
+                sha = volume.capture.sha256
+                held[volume.volume_id] = sha, parse_capture(self.read_capture(server.id, volume.volume_id, sha), volume.expected(sha))
+        record = Record(link=Link(state="ok"), data=Data(manifest=manifest, accepted={v: pair[0] for v,pair in held.items()}))
+        mono = self.clock.monotonic()
+        return build_view(server, record, publication(manifest, held), ObservationView({"state":"idle"}, mono), (manifest.written_unix, mono),
+                          None, "gate")
+
+    def _bytes(self, filename):
+        path = self.root / filename
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"missing or unsafe fixture: {filename}")
+        return path.read_bytes()
+
+    def open_capture(self, sid, vid, sha):
+        path = self.root / (sha + ".json.gz")
+        if path.is_symlink():
+            raise ValueError("unsafe fixture capture")
+        return path.open("rb")
+
+    def read_capture(self, sid, vid, sha):
+        return self._bytes(sha + ".json.gz")
 
     def lookup(self, server_id: Any) -> InventoryServer:
         if server_id not in self._views:

@@ -117,7 +117,7 @@ async function startSampleServer(tmp) {
     },
   });
   const origin = `http://127.0.0.1:${port}`;
-  try { await waitFor('sample serve.py', () => getJson(origin + '/api/servers')); }
+  try { await waitFor('sample serve.py', () => getJson(origin + '/api/v2/fleet')); }
   catch (error) { await stop(server); throw error; }
   return { server, origin };
 }
@@ -238,7 +238,7 @@ async function checkWidth(tab, origin, width) {
   const command = await tab.evaluate("document.getElementById('cleanupCopyAll').dataset.copyCommand");
   assert.match(command,/hostname -s/);
   await tab.evaluate("window.dispatchEvent(new Event('focus'))");
-  await waitFor('focus refresh', () => tab.evaluate("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('/hinton/snapshot')).length >= 2"));
+  await waitFor('focus refresh', () => tab.evaluate("performance.getEntriesByType('resource').filter(e=>e.name.endsWith('/api/v2/servers/hinton')).length >= 2"));
   assert.equal(await tab.evaluate("document.getElementById('cleanupCopyAll').dataset.copyCommand"),command,'V1 focus preserves command');
   const geometry = await tab.evaluate(`(() => {
     const vp=document.getElementById('staleViewport'); vp.scrollLeft=vp.scrollWidth;
@@ -255,8 +255,9 @@ async function shot(tab, name, width) {
   if (!dir) return;
   fs.mkdirSync(dir,{recursive:true});
   if (name !== 'overview') await tab.evaluate(`(async () => {
-    const target=document.querySelector('${name === 'stale' ? '#staleViewport' : '#treemap'}');
-    target.scrollIntoView({block:'center',behavior:'instant'});
+    const target=document.querySelector('${({stale:'#staleViewport',users:'#usersChart',top:'#topTbl'})[name] || '#treemap'}');
+    if ('${name}' === 'detail-treemap' && ${width} === 1440) document.querySelector('#main').scrollTo({top:0,behavior:'instant'});
+    else target.scrollIntoView({block:'center',behavior:'instant'});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   })()`);
   const {data} = await tab.send('Page.captureScreenshot',{format:'png'});
@@ -267,10 +268,18 @@ async function checkNavigation(tab,origin,width) {
   await tab.send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:false});
   await tab.send('Page.navigate',{url:origin+'/'});
   await waitFor('overview mounts',()=>tab.evaluate("document.querySelectorAll('.overview-mount[data-pressure]').length >= 4"));
+  const rootSizes = await tab.evaluate("Array.from(document.querySelectorAll('.overview-card[data-server-id=hinton] .overview-scan-folder'), row => [row.firstChild.textContent, row.lastChild.textContent])");
+  assert.deepEqual(rootSizes.filter(([path]) => path === '/data' || path === '/data1'), [['/data','7.53 TB'],['/data1','1.15 TB']]);
   await shot(tab,'overview',width);
   await tab.evaluate("document.querySelector('.overview-card[data-server-id=hinton]').click()");
   await waitFor('treemap tiles',()=>tab.evaluate("document.querySelectorAll('.tmtile').length"));
   assert.equal(await tab.evaluate("new URL(location).searchParams.get('tab')"),'treemap','V6 card href decides tab');
+  await tab.evaluate('document.querySelector(".cap-folder-button[data-folder=\'/data\']").click()');
+  await waitFor('multi-root tree',()=>tab.evaluate("new URL(location).searchParams.has('vol') && document.querySelectorAll('.tm-crumb').length > 1"));
+  const banner = await tab.evaluate("({text:document.querySelector('#warnBanner').innerText, height:document.querySelector('#warnBanner').getBoundingClientRect().height})");
+  assert.ok(banner.height > 0);
+  assert.match(banner.text,/2 directories could not be read/);
+  for (const path of ['/home/jusung','/data/private_collab']) assert.ok(banner.text.includes(path+' (EACCES)'));
   await shot(tab,'detail-treemap',width);
   const drill = await tab.evaluate(`(() => {
     const tile=document.querySelector('.tmtile.drillable[data-cleanup-path]');
@@ -291,6 +300,7 @@ async function checkNavigation(tab,origin,width) {
   await shot(tab,'stale',width);
   await tab.evaluate("document.querySelector('.tab[data-tab=top]').click()");
   await waitFor('owner options',()=>tab.evaluate("document.getElementById('ownerFilter').options.length > 1"));
+  await shot(tab,'top',width);
   const owner = await tab.evaluate(`(() => {const select=document.getElementById('ownerFilter');
     select.selectedIndex=1;select.dispatchEvent(new Event('change'));return select.value;})()`);
   await tab.evaluate('history.back()');
@@ -306,6 +316,12 @@ async function checkNavigation(tab,origin,width) {
   await waitFor('card after another tab',()=>tab.evaluate("!!document.querySelector('#panel-treemap.active') && !document.getElementById('detailView').hidden"));
   await tab.evaluate("document.querySelector('.tab[data-tab=users]').click()");
   await waitFor('Users chart',()=>tab.evaluate("!!document.querySelector('#usersChart canvas') && !!document.querySelector('#usersTbl tr[data-uid]')"));
+  await shot(tab,'users',width);
+  await tab.send('Page.navigate',{url:origin+'/?server=orion'});
+  await waitFor('legacy capture tree',()=>tab.evaluate("!!document.querySelector('.tmtile.drillable')"));
+  await tab.evaluate("document.querySelector('.tmtile.drillable').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))");
+  await waitFor('legacy tree drilled',()=>tab.evaluate("new URL(location).searchParams.has('path') && document.querySelectorAll('.tm-crumb').length > 1"));
+  await shot(tab,'legacy-treemap',width);
   await tab.send('Page.navigate',{url:origin+'/?server=unknown'});
   await waitFor('unknown server',()=>tab.evaluate("!document.getElementById('detailError').hidden"));
   assert.ok(await tab.evaluate("['detailHead','detailActions','detailTabs','caps','detailPanels'].every(id=>document.getElementById(id).hidden)"),'V7 unknown server hides chrome');

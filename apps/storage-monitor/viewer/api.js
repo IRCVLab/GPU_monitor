@@ -11,27 +11,6 @@ async function fetchJson(url, options) {
   if (!response.ok) throw makeFetchError(url, response.status, body);
   return body;
 }
-function normalizeServerSummariesEnvelope(body) {
-  const servers = Array.isArray(body) ? body : (Array.isArray(body && body.servers) ? body.servers : []);
-  const dataMode = body && body.data_mode === "sample" ? "sample" : "inventory";
-  return { data_mode: dataMode, servers };
-}
-const LIVE_CAPACITY_FIELDS = ["df_total", "df_used", "df_avail", "df_use_pct", "used_pct", "severity", "capacity_observed_unix"];
-
-function applyObservedCapacity(snapshot, capacity) {
-  if (!Array.isArray(snapshot?.mounts) || !Array.isArray(capacity?.mounts) ||
-      snapshot.scan_generation !== capacity.scan_generation) return snapshot;  // SHIM(M2b..M8) S5
-  const readings = new Map(capacity.mounts.map(mount => [mount.mount_id, mount]));
-  let changed = false;
-  const mounts = snapshot.mounts.map(mount => {
-    const reading = readings.get(mount.mount_id);
-    if (!reading || LIVE_CAPACITY_FIELDS.every(key => (mount[key] ?? null) === (reading[key] ?? null))) return mount;
-    changed = true;
-    return Object.assign({}, mount, Object.fromEntries(LIVE_CAPACITY_FIELDS.map(key => [key, reading[key] ?? null])));
-  });
-  return changed ? { ...snapshot, mounts } : snapshot;
-}
-
 // Keep raw route segments unambiguous even when a literal name starts with "~".
 export function rawSegment(node) {
   if (node.raw_name != null) return node.raw_name;
@@ -47,50 +26,44 @@ export function pathRoundTrips(path, bytes) {
   } catch { return false; }
 }
 
-function normalizedDetailPath(path) {
-  return String(path || "").replace(/\/+$/, "") || "/";
+function mountRows(volumes) {
+  return volumes.flatMap(volume => volume.roots.map(root => ({
+    ...root, volume_id:volume.volume_id, path:root.scan_root, scanned_bytes:root.bytes, mountpoint:volume.mountpoint,
+    status:volume.capture?.outcome ?? 'skipped',
+  })));
 }
-function isDetailActionablePath(path) {
-  const value = normalizedDetailPath(path);
-  return value !== "/boot" && !value.startsWith("/boot/");
+
+export function normalizeDetail(body) {
+  const mounts = mountRows(body.volumes);
+  const names = new Map(body.users.map(user => [user.uid,user.name]));
+  const file = row => ({...row,kind:row.kind === 'dir' ? 'directory' : row.kind ?? 'file',owner:names.get(row.uid)});
+  return {...body, hostname:body.host.hostname, mounts, selected_roots:mounts,
+    top_files:body.top_files.map(file), stale:body.stale.map(file)};
 }
-function isDetailActionableMount(mount) {
-  return isDetailActionablePath(mount && (mount.path || mount.mountpoint));
-}
-function normalizeDetailFiles(files) {
-  return (Array.isArray(files) ? files : []).filter(file => isDetailActionablePath(file && file.path));
-}
-function normalizeDetailUsers(users) {
-  const rows = [];
-  for (const user of Array.isArray(users) ? users : []) {
-    const byMount = {};
-    let bytes = 0;
-    const sourceByMount = user && user.by_mount && typeof user.by_mount === "object" ? user.by_mount : {};
-    for (const [mount, value] of Object.entries(sourceByMount)) {
-      if (!isDetailActionablePath(mount)) continue;
-      const n = Number(value) || 0;
-      if (n <= 0) continue;
-      byMount[mount] = n;
-      bytes += n;
-    }
-    if (bytes <= 0) continue;
-    rows.push(Object.assign({}, user, { by_mount: byMount, bytes }));
-  }
-  return rows;
+
+function treeNode(node) {
+  return {...node, kind:node.kind === 'dir' ? 'directory' : node.kind,
+    children:node.children?.map(treeNode)};
 }
 
 export async function fetchResource(key, signal, options = {}) {
   const [kind,id] = key.split('/');
-  const routes = {detail:'snapshot',activity:'scan-status',job:'job',rescan:'rescan'};
-  const path = kind === 'session' ? '/api/session' : kind === 'fleet' ? '/api/servers'
-    : '/api/servers/' + encodeURIComponent(id) + '/' + routes[kind];
-  const body = await fetchJson(path,{...options,signal});
-  if (kind === 'fleet') return normalizeServerSummariesEnvelope(body);
-  if (kind !== 'detail') return body;
-  return normalizeDetail(body);
+  const server = '/api/v2/servers/' + encodeURIComponent(id);
+  let path = server;
+  if (kind === 'capture') path = server + '/volumes/' + encodeURIComponent(options.volumeId) + '/captures/' + options.sha;
+  else if (kind === 'session' || kind === 'fleet') path = '/api/v2/' + kind;
+  else if (kind !== 'detail') path += '/' + kind;
+  const {sha, volumeId, ...init} = options;
+  const body = await fetchJson(path,{...init, signal, cache:kind === 'capture' ? 'default' : 'no-store'});
+  if (!body || typeof body !== 'object') throw new Error('Invalid '+kind+' response');
+  if (kind === 'fleet' && !Array.isArray(body.servers)) throw new Error('Missing fleet rows');
+  if (kind === 'detail') {
+    if (body.server_id !== id || !Array.isArray(body.volumes)) throw new Error('Invalid server detail');
+    return normalizeDetail(body);
+  }
+  if (kind === 'capture') {
+    if (body.schema !== 'storage-viz.capture/2' || body.volume_id !== volumeId) throw new Error('Unexpected capture');
+    return {...body,roots:body.roots.map(root => ({...root,tree:treeNode(root.tree)}))};
+  }
+  return body;
 }
-export function normalizeDetail(body) {
-  return {...body, mounts:(body.mounts || []).filter(isDetailActionableMount), users:normalizeDetailUsers(body.users),
-    stale:normalizeDetailFiles(body.stale), top_files:normalizeDetailFiles(body.top_files)};
-}
-export {applyObservedCapacity};

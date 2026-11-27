@@ -270,25 +270,28 @@ def run_health_check(
     last_error: Exception | None = None
     for _ in range(ready_attempts):
         try:
-            status, headers, session = _request(connection_factory, contract, "GET", "/api/session", headers={"X-Forwarded-User": FIXED_PROXY_OPERATOR})
+            status, headers, session = _request(connection_factory, contract, "GET", "/api/v2/session", headers={"X-Forwarded-User": FIXED_PROXY_OPERATOR})
             if status != 200 or not isinstance(session, Mapping) or session.get("can_rescan") is not True or not isinstance(session.get("csrf_token"), str):
                 raise HealthCheckError("session probe failed or can_rescan false")
             cookie = headers.get("Set-Cookie", "").split(";", 1)[0]
             if not cookie.startswith("storage_viz_session="):
                 raise HealthCheckError("session cookie missing")
-            status, _, servers = _request(connection_factory, contract, "GET", "/api/servers", headers={"Cookie": cookie, "X-Forwarded-User": FIXED_PROXY_OPERATOR})
-            if status != 200 or not isinstance(servers, Mapping) or servers.get("data_mode") != "inventory":
+            status, _, servers = _request(connection_factory, contract, "GET", "/api/v2/fleet", headers={"Cookie": cookie, "X-Forwarded-User": FIXED_PROXY_OPERATOR})
+            # Inventory fleets publish rollout state even with no desired agent. Fixture fleets return null.
+            if (status != 200 or not isinstance(servers, Mapping) or not isinstance(servers.get("policy"), Mapping)
+                    or not isinstance(servers.get("rollout"), Mapping)):
                 raise HealthCheckError("servers probe failed or sample mode")
-            observed = [s.get("id") for s in servers.get("servers", []) if isinstance(s, Mapping)]
+            observed = [s.get("server_id") for s in servers.get("servers", []) if isinstance(s, Mapping)]
             if observed != contract.enabled_server_ids:
                 raise HealthCheckError("enabled server IDs missing or reordered")
             absent = _unknown_id(set(contract.enabled_server_ids))
             post_headers = {"Cookie": cookie, "X-Forwarded-User": FIXED_PROXY_OPERATOR, "X-CSRF-Token": str(session["csrf_token"]), "Origin": contract.public_origin}
-            status, _, body = _request(connection_factory, contract, "POST", f"/api/servers/{absent}/rescan", body=b"{}", headers=post_headers)
+            status, _, body = _request(connection_factory, contract, "POST", f"/api/v2/servers/{absent}/rescan", body=b"{}", headers=post_headers)
             if (
                 status != 404
                 or not isinstance(body, Mapping)
-                or body.get("error") != "UNKNOWN_SERVER"
+                or not isinstance(body.get("error"), Mapping)
+                or body["error"].get("code") != "UNKNOWN_SERVER"
             ):
                 raise HealthCheckError("unknown-server rescan probe failed")
             return

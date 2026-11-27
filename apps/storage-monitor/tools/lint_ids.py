@@ -22,7 +22,7 @@ DEPLOY = {
     "deploy/server/health-check-dashboard.py": {
         "SERVER_ID_RE": r"\A(?!\.{1,2}\Z)[A-Za-z0-9_.-]{1,128}\Z", "SHA_RE": DEPLOY_SHA,
     },
-    "deploy/direct_proxy.py": {"RESCAN_PATH": r"^/api/servers/((?!\.{1,2}/)[A-Za-z0-9_.-]{1,128})/rescan$"},
+    "deploy/direct_proxy.py": {"RESCAN_PATH": r"^/api/v2/servers/((?!\.{1,2}/)[A-Za-z0-9_.-]{1,128})/rescan$"},
     # Installed as storage-dashboard-build-release.py as well as run from a checkout.
     "deploy/build-dashboard-release.py": {"SHA_RE": r"^[0-9a-fA-F]{40}$"},
 }
@@ -65,10 +65,8 @@ def deploy_calls(name, tree, errors):
 GENERATION = re.compile(r"\b(?:published|snapshot|scan)_generation\b")
 # Each occurrence in these v1 adapters must also carry the corresponding live marker.
 V1 = {
-    "api/routes.py": "S5", "collector/view.py": "S5", "collector/legacy.py": "S2",
+    "collector/legacy.py": "S2", "tools/gen_sample.py": "S3",
     "collector/actor.py": "S3", "collector/snapshot.py": "S3", "collector/store.py": "S3",
-    "viewer/api.js": "S5", "viewer/effects.js": "S5", "viewer/views/scan-status.js": "S5",
-    "tools/gen_sample.py": "S5", "tools/scrub_fixture.py": "S5",
 }
 
 

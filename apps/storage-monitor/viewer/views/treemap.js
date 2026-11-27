@@ -124,7 +124,7 @@ export function drawTreemap({DATA, route, ownerByUid, uidColorMap, colorForUid, 
   }
   function treemapCleanupItem(c, path, owner) {
     return {
-      path,
+      path, volume_id:m.volume_id,
       kind: c && c.kind,
       bytes: Number(c && c.bytes) || 0,
       uid: c && c.uid,

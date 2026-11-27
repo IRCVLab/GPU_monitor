@@ -56,34 +56,7 @@ def sample_snapshot(server_id="hinton") -> dict:
     }
 
 
-class CentralPollingLifecycleTest(unittest.TestCase):
-    def test_capacity_polling_starts_once_and_stops_cleanly(self):
-        from api import server as serve
-        polled = threading.Event()
-        poller = serve.CentralPoller(polled.set, 3600)
-        self.assertTrue(poller.start())
-        self.assertTrue(polled.wait(2), "the capacity feed must be polled right after startup")
-        first_thread = poller.thread_ident
-        self.assertFalse(poller.start(), "second start must not create duplicate polling thread")
-        self.assertEqual(poller.thread_ident, first_thread)
-        poller.stop(timeout=2)
-        self.assertFalse(poller.is_running)
-
-    def test_dev_sample_mode_serves_views_and_refuses_rescans(self):
-        from collector.errors import RescanDisabled, UnknownServer
-        from api import server as serve
-        with tempfile.TemporaryDirectory(prefix="storage-viz-dev-service.") as tmp:
-            sample_dir = Path(tmp)
-            rows = [{"id":"hinton", "label":"hinton", "file":"hinton", "default":True, "sample_data":True}]
-            (sample_dir / "hosts.json").write_text(json.dumps(rows) + "\n", encoding="utf-8")
-            (sample_dir / "hinton.json").write_text(json.dumps(sample_snapshot("hinton")) + "\n", encoding="utf-8")
-            samples = serve.FixtureFleet(str(sample_dir))
-            self.assertEqual(samples.view("hinton").snapshot.overview["scan_generation"], "hinton-1719200000-v1")
-            with self.assertRaises(RescanDisabled):
-                samples.request_rescan("hinton", "operator")
-            with self.assertRaises(UnknownServer):
-                samples.view("absent")
-
+class FixturesTest(unittest.TestCase):
     def test_dev_sample_rejects_symlink_root_before_resolve(self):
         from api import server as serve
         with tempfile.TemporaryDirectory(prefix="storage-viz-dev-real.") as real, tempfile.TemporaryDirectory(prefix="storage-viz-dev-link-parent.") as parent:
@@ -102,120 +75,14 @@ class CentralPollingLifecycleTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "main")
 
-class SnapshotRouteTest(unittest.TestCase):
-    def setUp(self):
-        from collector.live_capacity import LiveCapacity
-        from api import server as serve
-
-        self.runtime = serve.Runtime()
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.host = Collector(Path(temporary.name), "hinton", publish=False)
-        self.server_entry = self.host.servers[0]
-        self.capacity = LiveCapacity(self.host.servers, 8001, clock=self.host.clock.time)
-        self.runtime.fleet = self.host.fleet
-        self.runtime.live_capacity = self.capacity
-        overrides = patch.object(serve.auth, "TRUSTED_PROXY", True)
-        overrides.start()
-        self.addCleanup(overrides.stop)
-        self.server = serve.Server(("127.0.0.1", 0), self.runtime)
-        self.addCleanup(self.server.server_close)
-        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 3)
-        self.addCleanup(self.server.shutdown)
-
-    def publish(self, started=1719200000, payload=None):
-        payload = payload or payload_for("hinton", started=started)
-        for row in (payload["selected_roots"][0], payload["mounts"][0]):
-            row.update(capacity_id="dev-8-1", storage_media="ssd", storage_media_confidence="resolved")
-        status, data = status_data(payload)
-        self.host.host.publications["hinton"], self.host.host.captures[status["sha256"]] = status, data
-        self.host.tick()
-        payload["mounts"][0].update(used_pct=70, severity="critical")
-        return payload
-
-    def get(self, server_id="hinton", *, authenticated=True):
-        return self.get_path(f"/api/servers/{server_id}/snapshot", authenticated=authenticated)
-
-    def get_path(self, path, *, authenticated=True):
-        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=4)
-        try:
-            headers = {"X-Forwarded-User": "test-viewer"} if authenticated else {}
-            connection.request("GET", path, headers=headers)
-            with connection.getresponse() as response:
-                return response.status, json.load(response)
-        finally:
-            connection.close()
-
-    def test_all_v1_capacity_views_use_inventory_after_live_overlay(self):
-        from collector.inventory import CapacityThresholds
-        from collector.live_capacity import CapacitySample, VolumeCapacity
-
-        payload = payload_for("hinton")
-        started = payload["scan_started_unix"]
-        file_row = dict(path="/home/a", kind="file", bytes=20, uid=1000, owner="user", mtime=started - 86400)
-        payload["top_files"] = [file_row]
-        payload["stale"] = [dict(file_row, age_days=999)]
-        self.publish(payload=payload)
-        key = ("dev-8-1", "/dev/storage-viz/home", "ext4")
-        self.capacity._samples[(self.server_entry.host, self.server_entry.port)] = CapacitySample(
-            self.host.clock.now, {key: VolumeCapacity(100, 75, 25, 75)},
-        )
-        policy = CapacityThresholds(warning_used_pct=75, warning_free_bytes=10, critical_free_bytes=1)
-        with patch.object(self.runtime, "capacity_thresholds", policy):
-            detail = self.get()[1]
-            summary = self.get_path("/api/servers")[1]["servers"][0]["overview_snapshot"]
-            scan = self.get_path("/api/servers/hinton/scan-status")[1]["capacity"]
-        for view in (detail, summary, scan):
-            self.assertEqual(view["mounts"][0]["used_pct"], 75)
-            self.assertEqual(view["mounts"][0]["severity"], "warning")
-        self.assertEqual(detail["top_files"][0]["age_days"], 1)
-        self.assertEqual(detail["stale"][0]["age_days"], 1)
-        stored = json.loads(self.host.actor("hinton").store.read_capture("legacy", self.host.fleet.view("hinton").data.accepted["legacy"]))
-        self.assertEqual(stored["stale"][0]["age_days"], 999)
-        self.assertNotIn("severity", stored["mounts"][0])
-
-    def test_parallel_detail_reads_never_touch_the_store(self):
-        expected = self.publish()
-        store = self.host.actor("hinton").store
-        with patch.object(store, "read_capture", side_effect=AssertionError("a read went to disk")), ThreadPoolExecutor(max_workers=6) as pool:
-            reads = list(pool.map(lambda _: self.get(), range(12)))
-        self.assertEqual(reads, [(200, expected)] * 12)
-        newer = self.publish(started=1719200100)
-        self.assertEqual(self.get(), (200, newer))
-
-    def test_detail_updates_when_live_capacity_changes_or_expires(self):
-        from collector.live_capacity import CapacitySample, MAX_AGE_SECONDS, VolumeCapacity
-
-        expected = self.publish()
-        mount = expected["mounts"][0]
-        key = ("dev-8-1", "/dev/storage-viz/home", "ext4")
-        target = (self.server_entry.host, self.server_entry.port)
-        self.assertEqual(self.get(authenticated=False), (401, {"authenticated": False, "error": "AUTH_REQUIRED"}))
-        self.assertEqual(self.get()[1]["mounts"][0], mount)
-        at = self.host.clock.now
-        self.capacity._samples = {target: CapacitySample(at, {key: VolumeCapacity(100, 80, 20, 80)})}
-        self.assertEqual(self.get()[1]["mounts"][0]["df_used"], 80)
-        self.capacity._samples = {target: CapacitySample(at, {key: VolumeCapacity(100, 81, 19, 81)})}
-        self.assertEqual(self.get()[1]["mounts"][0]["df_used"], 81)
-        self.host.clock.now += MAX_AGE_SECONDS + 1
-        self.assertEqual(self.get()[1]["mounts"][0], mount)
-
-    def test_absent_snapshot_can_be_published_after_a_404(self):
-        self.assertEqual(self.get(), (404, {"error": "SNAPSHOT_ABSENT"}))
-        self.assertEqual(self.get("absent"), (404, {"error": "UNKNOWN_SERVER"}))
-        expected = self.publish()
-        self.assertEqual(self.get(), (200, expected))
-
-
 class ServerCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="storage-viz-api-test."); self.addCleanup(self.tmp.cleanup)
         self.sample_dir = Path(self.tmp.name) / "samples"; self.sample_dir.mkdir()
         self.write_manifest(["atlas", "hinton"])
-        (self.sample_dir / "hinton.json").write_text(json.dumps(sample_snapshot("hinton")) + "\n", encoding="utf-8")
-        (self.sample_dir / "atlas.json").write_text(json.dumps(sample_snapshot("atlas")) + "\n", encoding="utf-8")
+        from tools.gen_sample import SNAPSHOTS, write_server
+        for sid, generate in SNAPSHOTS[:2]:
+            write_server(self.sample_dir, generate())
         self.proc = None; self.addCleanup(self._stop)
 
     def start_server(self, extra_env=None, expect_exit=False, *, fixtures=None):
@@ -279,40 +146,37 @@ class ServerCase(unittest.TestCase):
 class ApiServerTest(ServerCase):
     def test_scan_status_read_endpoint_and_unknown_server(self):
         self.start_server()
-        code, _, status = self.request("GET", "/api/servers/hinton/scan-status")
+        code, _, status = self.request("GET", "/api/v2/servers/hinton/activity")
         self.assertEqual(code, 200)
-        self.assertEqual(status["state"], "unknown")
-        self.assertEqual(status["last_finished_unix"], 1719200042)
-        self.assertFalse(status["progress_available"])
-        self.assertIsNone(status["next_run_unix"])
-        self.assertEqual(self.request("GET", "/api/servers/unknown/scan-status")[0], 404)
+        self.assertEqual(status["activity"]["state"], "idle")
+        self.assertEqual(self.request("GET", "/api/v2/servers/unknown/activity")[0], 404)
 
     def test_dev_sample_api_is_read_only_and_ai_routes_404(self):
         self.start_server()
-        code, headers, session = self.request("GET", "/api/session")
+        code, headers, session = self.request("GET", "/api/v2/session")
         self.assertEqual(code, 200)
         self.assertFalse(session["can_rescan"])
         self.assertIn("SameSite=Lax", headers.get("Set-Cookie", ""))
-        code, _, servers = self.request("GET", "/api/servers")
+        code, _, servers = self.request("GET", "/api/v2/fleet")
         self.assertEqual(code, 200)
-        self.assertEqual(servers["data_mode"], "sample")
-        self.assertEqual([s["id"] for s in servers["servers"]], ["atlas", "hinton"])
-        self.assertEqual(self.request("GET", "/api/servers/hinton/snapshot")[2]["server_id"], "hinton")
-        self.assertEqual(self.request("GET", "/api/servers/unknown/snapshot")[0], 404)
-        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {})[0], 403)
+        self.assertIn("policy", servers)
+        self.assertEqual([s["server_id"] for s in servers["servers"]], ["atlas", "hinton"])
+        self.assertEqual(self.request("GET", "/api/v2/servers/hinton")[2]["server_id"], "hinton")
+        self.assertEqual(self.request("GET", "/api/v2/servers/unknown")[0], 404)
+        self.assertEqual(self.request("POST", "/api/v2/servers/hinton/rescan", {})[0], 403)
         self.assertEqual(self.request("GET", "/ai/status")[0], 404)
         self.assertEqual(self.request("POST", "/ai/recommend", {})[0], 404)
-        self.assertEqual(self.request("GET", "/capabilities")[2]["rescan"], False)
-        self.assertEqual(self.request("POST", "/rescan", {})[0], 503)
+        self.assertEqual(self.request("GET", "/capabilities")[0], 404)
+        self.assertEqual(self.request("POST", "/rescan", {})[0], 404)
 
     def test_direct_mode_with_inventory_still_disables_rescan(self):
         inv = self.write_inventory()
         self.start_server({"STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state")})
-        code, _, sess = self.request("GET", "/api/session")
+        code, _, sess = self.request("GET", "/api/v2/session")
         self.assertEqual(code, 200); self.assertFalse(sess["can_rescan"])
-        code, _, servers = self.request("GET", "/api/servers")
-        self.assertEqual(code, 200); self.assertEqual(servers["data_mode"], "inventory")
-        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        code, _, servers = self.request("GET", "/api/v2/fleet")
+        self.assertEqual(code, 200); self.assertIn("policy", servers)
+        self.assertEqual(self.request("POST", "/api/v2/servers/hinton/rescan", {}, headers={"Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
 
     def test_direct_loopback_rescan_opt_in_allows_only_the_ssh_tunnel_origin(self):
         inv = self.write_inventory()
@@ -331,19 +195,19 @@ class ApiServerTest(ServerCase):
         )
         self.proc = subprocess.Popen([sys.executable, str(SERVE)], cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         wait_until_serving(self.proc)
-        code, headers, sess = self.request("GET", "/api/session")
+        code, headers, sess = self.request("GET", "/api/v2/session")
         self.assertEqual(code, 200)
         self.assertTrue(sess["can_rescan"])
         cookie = self.cookie_value(headers)
         valid_headers = {"Cookie":cookie, "Origin":origin, "X-CSRF-Token":sess["csrf_token"]}
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers=valid_headers)[0], 404)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers=valid_headers)[0], 404)
         mismatch_headers = {**valid_headers, "Origin":localhost_origin}
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers=mismatch_headers)[0], 403)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers=mismatch_headers)[0], 403)
         lan_headers = {**valid_headers, "Host":"192.168.0.3:8088", "Origin":"http://192.168.0.3:8088"}
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers=lan_headers)[0], 403)
-        self.assertFalse(self.request("GET", "/api/session", headers={"Host":"192.168.0.3:8088"})[2]["can_rescan"])
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers=lan_headers)[0], 403)
+        self.assertFalse(self.request("GET", "/api/v2/session", headers={"Host":"192.168.0.3:8088"})[2]["can_rescan"])
         proxied_loopback_headers = {"Host":f"127.0.0.1:{self.port}", "X-Forwarded-For":"192.168.0.20"}
-        self.assertFalse(self.request("GET", "/api/session", headers=proxied_loopback_headers)[2]["can_rescan"])
+        self.assertFalse(self.request("GET", "/api/v2/session", headers=proxied_loopback_headers)[2]["can_rescan"])
 
     def test_direct_loopback_rescan_rejects_unsafe_startup_configuration(self):
         inv = self.write_inventory()
@@ -372,35 +236,35 @@ class ApiServerTest(ServerCase):
     def test_trusted_proxy_requires_loopback_exact_origin_operator_and_csrf(self):
         inv = self.write_inventory()
         self.start_server({"STORAGE_VIZ_INVENTORY":str(inv), "STORAGE_VIZ_STATE_DIR":str(Path(self.tmp.name) / "state"), "STORAGE_VIZ_TRUSTED_PROXY":"1", "STORAGE_VIZ_ALLOWED_ORIGINS":"http://storage.test", "STORAGE_VIZ_OPERATOR_ALLOWLIST":"operator-1"})
-        self.assertEqual(self.request("GET", "/api/session")[0], 401)
-        self.assertEqual(self.request("GET", "/api/servers")[0], 401)
-        self.assertEqual(self.request("GET", "/api/servers/hinton/scan-status")[0], 401)
+        self.assertEqual(self.request("GET", "/api/v2/session")[0], 401)
+        self.assertEqual(self.request("GET", "/api/v2/fleet")[0], 401)
+        self.assertEqual(self.request("GET", "/api/v2/servers/hinton/activity")[0], 401)
         self.assertEqual(self.request("GET", "/data/hinton.json")[0], 404)
-        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"viewer-1"})
+        code, headers, sess = self.request("GET", "/api/v2/session", headers={"X-Forwarded-User":"viewer-1"})
         self.assertEqual(code, 200); self.assertFalse(sess["can_rescan"])
         viewer_cookie = self.cookie_value(headers)
         self.assertIn("SameSite=Strict", headers.get("Set-Cookie", ""))
         self.assertIn("Secure", headers.get("Set-Cookie", ""))
-        code, _, servers = self.request("GET", "/api/servers", headers={"X-Forwarded-User":"viewer-1"})
-        self.assertEqual(code, 200); self.assertEqual(servers["data_mode"], "inventory")
+        code, _, servers = self.request("GET", "/api/v2/fleet", headers={"X-Forwarded-User":"viewer-1"})
+        self.assertEqual(code, 200); self.assertIn("policy", servers)
         self.assertEqual(self.request("GET", "/data/hinton.json", headers={"X-Forwarded-User":"viewer-1"})[0], 404)
-        self.assertEqual(self.request("POST", "/api/servers/hinton/rescan", {}, headers={"Cookie":viewer_cookie, "X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
-        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"operator-1"})
+        self.assertEqual(self.request("POST", "/api/v2/servers/hinton/rescan", {}, headers={"Cookie":viewer_cookie, "X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        code, headers, sess = self.request("GET", "/api/v2/session", headers={"X-Forwarded-User":"operator-1"})
         self.assertTrue(sess["can_rescan"])
         operator_cookie = self.cookie_value(headers)
-        code2, headers2, sess2 = self.request("GET", "/api/session", headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1"})
+        code2, headers2, sess2 = self.request("GET", "/api/v2/session", headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1"})
         self.assertEqual(code2, 200); self.assertEqual(sess2["csrf_token"], sess["csrf_token"])
         self.assertNotIn("Set-Cookie", headers2)
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403, "POST without Cookie must fail before server lookup")
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":"storage_viz_session=bad", "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://evil.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test"})[0], 403)
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":"bad"})[0], 403)
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 404)
-        self.assertEqual(self.request_raw("POST", "/api/servers/hinton/rescan", b"", headers={"Content-Type":"application/json", "Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 400)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers={"X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403, "POST without Cookie must fail before server lookup")
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"viewer-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers={"Cookie":"storage_viz_session=bad", "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://evil.test", "X-CSRF-Token":sess["csrf_token"]})[0], 403)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":"bad"})[0], 403)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers={"Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 404)
+        self.assertEqual(self.request_raw("POST", "/api/v2/servers/hinton/rescan", b"", headers={"Content-Type":"application/json", "Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 400)
         for raw in (b"[]", b"not-json", b"{}{}", b"{\"command\":\"scan\"}", b"{\"path\":\"/tmp\"}"):
-            self.assertEqual(self.request_raw("POST", "/api/servers/hinton/rescan", raw, headers={"Content-Type":"application/json", "Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 400)
+            self.assertEqual(self.request_raw("POST", "/api/v2/servers/hinton/rescan", raw, headers={"Content-Type":"application/json", "Cookie":operator_cookie, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":sess["csrf_token"]})[0], 400)
 
     def test_explicit_internal_http_proxy_mode_uses_non_secure_session_cookie_and_keeps_csrf(self):
         inv = self.write_inventory()
@@ -413,7 +277,7 @@ class ApiServerTest(ServerCase):
             "STORAGE_VIZ_OPERATOR_ALLOWLIST":"lan-operator",
             "STORAGE_VIZ_SESSION_COOKIE_SECURE":"0",
         })
-        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"lan-operator"})
+        code, headers, sess = self.request("GET", "/api/v2/session", headers={"X-Forwarded-User":"lan-operator"})
         self.assertEqual(code, 200)
         self.assertTrue(sess["can_rescan"])
         self.assertIn("SameSite=Strict", headers.get("Set-Cookie", ""))
@@ -425,7 +289,7 @@ class ApiServerTest(ServerCase):
             "Origin":origin,
             "X-CSRF-Token":sess["csrf_token"],
         }
-        self.assertEqual(self.request("POST", "/api/servers/unknown/rescan", {}, headers=post_headers)[0], 404)
+        self.assertEqual(self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers=post_headers)[0], 404)
 
     def test_session_cookie_secure_override_rejects_invalid_or_non_proxy_configuration(self):
         inv = self.write_inventory()
@@ -507,7 +371,7 @@ class ApiServerTest(ServerCase):
         env.pop("STORAGE_VIZ_PORT", None)
         self.proc = subprocess.Popen([sys.executable, str(SERVE), str(self.port)], cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         wait_until_serving(self.proc)
-        self.assertEqual(self.request("GET", "/api/session")[0], 200)
+        self.assertEqual(self.request("GET", "/api/v2/session")[0], 200)
 
     def test_expired_session_cookie_is_rejected_on_post(self):
         inv = self.write_inventory()
@@ -519,8 +383,8 @@ class ApiServerTest(ServerCase):
         value = encoded + "." + hmac.new(secret.encode(), encoded.encode(), hashlib.sha256).hexdigest()
         csrf = hmac.new(secret.encode(), ("csrf:" + value).encode(), hashlib.sha256).hexdigest()
         headers = {"Cookie": "storage_viz_session=" + value, "X-Forwarded-User":"operator-1", "Origin":"http://storage.test", "X-CSRF-Token":csrf}
-        code, _, body = self.request("POST", "/api/servers/unknown/rescan", {}, headers=headers)
-        self.assertEqual((code, body.get("error")), (403, "BAD_SESSION"))
+        code, _, body = self.request("POST", "/api/v2/servers/unknown/rescan", {}, headers=headers)
+        self.assertEqual((code, body["error"]["code"]), (403, "BAD_CSRF"))
 
     def test_operator_mode_without_allowed_origin_fails_startup(self):
         inv = self.write_inventory()
@@ -528,9 +392,10 @@ class ApiServerTest(ServerCase):
 
     def test_trusted_proxy_fixtures_require_identity(self):
         self.start_server({"STORAGE_VIZ_TRUSTED_PROXY":"1"})
-        self.assertEqual(self.request("GET", "/api/servers")[0], 401)
-        code, _, body = self.request("GET", "/api/servers", headers={"X-Forwarded-User":"viewer"})
-        self.assertEqual((code, body["data_mode"]), (200, "sample"))
+        self.assertEqual(self.request("GET", "/api/v2/fleet")[0], 401)
+        code, _, body = self.request("GET", "/api/v2/fleet", headers={"X-Forwarded-User":"viewer"})
+        self.assertEqual(code, 200)
+        self.assertIn("policy", body)
 
     def test_production_refuses_fixtures(self):
         self.start_server({"STORAGE_VIZ_ENV":"production"}, expect_exit=True)
@@ -559,22 +424,22 @@ class CandidatePreflightBackendModeTest(ServerCase):
 
     def test_preflight_backend_allows_session_csrf_and_unknown_probe_but_refuses_known_jobs(self):
         self.start_preflight()
-        code, headers, sess = self.request("GET", "/api/session", headers={"X-Forwarded-User":"fixed-proxy-operator"})
+        code, headers, sess = self.request("GET", "/api/v2/session", headers={"X-Forwarded-User":"fixed-proxy-operator"})
         self.assertEqual(code, 200)
         self.assertTrue(sess["can_rescan"])
         self.assertNotIn("Secure", headers.get("Set-Cookie", ""))
         cookie = self.cookie_value(headers)
-        code, _, servers = self.request("GET", "/api/servers", headers={"X-Forwarded-User":"fixed-proxy-operator"})
+        code, _, servers = self.request("GET", "/api/v2/fleet", headers={"X-Forwarded-User":"fixed-proxy-operator"})
         self.assertEqual(code, 200)
-        self.assertEqual(servers["data_mode"], "inventory")
-        self.assertEqual([s["id"] for s in servers["servers"]], ["hinton"])
+        self.assertIn("policy", servers)
+        self.assertEqual([s["server_id"] for s in servers["servers"]], ["hinton"])
         post_headers = {"Cookie":cookie, "X-Forwarded-User":"fixed-proxy-operator", "Origin":"http://166.104.167.11:505", "X-CSRF-Token":sess["csrf_token"]}
-        code, _, body = self.request("POST", "/api/servers/absent-preflight/rescan", {}, headers=post_headers)
+        code, _, body = self.request("POST", "/api/v2/servers/absent-preflight/rescan", {}, headers=post_headers)
         self.assertEqual(code, 404)
-        self.assertEqual(body.get("error"), "UNKNOWN_SERVER")
-        code, _, body = self.request("POST", "/api/servers/hinton/rescan", {}, headers=post_headers)
+        self.assertEqual(body["error"]["code"], "UNKNOWN_SERVER")
+        code, _, body = self.request("POST", "/api/v2/servers/hinton/rescan", {}, headers=post_headers)
         self.assertEqual(code, 403)
-        self.assertEqual(body.get("error"), "RESCAN_DISABLED")
+        self.assertEqual(body["error"]["code"], "FORBIDDEN")
 
     def test_preflight_backend_rejects_sample_direct_public_bind_and_missing_inventory(self):
         self.start_preflight(expect_exit=True, fixtures=True)
@@ -598,9 +463,9 @@ os.environ.update(STORAGE_VIZ_INVENTORY=str(inv), STORAGE_VIZ_STATE_DIR=str(root
 sys.path.insert(0, str(pathlib.Path('apps/storage-monitor').resolve()))
 from api import server as serve
 runtime = serve.configure()
-print(runtime.runs_actors, runtime.live_capacity, runtime.fleet.actors['hinton'].loaded)
+print(runtime.runs_actors, runtime.fleet.actors['hinton'].loaded)
 """
         with tempfile.TemporaryDirectory(prefix="storage-viz-preflight-import.") as tmp:
             result = subprocess.run([sys.executable, "-c", code, tmp], cwd=str(ROOT.parents[1]), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "False None False")
+        self.assertEqual(result.stdout.strip(), "False False")

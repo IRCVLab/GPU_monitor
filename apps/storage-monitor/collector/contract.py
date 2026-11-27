@@ -12,9 +12,7 @@ import json
 import zlib
 from typing import Any, Callable, Dict, FrozenSet, Iterable, Mapping, Optional, Pattern, Tuple
 
-from collector import judge
 from collector.ids import BINDING_RE, RELEASE_SHA_RE, REQUEST_ID_RE, RUN_ID_RE, SERVER_ID_RE, SHA256_RE, VOLUME_ID_RE
-from collector.inventory import CapacityThresholds
 from collector.update import Attempt
 
 MANIFEST_SCHEMA = "storage-viz.manifest/2"
@@ -234,6 +232,18 @@ class HostRun:
     pending: FrozenSet[str] = frozenset()
     """Request ids waiting in ``requests/``."""
 
+    trigger: Optional[str] = None
+    started_unix: Optional[int] = None
+    group: Optional[str] = None
+
+    @staticmethod
+    def activity_fields(run):
+        current = run.get("current")
+        group = current.get("group") if isinstance(current, dict) else None
+        return {"trigger": run.get("trigger") if run.get("trigger") in ("manual", "timer") else None,
+                "started_unix": run.get("started_unix") if type(run.get("started_unix")) is int else None,
+                "group": group if isinstance(group, str) else None}
+
 
 @dataclass(frozen=True)
 class AgentFacts:
@@ -290,7 +300,8 @@ def parse_observation(data: bytes) -> GateObservation:
         present=state != "idle", scanning=state == "running",
         run_id=run_id if isinstance(run_id, str) and RUN_ID_RE.fullmatch(run_id) else None,
         request_ids=frozenset(_id(item, REQUEST_ID_RE, "run.request_ids") for item in ids),
-        pending=frozenset(_id(item, REQUEST_ID_RE, "requests_pending") for item in pending))
+        pending=frozenset(_id(item, REQUEST_ID_RE, "requests_pending") for item in pending),
+        **HostRun.activity_fields(run))
     agent = raw["agent"]
     facts = AgentFacts(release_sha=_optional(agent["release_sha"], lambda value: _id(value, RELEASE_SHA_RE, "agent.release_sha")),
                        broken=agent["health"] == "broken", attempt=_attempt(raw["update"]))
@@ -710,22 +721,3 @@ def _unique(values: Iterable[str], label: str) -> None:
         if value in seen:
             raise ContractError(DUPLICATE_ID, f"{label} appears twice")
         seen.add(value)
-
-
-# ------------------------------------------------------------------ v1 responses
-
-
-def snapshot_response(snapshot, thresholds=CapacityThresholds()):
-    """Add the collector's judgments to a projected v1 snapshot without changing stored data."""
-    response = dict(snapshot)
-    if "mounts" in snapshot:
-        response["mounts"] = [
-            {**mount, **judge.capacity_fields(mount, thresholds)} for mount in snapshot["mounts"]
-        ]
-    for table in ("top_files", "stale"):
-        if table in snapshot:
-            response[table] = [
-                {**row, "age_days": judge.age_days(row.get("mtime"), snapshot.get("scan_started_unix"))}
-                for row in snapshot[table]
-            ]
-    return response

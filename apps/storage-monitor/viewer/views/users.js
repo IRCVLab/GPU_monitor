@@ -1,14 +1,13 @@
 import {humanBytes,escapeHtml} from '../format.js';
 import {columnValue,sortRows,updateArrows} from '../columns.js';
-export function drawUsers({DATA,route,mountPaths,mountColor,colorForUid,navigate,sort:usersSort,ui,toggleUserRow},echarts) {
+export function drawUsers({DATA,route,volumeLabels={},mountPaths,mountColor,colorForUid,navigate,sort:usersSort,ui,toggleUserRow},echarts) {
   const userMountFilter = route.mount || "";
   const userScopeBytes = user => columnValue("users","bytes",user,route);
-  const scopeCapacity = () => DATA.mounts.filter(m => !route.mount || m.path === route.mount)
-    .reduce((sum,m) => sum + (m.scanned_bytes ?? 0),0) || 1;
+  const scopeCapacity = () => DATA.users.reduce((sum,user) => sum + (userScopeBytes(user) ?? 0),0) || 1;
   const expandedUid = ui.expandedUsers?.[route.serverId];
   function renderUserMountControls() {
     const seg = document.getElementById("userMountSeg"); seg.innerHTML = "";
-    [["", "All"]].concat(mountPaths.map(p => [p, p])).forEach(([val, lab]) => {
+    [["", "All"]].concat(mountPaths.map(p => [p, volumeLabels[p] ?? p])).forEach(([val, lab]) => {
       const b = document.createElement("button");
       b.className = (userMountFilter === val ? "active" : ""); b.textContent = lab;
       b.onclick = () => { navigate({mount:val || null}); };
@@ -17,7 +16,7 @@ export function drawUsers({DATA,route,mountPaths,mountColor,colorForUid,navigate
     const leg = document.getElementById("userMountLegend"); leg.innerHTML = "";
     (userMountFilter ? [userMountFilter] : mountPaths).forEach(mp => {
       const it = document.createElement("div"); it.className = "legend-item";
-      it.innerHTML = '<span class="swatch" style="background:' + mountColor[mp] + '"></span><span class="mono">' + escapeHtml(mp) + '</span>';
+      it.innerHTML = '<span class="swatch" style="background:' + mountColor[mp] + '"></span><span class="mono">' + escapeHtml(volumeLabels[mp] ?? mp) + '</span>';
       leg.appendChild(it);
     });
   }
@@ -37,9 +36,9 @@ export function drawUsers({DATA,route,mountPaths,mountColor,colorForUid,navigate
 
     const mountsShown = userMountFilter ? [userMountFilter] : mountPaths;
     const series = mountsShown.map(mp => ({
-      name: mp, type: "bar", stack: "u", barMaxWidth: 17,
+      name: volumeLabels[mp] ?? mp, type: "bar", stack: "u", barMaxWidth: 17,
       itemStyle: { color: mountColor[mp] }, emphasis: { focus: "series" },
-      data: top.map(x => (x.u.by_mount && x.u.by_mount[mp]) || 0).reverse()
+      data: top.map(x => x.u.by_volume?.[mp]?.bytes || 0).reverse()
     }));
     if (series.length) series[series.length - 1].label = {
       show: true, position: "right", color: axisText, fontFamily: "ui-monospace, monospace", fontSize: 11,
@@ -111,11 +110,11 @@ export function drawUsers({DATA,route,mountPaths,mountColor,colorForUid,navigate
   }
 
   function expandedRow(u) {
-    const byMount = u.by_mount || {};
-    const entries = mountPaths.map(mp => [mp, byMount[mp] || 0]).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]);
+    const byMount = u.by_volume || {};
+    const entries = mountPaths.map(mp => [mp, byMount[mp]?.bytes || 0]).filter(e => e[1] > 0).sort((a, b) => b[1] - a[1]);
     let inner = '<div class="expand-inner">';
     if (!entries.length) inner += '<span class="hint">No per-storage breakdown.</span>';
-    else for (const [mp, b] of entries) inner += '<div class="mini-bar"><span class="mb-label">' + escapeHtml(mp) +
+    else for (const [mp, b] of entries) inner += '<div class="mini-bar"><span class="mb-label">' + escapeHtml(volumeLabels[mp] ?? mp) +
       '</span><span class="mb-track"><span class="mb-fill" style="width:' + (b / u.bytes * 100).toFixed(2) + '%;background:' +
       mountColor[mp] + '"></span></span><span class="mb-val">' + humanBytes(b) + '</span><span class="mb-pct">' +
       (b / u.bytes * 100).toFixed(0) + '%</span></div>';

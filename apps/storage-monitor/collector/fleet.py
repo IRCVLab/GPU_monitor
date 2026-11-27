@@ -25,7 +25,7 @@ from collector.errors import (
 from collector.ids import RELEASE_SHA_RE, SERVER_ID_RE, SHA256_RE
 from collector.inventory import Server, canary_of
 from collector.store import ServerStore
-from collector.view import ServerView, active_job, job_v1
+from collector.view import ServerView, active_job, job_body
 
 _LOG = logging.getLogger(__name__)
 
@@ -273,6 +273,9 @@ class Fleet:
         self.lookup(server_id)
         return self.actors[server_id].view
 
+    def open_capture(self, sid, vid, sha):
+        return self.actors[sid].store.open_capture(vid, sha)
+
     def views(self) -> List[ServerView]:
         return [self.actors[server.id].view for server in self.servers]
 
@@ -280,7 +283,7 @@ class Fleet:
         return self.rollout.desired()
 
     def rollout_view(self) -> dict:
-        """The rollout as /api/servers shows it (S5, additive)."""
+        """Rollout state published by the fleet route."""
         state = self.rollout.view()
         return {"phase": state.phase, "reason": state.reason, "error": self.rollout.write_error,
                 "desired_sha": state.desired_sha,
@@ -295,7 +298,7 @@ class Fleet:
         audit = _audit(now, actor_name, server.id)
         current = active_job(self.actors[server.id].view)
         if current is not None:
-            raise ActiveJob(job=job_v1(current, server.id), audit=audit("ACTIVE_JOB", current.request_id))
+            raise ActiveJob(job=job_body(current), audit=audit("ACTIVE_JOB", current.request_id))
         with self._lock:
             if server.id in self._admitting:
                 raise ActiveJob(audit=audit("ACTIVE_JOB", None))
@@ -316,7 +319,7 @@ class Fleet:
         if reply is None:
             raise ServerBusy(audit=audit("SERVER_BUSY", None))
         if reply.error == "ACTIVE_JOB":
-            raise ActiveJob(job=job_v1(reply.job, server.id), audit=audit("ACTIVE_JOB", reply.job.request_id))
+            raise ActiveJob(job=job_body(reply.job), audit=audit("ACTIVE_JOB", reply.job.request_id))
         if reply.error == "COOLDOWN":
             raise Cooldown(reply.retry_after, retry_after_seconds=reply.retry_after, audit=audit("COOLDOWN", None))
         if reply.error == StoreUnavailable.code:
@@ -328,7 +331,7 @@ class Fleet:
             raise RuntimeError(f"rescan admission for {server.id} failed: {reply.error}")
         event = audit("ACCEPTED", reply.job.request_id)
         _LOG.info("rescan accepted %s", event)
-        return {"status": "started", "job": job_v1(reply.job, server.id), "audit": event}
+        return {"status": "started", "job": job_body(reply.job), "audit": event}
 
 
 def _audit(now: int, actor_name: str, server_id: str) -> Callable[[str, Optional[str]], dict]:

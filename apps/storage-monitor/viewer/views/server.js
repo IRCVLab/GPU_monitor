@@ -1,6 +1,6 @@
 import {PALETTE,OTHER_COLOR,MOUNT_PALETTE,monotonicSeconds} from '../format.js';
 import {selectedMount,detailKey} from '../state.js';
-import {applyObservedCapacity} from '../api.js';
+
 import {renderHeader} from './header.js';
 import {drawTreemap} from './treemap.js';
 import {drawUsers} from './users.js';
@@ -18,7 +18,7 @@ export function renderServer(state,previous,{navigate,dispatch,chart,resize}) {
   const detail = active?.data;
   const ready = server && !!detail;
   for (const key of ['detailHead','detailActions','detailTabs','detailPanels','caps','warnBanner']) el(key).hidden = !ready;
-  const unknown = server && resources.fleet?.data && !resources.fleet.data.servers.some(row => row.id === id);
+  const unknown = server && resources.fleet?.data && !resources.fleet.data.servers.some(row => row.server_id === id);
   const error = unknown || server && !detail && active?.status === 'error';
   el('detailError').hidden = !error;
   if (error) el('detailError').textContent = unknown || active?.code === 'UNKNOWN_SERVER' ? 'Unknown server: ' + id : active.code;
@@ -30,23 +30,23 @@ export function renderServer(state,previous,{navigate,dispatch,chart,resize}) {
     renderSelectionBar(detail,entries,ui.selectionBarExpanded,dispatch);
   if (!ready) { el('rescanNotice').hidden = true; return; }
   const activity = resources['activity/'+id];
-  const summary = resources.fleet?.data?.servers.find(row => row.id === id);
-  const status = activity?.data ?? summary?.scan_status ?? {};
-  renderScanStatus(status,detail,{sample:resources.fleet?.data?.data_mode === 'sample',
-    now:status.host_now_unix == null ? undefined : status.host_now_unix + (activity?.received ? monotonicSeconds()-activity.received : 0)});
+  const observation = activity?.data && activity.received >= active.received ? activity : active;
+  const facts = observation.data;
+  const hostTime = facts.activity.host_now_unix;
+  renderScanStatus(facts,detail,{now:hostTime == null ? null : hostTime + monotonicSeconds()-observation.received});
   const rescan = state.rescans[id];
-  const phase = rescan?.busy ? rescan.phase : status.state === 'running' ? 'running' : 'idle';
+  const phase = rescan?.busy ? rescan.phase : facts.job || facts.activity.state === 'running' ? 'running' : 'idle';
   const btn = el('rescanBtn');
   btn.disabled = !resources.session?.data?.can_rescan || phase !== 'idle';
   btn.setAttribute('aria-busy',String(phase !== 'idle'));
   btn.dataset.rescanState = phase;
-  btn.title = btn.disabled && phase === 'idle' ? 'Read-only session: manual rescan is disabled.' : 'Run a fresh scan now';
+  btn.title = phase !== 'idle' ? 'Scan is running' : btn.disabled ? 'Read-only session: manual rescan is disabled.' : 'Run a fresh scan now';
   const message = rescan?.message ?? active.code;
   renderNotice(el('rescanNotice'),message);
   const dataChanged = previous?.resources[detailKey(id)]?.data !== detail;
   const routeChanged = previous?.route !== route;
-  if (dataChanged || routeChanged || previous?.resources['activity/'+id]?.data?.capacity !== status.capacity)
-    renderHeader(applyObservedCapacity(detail,status.capacity),selectedMount(detail,route),navigate);
+  if (dataChanged || routeChanged)
+    renderHeader(detail,selectedMount(detail,route),navigate);
   if (!(resize || dataChanged || routeChanged || previous?.ui !== ui || previous?.selection[id] !== state.selection[id])) return;
   const tab = route.tab === 'top' ? 'topfiles' : route.tab;
   document.querySelectorAll('.tab').forEach(button => {
@@ -54,9 +54,10 @@ export function renderServer(state,previous,{navigate,dispatch,chart,resize}) {
     button.setAttribute('aria-selected',String(button.dataset.tab === route.tab));
   });
   document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active',panel.id === 'panel-'+tab));
-  const mountPaths = detail.mounts.map(m => m.path);
+  const mountPaths = detail.volumes.map(v => v.volume_id);
   const uidColorMap = new Map([...detail.users].sort((a,b) => b.bytes-a.bytes).map((u,i) => [u.uid,PALETTE[i] ?? OTHER_COLOR]));
-  const context = {DATA:detail, route, ui, entries, navigate, mountPaths, uidColorMap,
+  const volumeLabels = Object.fromEntries(detail.volumes.map(v => [v.volume_id,v.mountpoint]));
+  const context = {DATA:detail, volumeLabels, route, ui, entries, navigate, mountPaths, uidColorMap,
     toggleUserRow:uid => dispatch({type:'ToggleUserRow',uid}),
     toggleCleanupSelectedItem:item => dispatch(entries.some(e => e.path === item.path) ? {type:'Unselect',path:item.path} : {type:'Select',item}),
     mountColor:Object.fromEntries(mountPaths.map((path,i) => [path,MOUNT_PALETTE[i % MOUNT_PALETTE.length]])),

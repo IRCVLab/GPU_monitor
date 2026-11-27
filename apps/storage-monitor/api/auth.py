@@ -206,7 +206,7 @@ class Auth:
     def _session(self) -> tuple[dict[str, Any], str | None]:
         actor = self._actor()
         if actor is None:
-            raise RequestError("AUTH_REQUIRED", body={"authenticated": False, "can_rescan": False})
+            raise RequestError("AUTH_REQUIRED")
         cookies = _parse_cookies(self.headers.get("Cookie", ""))
         cookie_value = cookies.get("storage_viz_session")
         if cookie_value and _validate_session_cookie(cookie_value, actor) is not None:
@@ -228,13 +228,13 @@ class Auth:
             return None
         actor = self._actor()
         if actor is None:
-            raise RequestError("AUTH_REQUIRED", body={"authenticated": False, "error": "AUTH_REQUIRED"})
+            raise RequestError("AUTH_REQUIRED")
         return None
 
     def _require_post_auth(self) -> str:
         actor = self._actor()
         if actor is None:
-            raise RequestError("AUTH_REQUIRED", body={"authenticated": False, "error": "AUTH_REQUIRED"})
+            raise RequestError("AUTH_REQUIRED")
         if not (self.server.runtime.rescan_enabled and actor in OPERATORS and ALLOWED_ORIGINS):
             raise RequestError("FORBIDDEN")
         origin = self.headers.get("Origin", "")
@@ -245,7 +245,7 @@ class Auth:
         cookies = _parse_cookies(self.headers.get("Cookie", ""))
         cookie_value = cookies.get("storage_viz_session", "")
         if _validate_session_cookie(cookie_value, actor) is None:
-            raise RequestError("BAD_SESSION")
+            raise RequestError("BAD_CSRF")
         expected = _csrf_token(cookie_value)
         supplied = self.headers.get("X-CSRF-Token", "")
         if not supplied or not hmac.compare_digest(supplied, expected):
