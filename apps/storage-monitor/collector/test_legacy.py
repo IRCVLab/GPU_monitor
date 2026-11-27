@@ -213,3 +213,24 @@ class V2ProbeTests(unittest.TestCase):
             with self.assertRaises(TransportError) as info:
                 parse_probe(probe(v2=v2), server())
             self.assertEqual(info.exception.code, "BAD_TELEMETRY")
+
+
+class LegacyVolumeTest(unittest.TestCase):
+    """SHIM(M2b..M5c) S3: the volumes a v1 snapshot shows on the v2 fleet."""
+
+    def test_only_scanned_or_failed_roots_become_volumes(self):
+        from collector.test_snapshot import base_payload
+        payload = base_payload()
+        root = payload["selected_roots"][0]
+        payload["selected_roots"] += [
+            {**root, "mount_id": "archive", "major_minor": "8:2", "mountpoint": "/archive", "scan_root": "/archive",
+             "status": "failed", "scanned_bytes": 0, "scanned_files": 0, "scanned_dirs": 0, "error_code": "EIO"},
+            # The v1 agent lists every mount its policy declined as a skipped root.
+            {**root, "mount_id": "proc", "major_minor": "0:22", "mount_source": "proc", "mountpoint": "/proc",
+             "scan_root": "/proc", "fstype": "proc", "status": "skipped", "scanned_bytes": 0, "scanned_files": 0,
+             "scanned_dirs": 0},
+        ]
+        manifest, captures, _ = legacy.legacy_volume(payload, "c" * 64)
+        self.assertEqual([volume.mountpoint for volume in manifest.volumes], ["/", "/archive"])
+        self.assertEqual([volume.capacity.total if volume.capacity else None for volume in manifest.volumes], [100, None])
+        self.assertEqual(len(captures), 1)

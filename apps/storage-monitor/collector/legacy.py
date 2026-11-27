@@ -423,6 +423,8 @@ def legacy_volume(payload, original_sha):
     mounts = {m["mount_id"]: m for m in payload["mounts"]}
     refs, volumes, captures, blobs = [], [], {}, {}
     for source in payload["selected_roots"]:
+        if source["status"] == "skipped":
+            continue  # a mount the v1 policy declined, such as /proc: not managed storage
         path = source["scan_root"]
         vid = "v-" + hashlib.sha256(encode([payload["server_id"], source["mount_id"]])).hexdigest()[:16]
         binding = "b-" + hashlib.sha256(encode([source.get(k) for k in (
