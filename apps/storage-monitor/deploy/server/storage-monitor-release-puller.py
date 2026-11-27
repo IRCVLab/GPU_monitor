@@ -106,17 +106,18 @@ def validate_repository(repository: str) -> None:
         raise PullError("repository must be OWNER/REPO")
 
 
-def default_get_json(path: str) -> object:
+def default_get_json(path: str, token: str = "") -> object:
     if not path.startswith("/"):
         raise PullError("GitHub API path must be absolute")
-    request = urllib.request.Request(
-        API_BASE + path,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "storage-monitor-release-puller",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "storage-monitor-release-puller",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        # Unauthenticated calls share 60 per hour per IP with every other client on the host.
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(API_BASE + path, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             if response.status == 403:
@@ -848,7 +849,19 @@ def activate_release(
     return _parse_activation_stdout(result.stdout, sha=sha, digest=digest, runtime_digest=runtime_digest)
 
 
+def read_github_token(token_file: Path) -> str:
+    try:
+        return token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def run_once(config: Config, *, get_json=default_get_json, run_command=default_run_command, now_fn=time.time, download=None) -> str:
+    if get_json is default_get_json:
+        token = read_github_token(config.github_token_file)
+
+        def get_json(path: str) -> object:
+            return default_get_json(path, token)
     if download is None:
         def download(path: str) -> bytes:
             return default_download(path, config.github_token_file)
