@@ -12,7 +12,7 @@ import time
 import uuid
 
 from . import capacity, capture, identity, mount_policy, plan, publish
-from .block_media import BlockMediaResolver
+from .block_media import BlockMediaResolver, MediaOverrides, MediaResult
 from .config import load_config
 from .ids import REQUEST_ID_RE
 
@@ -68,7 +68,11 @@ def requests(data):
 def discover(cfg, reader, resolver):
     entries = mount_policy.parse_mountinfo(reader())
     selection = mount_policy.select_scan_roots(entries, root_directory_paths=
-                                              mount_policy.verified_root_directory_paths(entries))
+                                              mount_policy.verified_root_directory_paths(entries),
+                                              classify=mount_policy.classifier(cfg.host_profile, entries, str(cfg.data_dir)))
+    if cfg.volume_media:
+        resolver = MediaOverrides(resolver, {e.major_minor: MediaResult(cfg.volume_media[e.mountpoint], "resolved")
+                                             for e in entries if e.mountpoint in cfg.volume_media})
     roots = identity.resolve(selection.selected, cfg.volume_aliases, cfg.config_digest,
                              resolver, devices=[e.major_minor for e in entries])
     return roots, mount_policy.mounts_within_roots(entries, roots)

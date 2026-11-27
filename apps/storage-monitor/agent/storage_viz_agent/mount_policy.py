@@ -215,10 +215,75 @@ def classify_mount(entry: MountEntry) -> MountDecision:
     return MountDecision("unsupported", "unsupported-fstype")
 
 
+Classifier = Callable[[MountEntry], MountDecision]
+
+
+def owning_mount(entries: Sequence[MountEntry], path: str) -> Optional[MountEntry]:
+    """The mount a path lives on: the deepest mountpoint containing it, the last of equals winning."""
+
+    path = _normalize_mountpoint(path)
+    owner = None
+    for entry in entries:
+        mountpoint = entry.mountpoint
+        if mountpoint == "/" or path == mountpoint or path.startswith(mountpoint + "/"):
+            if owner is None or len(mountpoint) >= len(owner.mountpoint):
+                owner = entry
+    return owner
+
+
+def _truenas_prohibition(entry: MountEntry, agent_dataset: Optional[str]) -> Optional[str]:
+    dataset = entry.source
+    parts = dataset.split("/")
+    if entry.fstype.lower() != "zfs":
+        return "truenas-not-zfs"
+    if parts[0] == "boot-pool":
+        return "truenas-boot-pool"
+    if len(parts) < 2 or not all(parts):
+        return "truenas-pool-root"
+    if ".system" in parts:
+        return "truenas-system-dataset"
+    if not entry.mountpoint.startswith("/mnt/"):
+        return "truenas-outside-mnt"
+    if dataset == agent_dataset:
+        return "truenas-agent-dataset"
+    return None
+
+
+def truenas_classifier(entries: Sequence[MountEntry], data_dir: str) -> Classifier:
+    """``classify_mount`` narrowed to the data-pool datasets of a TrueNAS SCALE host.
+
+    The boot pool, pool roots, the ``.system`` datasets and anything outside /mnt
+    are TrueNAS itself, and the dataset holding ``data_dir`` is the agent's own.
+    """
+
+    owner = owning_mount(entries, data_dir)
+    agent_dataset = owner.source if owner is not None and owner.fstype.lower() == "zfs" else None
+
+    def classify(entry: MountEntry) -> MountDecision:
+        decision = classify_mount(entry)
+        if decision.status != "selected":
+            return decision
+        reason = _truenas_prohibition(entry, agent_dataset)
+        return MountDecision("prohibited", reason) if reason else decision
+
+    return classify
+
+
+def classifier(host_profile: str, entries: Sequence[MountEntry], data_dir: str) -> Classifier:
+    """The mount classification of a config ``host_profile``."""
+
+    profiles = {
+        "standard": lambda: classify_mount,
+        "truenas": lambda: truenas_classifier(entries, data_dir),
+    }
+    return profiles[host_profile]()
+
+
 def select_scan_roots(
     entries: Sequence[MountEntry],
     home_path: str = "/home",
     root_directory_paths: Sequence[str] = (),
+    classify: Classifier = classify_mount,
 ) -> SelectionResult:
     """Select deterministic scan roots from parsed mount entries.
 
@@ -234,7 +299,7 @@ def select_scan_roots(
     skipped: List[SkippedMount] = []
 
     for entry in entries:
-        decision = classify_mount(entry)
+        decision = classify(entry)
         if decision.status != "selected":
             skipped.append(SkippedMount(entry.mount_id, entry.mountpoint, decision.reason, entry=entry))
             continue

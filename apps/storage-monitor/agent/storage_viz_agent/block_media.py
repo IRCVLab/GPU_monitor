@@ -34,6 +34,17 @@ class MediaResult:
     confidence: str
 
 
+class MediaOverrides:
+    """A resolver whose answer for some devices is fixed by config ``volume_media``."""
+
+    def __init__(self, base, overrides: Dict[str, MediaResult]):
+        self.base = base
+        self.overrides = dict(overrides)
+
+    def resolve(self, major_minor: str) -> MediaResult:
+        return self.overrides.get(major_minor) or self.base.resolve(major_minor)
+
+
 class BlockMediaResolver:
     """Resolve block media by following bounded sysfs block/slave topology."""
 
