@@ -87,6 +87,23 @@ class Publication:
     volumes: tuple[bytes, ...]
 
 
+def _volume_key(volume, raw):
+    """The volume holding /home first, then the root filesystem, then mountpoints alphabetically."""
+    holds_home = volume.mountpoint == "/home" or any(ref["scan_root"] == "/home" for ref in raw["roots"])
+    return (not holds_home, volume.mountpoint != "/", volume.mountpoint)
+
+
+def _root_key(scan_root):
+    """/home first within a volume, then scan roots in alphabetical order."""
+    return (scan_root != "/home", scan_root)
+
+
+def ordered_volumes(manifest):
+    """The manifest's volumes, each with its raw entry, in display order (shared by every view)."""
+    pairs = zip(manifest.volumes, manifest.raw["volumes"])
+    return sorted(pairs, key=lambda pair: _volume_key(*pair))
+
+
 def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None, user_file_totals=None):
     """Merge the accepted capture rows once, before publishing the actor's view."""
     users, top, stale, heads = {}, [], [], {}
@@ -119,12 +136,12 @@ def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None
     host = {"hostname": manifest.hostname if manifest else None, "mount_table": manifest.mount_table if manifest else None}
     volumes = []
     if manifest:
-        for vol, raw in zip(manifest.volumes, manifest.raw["volumes"]):
+        for vol, raw in ordered_volumes(manifest):
             vid = vol.volume_id
             state_id = "legacy" if legacy_bytes and vid in heads else vid
             attempt = raw["last_attempt"]
             roots = [{**ref, "bytes": root_bytes.get((vid, ref["binding"], ref["scan_root"]))}
-                     for ref in raw["roots"]]
+                     for ref in sorted(raw["roots"], key=lambda ref: _root_key(ref["scan_root"]))]
             volumes.append(encode({"volume_id": vid, "identity": vol.identity, "diagnostic": vol.diagnostic,
                                    "mountpoint": vol.mountpoint, "media": vol.media, "roots": roots,
                                    "data_state": (states or {}).get(state_id, "current" if vid in heads else "none"),
@@ -171,7 +188,7 @@ def server_bytes(view, mono, thresholds, *, detail=False):
     running_group = (activity["activity"]["progress"].get("group")
                      if activity["activity"]["state"] == "running" else None)
     if manifest:
-        for vol, prefix in zip(manifest.volumes, pub.volumes):
+        for (vol, _), prefix in zip(ordered_volumes(manifest), pub.volumes):
             head = pub.captures.get(vol.volume_id)
             capacity, severity = judge.volume_capacity(vol.capacity, now, thresholds)
             fresh = judge.volume_freshness(head and head["scan_finished_unix"], vol.cadence_sec, now,
