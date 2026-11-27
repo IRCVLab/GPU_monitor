@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tarfile
 import io
 import tempfile
@@ -378,6 +380,62 @@ class UpdaterTest(unittest.TestCase):
         (self.paths.incoming / "activate").write_text("activate ../../etc\n")
         self.assertEqual(self.updater().run(), 1)
         self.assertEqual(self.state()["last_attempt"]["code"], "REQUEST_INVALID")
+
+
+@unittest.skipUnless(shutil.which("ssh-keygen"), "ssh-keygen is required for signature checks")
+class DatasetLayoutTest(unittest.TestCase):
+    """`update.py --root DIR`: the manual update path of the TrueNAS host (deploy/bootstrap-truenas.py)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sv-update-dataset."))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = self.tmp / "storage-viz"
+        self.paths = update.Paths(dataset=self.root)
+        self.key = fixtures.SigningKey(self.tmp)
+        self.key.write_allowed_signers(self.root / "bootstrap/allowed_signers")
+        (self.root / "agent.yaml").write_text("{}")
+
+    def run_update(self, sha, entry=b"#!/bin/sh\nexit 0\n", *argv):
+        data = fixtures.bundle(sha, files=fixtures.release_files(entry))
+        self.paths.incoming.mkdir(parents=True, exist_ok=True)
+        (self.paths.incoming / f"{sha}.tar.gz").write_bytes(data)
+        (self.paths.incoming / f"{sha}.tar.gz.sig").write_bytes(self.key.sign(data))
+        (self.paths.incoming / "activate").write_text(f"activate {sha}\n")
+        script = Path(update.__file__)
+        return subprocess.run([sys.executable, "-I", str(script), *(argv or ("--root", str(self.root)))],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, check=False)
+
+    def test_paths_match_the_gates_dataset_layout(self):
+        from agent.bootstrap import gate
+        theirs = gate.Paths(dataset=self.root)
+        self.assertEqual((self.paths.opt, self.paths.update, self.paths.incoming, self.paths.scan_lock, self.paths.config),
+                         (theirs.opt, theirs.update, theirs.incoming, theirs.scan_lock, theirs.etc / "agent.yaml"))
+        self.assertEqual(self.paths.signers, self.root / "bootstrap/allowed_signers")
+        self.assertEqual(update.Paths().signers, Path("/etc/storage-viz/allowed_signers"), "the default layout is unchanged")
+
+    def test_root_installs_self_tests_directly_and_keeps_the_previous_release(self):
+        done = self.run_update(SHA_A)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(os.readlink(self.paths.current), f"releases/{SHA_A}")
+        self.assertEqual(self.run_update(SHA_B).returncode, 0)
+        state = json.loads(self.paths.state.read_text())
+        self.assertEqual((state["active"], state["previous"]), (SHA_B, SHA_A))
+        self.assertTrue((self.paths.releases / SHA_A).is_dir(), "the previous release stays for a manual rollback")
+        done = self.run_update(SHA_C, b"#!/bin/sh\necho broken; exit 1\n")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(os.readlink(self.paths.current), f"releases/{SHA_B}", "a failed self-test leaves current alone")
+        self.assertEqual(json.loads(self.paths.state.read_text())["last_attempt"]["code"], "SELFTEST_FAILED")
+
+    def test_root_refuses_a_bundle_the_pinned_key_did_not_sign(self):
+        (self.root / "bootstrap/allowed_signers").write_text(fixtures.SigningKey(self.tmp, "other").allowed_signers_line)
+        self.assertEqual(self.run_update(SHA_A).returncode, 1)
+        self.assertFalse(self.paths.current.exists())
+        self.assertEqual(json.loads(self.paths.state.read_text())["last_attempt"]["code"], "SIGNATURE")
+
+    def test_malformed_arguments_are_usage(self):
+        for argv in (("--root",), ("--root", "relative"), ("--root", "/a/../b"), ("--rot", "/a")):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.run_update(SHA_A, b"#!/bin/sh\nexit 0\n", *argv).returncode, 2)
 
 
 class SandboxContractTest(unittest.TestCase):

@@ -109,6 +109,12 @@ PARSE_SITES = {
         ('agent_config', 'json.loads(scanner_yaml.read_text())'): 'Agent and scanner configuration.',
         ('activate_bundle', "json.loads((self.data / 'update/state.json').read_text())"): 'Updater activation ledger.',
     },
+    "deploy/bootstrap-truenas.py": {
+        ('midclt', 'json.loads(text)'): 'TrueNAS middleware replies to the admin setup session.',
+        ('read_bundle', 'json.loads((bundle_dir / METADATA).read_text())'): 'Agent bundle metadata in the active dashboard release.',
+        ('install_release', 'json.loads(state_reply.stdout)'): 'Updater activation ledger on the TrueNAS host.',
+        ('observe', 'json.loads(body)'): 'The gate observe reply the setup checks once.',
+    },
     "deploy/build-agent-release.py": {
         ('build', "json.loads(git(repo, 'show', f'{source_sha}:{FLOOR_FILE}'))"): 'Release-floor build configuration.',
     },
