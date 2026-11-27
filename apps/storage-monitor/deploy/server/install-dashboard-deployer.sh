@@ -446,8 +446,9 @@ bootstrap_cutover() {
     echo "bootstrap cutover failed after live stop; rollback completed" >&2
     exit "$health_rc"
   fi
+  "$SYSTEMCTL" enable storage-viz-dashboard.service storage-viz-proxy.service
   "$SYSTEMCTL" enable --now storage-monitor-release-puller.timer
-  printf 'bootstrap cutover complete; puller timer enabled after approved production health\n'
+  printf 'bootstrap cutover complete; dashboard, proxy and puller timer enabled after approved production health\n'
 }
 
 if [[ "$BOOTSTRAP_CUTOVER" == 1 ]]; then
@@ -520,6 +521,19 @@ reset_failed_release_backoff() {
   fi
 }
 
+# A managed release serves through two units. Both must start at boot, not only after the
+# next deploy restarts them: the live host ran a disabled proxy after its first puller
+# activation, so a reboot would have left :505 unserved.
+enable_managed_services() {
+  local link target
+  link="$(prefix_path "$APP_PATH")"
+  [[ -L "$link" ]] || return 0
+  target="$(readlink "$link")"
+  [[ "$target" == "$RELEASE_ROOT"/* ]] || return 0
+  "$SYSTEMCTL" enable storage-viz-dashboard.service storage-viz-proxy.service
+  printf 'enabled at boot: storage-viz-dashboard.service storage-viz-proxy.service\n'
+}
+
 ensure_identity() {
   local user="$1" group="$2" home="$3"
   if [[ "$DRY_RUN" == 1 || -n "$PREFIX" ]]; then
@@ -584,7 +598,7 @@ reset_failed_release_backoff
 
 cat <<ACTIONS
 systemd action: daemon-reload
-systemd action: do not enable/start storage-viz-proxy.service until approved cutover
+systemd action: storage-viz-proxy.service starts at boot only once a managed release is active (enabled then)
 systemd action: enable --now storage-monitor-release-puller.timer only after approved production health
 systemd action: do not start storage-monitor-release-puller.service from installer
 ACTIONS
@@ -607,4 +621,5 @@ if [[ "$DRY_RUN" == 1 || ( -n "$PREFIX" && "${STORAGE_VIZ_INSTALL_TEST_REAL_WITH
 fi
 
 "$SYSTEMCTL" daemon-reload
+enable_managed_services
 printf 'dashboard deployer installed; release puller timer intentionally not enabled until an approved release passes health\n'

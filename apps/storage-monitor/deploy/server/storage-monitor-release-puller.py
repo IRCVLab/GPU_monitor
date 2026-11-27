@@ -58,6 +58,10 @@ class PullError(RuntimeError):
     pass
 
 
+class CiPending(PullError):
+    """main's ci.yml run for the SHA has not finished (or not started) yet: wait, nothing failed."""
+
+
 @dataclass(frozen=True)
 class Config:
     repository: str = "IRCVLab/GPU_monitor"
@@ -375,10 +379,13 @@ def workflow_run_for_sha(config: Config, sha: str, get_json=default_get_json) ->
         if run.get("head_sha") == sha:
             if run.get("event") != "push" or run.get("head_branch") != "main":
                 raise PullError("current SHA does not have push/main ci.yml evidence")
-            if run.get("status") != "completed" or run.get("conclusion") != "success":
+            if run.get("status") != "completed":
+                raise CiPending(f"ci.yml run for {sha} is {run.get('status')}")
+            if run.get("conclusion") != "success":
                 raise PullError("current SHA does not have successful ci.yml evidence")
             return run
-    raise PullError("missing successful ci.yml push/main workflow run for current SHA")
+    # Right after a push the run may not be listed yet.
+    raise CiPending(f"no ci.yml push/main workflow run listed yet for {sha}")
 
 
 def check_runs_for_sha(config: Config, sha: str, get_json=default_get_json) -> list[dict[str, object]]:
@@ -893,7 +900,10 @@ def run_once(config: Config, *, get_json=default_get_json, run_command=default_r
             now = float(now_fn())
         if failure is not None and now < failure["retry_after"]:
             return "backoff"
-        workflow_run, check_runs, _ = fetch_evidence(config, sha, get_json)
+        try:
+            workflow_run, check_runs, _ = fetch_evidence(config, sha, get_json)
+        except CiPending:
+            return "waiting-for-ci"
         authorize(config, sha, workflow_run, check_runs, run_command)
         plan = plan_agent_bundle(config, sha, workflow_run, get_json, now)
         try:

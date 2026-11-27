@@ -1129,3 +1129,49 @@ class AgentBundleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CiPendingTest(unittest.TestCase):
+    """A main push whose ci.yml run is still running is a wait, not a failure."""
+
+    def test_unfinished_or_unlisted_run_waits_and_a_failed_run_still_fails(self):
+        puller = load_puller()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = StorageReleasePullerTest.config(StorageReleasePullerTest(), tmp)
+            github = FakeGitHub(SHA1)
+            original = github.get_json
+
+            def running(path):
+                payload = original(path)
+                if "workflows/ci.yml/runs" in path:
+                    payload = {"workflow_runs": [dict(payload["workflow_runs"][0], status="in_progress", conclusion=None)]}
+                return payload
+
+            with self.assertRaises(puller.CiPending):
+                puller.workflow_run_for_sha(cfg, SHA1, running)
+            with self.assertRaises(puller.CiPending):
+                puller.workflow_run_for_sha(cfg, SHA1, lambda path: {"workflow_runs": []})
+            failed = FakeGitHub(SHA1, conclusion="failure")
+            with self.assertRaisesRegex(puller.PullError, "successful ci.yml evidence") as caught:
+                puller.workflow_run_for_sha(cfg, SHA1, failed.get_json)
+            self.assertNotIsInstance(caught.exception, puller.CiPending)
+
+    def test_run_once_answers_waiting_for_ci_and_records_no_backoff(self):
+        puller = load_puller()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = StorageReleasePullerTest.config(StorageReleasePullerTest(), tmp)
+            github = FakeGitHub(SHA1)
+            original = github.get_json
+
+            def running(path):
+                payload = original(path)
+                if "workflows/ci.yml/runs" in path:
+                    payload = {"workflow_runs": [dict(payload["workflow_runs"][0], status="queued", conclusion=None)]}
+                return payload
+
+            def no_commands(argv, **kwargs):
+                raise AssertionError(f"nothing may run while CI is pending: {argv}")
+
+            result = puller.run_once(cfg, get_json=running, run_command=no_commands, download=github.download)
+            self.assertEqual(result, "waiting-for-ci")
+            self.assertFalse((cfg.state_dir / "failed-release.json").exists())
