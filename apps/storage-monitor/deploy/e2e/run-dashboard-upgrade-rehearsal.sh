@@ -156,6 +156,9 @@ health() {  # health CID CHECKER: exit status of a health checker against the ru
 store_digest() {  # store_digest CID: digest of the old store STATE_DIR/<sid>/ and the duration history
   in_c "$1" "cd /var/lib/storage-viz-dashboard/state && find ${HOSTS[*]} scan-duration-history -type f 2>/dev/null | sort | xargs sha256sum | sha256sum | cut -c1-16"
 }
+scan_starts() {  # scan_starts HOST: how many times storage-viz-scan.service has started on HOST
+  in_c "${HOST_CID[$1]}" "journalctl -q -u storage-viz-scan.service -o cat | grep -c '^Starting storage-viz local filesystem scan' || true"
+}
 sftp_snapshot_opens() {  # sftp_snapshot_opens SINCE_EPOCH: snapshot files central opened over SFTP on all hosts
   local total=0 n
   for host in "${HOSTS[@]}"; do
@@ -253,14 +256,18 @@ GIT
     sleep 2
   done
   in_c "$cid" "for h in ${HOSTS[*]}; do test -f /var/lib/storage-viz-dashboard/state/\$h/current.json; done" || fail "$name: the live release wrote no old store"
-  local seeded
+  # Seed a job and duration history through the live release's own rescan. The POST returns
+  # before the dashboard starts the host's scan, so wait until that scan has run.
+  local seeded started
+  started="$(scan_starts "${HOSTS[0]}")"
   seeded="$(in_c "$cid" "python3 /rehearsal/rehearsal_probe.py rescan-v1 --server ${HOSTS[0]}")"
   [[ "$(json_get 'd["post_status"]' <<<"$seeded")" == 202 ]] || fail "$name: v1 rescan not accepted: $seeded"
-  for _ in $(seq 1 120); do
-    in_c "$cid" "test -s /var/lib/storage-viz-dashboard/state/scan-duration-history/${HOSTS[0]}.json" 2>/dev/null && break
+  for _ in $(seq 1 90); do
+    [[ "$(scan_starts "${HOSTS[0]}")" -gt "$started" ]] \
+      && ! docker exec "${HOST_CID[${HOSTS[0]}]}" systemctl -q is-active storage-viz-scan.service && break
     sleep 2
   done
-  in_c "$cid" "test -s /var/lib/storage-viz-dashboard/state/scan-duration-history/${HOSTS[0]}.json" || note "$name: no duration history after the v1 rescan"
+  [[ "$(scan_starts "${HOSTS[0]}")" -gt "$started" ]] || fail "$name: the v1 rescan did not start the scan on ${HOSTS[0]}"
   # The old store is settled once it holds each host's latest publication (it names snapshots by
   # the digest the agent published). Host timers are stopped, so nothing changes it after that.
   local host published settled
@@ -357,7 +364,8 @@ pass "proposed: /api/v2/fleet lists every host fresh, with link ok and per-mount
 
 for host in "${HOSTS[@]}"; do
   record="$(in_c "$C" "cat /var/lib/storage-viz-dashboard/state/servers/$host/record.json")"
-  [[ "$(json_get 'd["accepted"].get("legacy")' <<<"$record")" == "${OLD_SNAPSHOT[$host]}" ]] || fail "proposed: $host record does not hold the imported snapshot"
+  [[ "$(json_get 'd["accepted"].get("legacy")' <<<"$record")" == "${OLD_SNAPSHOT[$host]}" ]] \
+    || fail "proposed: $host record holds $(json_get 'd["accepted"]' <<<"$record"), not the old store's ${OLD_SNAPSHOT[$host]}; old store now $(in_c "$C" "cat /var/lib/storage-viz-dashboard/state/$host/current.json"), host publishes $(in_c "${HOST_CID[$host]}" 'cat /var/lib/storage-viz/scan-status.json' | json_get 'd["sha256"]')"
   in_c "$C" "test -f /var/lib/storage-viz-dashboard/state/servers/$host/captures/${OLD_SNAPSHOT[$host]}.json" || fail "proposed: $host capture missing"
 done
 durations="$(in_c "$C" "cat /var/lib/storage-viz-dashboard/state/servers/${HOSTS[0]}/record.json" | json_get 'd["durations"]')"
@@ -371,12 +379,11 @@ viewer="$(in_c "$C" 'python3 /rehearsal/rehearsal_probe.py viewer')"
 pass "proposed: the viewer page and its $(json_get 'd["assets"]' <<<"$viewer") files load through the proxy byte for byte"
 
 # host-a still carries the imported v1 job's cooldown, so the v2 rescan goes to host-b.
-scans() { in_c "${HOST_CID[host-b]}" "journalctl -q -u storage-viz-scan.service -o cat | grep -c '^Starting storage-viz local filesystem scan' || true"; }
-scans_before="$(scans)"
+scans_before="$(scan_starts host-b)"
 rescan="$(in_c "$C" 'python3 /rehearsal/rehearsal_probe.py rescan --server host-b')"
 protocol="$(in_c "$C" 'cat /var/lib/storage-viz-dashboard/state/servers/host-b/record.json' | json_get '(d["last_job"] or {}).get("protocol")')"
 note "proposed: rescan $(json_get '{"post": d["post_status"], "polls": d["polls"], "last_job": d["last_job"]}' <<<"$rescan") protocol $protocol"
-[[ "$(json_get 'd["post_status"]' <<<"$rescan")" == 202 && "$(scans)" -gt "$scans_before" ]] || fail "proposed: rescan did not start the host's scan unit"
+[[ "$(json_get 'd["post_status"]' <<<"$rescan")" == 202 && "$(scan_starts host-b)" -gt "$scans_before" ]] || fail "proposed: rescan did not start the host's scan unit"
 [[ "$(json_get '(d["last_job"] or {}).get("state")' <<<"$rescan")" == succeeded && "$protocol" == invocation ]] || fail "proposed: the v1 rescan did not succeed by invocation correlation"
 pass "proposed: a rescan POST on a v1 host started storage-viz-scan.service and its job ended succeeded by InvocationID correlation (S4)"
 
