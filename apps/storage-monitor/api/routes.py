@@ -133,8 +133,10 @@ def fleet(handler):
 
 def checked_view(source, sid):
     view = source.view(sid)
-    if view.error:
-        raise StoreUnavailable()
+    if view.error and view.publication is None:
+        if view.error == StoreUnavailable.code:
+            raise StoreUnavailable()
+        raise RequestError(view.error)
     return view
 
 

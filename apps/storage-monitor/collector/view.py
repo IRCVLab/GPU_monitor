@@ -54,7 +54,8 @@ def build_view(server: Server, record, pub: Optional[Publication], observation: 
     if release_sha is None and isinstance(manifest, HostManifest):
         release_sha = manifest.raw["agent"]["release_sha"]
     summary = encode({"server_id": server.id, "display_name": server.display_name, "order": server.order,
-                      "status": "ok", "link": {"state": record.link.state, "last_ok_unix": record.link.last_ok_unix,
+                      **({"status": "error", "error": {"code": error}} if error else {"status": "ok"}),
+                      "link": {"state": record.link.state, "last_ok_unix": record.link.last_ok_unix,
                       "error": record.link.error, "transport": transport or server.transport},
                       "agent": {"release_sha": release_sha, "matches_desired": bool(record.update.desired and
                                release_sha == record.update.desired), "update": record.update.state, "last_error": record.update.last_error},
@@ -153,7 +154,7 @@ def activity_body(view, mono):
 
 
 def server_bytes(view, mono, thresholds, *, detail=False):
-    if view.error:
+    if view.error and view.publication is None:
         return encode({"server_id": view.server.id, "status": "error", "error": {"code": view.error}})
     pub = view.publication or EMPTY_PUBLICATION
     manifest = pub.manifest

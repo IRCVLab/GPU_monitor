@@ -113,6 +113,18 @@ export function reducer(state, event) {
           if (updated.some((entry,i) => entry !== selected[i])) next.selection = {...next.selection,[server]:updated};
         }
       }
+      if (key === 'fleet' || key.startsWith('detail/')) {
+        const captures = new Set();
+        for (const [name,resource] of Object.entries(next.resources)) {
+          if (!name.startsWith('detail/')) continue;
+          for (const volume of resource.data?.volumes ?? []) {
+            if (volume.capture) captures.add('capture/' + volume.capture.sha256);
+          }
+        }
+        for (const name of Object.keys(next.resources)) {
+          if (name.startsWith('capture/') && !captures.has(name)) delete next.resources[name];
+        }
+      }
       return next;
     }
     case 'RescanObserved':

@@ -120,3 +120,21 @@ test('a treemap pick reconciles against the next capture by volume, binding, kin
   assert.equal(replaced.selection.hinton[0].flag,null);
   assert.equal(captured(state,'new','directory',20).selection.hinton[0].flag,'changed');
 });
+
+test('50 accepted revisions retain only captures referenced by the held details', () => {
+  let state = initialState(route), requestId = 0;
+  function load(key,data) {
+    ++requestId;
+    state = reducer(state,{type:'DataRequested',key,requestId});
+    state = reducer(state,{type:'DataLoaded',key,requestId,data});
+  }
+  const keys = () => Object.keys(state.resources).filter(key => key.startsWith('capture/'));
+  for (let revision=0;revision<50;revision++) {
+    const sha = revision.toString(16).padStart(64,'0');
+    load('detail/hinton',{volumes:[{volume_id:'v',capture:{sha256:sha}}],mounts:[]});
+    load('capture/'+sha,{roots:[]});
+    assert.deepEqual(keys(),['capture/'+sha]);
+  }
+  load('fleet',{servers:[]});
+  assert.deepEqual(keys(),[]);
+});

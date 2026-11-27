@@ -229,3 +229,26 @@ def test_installed_health_probe_has_no_rescan_side_effect(collector_api):
     assert request("GET","/api/servers")[1] == {"data_mode":"inventory", "servers":[{"id":s.id} for s in host.servers]}
     assert request("POST","/api/servers/hc-"+"a"*24+"/rescan","{}",auth)[:2] == (404, {"error":"UNKNOWN_SERVER"})
     assert request("POST","/api/servers/alpha-1/rescan","{}",auth)[0] == 404
+
+
+def test_tick_failure_still_serves_the_published_view(collector_api, monkeypatch):
+    host, request, _ = collector_api
+    base = "/api/v2/servers/alpha-1"
+    before = request("GET", base)[1]
+    volume = before["volumes"][0]
+    url = f"{base}/volumes/{volume['volume_id']}/captures/{volume['capture']['sha256']}"
+    raw = request("GET", url)[1]
+
+    def fail():
+        raise RuntimeError("simulated tick failure")
+
+    monkeypatch.setattr(host.actor(), "_observe", fail)
+    host.tick()
+    row = request("GET", "/api/v2/fleet")[1]["servers"][0]
+    assert row["error"] == {"code": "TICK_FAILED"} and row["status"] == "error"
+    assert row["volumes"] == before["volumes"]
+    code, detail, _ = request("GET", base)
+    assert code == 200 and detail["volumes"] == row["volumes"] and detail["error"] == row["error"]
+    assert request("GET", base + "/activity")[0] == 200
+    assert request("GET", url)[:2] == (200, raw)
+

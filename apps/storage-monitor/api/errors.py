@@ -9,7 +9,7 @@ from collector.errors import (
 )
 
 STATUS: Dict[type | str, int] = {
-    "INTERNAL": 500,
+    "INTERNAL": 500, "TICK_FAILED": 503,
     "NOT_FOUND": 404,
     "METHOD_NOT_ALLOWED": 405,
     "BAD_REQUEST": 400,
