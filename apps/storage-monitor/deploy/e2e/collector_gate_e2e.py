@@ -12,9 +12,11 @@ Phases:
                whose request id reaches the host and comes back in a receipt.
   update-pass  desired = the bundle in --bundle-dir: the canary stages, activates
                and passes probation on a seeded run; the rollout opens the fleet.
-  update-fail  desired = the bundle in --bundle-dir: probation fails on a seeded
-               INTERNAL_* fault; central sends rollback-update <previous>, never
-               activate-update, and the rollout halts.
+  update-fail  first, the manual rollback since update-pass is a switch central did
+               not make, so that release goes through probation; then desired = the
+               bundle in --bundle-dir: probation fails on a seeded INTERNAL_* fault;
+               central sends rollback-update <previous>, never activate-update, and
+               the rollout halts.
 
 The agent's mount policy refuses to scan the container root, so v2 data is
 seeded into /var/lib/storage-viz directly instead of scanned.
@@ -221,7 +223,8 @@ class E2E:
     def update_pass(self) -> None:
         desired = self.fleet.desired_agent()
         before = self.host_release()
-        self.until("update track activated the desired release", lambda: self.record.update.state == "probation", timeout=240)
+        self.until("update track activated the desired release",
+                   lambda: (self.record.update.state, self.record.update.trial) == ("probation", desired.sha), timeout=240)
         if [v.split()[0] for v in self.verbs if v.split()[0].endswith("-update")] != ["stage-update", "activate-update"] \
                 or self.release() != desired.sha or self.record.update.previous != before:
             fail(f"stage/activate through the track: verbs={self.verbs} release={self.release()} update={self.record.update}")
@@ -236,7 +239,16 @@ class E2E:
     def update_fail(self) -> None:
         desired = self.fleet.desired_agent()
         before = self.host_release()
-        self.until("update track activated the desired release", lambda: self.record.update.state == "probation", timeout=240)
+        # The manual rollback from B to A since the last phase is a switch central did not make: A goes on probation.
+        self.until("the unexpected switch goes to probation",
+                   lambda: (self.record.update.state, self.record.update.trial) == ("probation", before), timeout=60)
+        if self.verbs.count("rollback-update " + before) or any(v.startswith(("stage-update", "activate-update")) for v in self.verbs):
+            fail(f"central sent an update request while the switched-to release was on probation: {self.verbs}")
+        self.seed(last_run=self.run_doc(before))
+        self.until("the switched-to release passed probation", lambda: self.record.update.verified == before, timeout=60)
+        print(f"PASS: the switch to {before[:8]} that central did not make went through probation before anything else")
+        self.until("update track activated the desired release",
+                   lambda: (self.record.update.state, self.record.update.trial) == ("probation", desired.sha), timeout=240)
         if self.fleet.rollout_view()["phase"] != "canary" or self.release() != desired.sha:
             fail(f"a new sha did not go through the canary: {self.fleet.rollout_view()} release={self.release()}")
         print(f"PASS: a sha the canary has not passed went to the canary first and was activated ({desired.sha[:8]})")
