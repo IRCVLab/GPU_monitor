@@ -113,7 +113,8 @@ async function openBrowser(tmp) {
   ], { stdio: 'ignore', detached: true });
   chrome._detachedGroup = true;
   const cdpUrl = `http://127.0.0.1:${port}`;
-  try { await waitFor('Chrome DevTools endpoint', () => getJson(cdpUrl + '/json/version')); }
+  // A cold Chrome on a busy CI runner can take well over 15 s to open DevTools.
+  try { await waitFor('Chrome DevTools endpoint', () => getJson(cdpUrl + '/json/version'), 60000); }
   catch (error) { await stop(chrome); throw error; }
   return { cdpUrl, chrome };
 }
