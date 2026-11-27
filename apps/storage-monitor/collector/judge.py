@@ -15,9 +15,13 @@ LOCAL_SCAN_CADENCE_SECONDS = 6 * 3600
 SCHEDULED_TIMER_DELAY_SECONDS = 360
 ACTIVE_TELEMETRY_INTERVAL_SECONDS = 5
 IDLE_TELEMETRY_INTERVAL_SECONDS = 60
-MAX_CAPACITY_AGE_SECONDS = 900
 # Design §3.2: two missed idle observes plus the timer's randomized delay.
 VOLUME_GRACE_SECONDS = 2 * IDLE_TELEMETRY_INTERVAL_SECONDS + SCHEDULED_TIMER_DELAY_SECONDS
+# The agent samples every volume's capacity on each run of its hourly timer
+# (storage-viz-scan.timer, nothing-due runs included), so a sample is current for one
+# timer period plus the same grace as volume freshness.
+AGENT_TIMER_INTERVAL_SECONDS = 3600
+MAX_CAPACITY_AGE_SECONDS = AGENT_TIMER_INTERVAL_SECONDS + VOLUME_GRACE_SECONDS
 
 
 def host_now(host_unix: Optional[int], received_monotonic: Optional[float], now_monotonic: float) -> Optional[int]:
