@@ -2,7 +2,7 @@ import {humanBytes, escapeHtml} from '../format.js';
 import {mountId} from '../state.js';
 import {hasVolumeFolderLevel} from './overview.js';
 export function renderHeader(DATA, selected, navigate) {
-  document.getElementById("h-host").textContent = DATA.hostname || "—";
+  document.getElementById("h-host").textContent = DATA.display_name || DATA.hostname || "—";
 
   const warn = document.getElementById("warnBanner");
   const msgs = [];

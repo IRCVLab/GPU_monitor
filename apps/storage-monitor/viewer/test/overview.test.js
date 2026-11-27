@@ -21,15 +21,18 @@ test('fleet usage merges named accounts across host summaries', () => {
   assert.equal(usage.rows[0].servers.size,2);
 });
 
-test('a single-owner subtree is coloured by top-level folder, a shared one by owner', async () => {
-  const {folderColors} = await import('../views/treemap.js');
-  const nobody = 65534;
-  const nexus = {name:'datasets', uid:nobody, bytes:30, children:[
-    {name:'NCLT', uid:nobody, bytes:10, children:[{name:'a', uid:nobody, bytes:10}]},
-    {name:'Oxford', uid:nobody, bytes:20}]};
-  const colours = folderColors(nexus);
-  assert.deepEqual([...colours.keys()], ['Oxford', 'NCLT']);
-  assert.notEqual(colours.get('Oxford'), colours.get('NCLT'));
-  const shared = {name:'home', uid:0, bytes:30, children:[{name:'kim', uid:1001, bytes:10}, {name:'lee', uid:1002, bytes:20}]};
-  assert.equal(folderColors(shared), null);
+test('when one owner holds the bytes, tiles are coloured by first-level folder under the scan root', async () => {
+  const {folderColoring} = await import('../views/treemap.js');
+  // Live Nexus: NFS writes as nobody, while the dataset directories themselves belong to root.
+  const users = [{uid:65534, name:'nobody', bytes:4.71e12}, {uid:0, name:'root', bytes:1e6}];
+  const roots = [
+    {path:'/nexus/datasets', tree:{name:'datasets', children:[{name:'NCLT', bytes:419e9}, {name:'Oxford', bytes:1.55e12}]}},
+    {path:'/nexus/workspace', tree:{name:'workspace', children:[]}}];
+  const coloring = folderColoring(users, roots);
+  assert.equal(coloring.keyOf('/nexus/datasets/Oxford/2019-01-18/radar'), '/nexus/datasets/Oxford');
+  assert.equal(coloring.keyOf('/nexus/datasets'), null, 'a scan root itself has no folder colour');
+  assert.deepEqual([...coloring.colors.values()].map(c => c.name), ['Oxford', 'NCLT']);
+  assert.notEqual(coloring.colors.get('/nexus/datasets/Oxford').color, coloring.colors.get('/nexus/datasets/NCLT').color);
+  const shared = [{uid:1001, name:'kim', bytes:60}, {uid:1002, name:'lee', bytes:40}];
+  assert.equal(folderColoring(shared, roots), null, 'shared storage keeps owner colours');
 });

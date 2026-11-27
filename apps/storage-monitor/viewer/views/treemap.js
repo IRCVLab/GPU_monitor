@@ -96,32 +96,39 @@ function treemapCleanupCandidate(path, kind, owner, bytes, source) {
     source: source || "treemap",
   };
 }
-/* Owners present in the shown subtree, bounded so a huge tree costs little. */
-function subtreeOwners(node, limit = 20000) {
-  const owners = new Set();
-  const stack = [node];
-  let seen = 0;
-  while (stack.length && seen < limit && owners.size < 2) {
-    const n = stack.pop();
-    seen += 1;
-    if (n && n.uid != null) owners.add(n.uid);
-    for (const child of (n && n.children) || []) stack.push(child);
-  }
-  return owners;
-}
+/* When one owner holds nearly every byte (Nexus: NFS writes everything as nobody), owner
+   colour says nothing, so tiles are coloured by the folder they belong to: the first-level
+   folder under its scan root (/nexus/datasets/Oxford, /nexus/datasets/NCLT, ...).
+   Returns {keyOf(path), colors: Map(key -> {name, color})}, or null for owner colouring. */
+const FOLDER_FRAME = "#5f6b7a";  // scan roots and the folders above them
 
-/* A subtree with one owner (Nexus: NFS writes as nobody) says nothing by owner colour,
-   so its tiles are coloured by the top-level folder they belong to instead. */
-export function folderColors(node) {
-  if (subtreeOwners(node).size > 1) return null;
-  const kids = [...((node && node.children) || [])].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
-  return new Map(kids.map((child, i) => [child.name, PALETTE[i] ?? OTHER_COLOR]));
+export function folderColoring(users, roots) {
+  const total = users.reduce((sum, u) => sum + (u.bytes || 0), 0);
+  const top = users.reduce((max, u) => Math.max(max, u.bytes || 0), 0);
+  if (!total || top / total < 0.99) return null;
+  const rootPaths = roots.map(r => r.path.replace(/\/+$/, "")).filter(Boolean);
+  const keyOf = path => {
+    for (const root of rootPaths) {
+      if (path.startsWith(root + "/")) return root + "/" + path.slice(root.length + 1).split("/")[0];
+    }
+    return null;
+  };
+  const folders = [];
+  for (const root of roots) {
+    for (const child of (root.tree && root.tree.children) || []) {
+      folders.push({key: root.path.replace(/\/+$/, "") + "/" + child.name, name: child.name, bytes: child.bytes || 0});
+    }
+  }
+  folders.sort((a, b) => b.bytes - a.bytes);
+  const colors = new Map(folders.map((f, i) => [f.key, {name: f.name, color: PALETTE[i] ?? OTHER_COLOR}]));
+  return {keyOf, colors};
 }
 
 export function drawTreemap({DATA, route, ownerByUid, uidColorMap, colorForUid, entries, ui, navigate, toggleCleanupSelectedItem}) {
   const m = selectedMount(DATA,route);
   const treemapStack = drillStack(DATA,route);
-  let folders = null;  // top-level folder -> colour, when the shown subtree has one owner
+  const volumeRoots = (DATA.mounts ?? []).filter(r => mountId(r) === mountId(m));
+  const folders = folderColoring(DATA.users ?? [], volumeRoots);  // null: colour by owner
   const treemapCleanupLatched = ui.selectMode;
   const treemapModifierActive = ui.modifier || ui.selectMode;
   const isCleanupSelectedPath = path => entries.some(entry => entry.path === path);
@@ -228,7 +235,9 @@ export function drawTreemap({DATA, route, ownerByUid, uidColorMap, colorForUid, 
       navigate({volumeId: mountId(m), path:segments});
     }
   }
-  function tmTile(el, c, k, crumbPath, isGroup, level, segments, folderBase) {
+  function tmTile(el, c, k, crumbPath, isGroup, level, segments) {
+    const folderKey = folders && folders.keyOf(treemapPath(crumbPath, c.name));
+    const folderBase = folders ? (folderKey && folders.colors.get(folderKey)?.color) || FOLDER_FRAME : null;
     const base = c._other ? OTHER_COLOR : (folderBase || colorForUid(c.uid));
     const color = shade(base, level);
     const fg = labelColorForBg(color);
@@ -274,7 +283,7 @@ export function drawTreemap({DATA, route, ownerByUid, uidColorMap, colorForUid, 
   }
   /* Recursive nested layout: each parent group renders a header band + its own
      children squarified inside it, up to TM_DEPTH levels (drill for deeper). */
-  function layoutTreemap(el, node, x, y, w, h, level, crumbPath, segments, folderBase) {
+  function layoutTreemap(el, node, x, y, w, h, level, crumbPath, segments) {
     if (w < 8 || h < 8) return;
     const kids = tmChildren(node);
     if (!kids.length) return;
@@ -292,9 +301,8 @@ export function drawTreemap({DATA, route, ownerByUid, uidColorMap, colorForUid, 
       // so unbounded depth makes deep folders render far smaller than their size.
       const nest = level < TM_MAXLEVEL && hasKids && iw > 110 && ih > 84;
       const childSegments = [...segments, rawSegment(c)];
-      const base = level === 0 && folders ? (folders.get(c.name) || OTHER_COLOR) : folderBase;
-      tmTile(el, c, { x: ix, y: iy, w: iw, h: ih }, crumbPath, nest, level, childSegments, base);
-      if (nest) layoutTreemap(el, c, ix + 4, iy + HEAD, iw - 8, ih - HEAD - 4, level + 1, crumbPath + "/" + c.name, childSegments, base);
+      tmTile(el, c, { x: ix, y: iy, w: iw, h: ih }, crumbPath, nest, level, childSegments);
+      if (nest) layoutTreemap(el, c, ix + 4, iy + HEAD, iw - 8, ih - HEAD - 4, level + 1, crumbPath + "/" + c.name, childSegments);
     }
   }
   function renderTreemap() {
@@ -302,7 +310,6 @@ export function drawTreemap({DATA, route, ownerByUid, uidColorMap, colorForUid, 
 
     const el = document.getElementById("treemap");
     if (!m || !m.tree) { el.innerHTML = '<div class="empty">No tree data for this mount.</div>'; return; }
-    folders = folderColors(treemapStack[treemapStack.length - 1].node);
     renderTreemapLegend();
     const H = sizeTreemap(), W = el.clientWidth;
     el.innerHTML = "";
@@ -329,7 +336,7 @@ export function drawTreemap({DATA, route, ownerByUid, uidColorMap, colorForUid, 
   function renderTreemapLegend() {
     const wrap = document.getElementById("treemapLegend"); wrap.innerHTML = "";
     if (folders) {
-      for (const [name, color] of folders) {
+      for (const {name, color} of folders.colors.values()) {
         if (color === OTHER_COLOR) continue;
         const it = document.createElement("div"); it.className = "legend-item";
         it.innerHTML = '<span class="swatch" style="background:' + color + '"></span>' + escapeHtml(name);
