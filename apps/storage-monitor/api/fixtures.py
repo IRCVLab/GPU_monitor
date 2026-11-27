@@ -91,7 +91,7 @@ class FixtureFleet:
         if isinstance(doc, dict) and doc.get("schema_version") == 1:
             sha = hashlib.sha256(data).hexdigest()
             status = {"server_id": server.id, "generation": f"{server.id}-{doc['scan_started_unix']}-v1.json",
-                      "status": "complete" if all(r["status"] == "complete" for r in doc["selected_roots"]) else "partial",
+                      "status": "partial" if any(r["status"] in {"partial", "failed"} for r in doc["selected_roots"]) else "complete",
                       "byte_size": len(data), "sha256": sha, "scan_finished_unix": doc["scan_finished_unix"],
                       "config_digest": doc["config_digest"]}
             payload = validate_download(status, data, DesiredServer(server.id, server.scanner_digest)).payload

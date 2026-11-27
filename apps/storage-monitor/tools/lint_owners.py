@@ -71,6 +71,10 @@ PARSE_SITES = {
     "collector/rollout.py": {
         ('parse', 'json.loads(data)'): 'rollout.json, written only by fleet.Rollout.',
     },
+    "deploy/e2e/rehearsal_probe.py": {
+        ('json', 'json.loads(raw)'): 'Rehearsal harness: the disposable central dashboard it drives.',
+        ('cmd_viewer', "json.loads((APP / 'RELEASE-MANIFEST.json').read_text(encoding='utf-8'))"): 'Rehearsal harness: the release it checks.',
+    },
     "deploy/e2e/collector_gate_e2e.py": {
         ('seed', "json.loads(self.docker('cat', '/var/lib/storage-viz/manifest.json'))"): 'E2E harness: the disposable test host.',
         ('update_fail', "json.loads(self.docker('cat', '/var/lib/storage-viz/update/state.json'))"): 'E2E harness: the disposable test host.',
@@ -254,7 +258,8 @@ def check(root):
     errors = []
     for path in sources(root):
         name = path.as_posix()
-        if not runtime(path) or name in {"tools/lint_owners.py", "viewer/echarts.min.js"} or name == "deploy/e2e/run-agent-channel-e2e.sh":
+        if not runtime(path) or name in {"tools/lint_owners.py", "viewer/echarts.min.js", "deploy/e2e/run-agent-channel-e2e.sh",
+                                             "deploy/e2e/run-dashboard-upgrade-rehearsal.sh"}:
             continue
         source = (root / path).read_text()
         if path.suffix == ".py":

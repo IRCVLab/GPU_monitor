@@ -509,6 +509,17 @@ ensure_dir() {
   printf 'ensure dir: %s owner=%s mode=%s\n' "$dest" "$owner" "$mode"
 }
 
+# The puller backs off a failed SHA until main advances. Its tools change only here, and new
+# tools can make that same SHA succeed, so an install gives it a retry on the next puller run.
+reset_failed_release_backoff() {
+  local dest="$STATE_ROOT/puller/failed-release.json" actual_dest
+  actual_dest="$(prefix_path "$dest")"
+  if [[ -e "$actual_dest" || -L "$actual_dest" ]]; then
+    rm -f "$actual_dest"
+    printf 'reset puller backoff: removed %s so the next run retries with the installed tools\n' "$dest"
+  fi
+}
+
 ensure_identity() {
   local user="$1" group="$2" home="$3"
   if [[ "$DRY_RUN" == 1 || -n "$PREFIX" ]]; then
@@ -569,6 +580,7 @@ ensure_secret_file "$CONFIG_DIR/github-token" 0640 root:root
 install_file "$SERVER/systemd/storage-monitor-release-puller.service" "/etc/systemd/system/storage-monitor-release-puller.service" 0644 root:root
 install_file "$SERVER/systemd/storage-monitor-release-puller.timer" "/etc/systemd/system/storage-monitor-release-puller.timer" 0644 root:root
 render_proxy_service "/etc/systemd/system/storage-viz-proxy.service"
+reset_failed_release_backoff
 
 cat <<ACTIONS
 systemd action: daemon-reload

@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -1720,6 +1721,50 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         self.assertEqual(requests[2][2]["Host"], "166.104.167.11:505")
         self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
 
+    def test_rolled_back_pre_redesign_release_is_checked_with_its_own_routes(self):
+        # --rollback-state can put a release from before the redesign back on /opt. It
+        # serves only the legacy routes, so the installed checker must use those for it.
+        from unittest.mock import patch
+        dash, proxy, _ = self._write_envs()
+        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
+        legacy_release = Path(self.tempdir.name) / "legacy-release"
+        (legacy_release / "viewer").mkdir(parents=True)
+        (legacy_release / "collector").mkdir(parents=True)
+        (legacy_release / "collector/service.py").write_text("class PollService: pass\n", encoding="utf-8")
+        for unknown in (Path(self.tempdir.name) / "missing", Path(self.tempdir.name) / "empty-release"):
+            if unknown.name == "empty-release":
+                unknown.mkdir()
+            with self.assertRaises(self.module.HealthCheckError):
+                self.module.probes_for(unknown)
+        dangling = Path(self.tempdir.name) / "dangling"
+        dangling.symlink_to(Path(self.tempdir.name) / "nowhere")
+        with self.assertRaises(self.module.HealthCheckError):
+            self.module.probes_for(dangling)
+        current_release = Path(self.tempdir.name) / "current-release"
+        (current_release / "api").mkdir(parents=True)
+        (current_release / "api/routes.py").write_text("ROUTES = ()\n", encoding="utf-8")
+        self.assertIs(self.module.probes_for(legacy_release), self.module.LEGACY_PROBES)
+        self.assertIs(self.module.probes_for(current_release), self.module.V2_PROBES)
+
+        ids = contract.enabled_server_ids
+        legacy_answers = {
+            ("GET", "/api/session"): (200, {"Set-Cookie": "storage_viz_session=a"}, {"can_rescan": True, "csrf_token": "x"}),
+            ("GET", "/api/servers"): (200, {}, {"data_mode": "inventory", "servers": [{"id": sid} for sid in ids]}),
+        }
+        seen = []
+
+        def legacy_dashboard(_factory, _contract, method, path, **_kwargs):
+            seen.append((method, path))
+            if method == "POST" and re.fullmatch(r"/api/servers/hc-[A-Za-z0-9_]{24}/rescan", path):
+                return 404, {}, {"error": "UNKNOWN_SERVER"}
+            return legacy_answers.get((method, path), (404, {}, {"error": "NOT_FOUND"}))
+
+        with patch.object(self.module, "_request", side_effect=legacy_dashboard):
+            self.module.run_health_check(contract, skip_service_check=True, ready_attempts=1, probes=self.module.LEGACY_PROBES)
+            self.assertEqual([path.split("/hc-")[0] for _, path in seen], ["/api/session", "/api/servers", "/api/servers"])
+            with self.assertRaisesRegex(self.module.HealthCheckError, "session probe failed"):
+                self.module.run_health_check(contract, skip_service_check=True, ready_attempts=1, probes=self.module.V2_PROBES)
+
     def test_fixture_fleet_with_matching_ids_fails_health_check(self):
         from unittest.mock import patch
         dash, proxy, _ = self._write_envs()
@@ -2001,7 +2046,10 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
             state_path=state,
             app_path=self.root / "opt/storage-viz-dashboard",
         )
+        cfg.app_path.parent.mkdir(parents=True)
+        cfg.app_path.symlink_to(target.parents[1])
         self.assertEqual(self.module.validate_proxy_target(target, cfg), target.resolve())
+        cfg.app_path.unlink()
 
         backup = self.root / "legacy_backup"
         backup_proxy = backup / "deploy/direct_proxy.py"
@@ -2038,20 +2086,57 @@ class StorageVizProxyLauncherTest(unittest.TestCase):
                 with self.assertRaises(self.module.LauncherError):
                     self.module.validate_proxy_target(bad, cfg)
 
-    def test_launch_without_target_resolves_active_proxy_from_activation_state(self) -> None:
-        target = self._target()
-        state = self.root / "state.json"
-        state.write_text(json.dumps({"status": "active", "release": str(target.parents[1])}), encoding="utf-8")
+    def _linked_config(self, linked: Path, state: dict) -> object:
+        state_path = self.root / "state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
         cfg = self.module.LauncherConfig(
             release_root=self.root / "srv/storage-viz-dashboard/releases",
-            state_path=state,
+            state_path=state_path,
             app_path=self.root / "opt/storage-viz-dashboard",
         )
+        cfg.app_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg.app_path.symlink_to(linked)
+        return cfg
+
+    def _launched(self, cfg) -> str:
         calls: list[tuple[str, list[str]]] = []
-
         self.module.launch([], config=cfg, execv=lambda exe, argv: calls.append((exe, argv)))
+        return calls[0][1][-1]
 
-        self.assertEqual(calls[0][1][-1], str(target.resolve()))
+    def test_launch_without_target_resolves_the_proxy_of_the_linked_release(self) -> None:
+        target = self._target()
+        cfg = self._linked_config(target.parents[1], {"status": "active", "release": str(target.parents[1])})
+        self.assertEqual(self._launched(cfg), str(target.resolve()))
+
+    def test_proxy_under_activation_health_check_is_the_new_release(self) -> None:
+        # The activator links the new release and restarts both services before it writes
+        # the state, so the state still names the previous release during the health check.
+        previous = self._target("1" * 40)
+        candidate = self._target("2" * 40)
+        cfg = self._linked_config(candidate.parents[1], {"status": "active", "release": str(previous.parents[1])})
+        self.assertEqual(self._launched(cfg), str(candidate.resolve()))
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(previous, cfg)
+
+    def test_rollback_state_to_a_managed_release_starts_its_proxy(self) -> None:
+        previous = self._target("1" * 40)
+        current = self._target("2" * 40)
+        restored = str(previous.parents[1])
+        cfg = self._linked_config(previous.parents[1], {
+            "status": "rolled_back", "release": restored, "current": restored, "restored": restored,
+            "source_sha": "1" * 40, "previous": None, "legacy_backup": None,
+        })
+        self.assertEqual(self._launched(cfg), str(previous.resolve()))
+        with self.assertRaises(self.module.LauncherError):
+            self.module.validate_proxy_target(current, cfg)
+
+    def test_link_outside_the_release_root_is_refused(self) -> None:
+        elsewhere = self.root / "tmp/storage-monitor"
+        (elsewhere / "deploy").mkdir(parents=True)
+        (elsewhere / "deploy/direct_proxy.py").write_text("print('proxy')\n", encoding="utf-8")
+        cfg = self._linked_config(elsewhere, {"status": "active", "release": str(elsewhere)})
+        with self.assertRaises(self.module.LauncherError):
+            self.module.resolve_proxy_target(cfg)
 
     def test_recovery_state_accepts_only_exact_safe_real_legacy_proxy(self) -> None:
         app = self.root / "opt/storage-viz-dashboard"

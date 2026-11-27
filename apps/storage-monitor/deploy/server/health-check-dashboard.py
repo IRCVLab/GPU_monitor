@@ -249,6 +249,52 @@ def _request(connection_factory: Callable[..., Any], contract: HealthContract, m
         conn.close()
 
 
+@dataclass(frozen=True)
+class Probes:
+    """The three requests of one dashboard API and how to read their answers."""
+
+    session: str
+    fleet: str
+    rescan: str  # formatted with the absent server id
+    server_ids: Callable[[Mapping[str, Any]], list | None]  # None: not an inventory fleet
+    unknown_server: Callable[[Any], bool]
+
+
+def _v2_ids(fleet: Mapping[str, Any]) -> list | None:
+    # Inventory fleets publish rollout state even with no desired agent. Fixture fleets return null.
+    if not isinstance(fleet.get("policy"), Mapping) or not isinstance(fleet.get("rollout"), Mapping):
+        return None
+    return [s.get("server_id") for s in fleet.get("servers", []) if isinstance(s, Mapping)]
+
+
+V2_PROBES = Probes(
+    "/api/v2/session", "/api/v2/fleet", "/api/v2/servers/{}/rescan", _v2_ids,
+    lambda body: isinstance(body, Mapping) and isinstance(body.get("error"), Mapping) and body["error"].get("code") == "UNKNOWN_SERVER",
+)
+# SHIM(M8..M9) S9: a rollback to a release from before the redesign serves only these routes.
+# M9 retires those releases, and this probe set with them.
+LEGACY_PROBES = Probes(
+    "/api/session", "/api/servers", "/api/servers/{}/rescan",
+    lambda fleet: [s.get("id") for s in fleet.get("servers", []) if isinstance(s, Mapping)] if fleet.get("data_mode") == "inventory" else None,
+    lambda body: isinstance(body, Mapping) and body.get("error") == "UNKNOWN_SERVER",
+)
+
+
+def probes_for(app_path: Path) -> Probes:
+    """The probes the release at app_path answers.
+
+    Every release since M6 ships api/routes.py. Only a release positively
+    identified as pre-redesign (it ships collector/service.py and no api/)
+    gets the legacy probes; anything else, including a missing or dangling
+    app path, fails the check instead of falling back to weaker probes.
+    """
+    if (app_path / "api/routes.py").is_file():
+        return V2_PROBES
+    if (app_path / "collector/service.py").is_file() and not (app_path / "api").exists():
+        return LEGACY_PROBES
+    raise HealthCheckError(f"cannot identify the release at {app_path}: neither api/routes.py nor a pre-redesign layout")
+
+
 def _service_active(name: str, runner: Callable[..., Any]) -> None:
     result = runner(["systemctl", "is-active", name], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if getattr(result, "returncode", 1) != 0 or str(getattr(result, "stdout", "")).strip() != "active":
@@ -263,6 +309,7 @@ def run_health_check(
     connection_factory: Callable[..., Any] = http.client.HTTPConnection,
     sleep: Callable[[float], None] = time.sleep,
     ready_attempts: int = HEALTH_READY_ATTEMPTS,
+    probes: Probes = V2_PROBES,
 ) -> None:
     if not skip_service_check:
         for service in (DASHBOARD_SERVICE, PROXY_SERVICE):
@@ -270,29 +317,22 @@ def run_health_check(
     last_error: Exception | None = None
     for _ in range(ready_attempts):
         try:
-            status, headers, session = _request(connection_factory, contract, "GET", "/api/v2/session", headers={"X-Forwarded-User": FIXED_PROXY_OPERATOR})
+            status, headers, session = _request(connection_factory, contract, "GET", probes.session, headers={"X-Forwarded-User": FIXED_PROXY_OPERATOR})
             if status != 200 or not isinstance(session, Mapping) or session.get("can_rescan") is not True or not isinstance(session.get("csrf_token"), str):
                 raise HealthCheckError("session probe failed or can_rescan false")
             cookie = headers.get("Set-Cookie", "").split(";", 1)[0]
             if not cookie.startswith("storage_viz_session="):
                 raise HealthCheckError("session cookie missing")
-            status, _, servers = _request(connection_factory, contract, "GET", "/api/v2/fleet", headers={"Cookie": cookie, "X-Forwarded-User": FIXED_PROXY_OPERATOR})
-            # Inventory fleets publish rollout state even with no desired agent. Fixture fleets return null.
-            if (status != 200 or not isinstance(servers, Mapping) or not isinstance(servers.get("policy"), Mapping)
-                    or not isinstance(servers.get("rollout"), Mapping)):
+            status, _, servers = _request(connection_factory, contract, "GET", probes.fleet, headers={"Cookie": cookie, "X-Forwarded-User": FIXED_PROXY_OPERATOR})
+            observed = probes.server_ids(servers) if status == 200 and isinstance(servers, Mapping) else None
+            if observed is None:
                 raise HealthCheckError("servers probe failed or sample mode")
-            observed = [s.get("server_id") for s in servers.get("servers", []) if isinstance(s, Mapping)]
             if observed != contract.enabled_server_ids:
                 raise HealthCheckError("enabled server IDs missing or reordered")
             absent = _unknown_id(set(contract.enabled_server_ids))
             post_headers = {"Cookie": cookie, "X-Forwarded-User": FIXED_PROXY_OPERATOR, "X-CSRF-Token": str(session["csrf_token"]), "Origin": contract.public_origin}
-            status, _, body = _request(connection_factory, contract, "POST", f"/api/v2/servers/{absent}/rescan", body=b"{}", headers=post_headers)
-            if (
-                status != 404
-                or not isinstance(body, Mapping)
-                or not isinstance(body.get("error"), Mapping)
-                or body["error"].get("code") != "UNKNOWN_SERVER"
-            ):
+            status, _, body = _request(connection_factory, contract, "POST", probes.rescan.format(absent), body=b"{}", headers=post_headers)
+            if status != 404 or not probes.unknown_server(body):
                 raise HealthCheckError("unknown-server rescan probe failed")
             return
         except Exception as exc:
@@ -308,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--connect-host")
     parser.add_argument("--connect-port", type=int)
     parser.add_argument("--skip-service-check", action="store_true")
+    parser.add_argument("--app-path", type=Path, default=Path("/opt/storage-viz-dashboard"))
     args = parser.parse_args(argv)
     contract = load_contract(
         dashboard_env=Path(args.dashboard_env),
@@ -315,7 +356,9 @@ def main(argv: list[str] | None = None) -> int:
         connect_host=args.connect_host,
         connect_port=args.connect_port,
     )
-    run_health_check(contract, skip_service_check=args.skip_service_check)
+    # A bootstrap candidate is not under the app path yet, so it gets the current probes.
+    probes = V2_PROBES if args.connect_host is not None else probes_for(args.app_path)
+    run_health_check(contract, skip_service_check=args.skip_service_check, probes=probes)
     return 0
 
 
