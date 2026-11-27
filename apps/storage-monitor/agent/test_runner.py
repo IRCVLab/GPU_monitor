@@ -264,7 +264,9 @@ def test_bad_scanner_user_rows_do_not_prevent_publication(tmp_path):
             path.write_text(json.dumps(raw))
         return result
     host.scan = malformed
+    host.now += 4 * 86400  # Make every volume due again, so the malformed scan is published.
     assert host.run() == 0
+    assert host.volumes()["/data"]["capture"]["scan_started_unix"] == host.now
     assert host.volumes()["/data"]["capture"] != prior
     assert host.volumes()["/data"]["last_attempt"]["outcome"] == "complete"
     assert host.volumes()["/home"]["last_attempt"]["outcome"] == "complete"
