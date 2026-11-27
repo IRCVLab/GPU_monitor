@@ -695,7 +695,7 @@ for src in "$STORAGE_BUILDER" "$STORAGE_ACTIVATOR" "$STORAGE_HEALTH" "$STORAGE_P
   grep -Fq "$digest" "$DASH_LOG" || fail "dashboard dry-run output missing hash for $src"
 done
 grep -Fq 'systemd action: daemon-reload' "$DASH_LOG" || fail "dashboard dry-run output missing daemon-reload action"
-grep -Fq 'systemd action: do not enable/start storage-viz-proxy.service until approved cutover' "$DASH_LOG" || fail "dashboard dry-run output missing gated proxy start action"
+grep -Fq 'systemd action: storage-viz-proxy.service starts at boot only once a managed release is active' "$DASH_LOG" || fail "dashboard dry-run output missing gated proxy start action"
 grep -Fq 'systemd action: enable --now storage-monitor-release-puller.timer only after approved production health' "$DASH_LOG" || fail "dashboard dry-run output missing gated timer enable action"
 expected_plan_step=1
 while IFS= read -r expected_action; do
@@ -749,6 +749,17 @@ grep -q '^reset puller backoff: removed /var/lib/storage-viz-dashboard/puller/fa
 DASH_REAL_SYSTEMCTL_LOG="$DASH_REAL_SYSTEMCTL_LOG" SYSTEMCTL="$FAKEBIN/dashboard-systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_REAL_WITH_PREFIX=1 \
   "$DASHBOARD_DEPLOYER" --prefix "$DASH_REAL_PREFIX" >"$TMP/dashboard-real-reinstall.out"
 ! grep -q '^reset puller backoff' "$TMP/dashboard-real-reinstall.out" || fail "dashboard reinstall reported a reset with no backoff present"
+# Once a managed release is live, a reinstall also enables both of its units at boot.
+DASH_RELEASE_SHA="$(printf '3%.0s' {1..40})"
+mkdir -p "$DASH_REAL_PREFIX/srv/storage-viz-dashboard/releases/$DASH_RELEASE_SHA/storage-monitor" "$DASH_REAL_PREFIX/opt"
+rm -rf "$DASH_REAL_PREFIX/opt/storage-viz-dashboard"
+ln -s "/srv/storage-viz-dashboard/releases/$DASH_RELEASE_SHA/storage-monitor" "$DASH_REAL_PREFIX/opt/storage-viz-dashboard"
+: > "$DASH_REAL_SYSTEMCTL_LOG"
+DASH_REAL_SYSTEMCTL_LOG="$DASH_REAL_SYSTEMCTL_LOG" SYSTEMCTL="$FAKEBIN/dashboard-systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_REAL_WITH_PREFIX=1 \
+  "$DASHBOARD_DEPLOYER" --prefix "$DASH_REAL_PREFIX" >"$TMP/dashboard-managed-install.out" 2>"$TMP/dashboard-managed-install.err" || fail "managed reinstall failed: $(cat "$TMP/dashboard-managed-install.err")"
+grep -qx 'systemctl enable storage-viz-dashboard.service storage-viz-proxy.service' "$DASH_REAL_SYSTEMCTL_LOG" || fail "managed reinstall did not enable the dashboard and proxy at boot: $(cat "$DASH_REAL_SYSTEMCTL_LOG")"
+pass "a reinstall with a live managed release enables the dashboard and proxy at boot"
+rm -f "$DASH_REAL_PREFIX/opt/storage-viz-dashboard"
 pass "dashboard install clears only the failed-release backoff, so the next puller run retries with the new tools"
 
 DASH_CUTOVER_TMP="$TMP/dashboard-cutover"
