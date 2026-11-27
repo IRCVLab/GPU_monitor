@@ -317,6 +317,11 @@ async function checkNavigation(tab,origin,width) {
   await tab.evaluate("document.querySelector('.tab[data-tab=users]').click()");
   await waitFor('Users chart',()=>tab.evaluate("!!document.querySelector('#usersChart canvas') && !!document.querySelector('#usersTbl tr[data-uid]')"));
   await shot(tab,'users',width);
+  await tab.send('Page.navigate',{url:origin+'/?server=orion'});
+  await waitFor('legacy capture tree',()=>tab.evaluate("!!document.querySelector('.tmtile.drillable')"));
+  await tab.evaluate("document.querySelector('.tmtile.drillable').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))");
+  await waitFor('legacy tree drilled',()=>tab.evaluate("new URL(location).searchParams.has('path') && document.querySelectorAll('.tm-crumb').length > 1"));
+  await shot(tab,'legacy-treemap',width);
   await tab.send('Page.navigate',{url:origin+'/?server=unknown'});
   await waitFor('unknown server',()=>tab.evaluate("!document.getElementById('detailError').hidden"));
   assert.ok(await tab.evaluate("['detailHead','detailActions','detailTabs','caps','detailPanels'].every(id=>document.getElementById(id).hidden)"),'V7 unknown server hides chrome');

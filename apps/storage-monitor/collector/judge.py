@@ -1,4 +1,6 @@
 """Pure judgments shared by the storage monitor's volume and server views."""
+from dataclasses import dataclass
+from collector.contract import Capacity
 from typing import Any, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -92,9 +94,18 @@ def volume_freshness(finished, cadence, now):
     return "stale" if now > finished + cadence + VOLUME_GRACE_SECONDS else "fresh"
 
 
+@dataclass(frozen=True)
+class ScanCapacity(Capacity):
+    used_pct: int
+
+
 def volume_capacity(sample, now, thresholds):
     if sample is None:
         return None, "unknown"
+    if isinstance(sample, ScanCapacity):
+        return {"total": sample.total, "used": sample.used, "avail": sample.avail, "used_pct": sample.used_pct,
+                "observed_unix": sample.observed_unix, "source": "scan", "status": sample.status}, severity(
+                    sample.used_pct, sample.avail, thresholds)
     current = sample.status == "ok" and now is not None and capacity_sample_current(sample.observed_unix, now)
     usable = sample.used + sample.avail
     pct = -(-sample.used * 100 // usable) if current and usable else None

@@ -439,7 +439,8 @@ class ServerActor:
         if key[0] == "v1":
             sha, payload = captures[LEGACY_VOLUME]
             manifest, parsed, raw = legacy_volume(payload, sha)
-            return captures, key, publication(manifest, parsed, raw, states=health.volume_states(data))
+            return captures, key, publication(manifest, parsed, raw, states=health.volume_states(data),
+                                             user_file_totals={u["uid"]: u["files"] for u in payload["users"]})
         return captures, key, publication(data.manifest, captures, states=health.volume_states(data), problems=health.volume_problems(data))
 
     def _swap(self, held: tuple) -> None:

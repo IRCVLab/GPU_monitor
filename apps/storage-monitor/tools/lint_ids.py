@@ -65,7 +65,7 @@ def deploy_calls(name, tree, errors):
 GENERATION = re.compile(r"\b(?:published|snapshot|scan)_generation\b")
 # Each occurrence in these v1 adapters must also carry the corresponding live marker.
 V1 = {
-    "collector/legacy.py": "S2",
+    "collector/legacy.py": "S2", "tools/gen_sample.py": "S3",
     "collector/actor.py": "S3", "collector/snapshot.py": "S3", "collector/store.py": "S3",
 }
 

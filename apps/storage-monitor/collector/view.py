@@ -83,11 +83,11 @@ class Publication:
     detail: bytes
     captures: Mapping[str, dict]
     manifest: Optional[HostManifest]
-    legacy_bytes: Optional[bytes]
+    legacy_bytes: Optional[Mapping[str, bytes]]
     volumes: tuple[bytes, ...]
 
 
-def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None):
+def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None, user_file_totals=None):
     """Merge the accepted capture rows once, before publishing the actor's view."""
     users, top, stale, heads = {}, [], [], {}
     root_bytes = {}
@@ -108,6 +108,12 @@ def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None
                 for row in rows:
                     dest.append({**row, "volume_id": vid, "binding": root.binding,
                                  "age_days": judge.age_days(row["mtime"], capture.scan_started_unix)})
+    if user_file_totals is not None:
+        for uid, row in users.items():
+            row["files"] = user_file_totals[uid]
+            if len(row["by_volume"]) > 1:
+                for subtotal in row["by_volume"].values():
+                    subtotal["files"] = None
     ordered = sorted(users.values(), key=lambda row: (-row["bytes"], row["uid"]))
     revision = f"{manifest.seq if manifest else 0}:" + hashlib.sha256(encode(heads)).hexdigest()[:12]
     host = {"hostname": manifest.hostname if manifest else None, "mount_table": manifest.mount_table if manifest else None}
@@ -115,7 +121,7 @@ def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None
     if manifest:
         for vol, raw in zip(manifest.volumes, manifest.raw["volumes"]):
             vid = vol.volume_id
-            state_id = "legacy" if legacy_bytes else vid
+            state_id = "legacy" if legacy_bytes and vid in heads else vid
             attempt = raw["last_attempt"]
             roots = [{**ref, "bytes": root_bytes.get((vid, ref["binding"], ref["scan_root"]))}
                      for ref in raw["roots"]]

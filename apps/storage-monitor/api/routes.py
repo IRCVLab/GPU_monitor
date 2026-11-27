@@ -161,7 +161,7 @@ def capture(handler, sid, vid, sha):
     if pub.captures.get(vid, {}).get("sha256") != sha:
         raise RequestError("CAPTURE_GONE")
     try:
-        data = pub.legacy_bytes or source.read_capture(sid, vid, sha)
+        data = pub.legacy_bytes[vid] if pub.legacy_bytes else source.read_capture(sid, vid, sha)
     except StoreUnavailable:
         if source.view(sid).data.accepted.get(vid) != sha:
             raise RequestError("CAPTURE_GONE") from None

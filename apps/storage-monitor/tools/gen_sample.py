@@ -381,6 +381,13 @@ def capture_tree(node):
 
 def write_server(directory, doc):
     sid = doc["server_id"]
+    if sid == "orion":
+        doc = {**doc, "config_digest": "a" * 64}
+        doc["scan_generation"] = f"{sid}-{doc['scan_started_unix']}-v1"  # SHIM(M2b..M5c) S3: legacy agent fixture.
+        for row in doc["stale"]:
+            row["age_days"] = max(0, (doc["scan_started_unix"] - row["mtime"]) // 86400)
+        (directory / (sid + ".json")).write_text(json.dumps(doc, indent=2) + "\n")
+        return
     groups = [[m] for m in doc["mounts"]]
     if sid == "hinton":
         groups[1].extend(groups.pop(2))
@@ -437,7 +444,7 @@ def write_server(directory, doc):
             capture=dict(sha256=sha, bytes=len(raw), scan_started_unix=doc["scan_started_unix"],
                          scan_finished_unix=finished, outcome=outcome),
             last_attempt=dict(run_id="f"*32, started_unix=finished+1, finished_unix=finished+2, outcome="failed",
-                              error_code="SCANNER_FAILED") if sid=="orion" and index==0 else None))
+                              error_code="SCANNER_FAILED") if sid=="zeus" and index==0 else None))
     manifest = dict(schema="storage-viz.manifest/2", server_id=sid, hostname=sid, seq=1, written_unix=finished+3,
                     agent=dict(release_sha="a"*40, release_seq=1, config_digest="a"*64), volumes=volumes,
                     mount_table=dict(status="ok", observed_unix=finished, within_roots=[]), last_run=None, requests=[])

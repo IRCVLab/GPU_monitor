@@ -49,7 +49,9 @@ class FixtureTest(unittest.TestCase):
 
     def test_manifest_cases(self):
         fleet = FixtureFleet(DATA_DIR)
-        volumes = [v for view in fleet.views() for v in view.data.manifest.volumes]
+        self.assertEqual(fleet.view("orion").transport, "legacy")
+        self.assertEqual(fleet.view("hinton").transport, "gate")
+        volumes = [v for view in fleet.views() for v in view.publication.manifest.volumes]
         self.assertTrue(any(len(v.roots) > 1 for v in volumes))
         self.assertTrue(any(v.identity == "ambiguous" for v in volumes))
         self.assertTrue(any(v.last_attempt and v.last_attempt.outcome == "failed" and v.capture for v in volumes))

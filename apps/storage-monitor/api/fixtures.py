@@ -1,4 +1,5 @@
 """Read-only fleet backed by manifest and volume capture fixtures."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -6,6 +7,8 @@ import time
 from typing import Any, Mapping
 
 from collector.errors import RescanDisabled, UnknownServer
+from collector.legacy import legacy_volume
+from collector.snapshot import validate_download, DesiredServer
 from collector.health import Data, Link
 from collector.contract import parse_manifest, parse_capture
 from collector.ids import SERVER_ID_RE
@@ -83,7 +86,21 @@ class FixtureFleet:
         return servers
 
     def _build_view(self, server: InventoryServer) -> ServerView:
-        manifest = parse_manifest(self._bytes(self._files[server.id]))
+        data = self._bytes(self._files[server.id])
+        doc = json.loads(data)
+        if isinstance(doc, dict) and doc.get("schema_version") == 1:
+            sha = hashlib.sha256(data).hexdigest()
+            status = {"server_id": server.id, "generation": f"{server.id}-{doc['scan_started_unix']}-v1.json",
+                      "status": "complete" if all(r["status"] == "complete" for r in doc["selected_roots"]) else "partial",
+                      "byte_size": len(data), "sha256": sha, "scan_finished_unix": doc["scan_finished_unix"],
+                      "config_digest": doc["config_digest"]}
+            payload = validate_download(status, data, DesiredServer(server.id, server.scanner_digest)).payload
+            manifest, held, blobs = legacy_volume(payload, sha)
+            pub = publication(manifest, held, blobs, user_file_totals={u["uid"]: u["files"] for u in payload["users"]})
+            mono = self.clock.monotonic()
+            return build_view(server, Record(link=Link(state="ok")), pub, ObservationView({"state":"idle"}, mono),
+                              (manifest.written_unix, mono), None, "legacy")
+        manifest = parse_manifest(data)
         if manifest.server_id != server.id:
             raise ValueError("fixture manifest server mismatch")
         held = {}

@@ -252,3 +252,23 @@ def test_tick_failure_still_serves_the_published_view(collector_api, monkeypatch
     assert request("GET", base + "/activity")[0] == 200
     assert request("GET", url)[:2] == (200, raw)
 
+
+
+def test_legacy_capacity_on_each_mount(collector_api):
+    from tools.gen_sample import simple_snapshot
+    host, request, _ = collector_api
+    doc = simple_snapshot("alpha-1", offset=200, medias=["hdd", "hdd"], use_pcts=[93,70])
+    from collector.test_bug_harness import status_data
+    doc.update(config_digest="a"*64, scan_generation=f"alpha-1-{doc['scan_started_unix']}-v1")
+    for row in doc["stale"]:
+        row["age_days"] = (doc["scan_started_unix"] - row["mtime"]) // 86400
+    status, data = status_data(doc)
+    host.host.publications["alpha-1"] = status
+    host.host.captures[status["sha256"]] = data
+    host.tick()
+    detail = request("GET", "/api/v2/servers/alpha-1")[1]
+    assert [v["mountpoint"] for v in detail["volumes"]] == [r["mountpoint"] for r in doc["selected_roots"]]
+    for vol, mount in zip(detail["volumes"], doc["mounts"]):
+        assert (vol["capacity"]["used_pct"], vol["capacity"]["source"]) == (mount["df_use_pct"], "scan")
+        assert vol["capacity"]["observed_unix"] == doc["scan_finished_unix"]
+        assert vol["severity"] == ("critical" if mount["df_use_pct"] == 93 else "warning")

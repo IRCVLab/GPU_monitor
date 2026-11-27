@@ -41,7 +41,13 @@
         "scan_finished_unix": 1719200342,
         "outcome": "complete"
       },
-      "last_attempt": null
+      "last_attempt": {
+        "run_id": "ffffffffffffffffffffffffffffffff",
+        "started_unix": 1719200343,
+        "finished_unix": 1719200344,
+        "outcome": "failed",
+        "error_code": "SCANNER_FAILED"
+      }
     },
     {
       "volume_id": "x-aa52daba02bf8b39",
