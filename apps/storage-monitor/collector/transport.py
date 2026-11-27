@@ -68,6 +68,8 @@ class TransportError(Exception):
 
     def __init__(self, code: str, message: str):
         self.code = _safe_code(code)
+        self.host_code: Optional[str] = None
+        """The host's own ``err <CODE>`` text, for a gate refusal."""
         super().__init__(_safe_message(message))
 
 
@@ -253,6 +255,13 @@ GATE_HEADER_RE = re.compile(rb"storage-viz-gate/([1-9][0-9]{0,3}) (?:ok (0|[1-9]
 MAX_GATE_HEADER_BYTES = 64
 NOT_GATE = "NOT_GATE"
 """The host answered without the gate's header line: it is not bootstrapped, or the bootstrap was reverted."""
+GATE_CODES = frozenset({
+    "USAGE", "IO_ERROR", "START_FAILED", "FILE_TOO_LARGE", "OUTPUT_TOO_LARGE", "SHORT_READ", "BAD_SIGNATURE_SIZE",
+    "CAPTURE_GONE", "MANIFEST_MISSING", "SNAPSHOT_GONE", "STATUS_MISSING",
+})
+"""The gate's own refusal codes (agent/bootstrap/gate.py), kept as the error code. Any other code a host sends
+becomes GATE_REFUSED with the host's text in ``host_code``, so a host can never claim one of central's own
+codes (NOT_GATE, TIMEOUT, UNREACHABLE, AUTH_FAILED), which only central's observations produce."""
 SNAPSHOT_FILE_RE = re.compile(r"\A[A-Za-z0-9_.-]+-[0-9]+-v1\.json\Z")
 STAGE_SIZE_RE = re.compile(r"\A[1-9][0-9]{0,8}\Z")
 KiB = 1024
@@ -354,8 +363,11 @@ def parse_gate_reply(reply: bytes, returncode: int, limit: int, spec: GateVerb, 
     if match is None:
         raise TransportError(NOT_GATE, "the host did not answer with the gate header")
     if match.group(3) is not None:
-        code = match.group(3).decode()
-        raise TransportError(spec.too_large if code == "TOO_LARGE" else code, "the gate refused the verb")
+        host_code = match.group(3).decode()
+        code = spec.too_large if host_code == "TOO_LARGE" else host_code if host_code in GATE_CODES else "GATE_REFUSED"
+        error = TransportError(code, "the gate refused the verb")
+        error.host_code = host_code
+        raise error
     declared = int(match.group(2))
     body = reply[match.end():]
     if returncode != 0:

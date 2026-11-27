@@ -3,7 +3,8 @@
 A new sha goes to the canary first. Only after the canary leaves probation on it
 does the sha enter ``passed`` and the phase become ``fleet``, where every host may
 stage it, two at a time. A failed canary, or any host failing probation in the
-fleet phase, halts the rollout until the desired sha changes (I23).
+fleet phase, halts the rollout until the desired sha changes (I23). A sha any host
+rolls back from leaves ``passed``, so it must pass the canary again.
 
 ``fleet.Rollout`` owns the one RolloutState and persists it as ``rollout.json``;
 ``encode`` and ``parse`` are that file's boundary.
@@ -122,13 +123,22 @@ def _fleet_rolled_back(state: RolloutState, event: HostRolledBack) -> RolloutSta
     return _halt(state, event)
 
 
+def _unpass(handler: Callable[[RolloutState, Any], RolloutState]) -> Callable[[RolloutState, Any], RolloutState]:
+    """A rollback from a sha, whichever host and phase, takes it off ``passed`` before ``handler`` runs."""
+    def unpassed(state: RolloutState, event: HostRolledBack) -> RolloutState:
+        kept = tuple(entry for entry in state.passed if entry.sha != event.sha)
+        return handler(replace(state, passed=kept) if kept != state.passed else state, event)
+    return unpassed
+
+
 TRANSITIONS: Dict[Tuple[str, str], Callable[[RolloutState, Any], RolloutState]] = {
     **{(phase, kind): _ignore for phase in PHASES for kind in EVENT_KINDS},
     **{(phase, "DesiredChanged"): _desired_changed for phase in PHASES},
     ("canary", "HostInSync"): _canary_in_sync,
     ("canary", "HostFailed"): _canary_failed,
-    ("canary", "HostRolledBack"): _canary_failed,
-    ("fleet", "HostRolledBack"): _fleet_rolled_back,
+    ("canary", "HostRolledBack"): _unpass(_canary_failed),
+    ("fleet", "HostRolledBack"): _unpass(_fleet_rolled_back),
+    ("halted", "HostRolledBack"): _unpass(_ignore),
 }
 
 

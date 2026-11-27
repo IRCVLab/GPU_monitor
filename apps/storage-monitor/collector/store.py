@@ -191,10 +191,13 @@ def _upgrade_v2(raw: Any) -> Any:
     return {**raw, **jobs_v3, "schema": RECORD_SCHEMA, "manifest_sha256": None}
 
 
+UPDATE_FIELDS_SINCE_M3B = {"requested_host_unix": None, "requests": 0, "probation_manifest": None}
+
+
 def _upgrade_update(raw: Any) -> Any:
-    """Records before M3b have no update.requested_host_unix: no update request was ever sent."""
-    if isinstance(raw, dict) and isinstance(raw.get("update"), dict) and "requested_host_unix" not in raw["update"]:
-        return {**raw, "update": {**raw["update"], "requested_host_unix": None}}
+    """Records before M3b have none of the update-request fields: no update request was ever sent."""
+    if isinstance(raw, dict) and isinstance(raw.get("update"), dict):
+        return {**raw, "update": {**UPDATE_FIELDS_SINCE_M3B, **raw["update"]}}
     return raw
 
 

@@ -31,6 +31,9 @@ class FakeChannel:
     def desired(self):
         return self.current
 
+    def permits(self, server_id):
+        return self.allow
+
     def acquire(self, server_id):
         if self.allow:
             self.slots.add(server_id)
@@ -44,6 +47,9 @@ class FakeChannel:
 
     def reported(self, server_id, before, after):
         self.reports.append((server_id, before.state, after.state))
+
+    def confirmed(self, server_id, sha):
+        self.reports.append((server_id, "confirmed", sha))
 
 
 def gate_collector(tmp_path, channel=None, release=OLD, **options):
@@ -64,6 +70,12 @@ def calls(collector):
     return [(verb, sha) for _, verb, sha in collector.host.update_calls]
 
 
+def written_by(doc, agent_sha):
+    """A manifest document whose agent block names ``agent_sha``, as that release writes it."""
+    doc["agent"]["release_sha"] = agent_sha
+    return doc
+
+
 def run_by(collector, agent_sha, *, started, outcome="complete", error=None):
     """The host publishes a manifest whose last run is by ``agent_sha``, with one fresh capture."""
     data = capture(VA, BA, "/a", started + 50)
@@ -72,9 +84,9 @@ def run_by(collector, agent_sha, *, started, outcome="complete", error=None):
     volume["last_attempt"] = {"run_id": RUN, "started_unix": started, "finished_unix": started + 50,
                               "outcome": "failed" if error else "complete", "error_code": error}
     seq = record(collector).data.manifest.seq + 1
-    collector.host.manifests[SID] = encode(manifest_doc(server_id=SID, volumes=[volume], seq=seq, requests=[], last_run={
+    collector.host.manifests[SID] = encode(written_by(manifest_doc(server_id=SID, volumes=[volume], seq=seq, requests=[], last_run={
         "run_id": RUN, "trigger": "timer", "plan": "full", "started_unix": started, "finished_unix": started + 50,
-        "outcome": outcome, "agent_sha": agent_sha}))
+        "outcome": outcome, "agent_sha": agent_sha}), agent_sha))
 
 
 def to_probation(collector):
@@ -179,10 +191,10 @@ def test_a_capture_rejected_from_the_new_release_fails_probation(tmp_path):
     collector.host.volume_captures[(VA, sha(data))] = data
     volume = volume_doc(VA, BA, "/a", capture=(sha(data), len(data)), cadence=3600)
     started = collector.clock.now + 1
-    collector.host.manifests[SID] = encode(manifest_doc(server_id=SID, volumes=[volume], seq=record(collector).data.manifest.seq + 1, requests=[],
+    collector.host.manifests[SID] = encode(written_by(manifest_doc(server_id=SID, volumes=[volume], seq=record(collector).data.manifest.seq + 1, requests=[],
                                                         last_run={"run_id": RUN, "trigger": "timer", "plan": "full",
                                                                   "started_unix": started, "finished_unix": started + 1,
-                                                                  "outcome": "complete", "agent_sha": NEW}))
+                                                                  "outcome": "complete", "agent_sha": NEW}), NEW))
     collector.tick()
     assert track(collector).last_error == "CONTRACT_REJECTED" and ("rollback-update", OLD) in calls(collector)
 
@@ -267,18 +279,21 @@ def test_a_failed_stage_backs_off_and_frees_the_staging_slot(tmp_path):
     assert channel.slots == set() and record(collector).link.state == "unreachable"
 
 
-def test_a_restart_mid_stage_backs_off_and_mid_activation_keeps_the_staging_slot(tmp_path):
+def test_a_stage_whose_result_never_comes_is_staged_again_and_a_restart_mid_activation_keeps_the_slot(tmp_path):
     spawn = ManualSpawn()
     collector, host, channel = gate_collector(tmp_path, spawn=spawn)
     spawn.run()
     collector.settle()
     collector.tick()
     assert track(collector).state == "staging"
+    spawn.pending.clear()  # the stage died with the process: no result will come
     collector.restart()
-    assert (track(collector).state, track(collector).last_error) == ("backoff", "RESTARTED"), \
-        "a stage that died with the process would wait for an answer forever"
-    assert channel.slots == set()
-    collector.tick(updates.FIRST_BACKOFF_SECONDS)
+    assert (track(collector).state, channel.slots) == ("staging", {SID})
+    collector.tick(updates.STAGE_RESEND_SECONDS - 120)
+    assert spawn.pending == [], "staged again inside the resend window"
+    collector.tick(200)
+    assert [name for name, _ in spawn.pending] == [f"storage-viz-update-{SID}"], "the lost stage was never sent again"
+    assert track(collector).requests == 2
     spawn.run()
     collector.settle()
     assert track(collector).state == "activating"

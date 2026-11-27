@@ -203,5 +203,5 @@ def test_servers_show_each_transport_the_agent_update_track_and_the_rollout(coll
     assert rows["alpha-1"]["agent"] == {"release_sha": "2" * 40, "desired": "2" * 40, "update_state": "probation",
                                          "last_error": None}
     assert rows["beta-2"]["agent"]["update_state"] == "in_sync" and rows["beta-2"]["agent"]["release_sha"] is None
-    assert fleet["rollout"] == {"phase": "canary", "reason": None, "desired_sha": "2" * 40, "release_seq": 7,
+    assert fleet["rollout"] == {"phase": "canary", "reason": None, "error": None, "desired_sha": "2" * 40, "release_seq": 7,
                                 "canary": "alpha-1", "passed": []}

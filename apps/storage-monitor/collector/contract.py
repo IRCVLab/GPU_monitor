@@ -308,10 +308,27 @@ def _attempt(update: Any) -> Optional[Attempt]:
     action, sha, outcome, code, finished = (attempt.get(key) for key in ("action", "sha", "outcome", "code", "finished_unix"))
     if (action is not None and action not in ATTEMPT_ACTIONS) or outcome not in ATTEMPT_OUTCOMES \
             or (sha is not None and not (isinstance(sha, str) and RELEASE_SHA_RE.fullmatch(sha))) \
-            or (code is not None and not (isinstance(code, str) and code.isascii() and len(code) <= 64)) \
             or type(finished) is not int or finished < 0:
         return None
+    try:
+        code = _optional(code, lambda value: _code(value, "update.last_attempt.code"))
+    except ContractError:
+        return None
     return Attempt(action, sha, outcome, code, finished)
+
+
+def claimed_release(data: Optional[bytes]) -> Optional[str]:
+    """agent.release_sha as refused manifest bytes claim it, or None. Untrusted: it can only clear a
+    release of blame for a manifest it says another release wrote, never prove anything."""
+    if not isinstance(data, (bytes, bytearray)) or len(data) > MAX_MANIFEST_BYTES:
+        return None
+    try:
+        raw = decode_json(bytes(data))
+    except ContractError:
+        return None
+    agent = raw.get("agent") if isinstance(raw, dict) else None
+    release = agent.get("release_sha") if isinstance(agent, dict) else None
+    return release if isinstance(release, str) and RELEASE_SHA_RE.fullmatch(release) else None
 
 
 # ------------------------------------------------------------------ manifest

@@ -454,6 +454,7 @@ Fleet rollout (`collector/fleet.py`, `rollout.reduce`):
 | `canary` | `HostInSync(canary, sha)` | `fleet` | sha appended to `passed`. Others stage, at most 2 at a time. |
 | `canary` | `HostFailed(canary, sha)` (rolled_back, refused, or 3 backoffs) | `halted` | `reason` set. No host stages sha. |
 | `fleet` | `HostRolledBack(any, sha)` | `halted` | Hosts not yet updated stay on their release. |
+| any | `HostRolledBack(any, sha)` | (as above) | sha removed from `passed`: it must pass the canary again (M3b). |
 | `halted` | any host event | `halted` | Waits for `DesiredChanged`. |
 
 Never: a non-canary host staging a sha before it is in `passed` (I23); `halted` leaving without a desired change.
@@ -763,6 +764,12 @@ Host requirements become python3, systemd, sudo and OpenSSH 8.1 or later. `cc`, 
 - `rolling_back` sends `rollback-update <previous>`, not `activate-update`. A refused rollback (FLOOR) ends `refused`, an edge the diagram lacks.
 - Probation passes on the first `complete` or `partial` run whose `last_run.agent_sha` is the desired release and that started after the activation, once central holds every capture the manifest names. An `INTERNAL_*` volume error on that run, a refused manifest or capture (CONTRACT_REJECTED), `agent.health = broken`, or no such run within the longest volume cadence + 1 h rolls back. The agent reports a scanner killed by a signal as SCANNER_FAILED, which is not a fault, so the run deadline covers it.
 - The rollout halts when a host leaves probation for `rolling_back`, before the host confirms the rollback. Staging slots count hosts in `staging` and `activating`.
+- No track waits on one event. `staging`, `activating` and `rolling_back` each keep a host-time resend deadline (900 s for a stage, 300 s otherwise), so a lost result, a failed record write or a restart only delays the next send to an idle host. After 6 sends without success, `staging` and `activating` back off with the last error, and `rolling_back` ends in the terminal state `rollback_failed`, which holds no slot and leaves the rollout halted. A request result for another sha than the one being sent is ignored.
+- A host the rollout no longer permits (halted, or a non-canary host in the canary phase) goes back to `in_sync` on its release from `staging` or `activating`, with `last_error = ROLLOUT_STOPPED`. A host already on the new sha follows its own probation.
+- A canary in sync on the desired sha whose accepted manifest that release wrote, after a complete or partial run by it with no agent fault, counts as `HostInSync`. This covers a lost `rollout.json` and a canary bootstrapped onto the desired bundle. A failed `rollout.json` write shows as `rollout.error` in `/api/servers`.
+- A refused manifest fails probation only if it appeared after the activation: not the manifest the host showed when probation began, and not one whose bytes name another release.
+- A gate refusal keeps the host's text in `host_code`. Only the gate's own codes pass through as the error code; any other host text is `GATE_REFUSED`, so NOT_GATE, TIMEOUT, UNREACHABLE and AUTH_FAILED come only from central's own observations.
+- Activate and rollback requests do not wait for the transfer semaphore; only stages, which carry the bundle, share it with captures.
 - `fleet.desired_agent()` re-reads `agent/storage-viz-agent.json` when a stat shows it changed. No SIGHUP handler: a dashboard release change restarts the service anyway. A lost `rollout.json` restarts in the canary phase.
 - S2 stays until every host reports the gate transport. `REMOTE_OBSERVATION_SCRIPT` stays with it, because the S2 probe runs it.
 

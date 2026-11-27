@@ -413,3 +413,33 @@ def test_a_host_the_inventory_leaves_unmarked_is_legacy_and_moves_to_the_gate_on
     with pytest.raises(TransportError):
         hosts.observe(server)
     assert hosts.observe(server).transport == "gate" and hosts.transport(server) == "gate"
+
+
+@pytest.mark.parametrize("host_code", ["NOT_GATE", "TIMEOUT", "AUTH_FAILED", "UNREACHABLE", "SOMETHING_NEW"])
+def test_a_host_cannot_claim_centrals_own_codes(transport, remote, host_code):
+    remote.reply = (1, f"storage-viz-gate/1 err {host_code}\n".encode(), b"")
+    with pytest.raises(TransportError) as raised:
+        transport.run_verb(SERVER, "observe")
+    assert (raised.value.code, raised.value.host_code) == ("GATE_REFUSED", host_code)
+
+
+def test_the_gates_own_refusals_keep_their_code_and_the_host_text(transport, remote):
+    remote.reply = (1, b"storage-viz-gate/1 err START_FAILED\n", b"")
+    with pytest.raises(TransportError) as raised:
+        transport.run_verb(SERVER, "activate-update", (SHA,))
+    assert (raised.value.code, raised.value.host_code) == ("START_FAILED", "START_FAILED")
+
+
+def test_a_legacy_host_whose_gate_answers_err_not_gate_stays_on_the_gate(transport, remote):
+    hosts = HostRouter(GateHost(transport), Scripted("legacy"))
+    server = dataclasses.replace(SERVER, transport="legacy")
+    remote.reply = (1, b"storage-viz-gate/1 err NOT_GATE\n", b"")
+    with pytest.raises(TransportError):
+        hosts.observe(server)
+    assert hosts.transport(server) == "gate" and hosts.legacy.calls == [], "a host text switched the transport"
+
+
+def test_an_updater_code_that_is_not_a_code_reads_as_no_attempt(transport, remote):
+    attempt = {"action": "activate", "sha": SHA, "outcome": "refused", "code": "floor; rm -rf", "finished_unix": 1}
+    write(remote.paths.update / "state.json", json.dumps({"last_attempt": attempt}).encode())
+    assert observe(transport).agent.attempt is None

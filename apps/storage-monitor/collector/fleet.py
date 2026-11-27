@@ -102,6 +102,8 @@ class Rollout:
         self._stamp: Any = ()
         self._desired: Optional[DesiredAgent] = None
         self._state: Optional[rollout.RolloutState] = None
+        self.write_error: Optional[str] = None
+        """Set while the last rollout.json write failed: the state then lives only in memory."""
 
     def _current(self) -> rollout.RolloutState:
         """The state with the desired release refreshed. Call with the lock held."""
@@ -133,7 +135,7 @@ class Rollout:
 
     def _apply(self, event: rollout.Event) -> None:
         state = rollout.reduce(self._state, event)
-        if state == self._state:
+        if state == self._state and self.write_error is None:
             return
         self._state = state
         try:
@@ -144,7 +146,9 @@ class Rollout:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.path)
-        except OSError:
+            self.write_error = None
+        except OSError as exc:
+            self.write_error = f"ROLLOUT_WRITE_FAILED: {exc.strerror or type(exc).__name__}"
             _LOG.exception("rollout.json not written; the rollout state lives in memory until the next change")
         _LOG.info("agent rollout %s on %s: %s", state.phase, state.desired_sha, state.reason or type(event).__name__)
 
@@ -156,6 +160,10 @@ class Rollout:
         with self._lock:
             self._current()
             return self._desired
+
+    def permits(self, server_id: str) -> bool:
+        with self._lock:
+            return rollout.allows(self._current(), server_id)
 
     def acquire(self, server_id: str) -> bool:
         with self._lock:
@@ -181,6 +189,11 @@ class Rollout:
             with self._lock:
                 self._current()
                 self._apply(event)
+
+    def confirmed(self, server_id: str, sha: str) -> None:
+        with self._lock:
+            self._current()
+            self._apply(rollout.HostInSync(server_id, sha))
 
 
 class Fleet:
@@ -265,7 +278,8 @@ class Fleet:
     def rollout_view(self) -> dict:
         """The rollout as /api/servers shows it (S5, additive)."""
         state = self.rollout.view()
-        return {"phase": state.phase, "reason": state.reason, "desired_sha": state.desired_sha,
+        return {"phase": state.phase, "reason": state.reason, "error": self.rollout.write_error,
+                "desired_sha": state.desired_sha,
                 "release_seq": state.release_seq, "canary": state.canary,
                 "passed": [{"sha": entry.sha, "release_seq": entry.release_seq} for entry in state.passed]}
 
