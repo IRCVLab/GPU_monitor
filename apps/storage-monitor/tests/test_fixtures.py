@@ -49,6 +49,17 @@ class FixtureTest(unittest.TestCase):
             self.assertEqual({p.name for p in directory.glob("*.json")} | {"hosts.json"},
                              {p.name for p in DATA_DIR.glob("*.json")})
 
+    def test_volumes_list_home_first_then_root_then_alphabetical(self):
+        fleet = FixtureFleet(DATA_DIR)
+        orders = {}
+        for sid in ("hinton", "orion", "zeus"):
+            detail = json.loads(server_bytes(fleet.view(sid), fleet.clock.monotonic(), CapacityThresholds(), detail=True))
+            orders[sid] = [(v["mountpoint"], [r["scan_root"] for r in v["roots"]]) for v in detail["volumes"]]
+            row = json.loads(server_bytes(fleet.view(sid), fleet.clock.monotonic(), CapacityThresholds()))
+            self.assertEqual([v["mountpoint"] for v in row["volumes"]], [m for m, _ in orders[sid]])
+        self.assertEqual(orders["hinton"], [("/home", ["/home"]), ("/", ["/data", "/data1"]), ("/data3", ["/data3"])])
+        self.assertEqual([m for m, _ in orders["orion"]], ["/srv/orion/vol1", "/srv/orion/vol2"])
+
     def test_hinton_unreadable_directories(self):
         fleet = FixtureFleet(DATA_DIR)
         view = fleet.view("hinton")
