@@ -81,6 +81,68 @@ test('System removes an absent server from its list and count', async ({ page })
   await expect(page.locator('.sys-current-reading')).toContainText('0/1대 측정');
 });
 
+test('GPU experiment notes can be enabled, viewed with a manual memo, and disabled', async ({ page }) => {
+  const time = new Date().toISOString();
+  const manual = {
+    id: 10, server_id: 1, username: 'fixture', content: '수동 메모', priority: 'normal',
+    kind: 'memo', gpu_indices: [], created_at: time, expires_at: null, is_expired: false,
+  };
+  const auto = {
+    id: 'run-1', summary: 'TransFuser 학습', gpu_indices: [0], eta_seconds: null, observed_at: time,
+  };
+  let enabled = false;
+  let saves = 0;
+  const report = () => ({ enabled, configured: true, by_server: enabled ? { 1: [auto] } : {} });
+  await mockGpu(page, { status: route => route.fulfill({ json: { 1: gpuStatus(gpu, 'fixture', time) } }) });
+  await page.route(gpuOrigin + '/api/servers/1/notes', route => route.fulfill({ json: [manual] }));
+  await page.route(gpuOrigin + '/api/experiment-notes', route => route.fulfill({ json: report() }));
+  await page.route(gpuOrigin + '/api/experiment-notes/settings', route => {
+    const request = route.request();
+    expect(request.method()).toBe('PUT');
+    const body = request.postDataJSON();
+    if (body.admin_password !== 'fixture-admin') return route.fulfill({ status: 401, json: { detail: 'Invalid admin password' } });
+    enabled = body.enabled;
+    saves += 1;
+    return route.fulfill({ json: report() });
+  });
+
+  await page.goto(gpuOrigin);
+  const openSettings = async () => {
+    await page.getByRole('button', { name: '관리', exact: true }).click();
+    await page.getByRole('button', { name: '자동 실험 메모', exact: true }).click();
+    return page.getByRole('dialog', { name: '자동 실험 메모' });
+  };
+  const dialog = await openSettings();
+  const setting = dialog.getByRole('switch', { name: '자동 실험 메모 사용' });
+  const password = dialog.getByLabel('관리자 패스워드');
+  await expect(setting).not.toBeChecked();
+  await setting.check();
+  await password.fill('wrong');
+  await dialog.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toBeVisible();
+  await password.fill('fixture-admin');
+  await dialog.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(dialog.getByText('켜짐', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+
+  const noteButton = page.locator('button[aria-controls="notes-panel-1"]');
+  await noteButton.click();
+  const panel = page.locator('#notes-panel-1');
+  await expect(panel.getByText(auto.summary, { exact: true })).toBeVisible();
+  await expect(panel.getByText('종료 예상 미확인', { exact: false })).toBeVisible();
+  await expect(panel.getByText(manual.content, { exact: true })).toBeVisible();
+
+  await openSettings();
+  await setting.uncheck();
+  await password.fill('fixture-admin');
+  await dialog.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(dialog.getByText('꺼짐', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  await expect(panel.getByText(auto.summary, { exact: true })).toHaveCount(0);
+  await expect(panel.getByText(manual.content, { exact: true })).toBeVisible();
+  expect(saves).toBe(2);
+});
+
 test('Power Flow keeps an unsaved draft when navigation is cancelled from monitor mode', async ({ page }) => {
   await mockGpu(page, { status: route => route.fulfill({ json: {} }) });
   await page.goto(gpuOrigin + '/system/power-flow');

@@ -24,7 +24,7 @@ class SSHClient:
         self._client: paramiko.SSHClient | None = None
         self._client_lock = threading.Lock()
 
-    def connect(self) -> None:
+    def connect(self, *, handshake_timeout: float | None = None) -> None:
         """Connect using password or private key from server model.
 
         Credentials are decrypted via crypto.decrypt() before use.
@@ -39,6 +39,8 @@ class SSHClient:
             username=self._server.ssh_user,
             timeout=10,
         )
+        if handshake_timeout is not None:
+            common.update(timeout=handshake_timeout, banner_timeout=handshake_timeout, auth_timeout=handshake_timeout)
 
         if self._server.ssh_private_key:
             key_str = decrypt(self._server.ssh_private_key)

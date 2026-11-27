@@ -13,6 +13,26 @@ from backend.collectors import server_collector, storage
 from backend.collectors.ssh_client import SSHClient
 
 
+class SshConnectionTests(unittest.TestCase):
+    def test_callers_can_bound_tcp_banner_and_authentication(self):
+        server = SimpleNamespace(
+            name="fixture", host="fixture", port=22, ssh_user="monitor",
+            ssh_private_key=None, ssh_password="encrypted",
+        )
+        with (
+            patch("backend.collectors.ssh_client.paramiko.SSHClient") as client_factory,
+            patch("backend.collectors.ssh_client.decrypt", return_value="fixture-password"),
+        ):
+            ssh = SSHClient(server)
+            ssh.connect(handshake_timeout=4)
+            self.addCleanup(ssh.close)
+
+        client_factory.return_value.connect.assert_called_once_with(
+            hostname="fixture", port=22, username="monitor", password="fixture-password",
+            timeout=4, banner_timeout=4, auth_timeout=4,
+        )
+
+
 class CommandChannel:
     def __init__(self, stdout=b"", stderr=b"", code=0):
         self.stdout = stdout

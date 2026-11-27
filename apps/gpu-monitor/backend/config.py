@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from typing import Annotated
-from pydantic import AliasChoices, Field, PositiveInt, StringConstraints, field_validator, model_validator
+from pydantic import AliasChoices, Field, PositiveInt, SecretStr, StringConstraints, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     monitoring_expected_server_count: int = 0
     monitoring_database_backup_dir: str = ""
     monitoring_database_backup_keep: int = 5
+    experiment_notes_openai_api_key: SecretStr = SecretStr("")
+    experiment_notes_model: str = ""
 
     @field_validator("secret_key")
     @classmethod

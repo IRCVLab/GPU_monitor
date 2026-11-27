@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 const apiUrl = new URL('./api.ts', import.meta.url);
 const typesUrl = new URL('./types.ts', import.meta.url);
 const notePayloadUrl = new URL('./utils/notePayload.ts', import.meta.url);
+const experimentNotesUrl = new URL('./utils/experimentNotes.ts', import.meta.url);
 const apiSource = readFileSync(apiUrl, 'utf8');
 const typesSource = readFileSync(typesUrl, 'utf8');
 
@@ -17,11 +18,13 @@ async function loadApiModule() {
 	mkdirSync(join(tempDir, 'utils'));
 	writeFileSync(join(tempDir, 'types.ts'), readFileSync(typesUrl, 'utf8'));
 	writeFileSync(join(tempDir, 'utils', 'notePayload.ts'), readFileSync(notePayloadUrl, 'utf8'));
+	writeFileSync(join(tempDir, 'utils', 'experimentNotes.ts'), readFileSync(experimentNotesUrl, 'utf8'));
 	writeFileSync(
 		join(tempDir, 'api.ts'),
 		apiSource
 			.replace("from '$lib/types'", "from './types.ts'")
 			.replace("from '$lib/utils/notePayload'", "from './utils/notePayload.ts'")
+			.replace("from '$lib/utils/experimentNotes'", "from './utils/experimentNotes.ts'")
 	);
 	return import(`${pathToFileURL(join(tempDir, 'api.ts')).href}?t=${Date.now()}-${Math.random()}`);
 }

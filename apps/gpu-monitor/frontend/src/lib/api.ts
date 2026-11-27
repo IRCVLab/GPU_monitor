@@ -1,5 +1,6 @@
 import type { EventLog, Note, NoteKind, NotePriority, ServerRecord, ServerState } from '$lib/types';
 import { buildNotePayload, type CreateNoteInput } from '$lib/utils/notePayload';
+import { parseExperimentNotes, type ExperimentNotes } from '$lib/utils/experimentNotes';
 
 const BASE = '/api';
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -100,6 +101,25 @@ export async function getServersWithOptions(options?: RequestOptions): Promise<S
 export async function getServerStatus(options?: RequestOptions): Promise<Record<number, ServerState>> {
 	const res = await fetchWithTimeout(`${BASE}/servers/status`, undefined, DASHBOARD_TIMEOUT_MS, options);
 	return handleResponse<Record<number, ServerState>>(res);
+}
+
+export async function getExperimentNotes(options?: RequestOptions): Promise<ExperimentNotes> {
+	const res = await fetchWithTimeout(`${BASE}/experiment-notes`, undefined, DASHBOARD_TIMEOUT_MS, options);
+	return parseExperimentNotes(await handleResponse<unknown>(res));
+}
+
+export async function setExperimentNotesEnabled(
+	input: { enabled: boolean; admin_password: string },
+	options?: RequestOptions
+): Promise<ExperimentNotes> {
+	const res = await fetchWithTimeout(`${BASE}/experiment-notes/settings`, {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(input)
+	}, DASHBOARD_TIMEOUT_MS, options);
+	if (res.status === 401) throw new Error('관리자 패스워드가 올바르지 않습니다.');
+	if (res.status === 409) throw new Error('모델 API가 설정되지 않았습니다.');
+	return parseExperimentNotes(await handleResponse<unknown>(res));
 }
 
 interface NoteResponse extends Omit<Note, 'display_name' | 'priority' | 'kind' | 'gpu_indices'> {
