@@ -72,16 +72,29 @@ function findChrome() {
 
 // Only children returned by spawn reach this function. An existing CDP browser
 // receives a tab close and is never signalled.
+// A detached child leads its own process group. Chrome's helpers (renderer,
+// crashpad) live in that group and keep writing the profile after the main
+// process exits, so the whole group is signalled.
+function signal(child, name) {
+  try {
+    if (child.spawnargs && child.pid && child._detachedGroup) process.kill(-child.pid, name);
+    else child.kill(name);
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error;
+  }
+}
+
 async function stop(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise(resolve => child.once('exit',resolve));
-  const timeout = setTimeout(() => child.kill('SIGKILL'),5000);
+  const timeout = setTimeout(() => signal(child, 'SIGKILL'),5000);
   try {
-    child.kill('SIGTERM');
+    signal(child, 'SIGTERM');
     await exited;
   } finally {
     clearTimeout(timeout);
   }
+  if (child._detachedGroup) signal(child, 'SIGKILL');  // Any helper still alive in the group.
 }
 
 // Returns { cdpUrl, chrome } or null when no browser is available.
@@ -98,6 +111,7 @@ async function openBrowser(tmp) {
     `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1',
     `--user-data-dir=${path.join(tmp, 'chrome')}`, 'about:blank',
   ], { stdio: 'ignore', detached: true });
+  chrome._detachedGroup = true;
   const cdpUrl = `http://127.0.0.1:${port}`;
   try { await waitFor('Chrome DevTools endpoint', () => getJson(cdpUrl + '/json/version')); }
   catch (error) { await stop(chrome); throw error; }
@@ -350,7 +364,7 @@ async function main() {
     if (tab) await tab.close();
     if (sample) await stop(sample.server);
     if (browser) await stop(browser.chrome);
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 
