@@ -6,6 +6,12 @@ export function renderHeader(DATA, selected, navigate) {
 
   const warn = document.getElementById("warnBanner");
   const msgs = [];
+  const unreadable = (DATA.errors ?? []).filter(row => row.reason !== 'VANISHED');
+  if (unreadable.length) {
+    const paths = unreadable.slice(0, 6).map(row => escapeHtml(row.path + ' (' + row.reason + ')'));
+    msgs.push(unreadable.length + (unreadable.length === 1 ? ' directory' : ' directories') +
+      ' could not be read: ' + paths.join(', ') + (unreadable.length > paths.length ? ' …' : ''));
+  }
   for (const v of DATA.volumes) {
     if (v.diagnostic || v.last_attempt?.error_code) msgs.push(escapeHtml(v.mountpoint + ' · ' + (v.diagnostic || v.last_attempt.error_code)));
   }

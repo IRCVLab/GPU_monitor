@@ -256,7 +256,8 @@ async function shot(tab, name, width) {
   fs.mkdirSync(dir,{recursive:true});
   if (name !== 'overview') await tab.evaluate(`(async () => {
     const target=document.querySelector('${({stale:'#staleViewport',users:'#usersChart',top:'#topTbl'})[name] || '#treemap'}');
-    target.scrollIntoView({block:'center',behavior:'instant'});
+    if ('${name}' === 'detail-treemap' && ${width} === 1440) document.querySelector('#main').scrollTo({top:0,behavior:'instant'});
+    else target.scrollIntoView({block:'center',behavior:'instant'});
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
   })()`);
   const {data} = await tab.send('Page.captureScreenshot',{format:'png'});
@@ -275,6 +276,10 @@ async function checkNavigation(tab,origin,width) {
   assert.equal(await tab.evaluate("new URL(location).searchParams.get('tab')"),'treemap','V6 card href decides tab');
   await tab.evaluate('document.querySelector(".cap-folder-button[data-folder=\'/data\']").click()');
   await waitFor('multi-root tree',()=>tab.evaluate("new URL(location).searchParams.has('vol') && document.querySelectorAll('.tm-crumb').length > 1"));
+  const banner = await tab.evaluate("({text:document.querySelector('#warnBanner').innerText, height:document.querySelector('#warnBanner').getBoundingClientRect().height})");
+  assert.ok(banner.height > 0);
+  assert.match(banner.text,/2 directories could not be read/);
+  for (const path of ['/home/jusung','/data/private_collab']) assert.ok(banner.text.includes(path+' (EACCES)'));
   await shot(tab,'detail-treemap',width);
   const drill = await tab.evaluate(`(() => {
     const tile=document.querySelector('.tmtile.drillable[data-cleanup-path]');

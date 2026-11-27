@@ -276,6 +276,7 @@ A server whose view cannot be built is the row `{"server_id": "…", "status": "
 
 - `users`: merged across volumes, `{uid, name, bytes, files, by_volume: {volume_id: {bytes, files}}}`.
 - `top_files` and `stale`: merged, each row with `volume_id`, `binding` and `age_days = judge.age_days(mtime, capture.scan_started_unix)`, one reference for both tables (V5).
+- `errors`: accepted capture error rows with their volume ID and root binding.
 - `host`: `{hostname, mount_table}` for the removal command.
 
 `VolumeCapture` (`GET /api/v2/servers/<id>/volumes/<volume_id>/captures/<sha>`) serves the stored gzip bytes with `Content-Encoding: gzip`, `ETag: "<sha>"` and `Cache-Control: private, max-age=31536000, immutable`.

@@ -413,15 +413,17 @@ def write_server(directory, doc):
                         row["path_b64"] = base64.b64encode(path.encode() + b"/" + raw).decode()
                     tree.setdefault("children", []).append(node)
                     files.append(row)
-            roots.append(dict(scan_root=path, binding=binding, prune_class="data", tree=tree, outcome="complete",
-                counts=dict(bytes=tree["bytes"], files=tree["files"], dirs=mount["scanned_dirs"], errors=0, vanished_dirs=0),
+            errors = [row for row in doc["blocked"] if row["path"] == path or row["path"].startswith(path.rstrip("/") + "/")]
+            roots.append(dict(scan_root=path, binding=binding, prune_class="data", tree=tree, outcome="partial" if errors else "complete",
+                counts=dict(bytes=tree["bytes"], files=tree["files"], dirs=mount["scanned_dirs"], errors=len(errors), vanished_dirs=0),
                 users=[dict(uid=u["uid"], name=u["name"], bytes=u["by_mount"][path], files=file_counts.get(u["uid"], 0))
                        for u in doc["users"] if path in u["by_mount"]],
                 top_files=files, stale=[{k:r[k] for k in ("kind","path","bytes","uid","mtime")} for r in doc["stale"]
-                                       if r["path"].startswith(path + "/")], errors=[]))
+                                       if r["path"].startswith(path + "/")], errors=errors))
         run = f"{index+1:032x}"
+        outcome = "partial" if any(root["outcome"] == "partial" for root in roots) else "complete"
         capture = dict(schema="storage-viz.capture/2", volume_id=vid, run_id=run, group="slow",
-                       scan_started_unix=doc["scan_started_unix"], scan_finished_unix=finished, outcome="complete", roots=roots)
+                       scan_started_unix=doc["scan_started_unix"], scan_finished_unix=finished, outcome=outcome, roots=roots)
         raw = gzip.compress(json.dumps(capture, sort_keys=True).encode(), mtime=0)
         sha = hashlib.sha256(raw).hexdigest()
         (directory / (sha + ".json.gz")).write_bytes(raw)
@@ -433,7 +435,7 @@ def write_server(directory, doc):
             capacity=dict(total=m["df_total"], used=m["df_used"], avail=m["df_avail"], observed_unix=finished,
                           status="failed" if ambiguous else "ok"),
             capture=dict(sha256=sha, bytes=len(raw), scan_started_unix=doc["scan_started_unix"],
-                         scan_finished_unix=finished, outcome="complete"),
+                         scan_finished_unix=finished, outcome=outcome),
             last_attempt=dict(run_id="f"*32, started_unix=finished+1, finished_unix=finished+2, outcome="failed",
                               error_code="SCANNER_FAILED") if sid=="orion" and index==0 else None))
     manifest = dict(schema="storage-viz.manifest/2", server_id=sid, hostname=sid, seq=1, written_unix=finished+3,

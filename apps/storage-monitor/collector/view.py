@@ -90,10 +90,12 @@ def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None
     """Merge the accepted capture rows once, before publishing the actor's view."""
     users, top, stale, heads = {}, [], [], {}
     root_bytes = {}
+    errors = []
     for vid, (sha, capture) in held.items():
         heads[vid] = {"sha256": sha, "outcome": capture.outcome, "scan_finished_unix": capture.scan_finished_unix}
         for root in capture.roots:
             root_bytes[vid, root.binding, root.scan_root] = root.counts["bytes"]
+            errors.extend({**row, "volume_id": vid, "binding": root.binding} for row in root.errors)
             for row in root.users:
                 user = users.setdefault(row["uid"], {"uid": row["uid"], "name": row["name"], "bytes": 0,
                                                       "files": 0, "by_volume": {}})
@@ -123,7 +125,7 @@ def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None
                                    "last_attempt": {k:attempt[k] for k in ("finished_unix", "outcome", "error_code")}
                                    if attempt else None})[:-1])
     return Publication(revision, encode([{k: r[k] for k in ("uid","name","bytes")} for r in ordered]),
-                       encode({"users": ordered, "top_files": sorted(top, key=lambda r: -r["bytes"]),
+                       encode({"users": ordered, "errors": errors, "top_files": sorted(top, key=lambda r: -r["bytes"]),
                                "stale": sorted(stale, key=lambda r: -r["bytes"]), "host": host})[1:], heads, manifest, legacy_bytes, tuple(volumes))
 
 

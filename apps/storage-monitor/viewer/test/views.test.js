@@ -91,3 +91,17 @@ test('V2 header renders a multi-root volume once with the API severity and perce
   assert.match(caps.children[0].innerHTML,/32<span>%/);
   assert.equal(caps.children[0].children.at(-1).children.length,2);
 });
+
+test('detail banner shows unreadable directories across volumes and omits vanished paths', () => {
+  globalThis.document = documentFixture();
+  const detail = normalizeDetail({host:{hostname:'hinton'}, volumes:[], users:[], top_files:[], stale:[], errors:[
+    {path:'/home/jusung',reason:'EACCES'}, {path:'/data/private_collab',reason:'EACCES'}, {path:'/tmp/gone',reason:'VANISHED'}
+  ]});
+  renderHeader(detail,null,()=>{});
+  const banner = document.getElementById('warnBanner');
+  assert.ok(banner.classList.contains('show'));
+  assert.match(banner.innerHTML,/2 directories could not be read: \/home\/jusung \(EACCES\), \/data\/private_collab \(EACCES\)/);
+  assert.doesNotMatch(banner.innerHTML,/gone/);
+  renderHeader({...detail,errors:[]},null,()=>{});
+  assert.equal(banner.classList.contains('show'),false);
+});
