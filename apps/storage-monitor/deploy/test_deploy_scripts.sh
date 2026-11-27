@@ -730,10 +730,26 @@ cat > "$FAKEBIN/dashboard-systemctl" <<'FAKE'
 printf 'systemctl %s\n' "$*" >> "${DASH_REAL_SYSTEMCTL_LOG:?}"
 FAKE
 chmod +x "$FAKEBIN/dashboard-systemctl"
+# The installed puller left a backoff for a SHA its old tools could not release.
+DASH_PULLER_STATE="$DASH_REAL_PREFIX/var/lib/storage-viz-dashboard/puller"
+mkdir -p "$DASH_PULLER_STATE"
+printf '%s\n' "$(printf '1%.0s' {1..40})" >"$DASH_PULLER_STATE/current-live-sha"
+printf '{"current_sha": "%s", "failure_count": 1}\n' "$(printf '1%.0s' {1..40})" >"$DASH_PULLER_STATE/puller-state.json"
+printf '{"failures": 1, "retry_after": 9999999999.0, "sha": "%s"}\n' "$(printf '2%.0s' {1..40})" >"$DASH_PULLER_STATE/failed-release.json"
+cp "$DASH_PULLER_STATE/current-live-sha" "$TMP/current-live-sha.before"
+cp "$DASH_PULLER_STATE/puller-state.json" "$TMP/puller-state.before"
 DASH_REAL_SYSTEMCTL_LOG="$DASH_REAL_SYSTEMCTL_LOG" SYSTEMCTL="$FAKEBIN/dashboard-systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_REAL_WITH_PREFIX=1 \
   "$DASHBOARD_DEPLOYER" --prefix "$DASH_REAL_PREFIX" >"$TMP/dashboard-real-install.out"
 [[ "$(cat "$DASH_REAL_SYSTEMCTL_LOG")" == "systemctl daemon-reload" ]] || fail "ordinary dashboard install performed service/timer action: $(cat "$DASH_REAL_SYSTEMCTL_LOG")"
 pass "ordinary dashboard install only reloads systemd and leaves live services untouched"
+[[ ! -e "$DASH_PULLER_STATE/failed-release.json" ]] || fail "dashboard install kept the failed-release backoff, so the new tools wait for main to advance"
+cmp -s "$DASH_PULLER_STATE/current-live-sha" "$TMP/current-live-sha.before" || fail "dashboard install changed current-live-sha"
+cmp -s "$DASH_PULLER_STATE/puller-state.json" "$TMP/puller-state.before" || fail "dashboard install changed puller-state.json"
+grep -q '^reset puller backoff: removed /var/lib/storage-viz-dashboard/puller/failed-release.json' "$TMP/dashboard-real-install.out" || fail "dashboard install did not report the backoff reset"
+DASH_REAL_SYSTEMCTL_LOG="$DASH_REAL_SYSTEMCTL_LOG" SYSTEMCTL="$FAKEBIN/dashboard-systemctl" STORAGE_VIZ_INSTALL_TEST_ASSUME_ROOT=1 STORAGE_VIZ_INSTALL_TEST_REAL_WITH_PREFIX=1 \
+  "$DASHBOARD_DEPLOYER" --prefix "$DASH_REAL_PREFIX" >"$TMP/dashboard-real-reinstall.out"
+! grep -q '^reset puller backoff' "$TMP/dashboard-real-reinstall.out" || fail "dashboard reinstall reported a reset with no backoff present"
+pass "dashboard install clears only the failed-release backoff, so the next puller run retries with the new tools"
 
 DASH_CUTOVER_TMP="$TMP/dashboard-cutover"
 mkdir -p "$DASH_CUTOVER_TMP/bin" "$DASH_CUTOVER_TMP/incoming" "$DASH_CUTOVER_TMP/proc/5050" "$DASH_CUTOVER_TMP/proc/8088"
