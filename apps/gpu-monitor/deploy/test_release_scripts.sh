@@ -614,6 +614,9 @@ if [[ "\${1:-}" == is-active ]]; then
   [[ "\$mode" != inactive-health ]]
   exit
 fi
+if [[ "\${1:-}" == enable ]]; then
+  exit 0
+fi
 if [[ "\${1:-}" == show ]]; then
   count=\$((\$(cat '$fakebin/show-count') + 1))
   printf '%s\\n' "\$count" > '$fakebin/show-count'
@@ -1365,25 +1368,33 @@ test_restart_broker_exact_unit_allowlist() {
   fakebin="$tmp/fakebin"; log_file="$tmp/commands.log"
   install_fake_server_commands "$fakebin" "$log_file" pass
 
+  # Restart also enables the same units so a reboot brings the release back; stop never touches boot state.
   env -i PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
     "$RESTART_BROKER" --test-mode dev
-  grep -Fq 'gpu-monitor-backend@dev.service' "$log_file" || fail "dev broker omitted backend"
-  grep -Fq 'gpu-monitor-frontend@dev.service' "$log_file" || fail "dev broker omitted frontend"
-  ! grep -Eq 'bridge|@live' "$log_file" || fail "dev broker widened into bridge/live"
+  [[ "$(cat "$log_file")" == "systemctl enable gpu-monitor-backend@dev.service gpu-monitor-frontend@dev.service
+systemctl restart gpu-monitor-backend@dev.service
+systemctl restart gpu-monitor-frontend@dev.service" ]] || fail "dev broker restart did not enable and restart exactly backend and frontend: $(cat "$log_file")"
 
   : > "$log_file"; printf '0\n' > "$fakebin/restart-count"
   env -i PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
     "$RESTART_BROKER" --test-mode live
-  grep -Fq 'gpu-monitor-bridge@live.service' "$log_file" || fail "live broker omitted bridge"
+  [[ "$(cat "$log_file")" == "systemctl enable gpu-monitor-backend@live.service gpu-monitor-frontend@live.service gpu-monitor-bridge@live.service
+systemctl restart gpu-monitor-backend@live.service
+systemctl restart gpu-monitor-frontend@live.service
+systemctl restart gpu-monitor-bridge@live.service" ]] || fail "live broker restart did not enable and restart exactly backend, frontend, bridge: $(cat "$log_file")"
 
   : > "$log_file"; printf '0\n' > "$fakebin/restart-count"
   env -i PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
     "$RESTART_BROKER" --test-mode stop dev
-  grep -Fq 'systemctl stop gpu-monitor-backend@dev.service' "$log_file" ||
-    fail "dev stop broker omitted backend"
-  grep -Fq 'systemctl stop gpu-monitor-frontend@dev.service' "$log_file" ||
-    fail "dev stop broker omitted frontend"
-  ! grep -Eq 'bridge|@live' "$log_file" || fail "dev stop broker widened into bridge/live"
+  [[ "$(cat "$log_file")" == "systemctl stop gpu-monitor-backend@dev.service
+systemctl stop gpu-monitor-frontend@dev.service" ]] || fail "dev stop broker did more than stop backend and frontend: $(cat "$log_file")"
+
+  : > "$log_file"; printf '0\n' > "$fakebin/restart-count"
+  env -i PATH=/usr/bin:/bin GPU_MONITOR_TEST_PATH="$fakebin:/usr/bin:/bin" \
+    "$RESTART_BROKER" --test-mode stop live
+  [[ "$(cat "$log_file")" == "systemctl stop gpu-monitor-backend@live.service
+systemctl stop gpu-monitor-frontend@live.service
+systemctl stop gpu-monitor-bridge@live.service" ]] || fail "live stop broker did more than stop its three units: $(cat "$log_file")"
 
   if "$RESTART_BROKER" dev live > "$tmp/bad.out" 2> "$tmp/bad.err"; then
     fail "broker accepted a widened command shape"
@@ -2033,6 +2044,11 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   dev_auth="$prefix/home/gpu-deploy-dev/.ssh/authorized_keys"
   live_auth="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
   [[ -f "$dev_auth" ]] || fail "installer omitted dev identity key file"
+  [[ -f "$prefix/etc/gpu-monitor/github-token" && ! -s "$prefix/etc/gpu-monitor/github-token" ]] ||
+    fail "installer did not create an empty GitHub token file"
+  assert_mode "$prefix/etc/gpu-monitor/github-token" 0640
+  grep -Fq 'ensure_secret_file 0640 root:root "$prefix/etc/gpu-monitor/github-token"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not give the GitHub token file to root:root"
   [[ ! -e "$live_auth" ]] || fail "installer created live key without explicit input"
   assert_mode "$prefix/home/gpu-deploy-dev/.ssh" 0755
   assert_mode "$dev_auth" 0644
@@ -2047,6 +2063,12 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/upgrade.out"
   cmp "$tmp/live-before" "$live_auth" || fail "omitted live key did not preserve existing live authorization"
   grep -Fxq 'OPERATOR_SECRET=preserve-me' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade destroyed operator secret"
+  printf 'operator-token\n' > "$prefix/etc/gpu-monitor/github-token"
+  chmod 0600 "$prefix/etc/gpu-monitor/github-token"
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/token-keep.out"
+  [[ "$(cat "$prefix/etc/gpu-monitor/github-token")" == operator-token ]] || fail "installer overwrote an existing GitHub token"
+  assert_mode "$prefix/etc/gpu-monitor/github-token" 0600
+  ! grep -Fq operator-token "$tmp/token-keep.out" || fail "installer printed the GitHub token"
   grep -Fxq 'PORT=5174' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to enforce reserved frontend port"
   grep -Fxq 'GPU_MONITOR_BACKEND_PORT=8101' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to merge missing required port"
   before=$(file_tree_manifest "$prefix")

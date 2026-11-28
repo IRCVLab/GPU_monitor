@@ -5,6 +5,7 @@ import json
 import tempfile
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -580,6 +581,50 @@ class GpuReleasePullerTest(unittest.TestCase):
         self.assertIn("gpu-monitor-builder", source)
         self.assertIn("/etc/gpu-monitor/live.env", source)
         self.assertIn("env -i", source)
+
+
+class AuthenticatedApiTest(unittest.TestCase):
+    """The puller spends the token's API budget, not the host IP's shared 60 calls per hour."""
+
+    def api_headers_for_run(self, token_text):
+        puller = load_puller()
+        seen = []
+
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+            def read(self): return json.dumps({"object": {"sha": SHA1}}).encode()
+
+        def fake_urlopen(request, timeout=None):
+            seen.append(dict(request.header_items()))
+            return Response()
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(puller.urllib.request, "urlopen", fake_urlopen):
+            token_file = Path(tmp) / "github-token"
+            if token_text is not None:
+                token_file.write_text(token_text, encoding="utf-8")
+            cfg = GpuReleasePullerTest().config(tmp)
+            cfg = puller.Config(**{**cfg.__dict__, "github_token_file": token_file})
+            cfg.state_dir.mkdir(parents=True)
+            (cfg.state_dir / "current-live-sha").write_text(SHA1 + "\n", encoding="utf-8")
+            result = puller.run_once(cfg, run_command=lambda *a, **k: self.fail("unexpected command"))
+        self.assertEqual(result, "already-current")
+        self.assertEqual(len(seen), 1)
+        return seen[0]
+
+    def test_api_calls_carry_the_token_when_one_is_installed(self):
+        self.assertEqual(self.api_headers_for_run("tok-123\n").get("Authorization"), "Bearer tok-123")
+
+    def test_api_calls_stay_anonymous_without_a_token(self):
+        self.assertNotIn("Authorization", self.api_headers_for_run(None))
+        self.assertNotIn("Authorization", self.api_headers_for_run(""))
+
+    def test_token_file_path_is_configurable(self):
+        cfg = load_puller().parse_args(["--github-token-file", "/tmp/x-token"])
+        self.assertEqual(cfg.github_token_file, Path("/tmp/x-token"))
+        self.assertEqual(load_puller().parse_args([]).github_token_file, Path("/etc/gpu-monitor/github-token"))
+
 
 if __name__ == "__main__":
     unittest.main()

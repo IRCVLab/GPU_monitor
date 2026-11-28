@@ -50,6 +50,7 @@ class Config:
     timeout_seconds: int = 900
     failure_backoff_base_seconds: int = 900
     failure_backoff_max_seconds: int = 21600
+    github_token_file: Path = Path("/etc/gpu-monitor/github-token")
 
 
 def validate_sha(value: object, name: str = "sha") -> str:
@@ -63,17 +64,18 @@ def validate_repository(repository: str) -> None:
         raise PullError("repository must be OWNER/REPO")
 
 
-def default_get_json(path: str) -> object:
+def default_get_json(path: str, token: str = "") -> object:
     if not path.startswith("/"):
         raise PullError("GitHub API path must be absolute")
-    request = urllib.request.Request(
-        API_BASE + path,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "gpu-monitor-release-puller",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "gpu-monitor-release-puller",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        # Unauthenticated calls share 60 per hour per IP with every other client on the host.
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(API_BASE + path, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             if response.status == 403:
@@ -443,6 +445,13 @@ def activate_uploaded(config: Config, sha: str, digest: str, run_command=default
         raise PullError("live status does not match activated SHA")
 
 
+def read_github_token(token_file: Path) -> str:
+    try:
+        return token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def run_once(
     config: Config,
     *,
@@ -450,6 +459,11 @@ def run_once(
     run_command=default_run_command,
     now_fn=time.time,
 ) -> str:
+    if get_json is default_get_json:
+        token = read_github_token(config.github_token_file)
+
+        def get_json(path: str) -> object:
+            return default_get_json(path, token)
     validate_repository(config.repository)
     config.state_dir.mkdir(parents=True, exist_ok=True)
     lock_path = config.state_dir / "puller.lock"
@@ -521,6 +535,7 @@ def parse_args(argv: list[str]) -> Config:
         type=int,
         default=Config.failure_backoff_max_seconds,
     )
+    parser.add_argument("--github-token-file", type=Path, default=Config.github_token_file)
     args = parser.parse_args(argv)
     return Config(
         repository=args.repository,
@@ -534,6 +549,7 @@ def parse_args(argv: list[str]) -> Config:
         timeout_seconds=args.timeout_seconds,
         failure_backoff_base_seconds=args.failure_backoff_base_seconds,
         failure_backoff_max_seconds=args.failure_backoff_max_seconds,
+        github_token_file=args.github_token_file,
     )
 
 

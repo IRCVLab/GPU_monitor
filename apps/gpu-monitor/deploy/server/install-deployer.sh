@@ -214,6 +214,20 @@ install_file() {
   /usr/bin/install -m "$mode" "$source" "$destination"
 }
 
+# Create an empty secret the operator fills later. Never overwrite one that exists.
+ensure_secret_file() {
+  local mode=$1 owner=$2 destination=$3
+  mkdir -p "${destination%/*}"
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    printf 'keep secret: %s\n' "$destination"
+    return
+  fi
+  (umask 077 && : >"$destination")
+  chmod "$mode" "$destination"
+  [[ "$dry_run" == true ]] || chown "$owner" "$destination"
+  printf 'create secret: %s owner=%s mode=%s (empty: the release puller calls the GitHub API unauthenticated until it holds a token)\n' "$destination" "$owner" "$mode"
+}
+
 ensure_identity() {
   local user=$1 home=$2 shell=$3 system_home=$4
   local group_record passwd_record actual_uid actual_gid actual_home actual_shell expected_gid shadow_record
@@ -482,6 +496,7 @@ rewrite_reserved_env "$prefix/etc/gpu-monitor/live.env" \
   GPU_MONITOR_BACKEND_PORT=8001 GPU_MONITOR_BRIDGE_PORT=8000 \
   GPU_MONITOR_BRIDGE_HOST=0.0.0.0 HOST=0.0.0.0 PORT=5173 \
   GPU_MONITOR_SHARED_DIR=/var/lib/gpu-monitor/live
+ensure_secret_file 0640 root:root "$prefix/etc/gpu-monitor/github-token"
 if [[ "$dry_run" == false ]]; then
   chown root:gpu-deploy-dev "$prefix/etc/gpu-monitor/dev.env"
   chown root:gpu-deploy-live "$prefix/etc/gpu-monitor/live.env"
