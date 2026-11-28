@@ -2033,6 +2033,12 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   dev_auth="$prefix/home/gpu-deploy-dev/.ssh/authorized_keys"
   live_auth="$prefix/home/gpu-deploy-live/.ssh/authorized_keys"
   [[ -f "$dev_auth" ]] || fail "installer omitted dev identity key file"
+  [[ -f "$prefix/etc/gpu-monitor/github-token" && ! -s "$prefix/etc/gpu-monitor/github-token" ]] ||
+    fail "installer did not create an empty GitHub token file"
+  assert_mode "$prefix/etc/gpu-monitor/github-token" 0640
+  grep -Fq 'ensure_secret_file 0640 root:root "$prefix/etc/gpu-monitor/github-token"' "$INSTALLER_SCRIPT" ||
+    fail "installer does not give the GitHub token file to root:root"
+  [[ ! -e "$live_auth" ]] || fail "installer created live key without explicit input"
   [[ ! -e "$live_auth" ]] || fail "installer created live key without explicit input"
   assert_mode "$prefix/home/gpu-deploy-dev/.ssh" 0755
   assert_mode "$dev_auth" 0644
@@ -2047,6 +2053,14 @@ test_installer_separate_users_prefix_upgrade_and_idempotency() {
   "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/upgrade.out"
   cmp "$tmp/live-before" "$live_auth" || fail "omitted live key did not preserve existing live authorization"
   grep -Fxq 'OPERATOR_SECRET=preserve-me' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade destroyed operator secret"
+  printf 'operator-token\n' > "$prefix/etc/gpu-monitor/github-token"
+  chmod 0600 "$prefix/etc/gpu-monitor/github-token"
+  "$INSTALLER_SCRIPT" --dry-run --prefix "$prefix" --dev-public-key "$key" > "$tmp/token-keep.out"
+  [[ "$(cat "$prefix/etc/gpu-monitor/github-token")" == operator-token ]] || fail "installer overwrote an existing GitHub token"
+  assert_mode "$prefix/etc/gpu-monitor/github-token" 0600
+  ! grep -Fq operator-token "$tmp/token-keep.out" || fail "installer printed the GitHub token"
+  grep -Fxq 'PORT=5174' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to enforce reserved frontend port"
+  grep -Fxq 'GPU_MONITOR_BACKEND_PORT=8101' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to merge missing required port"
   grep -Fxq 'PORT=5174' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to enforce reserved frontend port"
   grep -Fxq 'GPU_MONITOR_BACKEND_PORT=8101' "$prefix/etc/gpu-monitor/dev.env" || fail "upgrade failed to merge missing required port"
   before=$(file_tree_manifest "$prefix")

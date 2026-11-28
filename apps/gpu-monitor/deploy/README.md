@@ -63,7 +63,7 @@ The installer lays out `/srv/gpu-monitor/{dev,live}`, `/var/lib/gpu-monitor/{dev
 The current automatic Live path is server-pulled, not GitHub-pushed:
 
 1. `gpu-monitor-release-puller.timer` uses a persistent five-minute calendar cadence with bounded jitter after an operator explicitly enables it.
-2. `gpu-monitor-release-puller.py` reads public GitHub API evidence for the current `main` SHA.
+2. `gpu-monitor-release-puller.py` reads public GitHub API evidence for the current `main` SHA. When `/etc/gpu-monitor/github-token` holds a token, every API call sends it as `Authorization: Bearer`. Without a token the calls are anonymous and share the host IP's 60 requests per hour with every other client on the host.
 3. The puller reuses the installed canonical `authorize_gpu_release.py` and requires successful `ci/required` for that exact SHA.
 4. The dedicated non-login `gpu-monitor-builder` user creates a clean exact-SHA checkout and builds the release artifact with managed Node on `PATH`.
 5. The builder environment is scrubbed and must not read `/etc/gpu-monitor/live.env`.
@@ -91,6 +91,12 @@ sudo systemctl enable --now gpu-monitor-release-puller.timer
 ```
 
 That command is a rollout action, not an installer side effect.
+
+The installer creates `/etc/gpu-monitor/github-token` empty, owned by `root:root` with mode `0640`, if it is missing. It never overwrites an existing file. To authenticate the puller, put a GitHub token that can read the repository in that file:
+
+```bash
+sudo install -m 0640 -o root -g root /path/to/token /etc/gpu-monitor/github-token
+```
 
 On every install, the installer atomically rewrites and deduplicates only the exact reserved runtime keys below while preserving comments, unrelated settings, `MONITORING_EXPECTED_SERVER_COUNT`, database backup settings, `DATABASE_URL`, and secrets byte-for-byte:
 
