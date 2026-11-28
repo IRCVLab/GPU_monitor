@@ -123,8 +123,6 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "scanner/hstscan.c": "int main(void){return 0;}\n",
             "deploy/install-agent.sh": "#!/bin/sh\n",
             "deploy/deploy-agent.sh": "#!/bin/sh\n",
-            "deploy/systemd/storage-viz-scan.service.in": "scan\n",
-            "deploy/systemd/storage-viz-scan.timer": "scan\n",
             "deploy/test_direct_proxy.py": "test\n",
             "viewer/viewer.test.js": "test\n",
             "api/test_auth.py": "test\n",

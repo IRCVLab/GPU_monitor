@@ -2,7 +2,7 @@ import gzip
 import hashlib
 import json
 import logging
-import shutil
+from contextlib import contextmanager
 
 from .ids import VOLUME_ID_RE
 import os
@@ -82,52 +82,75 @@ def commit_manifest(data, manifest, now):
     atomic(data / "manifest.json", payload)
 
 
+@contextmanager
+def _directory(name, parent=None):
+    fd = os.open(name, os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
 def _remove_entry(parent, name):
-    """Unlink relative to an open directory, opening child directories without following links."""
+    """Remove a directory tree without resolving symlinks in it."""
     try:
         os.unlink(name, dir_fd=parent)
     except IsADirectoryError:
-        child = os.open(name, os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
-        try:
+        with _directory(name, parent) as child:
             for entry in os.listdir(child):
                 _remove_entry(child, entry)
-        finally:
-            os.close(child)
         os.rmdir(name, dir_fd=parent)
     except FileNotFoundError:
         pass
 
 
+def _prune_temp(directory, now):
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if entry.name.endswith(".tmp") and entry.is_file(follow_symlinks=False):
+                if entry.stat(follow_symlinks=False).st_mtime < now - 3600:
+                    os.unlink(entry.name, dir_fd=directory)
+
+
+def _prune_captures(directory, current, prior):
+    with os.scandir(directory) as entries:
+        others = [(entry.stat(follow_symlinks=False).st_mtime_ns, entry.name) for entry in entries
+                  if entry.name.endswith(".json.gz") and entry.name != current
+                  and entry.is_file(follow_symlinks=False)]
+    if not others:
+        return
+    keep = prior if prior and prior != current else max(others)[1]
+    for _, name in others:
+        if name != keep:
+            os.unlink(name, dir_fd=directory)
+
+
 def prune(data, manifest, now, previous):
-    parent = os.open(data, os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
+    volumes = {volume["volume_id"]: volume["capture"] for volume in manifest["volumes"]}
+    with _directory(data) as parent:
         _remove_entry(parent, "snapshots")
         for name in ("scan-status.json", "scan-lifecycle.json", "slow-capture.json.gz"):
             try:
                 os.unlink(name, dir_fd=parent)
             except FileNotFoundError:
                 pass
-    finally:
-        os.close(parent)
-    current = {v["volume_id"]: v["capture"]["sha256"] for v in manifest["volumes"] if v["capture"]}
-    present = {v["volume_id"] for v in manifest["volumes"]}
-    for directory in (data / "captures").glob("*"):
-        if directory.is_symlink() or not VOLUME_ID_RE.fullmatch(directory.name) or not directory.is_dir():
-            continue
-        if directory.name not in present:
-            shutil.rmtree(directory)
-            continue
-        files = sorted(directory.glob("*.json.gz"), key=lambda p: p.stat().st_mtime_ns, reverse=True)
-        others = [p for p in files if p.name.split(".")[0] != current.get(directory.name)]
-        prior = previous.get(directory.name)
-        if prior and prior != current.get(directory.name):
-            keep = prior + ".json.gz"
-        else:
-            keep = others[0].name if others else None
-        for path in others:
-            if path.name != keep:
-                path.unlink()
-    for pattern in ("*.tmp", "captures/*/*.tmp"):
-        for path in data.glob(pattern):
-            if path.stat().st_mtime < now - 3600:
-                path.unlink()
+        _prune_temp(parent, now)
+        try:
+            with _directory("captures", parent) as captures:
+                for vid in os.listdir(captures):
+                    if not VOLUME_ID_RE.fullmatch(vid):
+                        continue
+                    if vid not in volumes:
+                        _remove_entry(captures, vid)
+                        continue
+                    try:
+                        with _directory(vid, captures) as directory:
+                            current = volumes[vid]
+                            prior = previous.get(vid)
+                            _prune_captures(directory, current and current["sha256"] + ".json.gz",
+                                            prior and prior + ".json.gz")
+                            _prune_temp(directory, now)
+                    except NotADirectoryError:
+                        continue
+        except (FileNotFoundError, NotADirectoryError):
+            return

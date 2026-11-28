@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY="$ROOT/deploy"
-SERVICE="$DEPLOY/systemd/storage-viz-scan.service.in"
-TIMER="$DEPLOY/systemd/storage-viz-scan.timer"
-SUDOERS="$DEPLOY/sudoers/storage-viz-monitoring"
+SERVICE="$ROOT/agent/bootstrap/systemd/storage-viz-scan.service"
+TIMER="$ROOT/agent/bootstrap/systemd/storage-viz-scan.timer"
+SUDOERS="$ROOT/agent/bootstrap/sudoers/storage-viz"
 VERIFY_LINUX="$DEPLOY/verify-linux.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -204,7 +204,7 @@ assert_contains "$SERVICE" "RestrictAddressFamilies=AF_UNIX"
 assert_contains "$SERVICE" "CapabilityBoundingSet=CAP_DAC_READ_SEARCH"
 assert_contains "$SERVICE" "AmbientCapabilities=CAP_DAC_READ_SEARCH"
 assert_not_grep "$SERVICE" 'CAP_SYS_ADMIN|CAP_DAC_OVERRIDE|CAP_SYS_PTRACE|CAP_NET|CAP_CHOWN|CAP_FOWNER' "broad/admin/network/write capabilities"
-assert_contains "$SERVICE" "ExecStart=/usr/bin/python3 -m agent.storage_viz_agent run --config /etc/storage-viz/scanner.yaml"
+assert_contains "$SERVICE" "ExecStart=/opt/storage-viz/current/bin/storage-viz-agent run --config /etc/storage-viz/agent.yaml"
 assert_contains "$SERVICE" "RuntimeDirectory=storage-viz"
 assert_contains "$SERVICE" "RuntimeDirectoryMode=0750"
 assert_contains "$SERVICE" "RuntimeDirectoryPreserve=yes"
@@ -213,11 +213,12 @@ grep -Fq 'cfg.run_dir / "scan.lock"' "$ROOT/agent/storage_viz_agent/runner.py" |
 grep -Fq "fcntl.LOCK_EX | fcntl.LOCK_NB" "$ROOT/agent/storage_viz_agent/runner.py" || fail "runner nonblocking lock not found"
 pass "service invokes the agent package; runner owns one nonblocking lock layer"
 
-expected_sudoers='monitoring ALL=(root) NOPASSWD: /usr/bin/systemctl start storage-viz-scan.service'
+expected_sudoers='monitoring ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block storage-viz-scan.service
+monitoring ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block storage-viz-agent-update.service'
 actual_sudoers="$(grep -Ev '^[[:space:]]*(#|$)' "$SUDOERS")"
 [[ "$actual_sudoers" == "$expected_sudoers" ]] || fail "sudoers command mismatch: <$actual_sudoers>"
 assert_not_grep "$SUDOERS" 'ALL$|systemctl[[:space:]]+(restart|enable|daemon-reload|stop)|/bin/sh|bash|sudoedit' "general sudo privileges"
-pass "sudoers permits only exact noninteractive service start"
+pass "sudoers permits only the scan and update unit starts"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/storage-viz-deploy-test.XXXXXX")"
 

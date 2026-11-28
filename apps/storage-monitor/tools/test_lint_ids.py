@@ -25,7 +25,7 @@ def test_identity_languages_accept_the_same_samples(owner, names):
             assert bool(side[local].fullmatch(value)) == bool(central[shared].fullmatch(value)), (local, value)
 
 
-def test_planted_duplicate_and_expired_shim(tmp_path):
+def test_rejects_duplicate_identity_and_generation(tmp_path):
     for path in [CENTRAL, HOST, GATE, PROGRESS]:
         (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / path, tmp_path / path)
@@ -34,8 +34,6 @@ def test_planted_duplicate_and_expired_shim(tmp_path):
     assert any("collector/actor.py:1: use" in error for error in check(tmp_path))
     path.write_text(path.read_text() + 'import re\nBAD = re.compile(r"^[0-9a-f]{64}$")\n')
     assert "collector/actor.py:3: import" in check(tmp_path)[0]
-    (tmp_path / PROGRESS).write_text((tmp_path / PROGRESS).read_text().replace('"M7"', '"M5c"'))
-    assert any("collector/actor.py:1: use" in e for e in check(tmp_path))
 
 @pytest.mark.parametrize("path,defs", DEPLOY.items())
 def test_standalone_deploy_patterns(tmp_path, monkeypatch, path, defs):

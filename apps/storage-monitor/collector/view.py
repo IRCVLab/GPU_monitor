@@ -40,14 +40,13 @@ class ServerView:
     host_clock: Optional[Tuple[int, float]] = None
     """(host unix time, central monotonic time of receipt) from the last successful observe."""
     error: Optional[str] = None
-    transport: Optional[str] = None
     update: Update = Update()
     release_sha: Optional[str] = None
     """The agent release the host runs: the gate's report, else the accepted manifest's."""
 
 
 def build_view(server: Server, record, pub: Optional[Publication], observation: Optional[ObservationView],
-               host_clock: Optional[Tuple[int, float]], error: Optional[str], transport: Optional[str] = None,
+               host_clock: Optional[Tuple[int, float]], error: Optional[str],
                release_sha: Optional[str] = None) -> ServerView:
     manifest = record.data.manifest
     if release_sha is None and isinstance(manifest, HostManifest):
@@ -55,14 +54,14 @@ def build_view(server: Server, record, pub: Optional[Publication], observation: 
     summary = encode({"server_id": server.id, "display_name": server.display_name, "order": server.order,
                       **({"status": "error", "error": {"code": error}} if error else {"status": "ok"}),
                       "link": {"state": record.link.state, "last_ok_unix": record.link.last_ok_unix,
-                      "error": record.link.error, "transport": transport or server.transport},
+                      "error": record.link.error, "transport": server.transport},
                       "agent": {"release_sha": release_sha, "matches_desired": bool(record.update.desired and
                                release_sha == record.update.desired), "update": "manual" if server.agent_updates == "manual" else record.update.state, "last_error": record.update.last_error},
                       "revision": (pub or EMPTY_PUBLICATION).revision})[:-1]
     return ServerView(
         server=server, summary=summary, publication=pub, last_job=record.last_job, link=record.link, data=record.data,
         job=record.job or record.last_job, durations=record.durations,
-        observation=observation, host_clock=host_clock, error=error, transport=transport,
+        observation=observation, host_clock=host_clock, error=error,
         update=record.update, release_sha=release_sha,
     )
 

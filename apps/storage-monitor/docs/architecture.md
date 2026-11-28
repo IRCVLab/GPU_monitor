@@ -7,7 +7,7 @@
 | Boundary | Files | Responsibility | Extension rule |
 |---|---|---|---|
 | Scanner | `scanner/hstscan.c`, `scanner/Makefile` | Fast local filesystem walker used only by the agent. | Preserve local-only scan roots and JSON correctness. |
-| Agent runtime | `agent/`, `deploy/bootstrap-agent.sh`, `deploy/systemd/storage-viz-scan.*` | Root scan runner, hourly scheduling with per-media intervals, manifest and immutable per-volume captures, and a forced SSH command for the `monitoring` account. | Do not accept arbitrary paths or commands from central. |
+| Agent runtime | `agent/`, `deploy/bootstrap-agent.sh`, `agent/bootstrap/systemd/storage-viz-scan.*` | Root scan runner, hourly scheduling with per-media intervals, manifest and immutable per-volume captures, and a forced SSH command for the `monitoring` account. | Do not accept arbitrary paths or commands from central. |
 | Central collector | `collector/`, `config/servers.example.yaml` | Strict inventory validation, SSH gate transport, state store, polling, and bounded manual rescan. | Inventory references external identity/known-host paths and must not contain secrets. |
 | Central dashboard | `viewer/serve.py`, `api/`, `deploy/systemd/storage-viz-dashboard.service.in`, `install.sh` | Loopback HTTP API/UI, trusted-proxy auth, exact-origin/CSRF checks, pulled snapshot serving. | Bind loopback by default and publish only through an authenticating reverse proxy. |
 | Data fixtures | `tests/fixtures/fleet/`, `tools/gen_sample.py`, `tools/scrub_fixture.py` | Tracked demo metadata and scrubbed fixtures. | Generated production snapshots remain ignored. |

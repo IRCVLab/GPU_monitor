@@ -137,6 +137,21 @@ def test_prune_does_not_follow_snapshot_or_file_links(tmp_path):
     assert sentinel.read_bytes() == b"safe"
 
 
+def test_prune_ignores_a_linked_captures_directory(tmp_path):
+    from agent.storage_viz_agent.publish import prune
+
+    data = tmp_path / "data"
+    data.mkdir()
+    outside = tmp_path / "outside"
+    volume = outside / ("v-" + "0" * 16)
+    volume.mkdir(parents=True)
+    sentinel = volume / "old.tmp"
+    sentinel.touch()
+    (data / "captures").symlink_to(outside)
+    prune(data, {"volumes": []}, sentinel.stat().st_mtime + 7200, {})
+    assert sentinel.is_file()
+
+
 def test_a9_capacity_fresh_on_slow_only_not_due_tick(tmp_path, monkeypatch):
     host = Host(tmp_path)
     root = tmp_path / "slow"

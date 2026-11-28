@@ -95,7 +95,7 @@ class FixtureFleet:
         record = Record(link=Link(state="ok"), data=Data(manifest=manifest, accepted={v: pair[0] for v,pair in held.items()}))
         mono = self.clock.monotonic()
         return build_view(server, record, publication(manifest, held), ObservationView({"state":"idle"}, mono), (manifest.written_unix, mono),
-                          None, "gate")
+                          None)
 
     def _bytes(self, filename):
         path = self.root / filename

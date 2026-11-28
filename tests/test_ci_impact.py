@@ -163,9 +163,6 @@ class CiImpactTest(unittest.TestCase):
         agent_deploy_paths = (
             "apps/storage-monitor/deploy/verify-linux.sh",
             "apps/storage-monitor/deploy/test_deploy_scripts.sh",
-            "apps/storage-monitor/deploy/sudoers/storage-viz-monitoring",
-            "apps/storage-monitor/deploy/systemd/storage-viz-scan.service.in",
-            "apps/storage-monitor/deploy/systemd/storage-viz-scan.timer",
         )
 
         for path in agent_deploy_paths:
