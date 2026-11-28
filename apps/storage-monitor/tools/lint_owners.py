@@ -76,6 +76,9 @@ PARSE_SITES = {
     "collector/store.py": {
         ('load', 'json.loads(self.record_path.read_bytes())'): 'Local persisted record.',
     },
+    "collector/switch_traffic.py": {
+        ('_load', 'json.loads(self._path.read_bytes())'): 'network.json, written only by SwitchTraffic.',
+    },
     "tools/check_shims.py": {
         ('done_units', 'json.loads((root / PROGRESS).read_text())'): 'Lint progress configuration.',
     },

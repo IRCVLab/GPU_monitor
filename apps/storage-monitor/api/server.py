@@ -10,10 +10,11 @@ import secrets
 
 from api import auth, routes
 from api.errors import http_error
-from api.fixtures import FixtureFleet
+from api.fixtures import FixtureFleet, SampleNetwork
 from collector.fleet import Fleet
 from collector.inventory import CapacityThresholds, load_inventory
 from collector.gate import GateHost
+from collector.switch_traffic import SwitchTraffic, parse_config
 from collector.transport import GateTransport
 
 
@@ -23,15 +24,20 @@ class Runtime:
     capacity_thresholds: CapacityThresholds = CapacityThresholds()
     runs_actors: bool = False
     rescan_enabled: bool = False
+    network: SwitchTraffic | SampleNetwork | None = None
 
 
 def configure(fixtures=None):
     if fixtures is not None:
         if os.environ.get("STORAGE_VIZ_ENV") == "production" or auth.PREFLIGHT_BACKEND or auth.DIRECT_LOOPBACK_RESCAN:
             raise SystemExit("fixtures disabled in production, preflight and direct rescan modes")
-        return Runtime(fleet=FixtureFleet(fixtures))
+        return Runtime(fleet=FixtureFleet(fixtures), network=SampleNetwork())
     if not auth.INVENTORY_PATH:
         return Runtime()
+    try:
+        network_config = parse_config(os.environ)
+    except ValueError as exc:
+        raise SystemExit(f"storage-viz network card: {exc}") from None
     inventory = load_inventory(auth.INVENTORY_PATH)
     project = Path(os.environ.get("STORAGE_VIZ_ROOT", routes.VIEWER_DIR.parent))
     state = Path(os.environ.get("STORAGE_VIZ_STATE_DIR", project / ".storage-viz-state")).resolve()
@@ -39,7 +45,8 @@ def configure(fixtures=None):
                   cooldown_seconds=int(os.environ.get("STORAGE_VIZ_RESCAN_COOLDOWN_SECONDS", "900")),
                   max_active_jobs=int(os.environ.get("STORAGE_VIZ_RESCAN_MAX_CONCURRENT", "2")))
     return Runtime(
-        fleet=fleet, capacity_thresholds=inventory.capacity_thresholds,
+        fleet=fleet, network=network_config and SwitchTraffic(network_config, state),
+        capacity_thresholds=inventory.capacity_thresholds,
         runs_actors=not auth.PREFLIGHT_BACKEND,
         rescan_enabled=bool(auth.OPERATORS and (auth.TRUSTED_PROXY or auth.DIRECT_LOOPBACK_RESCAN or auth.PREFLIGHT_BACKEND)),
     )
@@ -104,11 +111,15 @@ def main():
     with Server((auth.BIND, args.port), runtime) as httpd:
         if runtime.runs_actors:
             runtime.fleet.start()
+            if runtime.network:
+                runtime.network.start()
         try:
             print(f"storage-viz serving {routes.VIEWER_DIR} on {auth.BIND}:{httpd.server_port}", flush=True)
             httpd.serve_forever()
         finally:
             if runtime.runs_actors:
+                if runtime.network:
+                    runtime.network.stop()
                 runtime.fleet.stop()
 
 

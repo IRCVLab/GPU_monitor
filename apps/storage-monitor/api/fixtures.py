@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import random
 import time
 from typing import Any, Mapping
 
@@ -11,6 +12,7 @@ from collector.contract import parse_manifest, parse_capture
 from collector.ids import SERVER_ID_RE
 from collector.inventory import Server as InventoryServer
 from collector.store import Record
+from collector.switch_traffic import BUCKET_SECONDS, WINDOW_SECONDS, LinkSpec, LinkTraffic
 from collector.view import ServerView, build_view, publication, ObservationView
 
 
@@ -131,3 +133,36 @@ class FixtureFleet:
     def request_rescan(self, server_id: Any, actor_name: str) -> dict[str, Any]:
         self.lookup(server_id)
         raise RescanDisabled()
+
+
+class SampleNetwork:
+    """A synthetic Nexus link for sample-data mode: an idle day with transfer bursts up to about 20 Gb/s.
+
+    The day is a pure function of the clock, so a running sample viewer keeps moving
+    and every call returns a full 24 h ending at the current minute.
+    """
+    clock = time
+
+    def __init__(self) -> None:
+        self.spec = LinkSpec("nexus", "bond_nas", 200_000)
+
+    @staticmethod
+    def _rate(minute_index: int, direction: int) -> tuple[float, float]:
+        slot = random.Random(minute_index // 30 * 2 + direction)
+        burst = slot.random() < (0.30 if direction == 0 else 0.12)
+        peak = slot.uniform(4e9, 21e9) if direction == 0 else slot.uniform(0.5e9, 6e9)
+        wobble = random.Random(minute_index * 2 + direction)
+        avg = (peak * wobble.uniform(0.82, 1.0) if burst else wobble.uniform(0.01e9, 0.25e9))
+        return avg, avg * wobble.uniform(1.0, 1.08)
+
+    def snapshot(self) -> dict:
+        unix = self.clock.time()
+        link = LinkTraffic(self.spec)
+        this_minute = int(unix) // BUCKET_SECONDS
+        for index in range(this_minute - WINDOW_SECONDS // BUCKET_SECONDS + 1, this_minute + 1):
+            if index % 700 < 7:
+                continue  # a short hole, as after a poller restart
+            (rx_avg, rx_max), (tx_avg, tx_max) = self._rate(index, 0), self._rate(index, 1)
+            link.buckets[index * BUCKET_SECONDS] = [1, rx_avg, rx_max, tx_avg, tx_max]
+        link.now = (self._rate(int(unix), 0)[0], self._rate(int(unix), 1)[0], unix)
+        return {"links": [link.view(unix)], "sample_seconds": 2, "generated_unix": int(unix)}

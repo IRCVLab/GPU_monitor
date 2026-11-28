@@ -5,6 +5,7 @@ import {initialState,reducer,detailKey,drillStack,serverSelection} from './state
 import {bindRouter,parseUrl} from './router.js';
 import {bindEffects} from './effects.js';
 import {renderServer} from './views/server.js';
+import {renderNetwork} from './views/network.js';
 import {buildOverviewRows,renderOverviewList,buildFleetUserUsage,renderFleetUserUsage,layoutOverviewMasonry} from './views/overview.js';
 import {bindTooltip} from './views/treemap.js';
 import {bindTheme} from './views/theme.js';
@@ -34,13 +35,17 @@ function render() {
   const list = el('overviewList');
   if (!server && fleet) {
     if (stats) renderFleetUserUsage(el('fleetUsage'),buildFleetUserUsage(fleet.servers));
-    else if (previous?.route !== route || previous?.resources !== resources) renderOverviewList(list,buildOverviewRows(fleet.servers));
+    else if (previous?.route !== route || previous?.resources.fleet !== resources.fleet) renderOverviewList(list,buildOverviewRows(fleet.servers));
     if (redraw && !stats) layoutOverviewMasonry(list);
 
   }
+  const wasOverview = previous?.route.page === 'overview';
+  if (route.page === 'overview' && (!wasOverview || redraw || previous.resources.network !== resources.network || previous.ui.theme !== state.ui.theme))
+    renderNetwork(el('networkCards'),resources.network,{echarts:window.echarts,resize:redraw || !wasOverview});
   const bootError = resources.session?.code || resources.fleet?.code;
   el('bootError').hidden = !bootError;
-  if (server && route.tab === 'users' && !window.echarts && !chartLoading) {
+  const needsChart = server && route.tab === 'users' || route.page === 'overview' && resources.network?.data?.links.length;
+  if (needsChart && !window.echarts && !chartLoading) {
     const script = document.createElement('script');
     script.src = 'echarts.min.js';
     chartLoading = true;
