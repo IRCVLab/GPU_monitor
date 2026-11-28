@@ -132,8 +132,7 @@ def is_allowed_rescan_request(
         configured_origin.port
     except ValueError:
         return False
-    # SHIM(M8..M9) S9: forward only the installed checker's bounded legacy probe.
-    match = RESCAN_PATH.fullmatch(request_path.path) or re.fullmatch(r"/api/servers/(hc-[A-Za-z0-9_]{24})/rescan", request_path.path)
+    match = RESCAN_PATH.fullmatch(request_path.path)
     return (
         0 < content_length <= MAX_POST_BYTES
         and not request_path.scheme

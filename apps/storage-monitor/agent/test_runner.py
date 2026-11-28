@@ -114,8 +114,27 @@ def test_a8_no_run_json_after_completion(tmp_path):
     assert host.run() == 0
     assert not (host.data / "run.json").exists()
     assert '"phase"' not in json.dumps(host.manifest())
-    assert all(p.read_bytes() == b"rollback" for p in (host.data/"snapshots/old", host.data/"scan-status.json",
-               host.data/"scan-lifecycle.json", host.data/"slow-capture.json.gz"))
+    assert all(not (host.data / name).exists() for name in
+               ("snapshots", "scan-status.json", "scan-lifecycle.json", "slow-capture.json.gz"))
+
+
+def test_prune_does_not_follow_snapshot_or_file_links(tmp_path):
+    host = Host(tmp_path)
+    host.data.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep"
+    sentinel.write_bytes(b"safe")
+    snapshots = host.data / "snapshots"
+    snapshots.mkdir()
+    (snapshots / "nested").symlink_to(outside)
+    (host.data / "scan-status.json").symlink_to(sentinel)
+    assert host.run() == 0
+    assert not snapshots.exists()
+    snapshots.symlink_to(outside)
+    assert host.run() == 0
+    assert not snapshots.is_symlink()
+    assert sentinel.read_bytes() == b"safe"
 
 
 def test_a9_capacity_fresh_on_slow_only_not_due_tick(tmp_path, monkeypatch):

@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import BinaryIO, Dict, List, Optional, Sequence, Tuple
 
-BOOTSTRAP_VERSION = 1
+BOOTSTRAP_VERSION = 2
 KiB = 1024
 MiB = 1024 * KiB
 MAX_COMMAND = 256
@@ -53,7 +53,6 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 VOLUME_ID = re.compile(r"[vx]-[0-9a-f]{16}")
 REQUEST_ID = re.compile(r"[0-9a-f]{32}")
 SIZE = re.compile(r"[1-9][0-9]{0,8}")
-GENERATION = re.compile(r"[A-Za-z0-9_.-]+-[0-9]+-v1\.json")  # SHIM(M3..M9) S7
 
 # verb -> (argument patterns, output cap in bytes)
 VERBS: Dict[str, Tuple[Tuple[re.Pattern, ...], int]] = {
@@ -64,8 +63,6 @@ VERBS: Dict[str, Tuple[Tuple[re.Pattern, ...], int]] = {
     "stage-update": ((SHA40, SIZE), 1 * KiB),
     "activate-update": ((SHA40,), 1 * KiB),
     "rollback-update": ((SHA40,), 1 * KiB),
-    "get-status": ((), 64 * KiB),  # SHIM(M3..M9) S7
-    "get-snapshot": ((GENERATION,), 512 * MiB),  # SHIM(M3..M9) S7
 }
 
 
@@ -262,12 +259,7 @@ def observe(paths: Paths, host: Host) -> bytes:
             "release_sha": os.path.basename(os.readlink(str(current))) if current.is_symlink() else None,
             "health": host.agent_health(paths),
         },
-        # SHIM(M3..M9) S7: what REMOTE_OBSERVATION_SCRIPT reads today, so the
-        # central v1 telemetry parser keeps working over the gate.
-        "legacy": {
-            "lifecycle": _read_json(paths.data / "scan-lifecycle.json") or {},
-            "published": _read_json(paths.data / "scan-status.json") or {},
-            "progress": _read_json(paths.run / "scan-progress.json") or {},
+        "telemetry": {
             "services": host.show(UNITS[:2], "ActiveState,StateChangeTimestampMonotonic,"
                                   "ExecMainStartTimestampMonotonic,InactiveExitTimestampMonotonic").strip().split("\n\n"),
             "timer": host.show((TIMER,), "ActiveState,NextElapseUSecRealtime,NextElapseUSecMonotonic,Unit"),
@@ -280,8 +272,7 @@ def observe(paths: Paths, host: Host) -> bytes:
 
 # Fields observe may shrink, largest first, when the whole report would pass its
 # cap. The scan state, units, update state and agent health always stay whole.
-DEGRADABLE = (("legacy", "lifecycle"), ("legacy", "published"), ("legacy", "progress"), ("progress",),
-              ("legacy", "services"), ("legacy", "timer"), ("scan", "run"))
+DEGRADABLE = (("progress",), ("telemetry", "services"), ("telemetry", "timer"), ("scan", "run"))
 
 
 def _fit(report: dict, cap: int) -> bytes:
@@ -424,14 +415,8 @@ def serve(command: Optional[str], paths: Paths, host: Host, stdin: BinaryIO, out
         if verb == "get-capture":
             _stream_file(paths.captures / args[0] / f"{args[1]}.json.gz", cap, "CAPTURE_GONE", out)
             return 0
-        if verb == "get-snapshot":  # SHIM(M3..M9) S7
-            _stream_file(paths.data / "snapshots" / args[0], cap, "SNAPSHOT_GONE", out)
-            return 0
         if verb == "get-manifest":
             _stream_file(paths.data / "manifest.json", cap, "MANIFEST_MISSING", out)
-            return 0
-        if verb == "get-status":  # SHIM(M3..M9) S7
-            _stream_file(paths.data / "scan-status.json", cap, "STATUS_MISSING", out)
             return 0
         if verb == "observe":
             body = observe(paths, host)

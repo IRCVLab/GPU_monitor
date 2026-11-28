@@ -259,36 +259,6 @@ def test_an_unparsable_manifest_is_a_protocol_error_and_keeps_the_data(tmp_path)
 # ------------------------------------------------------------------ protocol switches
 
 
-def test_v1_host_that_gains_a_manifest_moves_off_s3_without_downloading_v1_data(tmp_path):
-    collector = Collector(tmp_path, SID)  # a v1 host with one accepted snapshot
-    v1_downloads = len(collector.host.fetch_calls)
-    collector.host.publish(SID, started=1719203000)  # S8: the v1 files linger, even a newer-looking one
-    host = V2Host(collector)
-    finished = collector.clock.now - 600
-    host.volume(VA, BA, "/a", capture(VA, BA, "/a", finished))
-    host.publish()
-    for _ in range(3):
-        collector.tick()
-    assert len(collector.host.fetch_calls) == v1_downloads, "a v1 snapshot was downloaded for a v2 host"
-    assert record(collector).data.accepted == {VA: sha(host.volumes[VA][2])}
-    assert set(mounts(collector)) == {VA}
-    names = [p.name for p in (collector.state_dir / "servers" / SID / "captures").iterdir()]
-    assert names == [f"{sha(host.volumes[VA][2])}.json.gz"], "the v1 capture outlived the switch"
-
-
-def test_v2_host_rolled_back_to_v1_falls_back_to_s3_on_the_retained_v1_files(tmp_path):
-    collector, host = v2_collector(tmp_path)
-    status, _ = collector.host.publish(SID, started=1719203000)  # the v1 files kept on the host (S8)
-    collector.tick()
-    assert collector.host.fetches_of(status["sha256"]) == 0
-    del collector.host.manifests[SID]
-    collector.tick()
-    assert collector.host.fetches_of(status["sha256"]) == 1
-    assert record(collector).data.accepted == {"legacy": status["sha256"]}
-    assert collector.actor()._captures["legacy"][1]["scan_generation"] == "alpha-1-1719203000-v1"
-    assert record(collector).link.state == "ok"
-
-
 def test_volume_transfers_share_the_fleet_limit_of_two(tmp_path):
     entered = threading.Semaphore(0)
     release = threading.Event()
@@ -329,7 +299,6 @@ def admit(collector):
 def test_v2_rescan_is_confirmed_only_by_the_manifest_receipt(tmp_path):
     collector, host = v2_collector(tmp_path)
     reply = admit(collector)
-    assert reply.job.protocol == "receipt"
     collector.settle()
     assert collector.host.rescan_requests == [(SID, "e" * 32)]
     assert collector.latest_job()["state"] == "pending"
@@ -359,13 +328,6 @@ def test_v2_interrupted_receipt_fails_the_job(tmp_path):
     collector.tick(5)
     job = collector.actor()._record.last_job
     assert (job.state, job.result_code) == ("failed", "SCAN_INTERRUPTED")
-
-
-def test_legacy_adapter_refuses_a_request_id_it_cannot_deliver(tmp_path):
-    from collector.legacy import LegacyHost
-    from collector.test_bug_harness import make_server
-    reply = LegacyHost(transport=None).rescan(make_server(), "e" * 32)
-    assert (reply.outcome, reply.code) == ("rejected", "REQUEST_UNSUPPORTED")
 
 
 # ------------------------------------------------------------------ M5a review F1: failures inside a transfer or a manifest read
@@ -570,25 +532,3 @@ def test_a_volume_naming_another_volumes_capture_is_rejected_once_without_a_fetc
 
 
 # ------------------------------------------------------------------ deviation 2: refuse a rescan the transport cannot deliver
-
-
-def test_a_v2_rescan_over_s2_is_refused_at_admission_without_a_cooldown(tmp_path):
-    collector, host = v2_collector(tmp_path)
-    collector.host.delivers_request_ids = False  # the host now answers over S2
-    collector.tick()
-    reply = admit(collector)
-    assert (reply.error, reply.job) == ("RESCAN_UNAVAILABLE", None)
-    assert record(collector).job is None and record(collector).last_job is None
-    assert collector.host.rescan_requests == []
-    collector.host.delivers_request_ids = True  # bootstrapped: the gate answers the next observe
-    collector.tick()
-    assert admit(collector).error is None, "the refusal started a cooldown"
-    collector.settle()
-    assert collector.host.rescan_requests and collector.host.rescan_requests[-1][1] == record(collector).job.request_id
-
-
-def test_a_v1_rescan_is_admitted_on_either_transport(tmp_path):
-    collector = Collector(tmp_path, SID)
-    collector.host.delivers_request_ids = False
-    collector.tick()
-    assert admit(collector).job.protocol == "invocation"

@@ -31,7 +31,7 @@ def test_planted_duplicate_and_expired_shim(tmp_path):
         shutil.copy(ROOT / path, tmp_path / path)
     path = tmp_path / "collector/actor.py"
     path.write_text("value = row.scan_generation  # SHIM" + "(M2b..M5c) S3\n")
-    assert check(tmp_path) == []
+    assert any("collector/actor.py:1: use" in error for error in check(tmp_path))
     path.write_text(path.read_text() + 'import re\nBAD = re.compile(r"^[0-9a-f]{64}$")\n')
     assert "collector/actor.py:3: import" in check(tmp_path)[0]
     (tmp_path / PROGRESS).write_text((tmp_path / PROGRESS).read_text().replace('"M7"', '"M5c"'))

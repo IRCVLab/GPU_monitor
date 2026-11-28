@@ -3,7 +3,7 @@
 This project has two independent runtime surfaces:
 
 - **Central dashboard:** `storage-viz-dashboard.service` runs `viewer/serve.py` on the operator host, polls configured remote servers, stores pulled snapshots, and serves the multi-server UI.
-- **Per-server agent.** `deploy/install-agent.sh` installs the hourly timer, scheduled scan service, and manual scan service.
+- **Per-server agent.** `deploy/bootstrap-agent.sh` installs the hourly timer, scheduled scan service, and manual scan service.
 
 The central installer and docs are intentionally separate from any unrelated monitoring stack. Storage Dashboard uses its own service names, paths, state, and loopback port; do not reuse unrelated services, ports, credentials, or paths, and do not restart or modify unrelated monitoring services for Storage Dashboard work.
 
@@ -57,149 +57,9 @@ sudo /usr/local/libexec/storage-dashboard-health-check.py
 
 The health checker probes the routes of the release that `/opt/storage-viz-dashboard` links to, so it also checks a rolled-back release from before the redesign.
 
-## Redesign deploy (one-time)
+## Deploy-tool changes
 
-This procedure moves the central host from the pre-redesign release (`06cdd5f`) to the redesign release that PR #16 merges into `main`. The owner runs every command. Commands that start with `sudo` need root on the central host. `deploy/e2e/run-dashboard-upgrade-rehearsal.sh` rehearses the dashboard part of this procedure, from the tools installed today to the new release, in docker containers.
-
-The order matters for one reason. A release does not update the deploy tools in `/usr/local/libexec`. Only the installer does. The installed tools come from commit `c09a7c2`, and their validator rejects the new tree. When the puller of today sees the merge, it fails with `invalid Storage release archive: manifest missing required runtime files: collector/scan_telemetry.py, ...` and backs off that SHA. The live release keeps serving. Rerunning the installer clears that backoff, so even this order recovers, but stopping the timer first avoids the failed attempt.
-
-### Before the deploy
-
-The dashboard can go out without the agent update channel. Steps 1 and 3 to 6 below set up that channel. Each one is optional for the first deploy. Without them, the puller logs `no agent release key is pinned in /etc/storage-viz/agent-allowed-signers; releasing the dashboard without an agent bundle` and deploys the dashboard alone. The hosts keep today's agent, and the dashboard reads them over SFTP (shim S2).
-
-1. Optional: generate the agent release signing key on an offline machine.
-
-	```bash
-	ssh-keygen -t ed25519 -N '' -C storage-viz-release-2026 -f storage-viz-release
-	```
-
-2. Name the person who holds the offline backup of that key (owner decision, target design §8 question 6). Make this decision before step 1.
-3. Optional: commit the public half to `apps/storage-monitor/agent/bootstrap/allowed_signers` as one line, and merge that commit before or with PR #16.
-
-	```text
-	storage-viz-release namespaces="storage-viz-agent" ssh-ed25519 AAAA... storage-viz-release-2026
-	```
-
-4. Optional: in the GitHub repository settings, create the environment `agent-signing`. Restrict its deployment branches to `main`. Add the secret `AGENT_SIGNING_KEY` with the content of the private key file `storage-viz-release`.
-5. Optional: provision a read-only GitHub token on the central host. Use a fine-grained token for `IRCVLab/GPU_monitor` with only **Actions: Read**.
-
-	```bash
-	sudo sh -c 'umask 077; cat > /etc/storage-viz/github-token'
-	```
-
-	Paste the token, then press Ctrl-D. The installer creates this file empty when it is missing and never overwrites it.
-6. Optional: set `"canary": true` on exactly one server in `/etc/storage-viz/servers.json` (`sudo` to edit). The dashboard reads the inventory when it starts, and the activation in step 5 of the deploy restarts it. Without the flag, the canary is the server with the lowest `order`.
-
-To add the agent channel after the deploy, do steps 1 to 6 and then repeat deploy steps 1 to 6 below with the commit that changes `allowed_signers`. The installer pins the new key on the central host, and the puller then builds that SHA with its signed agent bundle.
-
-### Deploy the dashboard
-
-Check the starting state. Expect three `active` lines, the live SHA `06cdd5f773fcee96bde41997a4ab83ea684ca59c`, and `healthy`.
-
-```bash
-systemctl is-active storage-monitor-release-puller.timer storage-viz-dashboard.service storage-viz-proxy.service
-sudo cat /var/lib/storage-viz-dashboard/puller/current-live-sha
-sudo /usr/local/libexec/storage-dashboard-health-check.py && echo healthy
-```
-
-1. Stop the puller timer.
-
-	```bash
-	sudo systemctl stop storage-monitor-release-puller.timer
-	systemctl is-active storage-monitor-release-puller.timer storage-monitor-release-puller.service
-	```
-
-	Expect `inactive` twice. If the service is still `activating`, wait until it is `inactive`.
-2. Merge PR #16 on GitHub. Wait until the `ci` workflow of the merge commit on `main` succeeds. The puller releases only a `main` SHA with a successful `ci.yml` push run and a successful `ci/required` check.
-3. Rerun the installer from a checkout of the new `main`.
-
-	```bash
-	git -C ~/GPU_monitor fetch origin
-	git -C ~/GPU_monitor checkout --detach origin/main
-	cd ~/GPU_monitor/apps/storage-monitor
-	sudo ./deploy/server/install-dashboard-deployer.sh
-	for f in /usr/local/libexec/storage*.py; do sha256sum -c "$f.sha256"; done
-	```
-
-	Expect an `install file:` line for each of the seven tools, the last line `dashboard deployer installed; release puller timer intentionally not enabled until an approved release passes health`, and `OK` for each tool. Do not run `install.sh` from the new checkout. It copies the app into `/opt/storage-viz-dashboard`, which is now a link to an immutable release.
-4. Confirm that no backoff is pending. The installer removes `failed-release.json` itself and prints `reset puller backoff: removed ...` when one existed.
-
-	```bash
-	sudo test ! -e /var/lib/storage-viz-dashboard/puller/failed-release.json && echo no backoff
-	```
-
-5. Start the puller once. The command returns when the release is built, validated, activated, and checked, which takes a few minutes.
-
-	```bash
-	sudo systemctl start storage-monitor-release-puller.service
-	sudo journalctl -u storage-monitor-release-puller.service -n 30 -o cat | grep -v pam_unix
-	sudo python3 -m json.tool /var/lib/storage-viz-dashboard/activation-state.json
-	sudo /usr/local/libexec/storage-dashboard-health-check.py && echo healthy
-	```
-
-	Expect the journal to end with `activated`. The activation state shows `"status": "active"`, the merge SHA as `source_sha`, and `previous` ending in `06cdd5f773fcee96bde41997a4ab83ea684ca59c/storage-monitor`.
-6. Start the timer again, and confirm it is enabled and active.
-
-	```bash
-	sudo systemctl start storage-monitor-release-puller.timer
-	systemctl is-enabled storage-monitor-release-puller.timer
-	systemctl is-active storage-monitor-release-puller.timer
-	```
-
-Then check what the new release did with the old data.
-
-- The old store was imported once and nothing was downloaded again (C8). Each server's new record holds the snapshot SHA of its old store:
-
-	```bash
-	sudo python3 - <<'PY'
-	import json, pathlib
-	state = pathlib.Path("/var/lib/storage-viz-dashboard/state")
-	for record in sorted(state.glob("servers/*/record.json")):
-	    sid = record.parent.name
-	    old = json.loads((state / sid / "current.json").read_text())["snapshot"] if (state / sid / "current.json").exists() else None
-	    new = json.loads(record.read_text())["accepted"].get("legacy")
-	    print(sid, "imported" if old and old[len("snapshot-v2-"):-len(".json")] == new else f"not imported (old {old}, new {new})")
-	PY
-	```
-
-- Open the dashboard at its public URL. Every inventory server is listed as fresh, with the capacity of each scanned mount.
-- Start a rescan on one server. Its job ends `succeeded`. A server whose last rescan under the old release is recent stays in cooldown until that cooldown ends.
-
-### Bootstrap the canary host, then the fleet
-
-This part needs the agent channel. The dashboard rehearsal does not cover it. `deploy/e2e/run-agent-channel-e2e.sh` covers the host side. Confirm that the active release carries the signed bundle:
-
-```bash
-ls /opt/storage-viz-dashboard/agent/
-```
-
-Expect `storage-viz-agent.json`, `storage-viz-agent.tar.gz`, and `storage-viz-agent.tar.gz.sig`. Then bootstrap the canary from the central host, as an admin account that has `sudo` on that host. The script uses the bundle under `/opt/storage-viz-dashboard/agent` by default.
-
-```bash
-cd ~/GPU_monitor/apps/storage-monitor
-./deploy/bootstrap-agent.sh --central-speaks-gate --admin <admin> <canary-host>
-```
-
-Expect the script to print an `observe` reply with `"schema": "storage-viz.observe/1"`. Within a few minutes the dashboard switches that server to the gate transport by itself. The canary's agent shows the bundle's release SHA, the update goes through probation, and the rollout moves from `canary` to `fleet` once probation passes. If probation fails, the dashboard rolls the canary back and halts the rollout.
-
-Bootstrap the other hosts one at a time with the same command. Check that each host is on the gate and healthy before the next one.
-
-### Roll back at each stage
-
-| Stage | What to do |
-| --- | --- |
-| Timer stopped, nothing merged | `sudo systemctl start storage-monitor-release-puller.timer`. |
-| Merged, installer not rerun | Nothing on the central host has changed. Keep the timer stopped until you continue. If the timer runs, the puller of today fails on the new tree, backs off, and leaves the live release alone. |
-| Installer rerun, puller not started | The new tools run the live release. To stay on it, keep the timer stopped, because the new puller deploys the merge on its next run. |
-| Step 5 fails | The activator puts `06cdd5f` back and restarts both services itself, and the puller writes `failed-release.json`. Read the error with `sudo journalctl -u storage-monitor-release-puller.service -n 50 -o cat`. After a fix, run `sudo rm /var/lib/storage-viz-dashboard/puller/failed-release.json` or rerun the installer, then repeat step 5. |
-| New release active | Run the manual rollback in [Storage Live automatic deployment](#storage-live-automatic-deployment). `06cdd5f` reads its old store, which the new release never writes (R1), and the health checker passes against it. The next puller runs answer `already-current` and keep the rollback until `main` advances. Keep the timer stopped if `main` may move. |
-| Roll forward after a rollback | `sudo rm /var/lib/storage-viz-dashboard/puller/current-live-sha`, then `sudo systemctl start storage-monitor-release-puller.service`. The journal ends with `activated`. |
-| Hosts bootstrapped | A bootstrapped host answers only the gate, which `06cdd5f` cannot read. Before a dashboard rollback to `06cdd5f`, revert each bootstrapped host with `./deploy/bootstrap-agent.sh --revert --admin <admin> <host>`. Between redesign releases, a dashboard rollback moves the desired agent back by itself. |
-
-### After the deploy
-
-- Cleanup releases remove the shims as the fleet moves (target design §6.2). S2 goes once every host reports the gate transport. S3, S4, the central callers of S7, and S8 go once every host runs the v2 agent. S9 and the S7 verbs go in M9.
-- One week after the deploy, M9 deletes the old store `STATE_DIR/<sid>/` and `scan-duration-history/` with a one-shot script that the owner runs. It is the only data deletion in the plan and it cannot be undone. After it, a rollback to `06cdd5f` no longer has its old data.
+After changes to `deploy/server/`, rerun `deploy/server/install-dashboard-deployer.sh` from a main checkout.
 
 ## One-time bootstrap cutover
 
@@ -247,7 +107,7 @@ After a successful bootstrap, verify the managed central surface from the Storag
 sudo /usr/local/libexec/storage-dashboard-health-check.py
 ```
 
-Use this expanded probe when you need visible evidence for each contract. It must return `can_rescan: true`, `data_mode: inventory`, enabled server IDs in `/etc/storage-viz/servers.json` order, and HTTP `404` with `UNKNOWN_SERVER` for a guaranteed absent server id. The final POST sends `{}` with the authenticated session cookie, CSRF token, exact `Host`, and exact `Origin`; it does not start a real scan.
+Use this expanded probe when you need visible evidence for each contract. It must return `can_rescan: true`, an inventory rollout, enabled server IDs in `/etc/storage-viz/servers.json` order, and HTTP `404` with `UNKNOWN_SERVER` for a guaranteed absent server id. The final POST sends `{}` with the authenticated session cookie, CSRF token, exact `Host`, and exact `Origin`; it does not start a real scan.
 
 ```bash
 PUBLIC_ORIGIN="$(awk -F= '$1 == "STORAGE_VIZ_PROXY_PUBLIC_ORIGIN" { print substr($0, index($0, "=") + 1) }' /etc/storage-viz/proxy.env)"
@@ -262,7 +122,7 @@ VERIFY_TMP="$(mktemp -d)"
 curl -sS -D "$VERIFY_TMP/session.headers" \
   -H "Host: $PUBLIC_HOST" \
   -H 'X-Forwarded-User: fixed-proxy-operator' \
-  "$PROXY_ENDPOINT/api/session" \
+  "$PROXY_ENDPOINT/api/v2/session" \
   -o "$VERIFY_TMP/session.json"
 python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert data["can_rescan"] is True; assert isinstance(data["csrf_token"], str) and data["csrf_token"]; print("can_rescan=true")' "$VERIFY_TMP/session.json"
 
@@ -273,15 +133,15 @@ curl -sS \
   -H "Host: $PUBLIC_HOST" \
   -H 'X-Forwarded-User: fixed-proxy-operator' \
   -H "Cookie: $COOKIE" \
-  "$PROXY_ENDPOINT/api/servers" \
+  "$PROXY_ENDPOINT/api/v2/fleet" \
   -o "$VERIFY_TMP/servers.json"
 python3 - /etc/storage-viz/servers.json "$VERIFY_TMP/servers.json" <<'PY'
 import json, sys
 inventory = json.load(open(sys.argv[1]))
 servers = json.load(open(sys.argv[2]))
 expected = [row["id"] for row in inventory["servers"] if row.get("enabled", True) is True]
-observed = [row["id"] for row in servers["servers"]]
-assert servers["data_mode"] == "inventory", servers.get("data_mode")
+observed = [row["server_id"] for row in servers["servers"]]
+assert isinstance(servers["rollout"], dict)
 assert observed == expected, (expected, observed)
 print("inventory mode/order ok:", ",".join(observed))
 PY
@@ -296,13 +156,13 @@ HTTP_CODE="$(curl -sS -o "$VERIFY_TMP/unknown.json" -w '%{http_code}' \
   -H "X-CSRF-Token: $CSRF" \
   -H 'Content-Type: application/json' \
   --data '{}' \
-  "$PROXY_ENDPOINT/api/servers/$UNKNOWN_ID/rescan")"
+  "$PROXY_ENDPOINT/api/v2/servers/$UNKNOWN_ID/rescan")"
 test "$HTTP_CODE" = 404
-python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert data["error"] == "UNKNOWN_SERVER"; print("UNKNOWN_SERVER non-mutating probe ok")' "$VERIFY_TMP/unknown.json"
+python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert data["error"]["code"] == "UNKNOWN_SERVER"; print("UNKNOWN_SERVER non-mutating probe ok")' "$VERIFY_TMP/unknown.json"
 rm -rf "$VERIFY_TMP"
 ```
 
-A real rescan is separate and optional after the health probe succeeds. Use the dashboard button only when `/api/session` reports `can_rescan: true`; otherwise the request cannot pass the managed proxy/session contract.
+A real rescan is separate and optional after the health probe succeeds. Use the dashboard button only when `/api/v2/session` reports `can_rescan: true`; otherwise the request cannot pass the managed proxy/session contract.
 
 ## Rescan button troubleshooting
 
@@ -311,7 +171,7 @@ The browser rescan button requires a healthy managed proxy and a valid operator 
 1. Confirm `storage-viz-proxy.service` and `storage-viz-dashboard.service` are active.
 2. Confirm `/etc/storage-viz/proxy.env` public origin exactly matches `STORAGE_VIZ_ALLOWED_ORIGINS` in `/etc/storage-viz/dashboard.env`.
 3. Confirm `STORAGE_VIZ_PROXY_OPERATOR=fixed-proxy-operator` and that operator appears in `STORAGE_VIZ_OPERATOR_ALLOWLIST`.
-4. Request `/api/session` through the configured proxy bind/port with the external `:505` Host header and verify `can_rescan: true`, a session cookie, and a CSRF token.
+4. Request `/api/v2/session` through the configured proxy bind/port with the external `:505` Host header and verify `can_rescan: true`, a session cookie, and a CSRF token.
 5. Re-run `storage-dashboard-health-check.py`; it exercises the non-mutating authenticated POST path without starting a scan.
 
 Do not troubleshoot the button by restarting the GPU application, changing remote scan timers, or triggering a real scan before session/proxy health passes.
@@ -346,7 +206,7 @@ Central defaults:
 | Bind | `127.0.0.1` | Loopback-only by default. |
 | Port | `8088` | Dashboard HTTP port. |
 
-`install.sh` installs only the central dashboard. It does not install scanner agents, restart unrelated monitoring services, or modify any unrelated monitoring path, service, port, or credential; use `deploy/deploy-agent.sh` for remote agent bootstrap.
+`install.sh` installs only the central dashboard. It does not install scanner agents, restart unrelated monitoring services, or modify any unrelated monitoring path, service, port, or credential; use `deploy/bootstrap-agent.sh` for remote agent bootstrap.
 
 Useful central commands:
 
@@ -415,7 +275,7 @@ STORAGE_VIZ_ALLOWED_ORIGINS=http://127.0.0.1:8088,http://localhost:8088
 STORAGE_VIZ_OPERATOR_ALLOWLIST=direct-viewer
 ```
 
-Keep `STORAGE_VIZ_BIND=127.0.0.1`. This mode rejects sample data, non-loopback binds, non-loopback or malformed origins, Host/Origin mismatches, and configurations without production inventory. It still requires the signed session cookie and CSRF token. Any LAN-facing proxy must remain GET/HEAD-only and forward the browser's original `Host` header so `/api/session` reports `can_rescan: false` outside the SSH tunnel.
+Keep `STORAGE_VIZ_BIND=127.0.0.1`. This mode rejects sample data, non-loopback binds, non-loopback or malformed origins, Host/Origin mismatches, and configurations without production inventory. It still requires the signed session cookie and CSRF token. Any LAN-facing proxy must remain GET/HEAD-only and forward the browser's original `Host` header so `/api/v2/session` reports `can_rescan: false` outside the SSH tunnel.
 
 ## Local development sample mode
 
@@ -428,7 +288,7 @@ STORAGE_VIZ_PORT=8088 \
 python3 -m api.server --fixtures tests/fixtures/fleet
 ```
 
-Use `http://127.0.0.1:8088`. In this mode `/api/servers` reports `data_mode: "sample"`, the UI shows the sample marker, and `tests/fixtures/fleet/hosts.json` keeps the four generated sample servers in this exact order: `hinton`, `atlas`, `orion`, `zeus`. This mode is read-only sample data for local development. Production inventory mode is separate, reports `data_mode: "inventory"`, and does not imply production storage is sample data.
+Use `http://127.0.0.1:8088`. In this mode `/api/v2/fleet` reports `rollout: null`, the UI shows the sample marker, and `tests/fixtures/fleet/hosts.json` keeps the four generated sample servers in this exact order: `hinton`, `atlas`, `orion`, `zeus`. This mode is read-only sample data for local development. Production inventory mode is separate, reports a rollout object, and does not imply production storage is sample data.
 
 ## Server inventory and SSH material
 
@@ -512,15 +372,7 @@ Store private identities under `/etc/storage-viz/keys`. Recommended ownership is
 
 ## Per-server agent bootstrap
 
-The remote runtime identity is the existing `monitoring` account. Bootstrap is interactive only through `shchoi`; after bootstrap, `monitoring` may run exactly this noninteractive sudo command:
-
-```text
-monitoring ALL=(root) NOPASSWD: /usr/bin/systemctl start storage-viz-scan.service
-```
-
-`deploy/deploy-agent.sh` verifies that exact sudo policy with `LC_ALL=C sudo -n -l`. If it is missing or broader than expected, the script uses the interactive `shchoi` bootstrap path once, copies an archive to a private remote temporary directory, runs `deploy/install-agent.sh`, cleans up by removing the copied temporary directory, then rechecks the exact policy.
-
-Do not grant shell, restart, stop, daemon-reload, edit, or wildcard sudo privileges to `monitoring`.
+Use `deploy/bootstrap-agent.sh` with the administrator SSH identity and signed bundle. Bootstrap restricts the monitoring key to the storage gate.
 
 ## TrueNAS host (Nexus)
 
@@ -577,11 +429,7 @@ If a scan holds the lock, the tool says so and the request stays queued. Rerun i
 
 `storage-viz-scan.timer` starts `storage-viz-scheduled-scan.service` at the start of each UTC hour with up to six minutes of scheduling delay. The agent scans resolved SSD roots every hour and HDD, mixed, and unresolved roots every third hourly slot. A persistent timer catches up after downtime. A new disk group, an incomplete scan, or a missing cached result triggers a fresh scan at the next tick. The shared agent lock prevents concurrent scans.
 
-Each agent writes snapshots under `/var/lib/storage-viz` and publishes the active generation in `/var/lib/storage-viz/scan-status.json`. Every generation includes the last measurements for both groups. Each tree-producing root carries its own `scan_finished_unix` timestamp. On SSD-only ticks the dashboard retains the earlier HDD observation with its original timestamp.
-
-The dashboard uses a fixed unprivileged query to check the manual and scheduled services before requesting a rescan. An active, activating, or reloading service blocks the request before consuming a cooldown. The dashboard can request only `sudo -n /usr/bin/systemctl start storage-viz-scan.service` for a configured server id. This manual service scans both groups and refreshes the HDD schedule. Rescan requests have transport timeouts, concurrency limits, and cooldowns.
-
-To upgrade an already configured agent, run `sudo deploy/install-agent.sh --server-id <configured-server-id>` from the updated checkout on the storage host. The installer validates and keeps the existing scanner configuration. If you supply a different server ID or the existing configuration is invalid, the installer stops before updating the agent. The installer restarts the timer to load its new schedule. Verify the hourly trigger with `systemctl list-timers storage-viz-scan.timer` and the scheduled unit with `systemctl cat storage-viz-scan.timer storage-viz-scheduled-scan.service`. The central deployment and the monitoring permission check do not install the update on an existing agent.
+Agents publish a manifest and immutable per-volume captures under `/var/lib/storage-viz`. A manual rescan sends a request ID through the gate. The dashboard follows its receipt and the captures it names. Ubuntu hosts receive signed bundles through the canary rollout.
 
 ## Cleanup workflow
 
@@ -589,25 +437,6 @@ The UI may prepare copy-only cleanup command snippets for humans to review. It m
 
 ## Live scan status
 
-`GET /api/servers/<inventory-id>/scan-status` uses the same read authentication as snapshots. The response reports `state` (`idle`, `running`, `complete`, `partial`, `failed`, or `unknown`), `phase` (`preparing`, `scanning`, or `publishing`), timestamps, current root, cumulative files/directories/allocated bytes, and root counts. Nullable values represent unavailable observations. `progress_available=false` must not be interpreted as zero progress.
+`GET /api/v2/servers/<inventory-id>/activity` serves the latest gate observation. The host lock and `run.json` identify a running or interrupted scan. Counters come from `progress.json` when its run ID matches. The collector polls idle hosts about once a minute and running scans about every five seconds.
 
-`last_finished_unix` and `last_duration_sec` describe the latest completed attempt. `estimate_duration_sec` is the most recent fully successful duration for the same `scan_plan`. A `full` scan measures every selected group. An `ssd` scan refreshes only the SSD group. Partial scans and failures preserve the successful durations. An explicitly null estimate means there is no reliable successful baseline. Historical ETA is an estimate, never a percentage or deadline guarantee. `generation` identifies a published terminal scan; `snapshot_generation` identifies the snapshot already available centrally. The collector refreshes a changed completed generation asynchronously, including timer-initiated scans. Clients retry snapshot refresh until the displayed generation matches.
-
-The agent writes `/var/lib/storage-viz/scan-lifecycle.json` independently of the immutable snapshot pointer `/var/lib/storage-viz/scan-status.json`. A failed attempt preserves the last-good snapshot pointer. The scanner atomically replaces `/run/storage-viz/scan-progress.json` at most once every two seconds during traversal, plus root/phase transitions. The lifecycle identifies the current scanner invocation and records counters from completed groups. The agent replaces transient progress when the next scan begins. The durable lifecycle records the terminal outcome.
-
-Central observations use one fixed SSH Python probe that reads only these fixed telemetry files and queries `storage-viz-scan.service`, `storage-viz-scheduled-scan.service`, and `storage-viz-scan.timer`. Reads are size bounded, reject symlinks/nonregular files, and validate types and counters. The probe does not accept paths or commands from browser input. The existing privileged bounded rescan command and authorization requirements are unchanged. Next-run time comes from the active timer's realtime trigger or its monotonic deadline converted with the remote host's own clocks. For long uptimes rendered with month/year units, a fixed `busctl get-property` query reads the timer's exact unsigned microsecond deadline instead of approximating months or years. Missing `busctl`, infinity, inactive, absent, elapsed, or otherwise unparseable timer values leave the next check time unavailable.
-
-Service activity overrides stale terminal telemetry. An inactive service with a leftover running record reports `unknown`/`SCAN_INTERRUPTED`; failed service state reports failure. A heartbeat older than 30 seconds is marked `STALE_PROGRESS`, retaining counts only as an old observation. SSH/probe failures return an unknown state with a bounded error code. The central collector refreshes each idle host about once a minute and each running scan about every five seconds. Overview and detail requests reuse the latest observation and its original `observed_unix`. Status requests do not contact the scan host or acquire the rescan/snapshot lock. The independent snapshot poll still checks remote publication and verifies transferred snapshots.
-
-The scheduled snapshot poll checks up to four hosts in parallel. It queues transfers
-separately so a slow transfer cannot hold up the next status cycle. At most two
-snapshot transfers run across the collector, including manual and telemetry-triggered
-pulls. A new observation replaces a queued transfer for an older publication.
-A pull can reuse a validated publication from telemetry. It still checks the current
-publication after transferring the file and validates the transferred bytes.
-
-The detail API reuses serialized responses while the committed snapshot and current
-capacity observation match. It retains up to 64 MiB of response bodies and evicts
-least recently used entries. Larger responses are served without being retained.
-
-Deploying the central dashboard alone does not upgrade remote agents or scanner binaries. Update the agent and scanner together using the installer on each storage host. Older agents still expose service activity and actual timer timing when readable, but progress is explicitly unavailable. Sample mode has unknown live state and no timer prediction. This change introduces no HTTP endpoint that can execute an arbitrary remote command.
+Each actor reads a changed manifest and fetches its new captures by volume ID and digest. Across the fleet, two transfers can run at once. The dashboard continues to serve the previous accepted capture during a transfer.

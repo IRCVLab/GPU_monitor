@@ -131,16 +131,11 @@ def test_staging_waits_for_an_idle_host_no_job_and_the_rollouts_permission(tmp_p
     assert calls(collector)[0] == ("stage-update", NEW)
 
 
-def test_no_desired_agent_and_s2_hosts_leave_the_track_idle(tmp_path):
+def test_no_desired_agent_leaves_the_track_idle(tmp_path):
     collector, host, channel = gate_collector(tmp_path, channel=FakeChannel(sha=None))
     for _ in range(3):
         collector.tick()
     assert calls(collector) == [] and track(collector) == updates.Update(since_unix=None, seen=OLD)
-    channel.current = Desired(NEW)
-    collector.host.delivers_request_ids = False  # the host answers over S2
-    for _ in range(3):
-        collector.tick()
-    assert calls(collector) == [] and track(collector).desired == NEW and track(collector).state == "in_sync"
 
 
 def test_update_requests_run_on_the_transfer_worker_under_the_fleet_semaphore(tmp_path):

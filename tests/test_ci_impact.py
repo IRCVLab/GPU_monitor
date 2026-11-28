@@ -161,8 +161,6 @@ class CiImpactTest(unittest.TestCase):
 
     def test_storage_agent_deployment_assets_gate_storage_agent_ci(self):
         agent_deploy_paths = (
-            "apps/storage-monitor/deploy/deploy-agent.sh",
-            "apps/storage-monitor/deploy/install-agent.sh",
             "apps/storage-monitor/deploy/verify-linux.sh",
             "apps/storage-monitor/deploy/test_deploy_scripts.sh",
             "apps/storage-monitor/deploy/sudoers/storage-viz-monitoring",

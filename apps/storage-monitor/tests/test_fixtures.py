@@ -83,7 +83,7 @@ class FixtureTest(unittest.TestCase):
 
     def test_manifest_cases(self):
         fleet = FixtureFleet(DATA_DIR)
-        self.assertEqual(fleet.view("orion").transport, "legacy")
+        self.assertEqual(fleet.view("orion").transport, "gate")
         self.assertEqual(fleet.view("hinton").transport, "gate")
         volumes = [v for view in fleet.views() for v in view.publication.manifest.volumes]
         self.assertTrue(any(len(v.roots) > 1 for v in volumes))

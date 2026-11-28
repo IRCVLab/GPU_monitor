@@ -90,8 +90,6 @@ def reduce_link(link: Link, event: LinkEvent) -> Link:
 
 # ---------------------------------------------------------------- data
 
-# SHIM(M2b..M5c) S3: a v1 host publishes one snapshot, held as the pseudo-volume "legacy".
-LEGACY_VOLUME = "legacy"
 MAX_REJECTED = 32
 GONE_BACKOFF_SECONDS = 60
 GONE_BACKOFF_MAX_SECONDS = 3600
@@ -100,30 +98,8 @@ DATA_STATES = ("none", "current", "fetching", "stale_rejected")
 
 
 @dataclass(frozen=True)
-class LegacyPublication:
-    """SHIM(M2b..M5c) S3: a v1 host's scan-status.json envelope, validated at the boundary, or None."""
-    envelope: Optional[Mapping] = None
-
-    def targets(self) -> Dict[str, Optional[str]]:
-        envelope = self.envelope
-        downloadable = envelope is not None and envelope.get("status") in DOWNLOADABLE
-        return {LEGACY_VOLUME: envelope.get("sha256") if downloadable else None}
-
-    @property
-    def config_digest(self) -> Optional[str]:
-        return self.envelope.get("config_digest") if self.envelope is not None else None
-
-    def scan_failed(self) -> bool:
-        return self.envelope is not None and self.envelope.get("status") == "failed"
-
-
-Publication = Union[LegacyPublication, HostManifest]
-"""What a host publishes: a v1 envelope (S3) or a v2 manifest. Each names its volumes' capture shas."""
-
-
-@dataclass(frozen=True)
 class Data:
-    manifest: Optional[Publication] = None
+    manifest: Optional[HostManifest] = None
     """The last accepted publication."""
     accepted: Mapping[str, str] = field(default_factory=dict)
     """volume_id -> sha256 of the capture held in the store. Can lag the manifest (stale_rejected)."""
@@ -139,8 +115,8 @@ class Data:
 
 @dataclass(frozen=True)
 class PublicationObserved:
-    """The host's current publication: every observe for v1, every accepted or unchanged manifest for v2."""
-    publication: Publication
+    """The host's current publication: every accepted or unchanged manifest."""
+    publication: HostManifest
     at: int = 0
     """Central time of the observe: a capture the host lost is not fetched again before its back-off ends."""
 
@@ -155,8 +131,6 @@ class CaptureAccepted:
 class CaptureRejected:
     volume_id: str
     sha: str
-    generation: Optional[str]
-    """SHIM(M2b..M5c) S4: the v1 generation, which the invocation job matches on."""
     reason: str
     at: int
 
@@ -166,7 +140,6 @@ class CaptureMismatch:
     """The bytes did not match the published size or digest: maybe a truncated transfer."""
     volume_id: str
     sha: str
-    generation: Optional[str]
     at: int
 
 
@@ -194,7 +167,7 @@ class CaptureGone:
 class Fetch:
     volume_id: str
     sha: str
-    publication: Publication
+    publication: HostManifest
     """The publication that named the sha: it says how to fetch and check the capture."""
 
 
@@ -278,13 +251,11 @@ def _capture_accepted(data: Data, event: CaptureAccepted) -> Tuple[Data, Tuple[F
     return replace(data, accepted={**data.accepted, event.volume_id: event.sha}), ()
 
 
-def _reject(data: Data, volume_id: str, sha: str, generation: Optional[str], reason: str, at: int) -> Data:
+def _reject(data: Data, volume_id: str, sha: str, reason: str, at: int) -> Data:
     if data.accepted.get(volume_id) == sha:
         # Bytes the volume holds were valid once: never both accepted and rejected for one volume.
         return replace(data, fetching=data.fetching - {sha}, retried=data.retried - {sha})
     entry = {"volume_id": volume_id, "reason": reason, "at": at}
-    if generation is not None:
-        entry["generation"] = generation
     return replace(data, rejected=_capped({**data.rejected, sha: entry}), fetching=data.fetching - {sha},
                    retried=data.retried - {sha})
 
@@ -299,14 +270,14 @@ def _capped(rejected: Dict[str, Mapping]) -> Dict[str, Mapping]:
 def _capture_rejected(data: Data, event: CaptureRejected) -> Tuple[Data, Tuple[Fetch, ...]]:
     if event.sha not in data.fetching:
         return data, ()
-    return _reject(data, event.volume_id, event.sha, event.generation, event.reason, event.at), ()
+    return _reject(data, event.volume_id, event.sha, event.reason, event.at), ()
 
 
 def _capture_mismatch(data: Data, event: CaptureMismatch) -> Tuple[Data, Tuple[Fetch, ...]]:
     if event.sha not in data.fetching:
         return data, ()
     if event.sha in data.retried:
-        return _reject(data, event.volume_id, event.sha, event.generation, "SHA_MISMATCH", event.at), ()
+        return _reject(data, event.volume_id, event.sha, "SHA_MISMATCH", event.at), ()
     return replace(data, fetching=data.fetching - {event.sha}, retried=data.retried | {event.sha}), ()
 
 

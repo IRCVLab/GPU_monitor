@@ -71,7 +71,7 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "api/fixtures.py": "",
             "api/routes.py": "",
             "api/server.py": "",
-            "viewer/serve.py": "from collector.inventory import load_inventory\nfrom collector.fleet import Fleet\nfrom collector.legacy import LegacyHost\nfrom collector.transport import OpenSshTransport\n",
+            "viewer/serve.py": "from collector.inventory import load_inventory\nfrom collector.fleet import Fleet\nfrom collector.gate import GateHost\nfrom collector.transport import GateTransport\n",
             "viewer/main.js": "console.log('app');\n",
             "viewer/api.js": "export const dataClient = {};\n",
             "viewer/effects.js": "export {};\n",
@@ -102,7 +102,6 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "collector/errors.py": "class DomainError(Exception): pass\n",
             "collector/fleet.py": "class Fleet: pass\n",
             "collector/health.py": "class Link: pass\n",
-            "collector/legacy.py": "class LegacyHost: pass\n",
             "collector/gate.py": "class GateHost: pass\n",
             "collector/rollout.py": "class RolloutState: pass\n",
             "collector/update.py": "class Update: pass\n",
@@ -113,9 +112,8 @@ class DashboardReleaseBuilderTest(unittest.TestCase):
             "collector/ids.py": "SERVER_ID_RE = None\n",
             "collector/inventory.py": "def load_inventory(): pass\n",
             "collector/jobs.py": "class Job: pass\n",
-            "collector/snapshot.py": "class Snapshot: pass\n",
             "collector/store.py": "class ServerStore: pass\n",
-            "collector/transport.py": "class OpenSshTransport: pass\n",
+            "collector/transport.py": "class GateTransport: pass\n",
             "config/servers.example.yaml": "servers: []\n",
             "docs/schema-v1.md": "# Schema\n",
             "deploy/direct_proxy.py": "print('proxy')\n",
@@ -444,13 +442,11 @@ class DashboardReleaseActivationTest(unittest.TestCase):
             "collector/fleet.py": b"class Fleet: pass\n",
             "collector/inventory.py": b"def load_inventory(): pass\n",
             "collector/jobs.py": b"class Job: pass\n",
-            "collector/legacy.py": b"class LegacyHost: pass\n",
             "collector/gate.py": b"class GateHost: pass\n",
             "collector/rollout.py": b"class RolloutState: pass\n",
-            "collector/snapshot.py": b"class Snapshot: pass\n",
             "collector/store.py": b"class ServerStore: pass\n",
             "collector/view.py": b"class ServerView: pass\n",
-            "collector/transport.py": b"class OpenSshTransport: pass\n",
+            "collector/transport.py": b"class GateTransport: pass\n",
             "config/servers.example.yaml": b"servers: []\n",
             "docs/schema-v1.md": b"# Schema\n",
             "deploy/direct_proxy.py": b"print('proxy')\n",
@@ -1721,49 +1717,20 @@ class DashboardProductionHealthContractTest(unittest.TestCase):
         self.assertEqual(requests[2][2]["Host"], "166.104.167.11:505")
         self.assertEqual(requests[2][2]["Origin"], "http://166.104.167.11:505")
 
-    def test_rolled_back_pre_redesign_release_is_checked_with_its_own_routes(self):
-        # --rollback-state can put a release from before the redesign back on /opt. It
-        # serves only the legacy routes, so the installed checker must use those for it.
-        from unittest.mock import patch
-        dash, proxy, _ = self._write_envs()
-        contract = self.module.load_contract(dashboard_env=dash, proxy_env=proxy)
-        legacy_release = Path(self.tempdir.name) / "legacy-release"
-        (legacy_release / "viewer").mkdir(parents=True)
-        (legacy_release / "collector").mkdir(parents=True)
-        (legacy_release / "collector/service.py").write_text("class PollService: pass\n", encoding="utf-8")
+    def test_checker_requires_identifiable_release(self):
         for unknown in (Path(self.tempdir.name) / "missing", Path(self.tempdir.name) / "empty-release"):
             if unknown.name == "empty-release":
                 unknown.mkdir()
             with self.assertRaises(self.module.HealthCheckError):
-                self.module.probes_for(unknown)
+                self.module.require_release(unknown)
         dangling = Path(self.tempdir.name) / "dangling"
         dangling.symlink_to(Path(self.tempdir.name) / "nowhere")
         with self.assertRaises(self.module.HealthCheckError):
-            self.module.probes_for(dangling)
+            self.module.require_release(dangling)
         current_release = Path(self.tempdir.name) / "current-release"
         (current_release / "api").mkdir(parents=True)
         (current_release / "api/routes.py").write_text("ROUTES = ()\n", encoding="utf-8")
-        self.assertIs(self.module.probes_for(legacy_release), self.module.LEGACY_PROBES)
-        self.assertIs(self.module.probes_for(current_release), self.module.V2_PROBES)
-
-        ids = contract.enabled_server_ids
-        legacy_answers = {
-            ("GET", "/api/session"): (200, {"Set-Cookie": "storage_viz_session=a"}, {"can_rescan": True, "csrf_token": "x"}),
-            ("GET", "/api/servers"): (200, {}, {"data_mode": "inventory", "servers": [{"id": sid} for sid in ids]}),
-        }
-        seen = []
-
-        def legacy_dashboard(_factory, _contract, method, path, **_kwargs):
-            seen.append((method, path))
-            if method == "POST" and re.fullmatch(r"/api/servers/hc-[A-Za-z0-9_]{24}/rescan", path):
-                return 404, {}, {"error": "UNKNOWN_SERVER"}
-            return legacy_answers.get((method, path), (404, {}, {"error": "NOT_FOUND"}))
-
-        with patch.object(self.module, "_request", side_effect=legacy_dashboard):
-            self.module.run_health_check(contract, skip_service_check=True, ready_attempts=1, probes=self.module.LEGACY_PROBES)
-            self.assertEqual([path.split("/hc-")[0] for _, path in seen], ["/api/session", "/api/servers", "/api/servers"])
-            with self.assertRaisesRegex(self.module.HealthCheckError, "session probe failed"):
-                self.module.run_health_check(contract, skip_service_check=True, ready_attempts=1, probes=self.module.V2_PROBES)
+        self.module.require_release(current_release)
 
     def test_fixture_fleet_with_matching_ids_fails_health_check(self):
         from unittest.mock import patch

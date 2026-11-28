@@ -1,4 +1,4 @@
-"""Collector fixtures: a real on-disk store, a fake clock and a simulated host on the legacy protocol.
+"""Collector fixtures: a real on-disk store, a fake clock and a simulated host on the gate protocol.
 
 ``Collector`` drives the actors without threads. ``settle`` handles every queued
 message and runs each contact that is due on the fake clock, so a test controls
@@ -6,7 +6,6 @@ time and ordering exactly.
 """
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import pathlib
@@ -15,10 +14,9 @@ import threading
 from collector.contract import AgentFacts, HostRun, ManifestPointer
 from collector.fleet import Fleet
 from collector.inventory import Server
-from collector.jobs import RescanReply, Scan
-from collector.legacy import Observation, empty_status
+from collector.jobs import RescanReply
+from collector.gate import Observation
 from collector.update import Attempt
-from collector.test_snapshot import base_payload, status_for
 from collector.transport import TransportError
 from collector.view import server_bytes, activity_body
 from collector.inventory import CapacityThresholds
@@ -32,32 +30,6 @@ def make_server(server_id="alpha-1", order=1, enabled=True, digest="a" * 64):
         known_hosts_file=pathlib.PurePosixPath("/etc/storage-viz/known_hosts"),
         scanner={"server_id": server_id}, scanner_digest=digest,
     )
-
-
-def payload_for(server_id="alpha-1", started=1719200000, digest="a" * 64, partial=False, total_failed=False):
-    payload = base_payload(server_id=server_id, generation=f"{server_id}-{started}-v1")
-    payload.update(hostname=f"{server_id}.example.test", scan_started_unix=started,
-                   scan_finished_unix=started + 42, config_digest=digest)
-    if partial:
-        payload["selected_roots"].append({
-            "mount_id": "archive", "major_minor": "8:2", "mount_source": "/dev/storage-viz/archive",
-            "mount_root": "/", "mountpoint": "/archive", "scan_root": "/archive", "fstype": "xfs",
-            "status": "failed", "scanned_bytes": 0, "scanned_files": 0, "scanned_dirs": 0,
-            "blocked_count": 0, "error_count": 1, "error_code": "EIO",
-        })
-    if total_failed:
-        payload["selected_roots"][0].update(status="failed", scanned_bytes=0, scanned_files=0, scanned_dirs=0, error_count=1, error_code="EIO")
-        payload["mounts"] = []
-    return payload
-
-
-def status_data(payload, status_value=None):
-    status, data = status_for(payload, config_digest=payload["config_digest"])
-    if status_value is not None:
-        status["status"] = status_value
-    elif any(root["status"] == "failed" for root in payload["selected_roots"]):
-        status["status"] = "partial"
-    return status, data
 
 
 class FakeClock:
@@ -93,27 +65,19 @@ class ManualSpawn:
 
 
 class FakeHost:
-    """A host as the legacy adapter reports it: published status, captures, scan units."""
+    """A gate host with published manifests, captures and scan requests."""
 
     def __init__(self, clock):
         self.clock = clock
-        self.publications = {}
-        self.captures = {}
-        self.scans = {}
         self.statuses = {}
         self.observe_errors = {}
         self.fetch_errors = {}
-        self.rescan_errors = {}
         self.observe_calls = []
-        self.fetch_calls = []
-        self.rescans = []
         self.observe_gate = None
         self.fetch_gate = None
-        self.rescan_started = threading.Event()
         self.lock = threading.Lock()
         self.active_fetches = 0
         self.max_active_fetches = 0
-        # v2 hosts
         self.manifests = {}
         """server_id -> manifest.json bytes. A server with one is a v2 host."""
         self.volume_captures = {}
@@ -123,8 +87,6 @@ class FakeHost:
         self.capture_calls = []
         self.manifest_errors = {}
         self.rescan_requests = []
-        self.delivers_request_ids = True
-        """Observations come over the gate; False makes them S2 observations, which deliver no request id."""
         self.rescan_replies = {}
         # the agent update channel
         self.agents = {}
@@ -133,11 +95,15 @@ class FakeHost:
         """(server_id, verb, sha) for every stage, activate and rollback request."""
         self.update_errors = {}
 
-    def publish(self, server_id, started=1719200000, **kwargs):
-        status, data = status_data(payload_for(server_id, started=started, **kwargs))
-        self.publications[server_id] = status
-        self.captures[status["sha256"]] = data
-        return status, data
+    def publish(self, server_id, started=1719200000):
+        from collector.test_contract import VID, capture_doc, encode, gz, manifest_doc, sha, volume_doc
+        data = gz(capture_doc(started=started, finished=started + 42))
+        volume = volume_doc(capture=(sha(data), len(data)))
+        volume["capture"].update(scan_started_unix=started, scan_finished_unix=started + 42)
+        doc = manifest_doc(server_id=server_id, seq=started, volumes=[volume])
+        self.manifests[server_id] = encode(doc)
+        self.volume_captures[VID, sha(data)] = data
+        return volume["capture"], data
 
     def observe(self, server):
         self.observe_calls.append(server.id)
@@ -146,17 +112,14 @@ class FakeHost:
         error = self.observe_errors.get(server.id)
         if error is not None:
             raise error
-        status = {**empty_status(), "state": "idle", **self.statuses.get(server.id, {})}
-        publication = self.publications.get(server.id)
+        status = {"state": "idle", **self.statuses.get(server.id, {})}
         manifest = self.manifests.get(server.id)
         pointer = None
         if manifest is not None:
             pointer = ManifestPointer(hashlib.sha256(manifest).hexdigest(), json.loads(manifest).get("seq"))
         agent = self.agents.get(server.id)
-        return Observation(int(self.clock.time()), status, copy.deepcopy(publication), None, self.scans.get(server.id, Scan()),
-                           pointer, self.runs.get(server.id, HostRun()),
-                           transport="gate" if self.delivers_request_ids else "legacy",
-                           agent=agent.facts() if agent is not None else AgentFacts())
+        return Observation(int(self.clock.time()), status, pointer, self.runs.get(server.id, HostRun()),
+                           agent.facts() if agent is not None else AgentFacts())
 
     def stage_update(self, server, sha, bundle, signature):
         self._update_call(server, "stage-update", sha)
@@ -193,6 +156,8 @@ class FakeHost:
         try:
             if self.fetch_gate is not None:
                 self.fetch_gate(server)
+            if server.id in self.fetch_errors:
+                raise self.fetch_errors[server.id]
             data = self.volume_captures.get((volume_id, sha256))
             if data is None:
                 raise TransportError("CAPTURE_GONE", "missing")
@@ -212,32 +177,6 @@ class FakeHost:
 
     def captures_of(self, sha):
         return sum(1 for _, _, fetched in self.capture_calls if fetched == sha)
-
-    def fetch_capture(self, server, publication):
-        with self.lock:
-            self.fetch_calls.append((server.id, publication["sha256"]))
-            self.active_fetches += 1
-            self.max_active_fetches = max(self.max_active_fetches, self.active_fetches)
-        try:
-            if self.fetch_gate is not None:
-                self.fetch_gate(server)
-            error = self.fetch_errors.get(server.id)
-            if error is not None:
-                raise error
-            return self.captures[publication["sha256"]]
-        finally:
-            with self.lock:
-                self.active_fetches -= 1
-
-    def start_rescan(self, server):
-        self.rescans.append(server.id)
-        self.rescan_started.set()
-        error = self.rescan_errors.get(server.id)
-        if error is not None:
-            raise error
-
-    def fetches_of(self, sha):
-        return sum(1 for _, fetched in self.fetch_calls if fetched == sha)
 
 
 class FakeUpdater:

@@ -55,7 +55,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, Optional, Sequence, Tuple
 
-BOOTSTRAP_VERSION = 1
+BOOTSTRAP_VERSION = 2
 APPLICATION = "storage-viz-agent"
 SIGNING_NAMESPACE = "storage-viz-agent"
 SIGNER_IDENTITY = "storage-viz-release"

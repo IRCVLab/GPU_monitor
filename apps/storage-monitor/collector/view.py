@@ -41,7 +41,6 @@ class ServerView:
     """(host unix time, central monotonic time of receipt) from the last successful observe."""
     error: Optional[str] = None
     transport: Optional[str] = None
-    """``gate`` or ``legacy`` (S2): who answered the last observe, else the inventory's choice."""
     update: Update = Update()
     release_sha: Optional[str] = None
     """The agent release the host runs: the gate's report, else the accepted manifest's."""
@@ -83,7 +82,6 @@ class Publication:
     detail: bytes
     captures: Mapping[str, dict]
     manifest: Optional[HostManifest]
-    legacy_bytes: Optional[Mapping[str, bytes]]
     volumes: tuple[bytes, ...]
 
 
@@ -104,7 +102,7 @@ def ordered_volumes(manifest):
     return sorted(pairs, key=lambda pair: _volume_key(*pair))
 
 
-def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None, user_file_totals=None):
+def publication(manifest, held, *, states=None, problems=None):
     """Merge the accepted capture rows once, before publishing the actor's view."""
     users, top, stale, heads = {}, [], [], {}
     root_bytes = {}
@@ -125,12 +123,6 @@ def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None
                 for row in rows:
                     dest.append({**row, "volume_id": vid, "binding": root.binding,
                                  "age_days": judge.age_days(row["mtime"], capture.scan_started_unix)})
-    if user_file_totals is not None:
-        for uid, row in users.items():
-            row["files"] = user_file_totals[uid]
-            if len(row["by_volume"]) > 1:
-                for subtotal in row["by_volume"].values():
-                    subtotal["files"] = None
     ordered = sorted(users.values(), key=lambda row: (-row["bytes"], row["uid"]))
     revision = f"{manifest.seq if manifest else 0}:" + hashlib.sha256(encode(heads)).hexdigest()[:12]
     host = {"hostname": manifest.hostname if manifest else None, "mount_table": manifest.mount_table if manifest else None}
@@ -138,19 +130,18 @@ def publication(manifest, held, legacy_bytes=None, *, states=None, problems=None
     if manifest:
         for vol, raw in ordered_volumes(manifest):
             vid = vol.volume_id
-            state_id = "legacy" if legacy_bytes and vid in heads else vid
             attempt = raw["last_attempt"]
             roots = [{**ref, "bytes": root_bytes.get((vid, ref["binding"], ref["scan_root"]))}
                      for ref in sorted(raw["roots"], key=lambda ref: _root_key(ref["scan_root"]))]
             volumes.append(encode({"volume_id": vid, "identity": vol.identity, "diagnostic": vol.diagnostic,
                                    "mountpoint": vol.mountpoint, "media": vol.media, "roots": roots,
-                                   "data_state": (states or {}).get(state_id, "current" if vid in heads else "none"),
-                                   "data_error": (problems or {}).get(state_id), "capture": heads.get(vid),
+                                   "data_state": (states or {}).get(vid, "current" if vid in heads else "none"),
+                                   "data_error": (problems or {}).get(vid), "capture": heads.get(vid),
                                    "last_attempt": {k:attempt[k] for k in ("finished_unix", "outcome", "error_code")}
                                    if attempt else None})[:-1])
     return Publication(revision, encode([{k: r[k] for k in ("uid","name","bytes")} for r in ordered]),
                        encode({"users": ordered, "errors": errors, "top_files": sorted(top, key=lambda r: -r["bytes"]),
-                               "stale": sorted(stale, key=lambda r: -r["bytes"]), "host": host})[1:], heads, manifest, legacy_bytes, tuple(volumes))
+                               "stale": sorted(stale, key=lambda r: -r["bytes"]), "host": host})[1:], heads, manifest, tuple(volumes))
 
 
 EMPTY_PUBLICATION = publication(None, {})

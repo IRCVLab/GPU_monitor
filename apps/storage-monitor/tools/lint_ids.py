@@ -3,7 +3,7 @@ import ast
 from collections import Counter
 import re
 
-from check_shims import done_units, markers, root_arg, sources
+from check_shims import root_arg, sources
 
 CENTRAL = "collector/ids.py"
 HOST = "agent/storage_viz_agent/ids.py"
@@ -63,13 +63,6 @@ def deploy_calls(name, tree, errors):
 
 
 GENERATION = re.compile(r"\b(?:published|snapshot|scan)_generation\b")
-# Each occurrence in these v1 adapters must also carry the corresponding live marker.
-V1 = {
-    "collector/legacy.py": "S2", "tools/gen_sample.py": "S3",
-    "collector/actor.py": "S3", "collector/snapshot.py": "S3", "collector/store.py": "S3",
-}
-
-
 def runtime(path):
     return not ({"tests", "test", "node_modules"} & set(path.parts) or path.name.startswith("test_")
                 or path.name.endswith(".test.js") or path.name == "conftest.py")
@@ -128,7 +121,6 @@ def check(root):
             if call not in owned and pattern in canonical:
                 errors.append(f"{name}:{call.lineno}: reuse the existing identity definition")
 
-    done = done_units(root)
     for path in sources(root):
         name = path.as_posix()
         if not runtime(path) or name == "tools/lint_ids.py":
@@ -171,10 +163,8 @@ def check(root):
                     line = first + snippet.count("\n", 0, offset)
                     errors.append(f"{name}:{line}: reuse the canonical identity at the boundary")
         for n, line in enumerate(source.splitlines(), 1):
-            if GENERATION.search(line) and not any(
-                m and m[2] not in done and m[3] == V1.get(name) for m in markers(line)
-            ):
-                errors.append(f"{name}:{n}: use the canonical identity or annotate the listed v1 site with its live shim")
+            if GENERATION.search(line):
+                errors.append(f"{name}:{n}: use the canonical identity")
     return errors
 
 

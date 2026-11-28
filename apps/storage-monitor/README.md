@@ -89,13 +89,7 @@ Central defaults:
 
 ## Remote agent deployment
 
-Use `deploy/deploy-agent.sh` to bootstrap storage servers. Runtime access uses the existing `monitoring` account with exactly this sudoers rule:
-
-```text
-monitoring ALL=(root) NOPASSWD: /usr/bin/systemctl start storage-viz-scan.service
-```
-
-Interactive bootstrap is through `shchoi` only when the exact rule is missing or too broad. The deploy script uses strict host key checking, explicit identity files, no password handling, and private temporary cleanup.
+Use `deploy/bootstrap-agent.sh` for Ubuntu hosts and `deploy/bootstrap-truenas.py` for Nexus. The monitoring key runs the gate as a forced SSH command.
 
 ## Operator security
 

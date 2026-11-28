@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Dict
 
 from collector.errors import (
-    ActiveJob, Cooldown, DomainError, GlobalConcurrency, RescanDisabled, RescanUnavailable, ServerBusy,
+    ActiveJob, Cooldown, DomainError, GlobalConcurrency, RescanDisabled, ServerBusy,
     StoreUnavailable, UnknownServer,
 )
 
@@ -23,7 +23,6 @@ STATUS: Dict[type | str, int] = {
     GlobalConcurrency: 429,
     StoreUnavailable: 503,
     ServerBusy: 503,
-    RescanUnavailable: 503,
 }
 
 
@@ -34,12 +33,9 @@ class RequestError(Exception):
         self.headers = headers or {}
 
 
-def http_error(exc, request_id, *, health_probe=False):
+def http_error(exc, request_id):
     code = exc.code if isinstance(exc, (DomainError, RequestError)) else "INTERNAL"
     status = STATUS.get(type(exc), STATUS.get(code, 500))
-    if health_probe and isinstance(exc, UnknownServer):
-        # SHIM(M8..M9) S9: installed checker compares the string at body.error.
-        return status, {}, {"error": code}
     if isinstance(exc, RescanDisabled):
         code = "FORBIDDEN"
     headers = dict(exc.headers) if isinstance(exc, RequestError) else {}

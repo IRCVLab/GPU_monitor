@@ -95,10 +95,9 @@ class E2E:
 
     def run(self) -> None:
         from collector.fleet import Fleet
-        from collector.gate import GateHost, HostRouter
+        from collector.gate import GateHost
         from collector.inventory import Server
-        from collector.legacy import LegacyHost
-        from collector.transport import GateTransport, OpenSshTransport
+        from collector.transport import GateTransport
 
         work = self.args.work
         server = Server(id=SID, display_name=SID, order=1, host="127.0.0.1", port=self.args.port, enabled=True,
@@ -115,7 +114,7 @@ class E2E:
 
         transport.run_verb = counted
         desired = self.args.bundle_dir / "storage-viz-agent.json" if self.args.bundle_dir else work / "no-agent.json"
-        self.fleet = Fleet([server], work / "central-state", HostRouter(GateHost(transport), LegacyHost(OpenSshTransport())),
+        self.fleet = Fleet([server], work / "central-state", GateHost(transport),
                            spawn=lambda job, name: job(), desired_path=desired)
         self.actor = self.fleet.actors[SID]
         self.actor._guard(self.actor.load)
@@ -210,7 +209,7 @@ class E2E:
         ask = Ask()
         self.actor.post(Admit(request_id, "e2e", int(time.time()), 0, ask))
         self.step()
-        if ask.value is None or ask.value.error is not None or ask.value.job.protocol != "receipt":
+        if ask.value is None or ask.value.error is not None:
             fail(f"rescan admission over the gate: {ask.value}")
         job = self.until("rescan job finished by receipt", lambda: self.record.last_job if self.record.job is None else None,
                          timeout=240, pause=3)

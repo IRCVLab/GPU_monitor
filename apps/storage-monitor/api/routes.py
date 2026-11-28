@@ -9,7 +9,6 @@ import os
 from typing import BinaryIO
 
 from api.errors import RequestError
-from collector.fleet import Fleet
 from collector.ids import SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE
 from collector.view import activity_body, server_bytes, encode
 from collector.errors import RescanDisabled, StoreUnavailable
@@ -76,13 +75,6 @@ def session(handler):
     return json_response(body, headers={"Set-Cookie": cookie} if cookie else {})
 
 
-def health_inventory(handler):
-    # SHIM(M8..M9) S9: the installed health checker validates inventory order.
-    runtime = handler.server.runtime
-    return json_response({"data_mode": "inventory" if isinstance(runtime.fleet, Fleet) else "sample",
-                          "servers": [{"id": s.id} for s in runtime.fleet.servers]})
-
-
 def rescan(handler, server_id):
     try:
         length = int(handler.headers.get("Content-Length", "0") or "0")
@@ -107,10 +99,6 @@ def rescan(handler, server_id):
     runtime = handler.server.runtime
     if runtime.fleet is None:
         raise RescanDisabled()
-    if handler.health_probe:
-        # SHIM(M8..M9) S9: the old checker submits a random absent hc- id.
-        runtime.fleet.lookup(server_id)
-        raise RequestError("NOT_FOUND")
     if not runtime.runs_actors:
         runtime.fleet.lookup(server_id)
         raise RescanDisabled()
@@ -165,8 +153,6 @@ def capture(handler, sid, vid, sha):
         raise RequestError("CAPTURE_GONE")
     headers = {"Content-Encoding": "gzip", "ETag": f'"{sha}"',
                "Cache-Control": "private, max-age=31536000, immutable"}
-    if pub.legacy_bytes:
-        return Response([pub.legacy_bytes[vid]], headers=headers)
     stream = source.open_capture(sid, vid, sha)
     try:
         headers["Content-Length"] = str(os.fstat(stream.fileno()).st_size)
@@ -183,10 +169,7 @@ ROUTES = (
     ("GET", r"/api/v2/servers/([^/]+)/activity", activity, "read"),
     ("GET", r"/api/v2/servers/([^/]+)/volumes/([^/]+)/captures/([^/]+)", capture, "read"),
     ("POST", r"/api/v2/servers/([^/]+)/rescan", rescan, "rescan"),
-    # SHIM(M8..M9) S9: only the three installed health-check requests.
-    ("GET", r"/api/session", session, "session"),
-    ("GET", r"/api/servers", health_inventory, "read"),
-    ("POST", r"/api/servers/(hc-[A-Za-z0-9_]{24})/rescan", rescan, "rescan"),
+
 )
 
 
@@ -201,11 +184,9 @@ def dispatch(handler, target):
             continue
         if handler.command != method:
             raise RequestError("METHOD_NOT_ALLOWED", headers={"Allow": method})
-        handler.health_probe = not path.startswith("/api/v2/")
-        if not handler.health_probe:
-            if "?" in target or any(not regex.fullmatch(param) for regex, param in
-                                    zip((SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE), match.groups())):
-                raise RequestError("BAD_REQUEST")
+        if "?" in target or any(not regex.fullmatch(param) for regex, param in
+                                zip((SERVER_ID_RE, VOLUME_ID_RE, SHA256_RE), match.groups())):
+            raise RequestError("BAD_REQUEST")
         if auth == "read":
             handler._require_read_auth()
             if handler.server.runtime.fleet is None:

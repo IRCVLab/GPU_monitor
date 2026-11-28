@@ -82,8 +82,33 @@ def commit_manifest(data, manifest, now):
     atomic(data / "manifest.json", payload)
 
 
+def _remove_entry(parent, name):
+    """Unlink relative to an open directory, opening child directories without following links."""
+    try:
+        os.unlink(name, dir_fd=parent)
+    except IsADirectoryError:
+        child = os.open(name, os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            for entry in os.listdir(child):
+                _remove_entry(child, entry)
+        finally:
+            os.close(child)
+        os.rmdir(name, dir_fd=parent)
+    except FileNotFoundError:
+        pass
+
+
 def prune(data, manifest, now, previous):
-    # SHIM(M5b..M5c) S8: limit collection to v2 capture and staging files.
+    parent = os.open(data, os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        _remove_entry(parent, "snapshots")
+        for name in ("scan-status.json", "scan-lifecycle.json", "slow-capture.json.gz"):
+            try:
+                os.unlink(name, dir_fd=parent)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(parent)
     current = {v["volume_id"]: v["capture"]["sha256"] for v in manifest["volumes"] if v["capture"]}
     present = {v["volume_id"] for v in manifest["volumes"]}
     for directory in (data / "captures").glob("*"):
