@@ -47,10 +47,5 @@ class GlobalConcurrency(DomainError):
     code = "GLOBAL_CONCURRENCY"
 
 
-class RescanUnavailable(DomainError):
-    """A v2 host whose transport cannot deliver a request id: no job, no cooldown. M3b's gate lifts it."""
-    code = "RESCAN_UNAVAILABLE"
-
-
 class RescanDisabled(DomainError):
     code = "RESCAN_DISABLED"

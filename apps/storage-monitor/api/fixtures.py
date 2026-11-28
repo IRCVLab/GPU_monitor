@@ -1,5 +1,4 @@
 """Read-only fleet backed by manifest and volume capture fixtures."""
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -7,10 +6,8 @@ import time
 from typing import Any, Mapping
 
 from collector.errors import RescanDisabled, UnknownServer
-from collector.legacy import legacy_volume
-from collector.snapshot import validate_download, DesiredServer
 from collector.health import Data, Link
-from collector.contract import decode_json, parse_manifest, parse_capture
+from collector.contract import parse_manifest, parse_capture
 from collector.ids import SERVER_ID_RE
 from collector.inventory import Server as InventoryServer
 from collector.store import Record
@@ -87,19 +84,6 @@ class FixtureFleet:
 
     def _build_view(self, server: InventoryServer) -> ServerView:
         data = self._bytes(self._files[server.id])
-        doc = decode_json(data)
-        if isinstance(doc, dict) and doc.get("schema_version") == 1:
-            sha = hashlib.sha256(data).hexdigest()
-            status = {"server_id": server.id, "generation": f"{server.id}-{doc['scan_started_unix']}-v1.json",
-                      "status": "partial" if any(r["status"] in {"partial", "failed"} for r in doc["selected_roots"]) else "complete",
-                      "byte_size": len(data), "sha256": sha, "scan_finished_unix": doc["scan_finished_unix"],
-                      "config_digest": doc["config_digest"]}
-            payload = validate_download(status, data, DesiredServer(server.id, server.scanner_digest)).payload
-            manifest, held, blobs = legacy_volume(payload, sha)
-            pub = publication(manifest, held, blobs, user_file_totals={u["uid"]: u["files"] for u in payload["users"]})
-            mono = self.clock.monotonic()
-            return build_view(server, Record(link=Link(state="ok")), pub, ObservationView({"state":"idle"}, mono),
-                              (manifest.written_unix, mono), None, "legacy")
         manifest = parse_manifest(data)
         if manifest.server_id != server.id:
             raise ValueError("fixture manifest server mismatch")
@@ -111,7 +95,7 @@ class FixtureFleet:
         record = Record(link=Link(state="ok"), data=Data(manifest=manifest, accepted={v: pair[0] for v,pair in held.items()}))
         mono = self.clock.monotonic()
         return build_view(server, record, publication(manifest, held), ObservationView({"state":"idle"}, mono), (manifest.written_unix, mono),
-                          None, "gate")
+                          None)
 
     def _bytes(self, filename):
         path = self.root / filename

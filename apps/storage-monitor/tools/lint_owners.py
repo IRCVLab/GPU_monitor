@@ -4,7 +4,7 @@ from collections import Counter
 from fnmatch import fnmatchcase
 import re
 
-from check_shims import done_units, markers, root_arg, sources
+from check_shims import root_arg, sources
 from lint_ids import runtime
 
 PUBLISH = "agent/storage_viz_agent/publish.py"
@@ -59,21 +59,11 @@ PARSE_SITES = {
     "api/fixtures.py": {
         ('_read', 'json.loads(path.read_bytes())'): 'Offline fixture inventory and snapshots.',
     },
-    "collector/actor.py": {
-        ('_load_captures', 'json.loads(data)'): 'Previously validated captures in the local record store.',
-    },
     "collector/fleet.py": {
         ('load_desired_agent', 'json.loads(_read_bounded(path, MAX_METADATA_BYTES))'): 'Agent bundle metadata the release puller verified into the active dashboard release.',
     },
-    "collector/gate.py": {
-        ('fetch_capture', "json.loads(self.transport.run_verb(server, 'get-status'))"): 'S7: v1 status reply over the gate.',
-    },
     "collector/rollout.py": {
         ('parse', 'json.loads(data)'): 'rollout.json, written only by fleet.Rollout.',
-    },
-    "deploy/e2e/rehearsal_probe.py": {
-        ('json', 'json.loads(raw)'): 'Rehearsal harness: the disposable central dashboard it drives.',
-        ('cmd_viewer', "json.loads((APP / 'RELEASE-MANIFEST.json').read_text(encoding='utf-8'))"): 'Rehearsal harness: the release it checks.',
     },
     "deploy/e2e/collector_gate_e2e.py": {
         ('seed', "json.loads(self.docker('cat', '/var/lib/storage-viz/manifest.json'))"): 'E2E harness: the disposable test host.',
@@ -83,21 +73,8 @@ PARSE_SITES = {
     "collector/inventory.py": {
         ('load_inventory', "json.loads(cfg_path.read_text(encoding='utf-8'))"): 'Collector inventory configuration.',
     },
-    "collector/legacy.py": {
-        ('parse_probe', 'json.loads(raw)'): 'S2: remote legacy probe response.',
-    },
-    "collector/snapshot.py": {
-        ('validate_download', "json.loads(bytes(downloaded).decode('utf-8'))"): 'S3: v1 snapshot download.',
-    },
     "collector/store.py": {
-        ('_old_durations', 'json.loads(path.read_bytes())'): 'S6: old duration history.',
-        ('_old_manifest', 'json.loads(path.read_bytes())'): 'S6: old store manifest.',
-        ('_old_capture', 'json.loads(data)'): 'S6: old store snapshot.',
         ('load', 'json.loads(self.record_path.read_bytes())'): 'Local persisted record.',
-        ('import_legacy', "json.loads((old / manifest['state']).read_bytes())"): 'S6: old job record.',
-    },
-    "collector/transport.py": {
-        ('fetch_status', "json.loads(data.decode('utf-8'))"): 'S2: v1 status reply.',
     },
     "tools/check_shims.py": {
         ('done_units', 'json.loads((root / PROGRESS).read_text())'): 'Lint progress configuration.',
@@ -153,11 +130,6 @@ PARSE_SITES = {
     },
 }
 
-# Parsers in the embedded Python program installed on v1 hosts.
-EMBEDDED = {
-    ("collector/legacy.py", "return json.loads(data)"): "S2: host telemetry files.",
-    ("collector/legacy.py", "try: seq = json.loads(data).get('seq')"): "S2: host manifest.",
-}
 # Each installer snippet decodes one result from its own activator.
 INSTALLER_READS = {"parse_status_path", "prepare_legacy_proxy_recovery",
                    "is_no_state_rollback_error", "validate_recovery_status"}
@@ -207,11 +179,7 @@ def path_value(node, bindings, seen=frozenset()):
     return "*"
 
 
-def active(reason, live):
-    return bool(reason) and (not re.match(r"S\d+:", reason) or reason.split(":")[0] in live)
-
-
-def python_errors(name, source, live):
+def python_errors(name, source):
     errors = []
     tree = ast.parse(source)
     aliases = {}
@@ -239,7 +207,7 @@ def python_errors(name, source, live):
                 reason = PARSE_SITES.get(name, {}).get(key, "")
                 used[key] += 1
                 if not (name == "api/routes.py" and scope == "rescan") and (
-                        not active(reason, live) or used[key] > 1):
+                        not reason or used[key] > 1):
                     errors.append(f"{name}:{node.lineno}: parse external JSON in the contract or request boundary")
             target = write_target(node)
             if target is not None:
@@ -249,9 +217,8 @@ def python_errors(name, source, live):
                         if name not in owners:
                             errors.append(f"{name}:{node.lineno}: write {pattern} through {' or '.join(sorted(owners))}")
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and "\n" in node.value:
-            # The legacy transport sends a Python program as a multiline literal.
             for offset, line in enumerate(node.value.splitlines()):
-                if PARSE_TEXT.search(line) and not active(EMBEDDED.get((name, line.strip()), ""), live):
+                if PARSE_TEXT.search(line):
                     errors.append(f"{name}:{node.lineno + offset}: move the embedded JSON parse to its boundary")
         for child in ast.iter_child_nodes(node):
             visit(child, scope, bindings)
@@ -260,18 +227,14 @@ def python_errors(name, source, live):
 
 
 def check(root):
-    done = done_units(root)
     errors = []
     for path in sources(root):
         name = path.as_posix()
-        if not runtime(path) or name in {"tools/lint_owners.py", "viewer/echarts.min.js", "deploy/e2e/run-agent-channel-e2e.sh",
-                                             "deploy/e2e/run-dashboard-upgrade-rehearsal.sh"}:
+        if not runtime(path) or name in {"tools/lint_owners.py", "viewer/echarts.min.js", "deploy/e2e/run-agent-channel-e2e.sh"}:
             continue
         source = (root / path).read_text()
         if path.suffix == ".py":
-            live = {shim.strip() for line in source.splitlines() for m in markers(line) if m and m[2] not in done
-                    for shim in m[3].split(",")}
-            errors.extend(python_errors(name, source, live))
+            errors.extend(python_errors(name, source))
         elif path.suffix in {".js", ".mjs", ".html", ".sh"}:
             if path.suffix != ".sh" and name not in BOUNDARIES:
                 for match in PARSE_TEXT.finditer(source):

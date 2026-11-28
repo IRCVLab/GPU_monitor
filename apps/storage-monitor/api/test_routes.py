@@ -142,21 +142,6 @@ def test_an_unexpected_admission_failure_is_500_internal(collector_api, monkeypa
     assert host.latest_job() is None
 
 
-def test_v2_rescan_without_request_id_delivery_answers_503(collector_api):
-    from collector.test_volumes import BA, VA, V2Host, capture
-
-    host, request, origin = collector_api
-    auth = rescan_headers(request, origin)
-    v2 = V2Host(host, "alpha-1")
-    v2.volume(VA, BA, "/a", capture(VA, BA, "/a", host.clock.now - 600))
-    v2.publish()
-    host.host.delivers_request_ids = False  # observed over S2
-    host.tick()
-    host.fleet.start()
-    code, body, _ = request("POST", "/api/v2/servers/alpha-1/rescan", "{}", auth)
-    assert (code, body["error"]["code"]) == (503, "RESCAN_UNAVAILABLE")
-
-
 def test_servers_show_each_transport_the_agent_update_track_and_the_rollout(collector_api, tmp_path):
     import dataclasses
 
@@ -164,7 +149,7 @@ def test_servers_show_each_transport_the_agent_update_track_and_the_rollout(coll
     from collector.test_rollout import write_agent
 
     host, request, _ = collector_api
-    host.servers = [dataclasses.replace(host.servers[0], canary=True), dataclasses.replace(host.servers[1], transport="legacy")]
+    host.servers = [dataclasses.replace(host.servers[0], canary=True), host.servers[1]]
     host.host.agents["alpha-1"] = FakeUpdater("1" * 40)
     write_agent(tmp_path / "agent", "2" * 40)
     host.restart(desired_path=tmp_path / "agent" / "storage-viz-agent.json")
@@ -176,7 +161,7 @@ def test_servers_show_each_transport_the_agent_update_track_and_the_rollout(coll
     rows = {row["server_id"]: row for row in fleet["servers"]}
     assert rows["alpha-1"]["link"]["transport"] == "gate" and rows["alpha-1"]["link"]["state"] == "ok"
     assert rows["alpha-1"]["agent"] == {"release_sha": "2" * 40, "matches_desired": True, "update": "probation", "last_error": None}
-    assert rows["beta-2"]["agent"]["update"] == "in_sync" and rows["beta-2"]["agent"]["release_sha"] is None
+    assert rows["beta-2"]["agent"]["update"] == "in_sync" and rows["beta-2"]["agent"]["release_sha"] == "3" * 40
     assert fleet["rollout"] == {"phase": "canary", "reason": None, "error": None, "desired_sha": "2" * 40, "release_seq": 7,
                                 "canary": "alpha-1", "passed": []}
 
@@ -185,6 +170,7 @@ def test_capture_contract_and_retention(collector_api, monkeypatch):
     from collector.test_volumes import VA, BA, VB, BB, SID, V2Host, capture, sha
     host, request, _ = collector_api
     agent = V2Host(host)
+    agent.seq = host.actor().view.data.manifest.seq
     finished = host.clock.now
     first = agent.volume(VA, BA, "/a", capture(VA, BA, "/a", finished))
     second = agent.volume(VB, BB, "/b", capture(VB, BB, "/b", finished - 2 * 86400))
@@ -229,16 +215,6 @@ def test_capture_contract_and_retention(collector_api, monkeypatch):
     assert request("GET", url)[0] == 410  # Old reader after the durable record changed and pruned its file.
 
 
-def test_installed_health_probe_has_no_rescan_side_effect(collector_api):
-    host, request, origin = collector_api
-    status, session, headers = request("GET","/api/session")
-    assert status == 200 and session["can_rescan"]
-    auth = {"Cookie":headers["Set-Cookie"].split(";",1)[0], "Origin":origin, "X-CSRF-Token":session["csrf_token"]}
-    assert request("GET","/api/servers")[1] == {"data_mode":"inventory", "servers":[{"id":s.id} for s in host.servers]}
-    assert request("POST","/api/servers/hc-"+"a"*24+"/rescan","{}",auth)[:2] == (404, {"error":"UNKNOWN_SERVER"})
-    assert request("POST","/api/servers/alpha-1/rescan","{}",auth)[0] == 404
-
-
 def test_tick_failure_still_serves_the_published_view(collector_api, monkeypatch):
     host, request, _ = collector_api
     base = "/api/v2/servers/alpha-1"
@@ -259,24 +235,3 @@ def test_tick_failure_still_serves_the_published_view(collector_api, monkeypatch
     assert code == 200 and detail["volumes"] == row["volumes"] and detail["error"] == row["error"]
     assert request("GET", base + "/activity")[0] == 200
     assert request("GET", url)[:2] == (200, raw)
-
-
-
-def test_legacy_capacity_on_each_mount(collector_api):
-    from tools.gen_sample import simple_snapshot
-    host, request, _ = collector_api
-    doc = simple_snapshot("alpha-1", offset=200, medias=["hdd", "hdd"], use_pcts=[93,70])
-    from collector.test_bug_harness import status_data
-    doc.update(config_digest="a"*64, scan_generation=f"alpha-1-{doc['scan_started_unix']}-v1")
-    for row in doc["stale"]:
-        row["age_days"] = (doc["scan_started_unix"] - row["mtime"]) // 86400
-    status, data = status_data(doc)
-    host.host.publications["alpha-1"] = status
-    host.host.captures[status["sha256"]] = data
-    host.tick()
-    detail = request("GET", "/api/v2/servers/alpha-1")[1]
-    assert [v["mountpoint"] for v in detail["volumes"]] == [r["mountpoint"] for r in doc["selected_roots"]]
-    for vol, mount in zip(detail["volumes"], doc["mounts"]):
-        assert (vol["capacity"]["used_pct"], vol["capacity"]["source"]) == (mount["df_use_pct"], "scan")
-        assert vol["capacity"]["observed_unix"] == doc["scan_finished_unix"]
-        assert vol["severity"] == ("critical" if mount["df_use_pct"] == 93 else "warning")

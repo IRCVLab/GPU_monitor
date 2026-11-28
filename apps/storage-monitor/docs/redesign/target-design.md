@@ -1,6 +1,6 @@
 # Storage monitor: target design and migration plan
 
-Status: final proposal for owner review. No code is written yet. Inputs: `docs/redesign/as-is.md` and `docs/redesign/bug-catalog.md` at main 06cdd5f, the arena candidates and the reference branches `fix/storage-bug-sweep` (collector and API) and `fix/storage-viewer-sweep` (viewer). Paths are relative to `apps/storage-monitor/` unless they start with `/`.
+Status: deployed on 2026-11-27. The 2026-11-28 cleanup retired the transition code listed in §6.2. The milestone sequence records the original rollout plan. Inputs: `docs/redesign/as-is.md` and `docs/redesign/bug-catalog.md` at main 06cdd5f, the arena candidates and the reference branches `fix/storage-bug-sweep` (collector and API) and `fix/storage-viewer-sweep` (viewer). Paths are relative to `apps/storage-monitor/` unless they start with `/`.
 
 ## 0. The shape in one page
 
@@ -215,8 +215,8 @@ STATE_DIR/
 ```
 
 - Captures are stored byte for byte, so the file name is the hash. A restart lists `captures/` (C8).
-- `manifest_sha256` is the sha256 of the manifest bytes the host wrote; the verbatim object re-encoded no longer hashes to it. It is null for a v1 host, whose `manifest` is the scan-status envelope (S3). A job's `protocol` is `receipt` on a v2 host and `invocation` on a v1 host (S4).
-- Schema versions (M5a decision): no M2b to M4 release ships. Production goes from the pre-M2 release straight to the final one, and a rollback past M2 uses the untouched old store (R1). So the reader accepts `/2`, M2b's record, and upgrades it with `manifest_sha256: null`, and `protocol: "invocation"` and `last_dispatch_unix: null` on each job. It writes `/3` only. A record from a later schema is `STORE_UNAVAILABLE`.
+- `manifest_sha256` identifies the manifest bytes the host published. Jobs follow request IDs through the mailbox, run and receipt.
+- The central store reads and writes /3 records. An unrecognized record schema yields `STORE_UNAVAILABLE`.
 - `accepted` can lag the manifest: a volume whose new capture was rejected keeps its last accepted sha and shows `data_state: stale_rejected`.
 - `rejected` holds at most 32 entries, evicted when the manifest no longer names the sha (C2).
 - `link.seq` on disk is a reserved ceiling: no `contact_seq` above it has been issued. The actor reserves seqs in blocks and resumes above the ceiling after a restart, so an exchange alone does not rewrite the record; it is written when another field changes or a block runs out (I7).
@@ -760,7 +760,7 @@ Host requirements become python3, systemd, sudo and OpenSSH 8.1 or later. `cc`, 
 
 **As built in M3b (2026-11-27).** Central speaks the gate. These points add to or differ from §3.4 and the text above:
 
-- Transport per host, shown as `link.transport`. Inventory `transport: legacy` is the default: S2 until the gate answers an `observe` with its header, then the gate. Central tries the gate on the first contact and after each failed S2 observe, because a bootstrap turns S2 off. A reply without the header (`NOT_GATE`) sends a reverted host back to S2. A host that is not bootstrapped at deploy keeps working with no inventory edit. `transport: gate` pins a host to the gate, with no S2 fallback.
+- All hosts use the SSH gate. Inventory accepts an omitted transport or `transport: gate`.
 - `activate-update` and `rollback-update` only queue the updater, so the track reads the answer from `observe` (`update.last_attempt`). An answer counts only when the host finished it at or after the host time of the request (I20). A BUSY answer, or 300 host seconds without one, resends the request to an idle host.
 - Terminal answers: FLOOR, BOOTSTRAP_TOO_OLD, BAD_RELEASE and the host's SELFTEST_BACKOFF go to `refused`. Other failures (signature, digest, a first self-test failure) go to `backoff`.
 - `rolling_back` sends `rollback-update <previous>`, not `activate-update`. A refused rollback (FLOOR) ends `refused`, an edge the diagram lacks.
@@ -774,7 +774,6 @@ Host requirements become python3, systemd, sudo and OpenSSH 8.1 or later. `cc`, 
 - A gate refusal keeps the host's text in `host_code`. Only the gate's own codes pass through as the error code; any other host text is `GATE_REFUSED`, so NOT_GATE, TIMEOUT, UNREACHABLE and AUTH_FAILED come only from central's own observations.
 - Activate and rollback requests do not wait for the transfer semaphore; only stages, which carry the bundle, share it with captures.
 - `fleet.desired_agent()` re-reads `agent/storage-viz-agent.json` when a stat shows it changed. No SIGHUP handler: a dashboard release change restarts the service anyway. A lost `rollout.json` restarts in the canary phase.
-- S2 stays until every host reports the gate transport. `REMOTE_OBSERVATION_SCRIPT` stays with it, because the S2 probe runs it.
 
 **Limits found in M4 (accepted 2026-11-27).** Row paths in `top_files`, `stale` and error rows are capped at 4096 bytes, because the agent and collector reject longer strings. Longer rows are skipped from those lists, but their bytes still count in totals. An error row deeper than that is reported at its deepest ancestor that fits. Tree depth is capped at 128 levels by folding deeper levels into `other_bytes` at the cap (A10, fixed in M5). `vanished_dirs` counts VANISHED, REPLACED and FD_BUDGET_REOPEN_FAILED rows, not EACCES.
 
@@ -894,9 +893,9 @@ Rules for every unit: it lands as one commit series, or as the named a/b series.
 
 #### M9. Close out
 
-- Changes: delete the old `STATE_DIR/<sid>/` store and the imported duration history (R1, S6) after one week on M2, with a one-shot script the operator runs. It is the only data deletion in the plan. Ship `bootstrap_version 2` without S7 and rerun `bootstrap-agent.sh` on each host, one command per host. Update `docs/architecture.md` and `docs/operations.md`, and replace `docs/schema-v1.md` with `docs/schema-v2.md`.
+- Changes: retire the old store and duration-history readers. Existing directories stay on disk pending an owner decision. Ship `bootstrap_version 2` without S7 and rerun `bootstrap-agent.sh` on each host, one command per host. Update `docs/architecture.md` and `docs/operations.md`, and replace `docs/schema-v1.md` with `docs/schema-v2.md`.
 - Harness: `check_bug_coverage.py` green with no expected-failure markers left; `check_shims.py` finds no markers; `lint_owners.py`, `lint_ids.py` and `lint_viewer_judgments.py` over the whole tree.
-- Rollback: the store deletion is not reversible, so it runs only after the week. The bootstrap rerun reverts per host with `--revert`.
+- The old central store and duration-history directories stay on disk until the owner decides their disposition. Bootstrap 1 continues to support current bundles and central operations.
 
 ### 6.2 Temporary shims
 
@@ -905,15 +904,15 @@ Every shim carries a `SHIM(Mx..My)` marker that `tools/check_shims.py` checks (I
 | Id | Shim | Added | Deleted |
 |---|---|---|---|
 | S1 | `selection.js` pure functions exported through `globalThis` for removal tests | M0 | M7 |
-| S2 | Legacy transport adapter in the actor (SFTP, Python probe, blocking `systemctl start` in a helper thread) | M2b | M3b |
-| S3 | v1 snapshot reader as one `legacy` pseudo-volume | M2b | M5c |
-| S4 | v1 job correlation by `InvocationID`, ending `unconfirmed` when ambiguous | M2b | M5c |
+| S2 | Legacy transport adapter in the actor (SFTP, Python probe, blocking `systemctl start` in a helper thread) | M2b | M3b (deleted 2026-11-28) |
+| S3 | v1 snapshot reader as one `legacy` pseudo-volume | M2b | M5c (deleted 2026-11-28) |
+| S4 | v1 job correlation by `InvocationID`, ending `unconfirmed` when ambiguous | M2b | M5c (deleted 2026-11-28) |
 | S5 | v1 API routes reading `ServerView` | M2b | M8 |
-| S6 | One-shot import of `scan-duration-history/` into `record.durations` | M2b | M9 |
-| S7 | Gate verbs `get-snapshot` and `get-status` | M3 | central callers M5c; verbs M9 (`bootstrap_version 2`) |
-| S8 | New agent keeps the v1 files on hosts for rollback | M5b | M5c |
-| S9 | Installed health checker probes the session, ordered inventory IDs and an authenticated POST for a nonexistent hc- server. Release proxy forwards this probe until the checker is reinstalled. The reinstalled checker probes a rolled-back pre-redesign release the same way. | M8 | M9 |
-| R1 | Old store `STATE_DIR/<sid>/` kept for rollback (retained data, no code) | M2b | M9 |
+| S6 | One-shot import of `scan-duration-history/` into `record.durations` | M2b | M9 (deleted 2026-11-28) |
+| S7 | Gate verbs `get-snapshot` and `get-status` | M3 | central callers M5c; verbs M9 (`bootstrap_version 2`) (deleted 2026-11-28) |
+| S8 | New agent keeps the v1 files on hosts for rollback | M5b | M5c (deleted 2026-11-28) |
+| S9 | Installed health checker probes the session, ordered inventory IDs and an authenticated POST for a nonexistent hc- server. Release proxy forwards this probe until the checker is reinstalled. The reinstalled checker probes a rolled-back pre-redesign release the same way. | M8 | M9 (deleted 2026-11-28) |
+| R1 | Old store reader for `STATE_DIR/<sid>/`. The directories remain on disk. | M2b | M9 (deleted 2026-11-28) |
 
 ## 7. Alternatives considered and rejected
 

@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from pathlib import Path
 
-from collector.test_bug_harness import Collector, payload_for, status_data
+from collector.test_bug_harness import Collector
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVE = ROOT / "viewer" / "serve.py"

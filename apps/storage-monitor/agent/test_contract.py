@@ -50,7 +50,7 @@ def test_gate_reads_real_runner_files_with_tab_in_filename(tmp_path):
         stream = io.BytesIO()
         assert gate.serve(command, paths, FakeHost(), io.BytesIO(), stream) == 0
         header, body = stream.getvalue().split(b"\n", 1)
-        assert header == ("storage-viz-gate/1 ok %d" % len(body)).encode()
+        assert header == ("storage-viz-gate/2 ok %d" % len(body)).encode()
         return body
     from collector import contract
     if hasattr(contract, "parse_manifest"):

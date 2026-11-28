@@ -3,38 +3,36 @@
 Every change goes through the pure reducers in ``health``, ``jobs`` and ``update``. The actor
 commits the new record before it runs the effects the reducers asked for, then
 publishes a new immutable ``ServerView`` by one attribute assignment. Transfers,
-update requests and the blocking rescan start run in helper threads that post their
+update requests and rescan requests run in helper threads that post their
 results back to the inbox, so observes continue while they run.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import hashlib
-import json
 import logging
 import queue
 import threading
 import time
 from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
 
-from collector import contract, health, jobs, judge, snapshot
+from collector import contract, health, jobs, judge
 from collector import update as updates
 from collector.contract import AgentFacts, ContractError, HostManifest, HostRun, LastRun, ManifestPointer
-from collector.errors import RescanUnavailable, StoreUnavailable
+from collector.errors import StoreUnavailable
 from collector.health import (
-    LEGACY_VOLUME, CaptureAccepted, CaptureGone, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
-    LegacyPublication, PublicationObserved, TransferFailed,
+    CaptureAccepted, CaptureGone, CaptureMismatch, CaptureRejected, ExchangeFailed, ExchangeOk, Fetch,
+    PublicationObserved, TransferFailed,
 )
 from collector.inventory import Server
 from collector.store import DURATION_LIMIT, DURATION_PLANS, Record, ServerStore
 from collector.transport import TransportError
 from collector.view import ObservationView, ServerView, build_view, publication
-from collector.legacy import legacy_volume
 
 _LOG = logging.getLogger(__name__)
 
 # Transfer failures that condemn the published capture. Any other code is retried on a later observe.
-_REJECT_CODES = frozenset({"SNAPSHOT_TOO_LARGE", "BAD_STATUS", "BAD_GENERATION", "CAPTURE_TOO_LARGE"})
+_REJECT_CODES = frozenset({"CAPTURE_TOO_LARGE"})
 _GONE_CODES = frozenset({"CAPTURE_GONE"})
 """The host pruned the capture: the manifest moved on. Reread it; the sha is not condemned."""
 _MISMATCH_CODES = frozenset({"SIZE_MISMATCH"})
@@ -60,17 +58,12 @@ class Clock(Protocol):
 
 
 class Host(Protocol):
-    """What the actor asks of a storage server: ``gate.HostRouter`` sends each call over the
-    server's transport, the gate (``gate.GateHost``) or S2 (``legacy.LegacyHost``)."""
+    """The storage gate verbs the actor uses."""
     def observe(self, server: Server) -> Any:
-        """An Observation whose ``transport`` names who answered. Only the gate delivers request ids."""
+        """Read the current gate observation."""
     def get_manifest(self, server: Server) -> bytes: ...
     def get_capture(self, server: Server, volume_id: str, sha256: str, cap: int) -> bytes: ...
     def rescan(self, server: Server, request_id: str) -> jobs.RescanReply: ...
-    def fetch_capture(self, server: Server, publication: Mapping[str, Any]) -> bytes:
-        """SHIM(M2b..M5c) S3: the v1 snapshot named by a scan-status envelope."""
-    def start_rescan(self, server: Server) -> None:
-        """SHIM(M2b..M5c) S4: the blocking start of the manual scan unit."""
     def stage_update(self, server: Server, sha: str, bundle: bytes, signature: bytes) -> None: ...
     def activate_update(self, server: Server, sha: str) -> None: ...
     def rollback_update(self, server: Server, sha: str) -> None: ...
@@ -187,7 +180,6 @@ class Fetched:
     seq: int
     volume_id: str
     sha: str
-    generation: Optional[str]
     outcome: str
     """accepted, rejected, mismatch, gone, retry or transport."""
     code: Optional[str] = None
@@ -200,13 +192,6 @@ class Replied:
     """The host's answer to ``rescan <request_id>``; ambiguous when the exchange gave none."""
     seq: int
     outcome: str
-    code: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class Dispatched:
-    seq: int
-    ok: bool
     code: Optional[str] = None
 
 
@@ -291,9 +276,9 @@ def _capture_event(message: Fetched, at: int) -> health.DataEvent:
     if message.outcome == "accepted":
         return CaptureAccepted(message.volume_id, message.sha)
     if message.outcome == "rejected":
-        return CaptureRejected(message.volume_id, message.sha, message.generation, message.code, at)
+        return CaptureRejected(message.volume_id, message.sha, message.code, at)
     if message.outcome == "mismatch":
-        return CaptureMismatch(message.volume_id, message.sha, message.generation, at)
+        return CaptureMismatch(message.volume_id, message.sha, at)
     if message.outcome == "gone":
         return CaptureGone(message.volume_id, message.sha, at)
     return TransferFailed(message.volume_id, message.sha)
@@ -303,14 +288,6 @@ def _durable(record: Record) -> Record:
     """The record less what changes on every exchange or lives only in memory; a change here needs a write."""
     return replace(record, link=replace(record.link, seq=0, last_ok_unix=None),
                    data=replace(record.data, fetching=frozenset(), retried=frozenset(), gone={}))
-
-
-def record_duration(durations: Mapping[str, Any], status: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Keep the last completed full and ssd scan durations for the ETA (today's rule)."""
-    if status.get("state") != "complete":
-        return durations
-    finished = status.get("finished_unix") or status.get("last_finished_unix")
-    return _add_duration(durations, status.get("scan_plan"), finished, status.get("last_duration_sec"))
 
 
 def last_run_duration(durations: Mapping[str, Any], last_run: Optional[LastRun]) -> Mapping[str, Any]:
@@ -350,14 +327,13 @@ class ServerActor:
         self._record = Record()
         self._publication = None
         self._captures: Mapping[str, tuple] = {}
-        """volume_id -> (sha, parsed capture) for every accepted capture: a v1 payload (S3) or a VolumeCapture."""
+        """volume_id -> (sha, parsed capture) for every accepted capture: a VolumeCapture."""
         self._rendered: Any = None
         """What the publication was rendered from, so an unchanged publication renders nothing."""
         self._bad_manifest: Optional[tuple] = None
         """Memory only: (sha256, code) of the last manifest refused, so it is read once per process."""
         self._reread_manifest = False
         self._observation: Optional[ObservationView] = None
-        self._scan: Optional[jobs.Scan] = None
         self._run: HostRun = HostRun()
         self._host_clock = None
         self._error: Optional[str] = None
@@ -368,8 +344,6 @@ class ServerActor:
         """No seq above this was issued: the link.seq record.json holds."""
         self._next_contact = 0.0
         self._failed_ticks = 0
-        self._transport = server.transport
-        """Who answered the last observe: ``gate`` or ``legacy`` (S2). The inventory's choice until then."""
 
     # ------------------------------------------------------------ driving
 
@@ -425,8 +399,8 @@ class ServerActor:
         self._next_contact = self.clock.monotonic() + judge.IDLE_TELEMETRY_INTERVAL_SECONDS
         stored = self.store.load()
         if stored is None:
-            stored, capture = self.store.import_legacy() or (Record(), None)
-            self.store.commit(stored, capture, prune=False)
+            stored = Record()
+            self.store.commit(stored, prune=False)
         captures = self._load_captures(stored)
         record = stored
         if set(captures) != set(record.data.accepted):
@@ -455,9 +429,7 @@ class ServerActor:
         for volume_id, sha in record.data.accepted.items():
             data = self.store.read_capture(volume_id, sha)
             try:
-                if volume_id == LEGACY_VOLUME:
-                    captures[volume_id] = (sha, json.loads(data))
-                elif isinstance(manifest, HostManifest) and manifest.volume(volume_id) is not None:
+                if isinstance(manifest, HostManifest) and manifest.volume(volume_id) is not None:
                     captures[volume_id] = (sha, contract.parse_capture(data, manifest.volume(volume_id).expected(sha)))
             except ValueError:
                 _LOG.warning("stored capture for %s is corrupt; it will be fetched again", self.server.id)
@@ -466,9 +438,7 @@ class ServerActor:
     def _hold(self, data: health.Data, captures: Mapping[str, tuple]) -> tuple:
         """Build a publication only when its manifest, accepted captures or diagnostics change."""
         captures = {volume_id: held for volume_id, held in captures.items() if data.accepted.get(volume_id) == held[0]}
-        if LEGACY_VOLUME in captures:
-            key = ("v1", captures[LEGACY_VOLUME][0], health.volume_state(data, LEGACY_VOLUME))
-        elif isinstance(data.manifest, HostManifest):
+        if isinstance(data.manifest, HostManifest):
             key = ("v2", data.manifest.sha256, tuple(sorted(data.accepted.items())),
                    tuple(sorted(health.volume_states(data).items())), tuple(sorted(health.volume_problems(data).items())))
         else:
@@ -477,11 +447,6 @@ class ServerActor:
             return captures, key, self._publication
         if key is None:
             return captures, key, None
-        if key[0] == "v1":
-            sha, payload = captures[LEGACY_VOLUME]
-            manifest, parsed, raw = legacy_volume(payload, sha)
-            return captures, key, publication(manifest, parsed, raw, states=health.volume_states(data),
-                                             user_file_totals={u["uid"]: u["files"] for u in payload["users"]})
         return captures, key, publication(data.manifest, captures, states=health.volume_states(data), problems=health.volume_problems(data))
 
     def _swap(self, held: tuple) -> None:
@@ -511,7 +476,7 @@ class ServerActor:
 
     def _publish(self) -> None:
         self.view = build_view(self.server, self._record, self._publication, self._observation, self._host_clock, self._error,
-                               self._transport, self._agent.release_sha)
+                               self._agent.release_sha)
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -525,16 +490,6 @@ class ServerActor:
         if job.state in jobs.TERMINAL:
             return replace(record, job=None, last_job=job)
         return replace(record, job=job)
-
-    def _job_observed(self, record: Record, captures) -> tuple:
-        if record.job.protocol == "receipt":
-            return jobs.reduce(record.job, self._trace(record))
-        if self._scan is None:
-            return record.job, ()
-        rejected = frozenset(entry.get("generation") for entry in record.data.rejected.values())
-        accepted = captures[LEGACY_VOLUME][1]["scan_generation"] if LEGACY_VOLUME in captures else None  # SHIM(M2b..M5c) S3
-        event = jobs.Observed(int(self.clock.time()), self._scan, accepted, rejected)
-        return jobs.reduce(record.job, event)
 
     def _trace(self, record: Record) -> jobs.Traced:
         request_id = record.job.request_id
@@ -552,8 +507,6 @@ class ServerActor:
             self._admit(message)
         elif isinstance(message, Fetched):
             self._fetched(message)
-        elif isinstance(message, Dispatched):
-            self._dispatched(message)
         elif isinstance(message, Replied):
             self._replied(message)
         elif isinstance(message, UpdateSent):
@@ -593,29 +546,21 @@ class ServerActor:
             self._commit(replace(self._record, link=health.reduce_link(self._record.link, ExchangeFailed(seq, at, exc.code))))
             return
         received = self.clock.monotonic()
-        self._transport = observation.transport
         self._host_clock = (observation.host_now, received)
         self._observation = ObservationView({**observation.status, "observed_unix": at}, received)
         self._agent = observation.agent
-        self._scan = observation.scan
         self._run = observation.run
         record = self._record
         before = record.update
         refused = None
         if observation.manifest is not None:
             record, fetches, refused = self._manifest_observed(record, observation.manifest, seq, at)
-        elif observation.publication_error is None:
-            # SHIM(M2b..M5c) S3: a host without manifest.json, or one rolled back to the v1 agent.
-            data, fetches = health.reduce_data(record.data, PublicationObserved(LegacyPublication(observation.publication), at))
-            record = replace(record, link=health.reduce_link(record.link, ExchangeOk(seq, at)), data=data,
-                             durations=record_duration(record.durations, observation.status))
         else:
-            record = replace(record, link=health.reduce_link(record.link, ExchangeFailed(seq, at, observation.publication_error)),
-                             durations=record_duration(record.durations, observation.status))
+            record = replace(record, link=health.reduce_link(record.link, ExchangeOk(seq, at)))
             fetches = ()
         dispatches: tuple = ()
         if record.job is not None:
-            job, dispatches = self._job_observed(record, self._captures)
+            job, dispatches = jobs.reduce(record.job, self._trace(record))
             record = self._with_job(record, job)
         held = self._hold(record.data, self._captures)
         record, update_effects = self._update_observed(record, observation, at, refused)
@@ -629,7 +574,7 @@ class ServerActor:
         for fetch in fetches:
             self._start_transfer(fetch)
         for _ in dispatches:
-            self._dispatch(record.job)
+            self._send_rescan(record.job.request_id)
 
     def _manifest_observed(self, record: Record, pointer: ManifestPointer, seq: int, at: int) -> tuple:
         """Read a changed manifest, then publish the held one to the data reducer (design §4.2 steps 2, 3).
@@ -695,11 +640,7 @@ class ServerActor:
         last = record.last_job.requested_unix if record.last_job is not None else None
         if last is not None and message.at - last < message.cooldown_seconds:
             return Admitted(error="COOLDOWN", retry_after=message.cooldown_seconds - (message.at - last))
-        protocol = "receipt" if isinstance(record.data.manifest, HostManifest) else "invocation"
-        if protocol == "receipt" and self._transport != "gate":
-            # Refused before any job or cooldown exists: only the gate writes the request mailbox (S2 cannot).
-            return Admitted(error=RescanUnavailable.code)
-        job = jobs.admit(message.request_id, message.actor, message.at, protocol)
+        job = jobs.admit(message.request_id, message.actor, message.at)
         if not self._commit(replace(record, job=job)):
             return Admitted(error=StoreUnavailable.code)
         self._publish()
@@ -710,46 +651,6 @@ class ServerActor:
     # ------------------------------------------------------------ transfers
 
     def _start_transfer(self, fetch: Fetch) -> None:
-        if isinstance(fetch.publication, HostManifest):
-            self._start_volume_transfer(fetch)
-            return
-        seq = self._next_seq()
-        manifest = fetch.publication.envelope
-        volume_id, sha = fetch.volume_id, fetch.sha
-        generation = manifest["generation"].removesuffix(".json")
-        server, host, transfers = self.server, self.host, self.transfers
-
-        def work() -> None:
-            try:
-                with transfers:
-                    data = host.fetch_capture(server, manifest)
-            except TransportError as exc:
-                outcome = "mismatch" if exc.code in _MISMATCH_CODES else (
-                    "transport" if exc.code in health.TRANSPORT_CODES | health.AUTH_CODES else (
-                        "rejected" if exc.code in _REJECT_CODES else "retry"))
-                self.post(Fetched(seq, volume_id, sha, generation, outcome, exc.code))
-                return
-            except Exception:
-                _LOG.exception("capture transfer failed for %s", server.id)
-                self.post(Fetched(seq, volume_id, sha, generation, "retry", "TRANSFER_FAILED"))
-                return
-            desired = snapshot.DesiredServer(server_id=server.id, config_digest=server.scanner_digest)
-            try:
-                valid = snapshot.validate_download(manifest, data, desired)
-            except _CONTENT_ERRORS as exc:
-                mismatch = str(exc) in _MISMATCH_MESSAGES
-                self.post(Fetched(seq, volume_id, sha, generation, "mismatch" if mismatch else "rejected",
-                                  "SHA_MISMATCH" if mismatch else "INVALID_SNAPSHOT"))
-                return
-            except Exception:
-                _LOG.exception("capture validation failed for %s", server.id)
-                self.post(Fetched(seq, volume_id, sha, generation, "retry", "TRANSFER_FAILED"))
-                return
-            self.post(Fetched(seq, volume_id, sha, generation, "accepted", payload=valid.payload, data=data))
-
-        self.spawn(work, f"storage-viz-transfer-{server.id}")
-
-    def _start_volume_transfer(self, fetch: Fetch) -> None:
         seq = self._next_seq()
         volume_id, sha = fetch.volume_id, fetch.sha
         volume = fetch.publication.volume(volume_id)
@@ -757,7 +658,7 @@ class ServerActor:
         server, host, transfers = self.server, self.host, self.transfers
 
         def post(outcome: str, code: Optional[str] = None, **fields: Any) -> None:
-            self.post(Fetched(seq, volume_id, sha, None, outcome, code, **fields))
+            self.post(Fetched(seq, volume_id, sha, outcome, code, **fields))
 
         def work() -> None:
             if declared > contract.MAX_CAPTURE_BYTES:
@@ -800,7 +701,7 @@ class ServerActor:
             captures = {**self._captures, message.volume_id: (message.sha, message.payload)} if accepted else self._captures
             held = self._hold(data, captures)
             if record.job is not None and record.job.state == "collecting":
-                job, _ = self._job_observed(record, held[0])
+                job, _ = jobs.reduce(record.job, self._trace(record))
                 record = self._with_job(record, job)
             before = record.update
             record, update_effects = self._judge_probation(record, at, None, ())
@@ -842,17 +743,16 @@ class ServerActor:
                 update = updates.Update(desired=sha, since_unix=at, verified=update.verified, seen=update.seen)
             return replace(record, update=update), ()
         effects: tuple = ()
-        if observation.transport == "gate":  # S2 cannot stage: the track only follows the desired release
-            agent = observation.agent
-            permitted = self.channel.permits(self.server.id)
-            allowed = (permitted and update.state in ("in_sync", "backoff") and update.desired is not None
-                       and agent.release_sha != update.desired and self.channel.acquire(self.server.id))
-            update, effects = updates.reduce(update, updates.Observed(
-                at, observation.host_now, agent.release_sha, idle=not observation.run.present,
-                job_active=record.job is not None, allowed=allowed, permitted=permitted, broken=agent.broken,
-                attempt=agent.attempt, cadence_sec=_cadence(record.data),
-                manifest_sha=observation.manifest.sha256 if observation.manifest is not None else None,
-                release_passed=self.channel.passed(agent.release_sha)))
+        agent = observation.agent
+        permitted = self.channel.permits(self.server.id)
+        allowed = (permitted and update.state in ("in_sync", "backoff") and update.desired is not None
+                   and agent.release_sha != update.desired and self.channel.acquire(self.server.id))
+        update, effects = updates.reduce(update, updates.Observed(
+            at, observation.host_now, agent.release_sha, idle=not observation.run.present,
+            job_active=record.job is not None, allowed=allowed, permitted=permitted, broken=agent.broken,
+            attempt=agent.attempt, cadence_sec=_cadence(record.data),
+            manifest_sha=observation.manifest.sha256 if observation.manifest is not None else None,
+            release_passed=self.channel.passed(agent.release_sha)))
         return self._judge_probation(replace(record, update=update), at, refused, effects)
 
     def _judge_probation(self, record: Record, at: int, refused: Optional[Refusal], effects: tuple) -> tuple:
@@ -872,7 +772,7 @@ class ServerActor:
             self.channel.release(self.server.id)
         if after != before:
             self.channel.reported(self.server.id, before, after)
-        if (after.state == "in_sync" and self._transport == "gate" and self._agent.release_sha == after.desired == after.verified
+        if (after.state == "in_sync" and self._agent.release_sha == after.desired == after.verified
                 and run_verdict(after.desired, self._record.data) == (False, None)):
             # A host whose release passed probation here and shows a good real run by it, such as the
             # canary after rollout.json was lost: it counts as in sync for the rollout.
@@ -933,12 +833,6 @@ class ServerActor:
 
     # ------------------------------------------------------------ rescan
 
-    def _dispatch(self, job: jobs.Job) -> None:
-        if job.protocol == "receipt":
-            self._send_rescan(job.request_id)
-        else:
-            self._start_rescan()
-
     def _send_rescan(self, request_id: str) -> None:
         seq = self._next_seq()
         server, host = self.server, self.host
@@ -966,37 +860,6 @@ class ServerActor:
         record = replace(record, link=health.reduce_link(record.link, link_event))
         if record.job is not None:
             job, _ = jobs.reduce(record.job, jobs.RescanReplied(at, message.outcome, message.code))
-            record = self._with_job(record, job)
-        if self._commit(record):
-            self._next_contact = 0.0
-
-    def _start_rescan(self) -> None:
-        seq = self._next_seq()
-        server, host = self.server, self.host
-
-        def work() -> None:
-            # SHIM(M2b..M3b) S2: today's sudo rule allows only the blocking oneshot start.
-            try:
-                host.start_rescan(server)
-            except TransportError as exc:
-                self.post(Dispatched(seq, False, exc.code))
-                return
-            except Exception:
-                _LOG.exception("rescan start failed for %s", server.id)
-                self.post(Dispatched(seq, False, "RESCAN_FAILED"))
-                return
-            self.post(Dispatched(seq, True))
-
-        self.spawn(work, f"storage-viz-rescan-{server.id}")
-
-    def _dispatched(self, message: Dispatched) -> None:
-        at = int(self.clock.time())
-        record = self._record
-        failed_contact = message.code in health.TRANSPORT_CODES | health.AUTH_CODES
-        link_event = ExchangeFailed(message.seq, at, message.code) if failed_contact else ExchangeOk(message.seq, at)
-        record = replace(record, link=health.reduce_link(record.link, link_event))
-        if record.job is not None:
-            job, _ = jobs.reduce(record.job, jobs.DispatchReturned(at, message.ok, message.code))
             record = self._with_job(record, job)
         if self._commit(record):
             self._next_contact = 0.0

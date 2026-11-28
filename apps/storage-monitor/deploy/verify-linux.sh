@@ -218,7 +218,6 @@ run_commands_in_dir() {
   run_one "$workdir" "python3 -m unittest discover -s agent -p 'test_*.py' -v" python3 -m unittest discover -s agent -p 'test_*.py' -v || rc=1
   run_one "$workdir" "python3 -m unittest discover -s collector -p 'test_*.py' -v" python3 -m unittest discover -s collector -p 'test_*.py' -v || rc=1
   run_one "$workdir" 'bash deploy/test_deploy_scripts.sh' bash deploy/test_deploy_scripts.sh || rc=1
-  run_one "$workdir" 'deploy/install-agent.sh --dry-run' deploy/install-agent.sh --dry-run || rc=1
   return "$rc"
 }
 
@@ -307,7 +306,6 @@ run_one 'python3 tests/test_fixtures.py' python3 tests/test_fixtures.py
 run_one "python3 -m unittest discover -s agent -p 'test_*.py' -v" python3 -m unittest discover -s agent -p 'test_*.py' -v
 run_one "python3 -m unittest discover -s collector -p 'test_*.py' -v" python3 -m unittest discover -s collector -p 'test_*.py' -v
 run_one 'bash deploy/test_deploy_scripts.sh' bash deploy/test_deploy_scripts.sh
-run_one 'deploy/install-agent.sh --dry-run' deploy/install-agent.sh --dry-run
 exit "$rc"
 REMOTE
 )"

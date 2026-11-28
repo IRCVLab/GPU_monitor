@@ -2,7 +2,7 @@
 
 ``parse_manifest`` and ``parse_capture`` turn host bytes into frozen domain values or
 raise ``ContractError`` with one reason from ``REASONS``. Nothing past them re-checks
-shapes (I21). The v1 snapshot keeps its own validator in ``collector/snapshot.py`` (S3).
+shapes (I21).
 """
 from __future__ import annotations
 
@@ -247,7 +247,7 @@ class HostRun:
 
 @dataclass(frozen=True)
 class AgentFacts:
-    """What the gate reports of the agent release and its updater. Empty over S2."""
+    """What the gate reports of the agent release and its updater."""
     release_sha: Optional[str] = None
     """The release ``/opt/storage-viz/current`` points at."""
     broken: bool = False
@@ -260,15 +260,15 @@ class AgentFacts:
 class GateObservation:
     """The gate's ``observe`` reply (§4.5). Scan state comes from the host's lock and run.json (I12)."""
     manifest: Optional[ManifestPointer]
-    """None for a host without manifest.json (a v1 agent)."""
+    """None until the host publishes manifest.json."""
     run: HostRun
     progress: Any
-    """progress.json as the gate read it; the v1 status reader checks it against the run."""
+    """progress.json as the gate read it; the gate parser checks it against the run."""
     agent: AgentFacts
     units: Mapping[str, Any]
     """Id, ActiveState and InvocationID of the scan, scheduled-scan and update units."""
-    legacy: Mapping[str, Any]
-    """SHIM(M3b..M5c) S7: the v1 telemetry section, checked by ``legacy.parse_telemetry``."""
+    telemetry: Mapping[str, Any]
+    """Service and timer details. Bootstrap 1 includes these under the legacy key."""
     cron: bool = False
     """The host runs the agent from cron with no units (``scheduler: cron``, the TrueNAS gate's ``--no-units``)."""
 
@@ -307,10 +307,10 @@ def parse_observation(data: bytes) -> GateObservation:
     agent = raw["agent"]
     facts = AgentFacts(release_sha=_optional(agent["release_sha"], lambda value: _id(value, RELEASE_SHA_RE, "agent.release_sha")),
                        broken=agent["health"] == "broken", attempt=_attempt(raw["update"]))
-    units, legacy = raw["units"], raw["legacy"]
-    if not isinstance(units, dict) or not isinstance(legacy, dict):
-        raise ContractError(BAD_FIELD, "units or legacy is not an object")
-    return GateObservation(pointer, host_run, raw["progress"], facts, units, legacy, raw.get("scheduler") == "cron")
+    units, telemetry = raw["units"], raw.get("telemetry", raw.get("legacy"))
+    if not isinstance(units, dict) or not isinstance(telemetry, dict):
+        raise ContractError(BAD_FIELD, "units or telemetry is not an object")
+    return GateObservation(pointer, host_run, raw["progress"], facts, units, telemetry, raw.get("scheduler") == "cron")
 
 
 def _attempt(update: Any) -> Optional[Attempt]:

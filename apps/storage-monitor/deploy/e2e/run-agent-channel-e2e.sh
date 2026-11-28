@@ -7,7 +7,7 @@
 #   1. builds three bundles in a scratch git repo (A through the real docker
 #      hstscan build, B an agent change, C whose hstscan miscounts) and signs
 #      them with a throwaway key;
-#   2. installs the legacy agent with install-agent.sh, as hosts have it today;
+#   2. provisions the host accounts and SSH keys;
 #   3. runs bootstrap-agent.sh from this machine over ssh, twice;
 #   4. drives the gate with the central key: forced command, observe, rescan;
 #   5. runs the real collector over the gate (deploy/e2e/collector_gate_e2e.py):
@@ -99,16 +99,12 @@ PORT="$(docker port "$CID" 22/tcp | head -1 | sed 's/.*://')"
 docker cp "$WORK/admin.pub" "$CID:/home/admin/.ssh/authorized_keys"
 docker cp "$WORK/central.pub" "$CID:/home/monitoring/.ssh/authorized_keys"
 docker exec "$CID" sh -c 'chown admin:admin /home/admin/.ssh/authorized_keys; chown monitoring:monitoring /home/monitoring/.ssh/authorized_keys'
-docker cp "$app" "$CID:/root/legacy-src"
-docker exec "$CID" bash /root/legacy-src/deploy/install-agent.sh --server-id e2e-host >/dev/null
-docker exec "$CID" systemctl is-enabled storage-viz-scan.timer >/dev/null || fail "legacy timer not enabled"
-LEGACY_SNAPSHOT='cd / && stat -c "%n %a %U:%G" home/monitoring && for p in home/monitoring/.ssh etc/sudoers.d/storage-viz-monitoring etc/sudoers.d/storage-viz etc/systemd/system/storage-viz-scan.service etc/systemd/system/storage-viz-scheduled-scan.service etc/systemd/system/storage-viz-scan.timer etc/systemd/system/storage-viz-agent-update.service opt/storage-viz usr/local/lib/storage-viz etc/storage-viz; do if [ -e "$p" ]; then find "$p" -printf "%p %m %u:%g %y\n" | sort; find "$p" -type f -exec sha256sum {} + | sort; else echo "absent $p"; fi; done; systemctl is-enabled storage-viz-scan.timer'
-before="$(docker exec "$CID" sh -c "$LEGACY_SNAPSHOT")"
-pass "legacy agent installed by install-agent.sh on Ubuntu 20.04 ($(docker exec "$CID" systemctl --version | head -1))"
+BOOTSTRAP_SNAPSHOT='cd / && stat -c "%n %a %U:%G" home/monitoring && for p in home/monitoring/.ssh etc/sudoers.d/storage-viz-monitoring etc/sudoers.d/storage-viz etc/systemd/system/storage-viz-scan.service etc/systemd/system/storage-viz-scheduled-scan.service etc/systemd/system/storage-viz-scan.timer etc/systemd/system/storage-viz-agent-update.service opt/storage-viz usr/local/lib/storage-viz etc/storage-viz; do if [ -e "$p" ]; then find "$p" -printf "%p %m %u:%g %y\n" | sort; find "$p" -type f -exec sha256sum {} + | sort; else echo "absent $p"; fi; done'
+before="$(docker exec "$CID" sh -c "$BOOTSTRAP_SNAPSHOT")"
 
 SSH=(-oBatchMode=yes -oStrictHostKeyChecking=no -oUserKnownHostsFile="$WORK/known_hosts" -oIdentitiesOnly=yes -oPort="$PORT" -oLogLevel=ERROR)
 bootstrap() {
-  "$app/deploy/bootstrap-agent.sh" --admin admin --bundle-dir "$WORK/A" --central-speaks-gate \
+  "$app/deploy/bootstrap-agent.sh" --admin admin --server-id e2e-host --bundle-dir "$WORK/A" --central-speaks-gate \
     --ssh-opt "-oIdentityFile=$WORK/admin" $(printf -- '--ssh-opt %s ' "${SSH[@]}") "$@" 127.0.0.1
 }
 gate() { ssh "${SSH[@]}" -oIdentityFile="$WORK/central" monitoring@127.0.0.1 "$@"; }
@@ -131,12 +127,12 @@ stage() {  # stage DIR SHA
 
 # -- 3. bootstrap ---------------------------------------------------------------
 set +e
-"$app/deploy/bootstrap-agent.sh" --admin admin --bundle-dir "$WORK/A" --ssh-opt "-oIdentityFile=$WORK/admin" \
+"$app/deploy/bootstrap-agent.sh" --admin admin --server-id e2e-host --bundle-dir "$WORK/A" --ssh-opt "-oIdentityFile=$WORK/admin" \
   $(printf -- '--ssh-opt %s ' "${SSH[@]}") 127.0.0.1 > "$WORK/guard.log" 2>&1
 rc_guard=$?
 set -e
 [[ $rc_guard -eq 2 ]] || fail "bootstrap ran without --central-speaks-gate (rc=$rc_guard)"
-[[ "$(docker exec "$CID" sh -c "$LEGACY_SNAPSHOT")" == "$before" ]] || fail "the refused bootstrap changed the host"
+[[ "$(docker exec "$CID" sh -c "$BOOTSTRAP_SNAPSHOT")" == "$before" ]] || fail "the refused bootstrap changed the host"
 bootstrap > "$WORK/bootstrap1.log" 2>&1 || { cat "$WORK/bootstrap1.log"; fail "bootstrap failed"; }
 grep -q '"schema": "storage-viz.observe/1"' "$WORK/bootstrap1.log" || fail "bootstrap did not print observe"
 bootstrap > "$WORK/bootstrap2.log" 2>&1 || { cat "$WORK/bootstrap2.log"; fail "second bootstrap failed"; }
@@ -155,7 +151,7 @@ pass "release A active through the updater unit (self-test under systemd-run), a
 # -- 4. the gate ------------------------------------------------------------------
 for cmd in "id" "observe; id" "sh -c id" "get-status x" "scp -t /tmp"; do
   set +e; out="$(gate "$cmd" 2>&1)"; rc=$?; set -e
-  [[ $rc -eq 2 && "$out" == "storage-viz-gate/1 err USAGE" ]] || fail "gate accepted '$cmd' (rc=$rc: $out)"
+  [[ $rc -eq 2 && "$out" == "storage-viz-gate/2 err USAGE" ]] || fail "gate accepted '$cmd' (rc=$rc: $out)"
 done
 set +e; ssh "${SSH[@]}" -oIdentityFile="$WORK/central" -s monitoring@127.0.0.1 sftp </dev/null >/dev/null 2>&1; rc_sftp=$?
 ssh "${SSH[@]}" -oIdentityFile="$WORK/central" monitoring@127.0.0.1 </dev/null >/dev/null 2>&1; rc_shell=$?
@@ -236,11 +232,11 @@ collector update-fail "$WORK/D"
 
 # -- 8. revert ---------------------------------------------------------------------
 bootstrap --revert > "$WORK/revert.log" 2>&1 || { cat "$WORK/revert.log"; fail "revert failed"; }
-after="$(docker exec "$CID" sh -c "$LEGACY_SNAPSHOT")"
+after="$(docker exec "$CID" sh -c "$BOOTSTRAP_SNAPSHOT")"
 if [[ "$before" != "$after" ]]; then
   diff <(echo "$before") <(echo "$after") >&2 || true
   fail "revert did not restore the legacy files"
 fi
 gate observe >/dev/null 2>&1 && fail "monitoring still has the forced command after revert" || true
-pass "bootstrap-agent.sh --revert restored authorized_keys, sudoers, units, /opt/storage-viz and the enabled timer byte for byte"
+pass "bootstrap-agent.sh --revert restored authorized_keys, sudoers, units, /opt/storage-viz and the pre-bootstrap unit state"
 echo "e2e: all checks passed"

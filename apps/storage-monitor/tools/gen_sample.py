@@ -381,13 +381,6 @@ def capture_tree(node):
 
 def write_server(directory, doc):
     sid = doc["server_id"]
-    if sid == "orion":
-        doc = {**doc, "config_digest": "a" * 64}
-        doc["scan_generation"] = f"{sid}-{doc['scan_started_unix']}-v1"  # SHIM(M2b..M5c) S3: legacy agent fixture.
-        for row in doc["stale"]:
-            row["age_days"] = max(0, (doc["scan_started_unix"] - row["mtime"]) // 86400)
-        (directory / (sid + ".json")).write_text(json.dumps(doc, indent=2) + "\n")
-        return
     groups = [[m] for m in doc["mounts"]]
     if sid == "hinton":
         groups[1].extend(groups.pop(2))

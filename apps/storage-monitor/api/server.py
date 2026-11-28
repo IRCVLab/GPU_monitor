@@ -13,9 +13,8 @@ from api.errors import http_error
 from api.fixtures import FixtureFleet
 from collector.fleet import Fleet
 from collector.inventory import CapacityThresholds, load_inventory
-from collector.gate import GateHost, HostRouter
-from collector.legacy import LegacyHost
-from collector.transport import GateTransport, OpenSshTransport
+from collector.gate import GateHost
+from collector.transport import GateTransport
 
 
 @dataclass
@@ -36,7 +35,7 @@ def configure(fixtures=None):
     inventory = load_inventory(auth.INVENTORY_PATH)
     project = Path(os.environ.get("STORAGE_VIZ_ROOT", routes.VIEWER_DIR.parent))
     state = Path(os.environ.get("STORAGE_VIZ_STATE_DIR", project / ".storage-viz-state")).resolve()
-    fleet = Fleet(inventory.servers, state, HostRouter(GateHost(GateTransport()), LegacyHost(OpenSshTransport())),
+    fleet = Fleet(inventory.servers, state, GateHost(GateTransport()),
                   cooldown_seconds=int(os.environ.get("STORAGE_VIZ_RESCAN_COOLDOWN_SECONDS", "900")),
                   max_active_jobs=int(os.environ.get("STORAGE_VIZ_RESCAN_MAX_CONCURRENT", "2")))
     return Runtime(
@@ -49,13 +48,12 @@ def configure(fixtures=None):
 class Handler(auth.Auth, BaseHTTPRequestHandler):
     def handle_request(self):
         request_id = secrets.token_hex(16)
-        self.health_probe = False
         try:
             # BaseHTTPRequestHandler rewrites leading slashes. Validate the original target.
             target = self.requestline.split()[1]
             response = routes.dispatch(self, target)
         except Exception as exc:
-            status, headers, body = http_error(exc, request_id, health_probe=self.health_probe)
+            status, headers, body = http_error(exc, request_id)
             if status == 500:
                 logging.exception("storage-viz request %s failed", request_id)
             response = routes.json_response(body, status, headers)

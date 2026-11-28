@@ -15,10 +15,8 @@ import sys
 import pytest
 
 from agent.bootstrap import gate as host_gate
-from collector.gate import GateHost, HostRouter, parse_observe
-from collector.legacy import Observation
+from collector.gate import GateHost, parse_observe, parse_timer
 from collector.test_bug_harness import make_server
-from collector.test_snapshot import base_payload, status_for
 from collector.transport import GATE_VERBS, MAX_GATE_HEADER_BYTES, NOT_GATE, GateTransport, TransportError
 
 REQUEST = "0123456789abcdef0123456789abcdef"
@@ -236,44 +234,11 @@ def test_update_verbs_stage_the_bundle_then_its_signature_and_request_the_update
     assert remote.units.started == ["storage-viz-agent-update.service"] * 2
 
 
-def test_s7_v1_snapshot_is_read_with_get_snapshot_and_checked_against_get_status(transport, remote):
-    payload = base_payload(server_id=SERVER.id, generation=f"{SERVER.id}-1719200000-v1")
-    status, data = status_for(payload, config_digest="a" * 64)
-    write(remote.paths.data / "snapshots" / status["generation"], data)
-    write(remote.paths.data / "scan-status.json", json.dumps(status).encode())
-    host = gate_host(transport)
-    assert host.fetch_capture(SERVER, status) == data
-    changed = dict(status, sha256="f" * 64)
-    with pytest.raises(TransportError) as raised:
-        host.fetch_capture(SERVER, changed)
-    assert raised.value.code == "RACE"
-
-
 # ------------------------------------------------------------------ observe
 
 
 def observe(transport, server=SERVER):
     return gate_host(transport).observe(server)
-
-
-def v1_files(remote):
-    payload = base_payload(server_id=SERVER.id, generation=f"{SERVER.id}-1719200000-v1")
-    status, _ = status_for(payload, config_digest="a" * 64)
-    write(remote.paths.data / "scan-status.json", json.dumps(status).encode())
-    write(remote.paths.data / "scan-lifecycle.json", json.dumps({"state": "complete", "server_id": SERVER.id}).encode())
-    return status
-
-
-def test_a_v1_agent_behind_the_gate_reads_as_it_does_over_s2(transport, remote):
-    status = v1_files(remote)
-    observation = observe(transport)
-    assert observation.transport == "gate"
-    assert observation.manifest is None and observation.publication["sha256"] == status["sha256"]
-    assert observation.status["state"] == "complete", "the v1 lifecycle file decides, as over S2"
-    remote.units.active["storage-viz-scan.service"] = ("active", "a" * 32)
-    observation = observe(transport)
-    assert observation.status["state"] == "running"
-    assert observation.scan.invocation == "a" * 32, "S4 correlates the v1 job by the unit's InvocationID"
 
 
 def manifest_bytes(seq=7):
@@ -328,7 +293,7 @@ def test_a_truenas_host_without_units_reads_as_a_v2_host(transport, remote, tmp_
     remote.paths.scan_lock.touch()
     write(remote.paths.data / "manifest.json", manifest_bytes())
     idle = observe(transport)
-    assert (idle.transport, idle.manifest.seq, idle.run.scanning, idle.agent.broken) == ("gate", 7, False, False)
+    assert (idle.manifest.seq, idle.run.scanning, idle.agent.broken) == (7, False, False)
     assert idle.status["state"] != "running"
     run = {"schema": "storage-viz.run/2", "run_id": "b" * 32, "request_ids": []}
     write(remote.paths.data / "run.json", json.dumps(run).encode())
@@ -362,93 +327,6 @@ def test_observe_refuses_malformed_replies_as_bad_telemetry(transport, remote):
 # ------------------------------------------------------------------ transport choice
 
 
-class Scripted:
-    def __init__(self, name):
-        self.name = name
-        self.errors = []
-        self.calls = []
-
-    def observe(self, server):
-        self.calls.append("observe")
-        if self.errors:
-            error = self.errors.pop(0)
-            if error is not None:
-                raise TransportError(error, error)
-        return Observation(0, {}, None, None, None, transport=self.name)
-
-    def get_manifest(self, server):
-        self.calls.append("get_manifest")
-        return self.name.encode()
-
-
-def router():
-    gate, s2 = Scripted("gate"), Scripted("legacy")
-    return HostRouter(gate, s2), gate, s2
-
-
-def test_a_gate_host_in_the_inventory_never_uses_s2():
-    hosts, gate, s2 = router()
-    server = dataclasses.replace(SERVER, transport="gate")
-    gate.errors = [NOT_GATE]
-    with pytest.raises(TransportError):
-        hosts.observe(server)
-    assert hosts.observe(server).transport == "gate" and hosts.get_manifest(server) == b"gate"
-    assert s2.calls == [] and hosts.transport(server) == "gate"
-
-
-def test_a_legacy_host_moves_to_the_gate_once_the_gate_answers_and_back_when_it_is_reverted():
-    hosts, gate, s2 = router()
-    server = dataclasses.replace(SERVER, transport="legacy")
-    gate.errors = [NOT_GATE]
-    assert hosts.observe(server).transport == "legacy" and hosts.transport(server) == "legacy"
-    assert hosts.observe(server).transport == "legacy"
-    assert gate.calls == ["observe"], "the gate is tried on the first contact, not on every S2 observe"
-    s2.errors = ["TELEMETRY_UNAVAILABLE"]  # bootstrapped: the forced command refuses the S2 probe
-    with pytest.raises(TransportError):
-        hosts.observe(server)
-    assert hosts.observe(server).transport == "gate" and hosts.transport(server) == "gate"
-    assert hosts.get_manifest(server) == b"gate"
-    gate.errors = ["UNREACHABLE"]
-    with pytest.raises(TransportError):
-        hosts.observe(server)
-    assert hosts.transport(server) == "gate", "a failed contact proves nothing about the transport"
-    gate.errors = [NOT_GATE]  # bootstrap reverted
-    assert hosts.observe(server).transport == "legacy" and hosts.transport(server) == "legacy"
-
-
-def test_a_gate_refusal_on_a_legacy_host_proves_the_gate():
-    hosts, gate, s2 = router()
-    server = dataclasses.replace(SERVER, transport="legacy")
-    gate.errors = ["IO_ERROR"]
-    with pytest.raises(TransportError):
-        hosts.observe(server)
-    assert hosts.transport(server) == "gate" and s2.calls == []
-
-
-def test_an_unreachable_legacy_host_is_not_contacted_twice_per_observe():
-    hosts, gate, s2 = router()
-    server = dataclasses.replace(SERVER, transport="legacy")
-    gate.errors = ["TIMEOUT"]
-    with pytest.raises(TransportError):
-        hosts.observe(server)
-    assert s2.calls == [] and hosts.transport(server) == "legacy"
-
-
-def test_a_host_the_inventory_leaves_unmarked_is_legacy_and_moves_to_the_gate_once_it_answers():
-    from collector.inventory import parse_inventory
-
-    raw = {"servers": [{"id": SERVER.id, "display_name": "Alpha", "host": SERVER.host, "username": "monitoring",
-                        "identity_file": str(SERVER.identity_file), "known_hosts_file": str(SERVER.known_hosts_file)}]}
-    server = parse_inventory(raw).servers[0]
-    hosts, gate, s2 = router()
-    gate.errors = [NOT_GATE]  # not bootstrapped yet
-    assert hosts.observe(server).transport == "legacy" and hosts.transport(server) == "legacy"
-    s2.errors = ["TELEMETRY_UNAVAILABLE"]  # bootstrapped: the forced command refuses the S2 probe
-    with pytest.raises(TransportError):
-        hosts.observe(server)
-    assert hosts.observe(server).transport == "gate" and hosts.transport(server) == "gate"
-
-
 @pytest.mark.parametrize("host_code", ["NOT_GATE", "TIMEOUT", "AUTH_FAILED", "UNREACHABLE", "SOMETHING_NEW"])
 def test_a_host_cannot_claim_centrals_own_codes(transport, remote, host_code):
     remote.reply = (1, f"storage-viz-gate/1 err {host_code}\n".encode(), b"")
@@ -464,16 +342,23 @@ def test_the_gates_own_refusals_keep_their_code_and_the_host_text(transport, rem
     assert (raised.value.code, raised.value.host_code) == ("START_FAILED", "START_FAILED")
 
 
-def test_a_legacy_host_whose_gate_answers_err_not_gate_stays_on_the_gate(transport, remote):
-    hosts = HostRouter(GateHost(transport), Scripted("legacy"))
-    server = dataclasses.replace(SERVER, transport="legacy")
-    remote.reply = (1, b"storage-viz-gate/1 err NOT_GATE\n", b"")
-    with pytest.raises(TransportError):
-        hosts.observe(server)
-    assert hosts.transport(server) == "gate" and hosts.legacy.calls == [], "a host text switched the transport"
-
-
 def test_an_updater_code_that_is_not_a_code_reads_as_no_attempt(transport, remote):
     attempt = {"action": "activate", "sha": SHA, "outcome": "refused", "code": "floor; rm -rf", "finished_unix": 1}
     write(remote.paths.update / "state.json", json.dumps({"last_attempt": attempt}).encode())
     assert observe(transport).agent.attempt is None
+
+
+def test_bootstrap_one_observe_still_supplies_service_and_timer_details(remote):
+    report = json.loads(host_gate.observe(remote.paths, remote.units))
+    expected = parse_observe(json.dumps(report).encode(), SERVER)
+    report["bootstrap_version"] = 1
+    report["legacy"] = dict(report.pop("telemetry"), published={}, lifecycle={}, progress={})
+    assert parse_observe(json.dumps(report).encode(), SERVER) == expected
+
+
+def test_timer_uses_the_host_clock_for_both_absolute_and_monotonic_deadlines():
+    assert parse_timer("ActiveState=active\nNextElapseUSecRealtime=Mon 2026-11-16 12:00:00 UTC")["next_run_unix"] == 1794830400
+    timer = "ActiveState=active\nUnit=storage-viz-scheduled-scan.service\nNextElapseUSecMonotonic=1h 2min 3s"
+    assert parse_timer(timer, remote_unix=10000, remote_monotonic=3600) == {
+        "timer_state": "active", "schedule_mode": "due-check", "next_run_unix": 10123}
+    assert parse_timer(timer.replace("=active", "=inactive"))["next_run_unix"] is None
