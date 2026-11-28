@@ -506,6 +506,10 @@ def plan_agent_bundle(config: Config, sha: str, ci_run: dict[str, object], get_j
          and r.get("head_branch") == "main" and r.get("event") == "workflow_run" and isinstance(r.get("id"), int)),
         key=lambda r: r["id"], reverse=True,
     )
+    # Every main push triggers the signing workflow once per finished upstream workflow;
+    # the runs whose upstream was not ci finish "skipped" without doing anything. A skipped
+    # run says nothing about the bundle, so it must not shadow the run that signed it.
+    runs = [r for r in runs if not (r.get("status") == "completed" and r.get("conclusion") == "skipped")] or runs
     if not runs:
         ci_done = _iso_seconds(ci_run.get("updated_at"))
         if ci_done is not None and now - ci_done < AGENT_RUN_GRACE_SECONDS:
