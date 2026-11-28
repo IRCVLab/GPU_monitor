@@ -1200,3 +1200,27 @@ class AuthenticatedApiTest(unittest.TestCase):
             puller.default_get_json("/x", puller.read_github_token(Path(tmp) / "missing"))
         self.assertEqual(seen[0].get("Authorization"), "Bearer tok-123")
         self.assertNotIn("Authorization", seen[1])
+
+
+class SkippedSigningRunTest(unittest.TestCase):
+    def test_a_newer_skipped_run_does_not_shadow_the_run_that_signed(self):
+        # Live: dd4cd0d had a successful signing run and a newer skipped one; the puller
+        # read only the newest and kept the old bundle for hours.
+        puller = load_puller()
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = StorageReleasePullerTest.config(StorageReleasePullerTest(), tmp)
+            (Path(tmp) / "allowed").write_text("x", encoding="utf-8")
+            runs = [
+                {"id": 10, "event": "workflow_run", "head_branch": "main", "head_sha": SHA1, "status": "completed", "conclusion": "success"},
+                {"id": 11, "event": "workflow_run", "head_branch": "main", "head_sha": SHA1, "status": "completed", "conclusion": "skipped"},
+            ]
+            def get_json(path):
+                if "/runs?" in path:
+                    return {"workflow_runs": runs}
+                if path.endswith("/artifacts?per_page=100"):
+                    assert "/runs/10/" in path, path
+                    return {"artifacts": [{"name": f"{puller.AGENT_ARTIFACT_PREFIX}-{SHA1}", "expired": False, "id": 7}]}
+                raise AssertionError(path)
+            with mock.patch.object(puller, "agent_channel_disabled", lambda config: None):
+                plan = puller.plan_agent_bundle(cfg, SHA1, {}, get_json, 0.0)
+            self.assertEqual((plan.kind, plan.artifact_id if hasattr(plan, "artifact_id") else plan[2]), ("fresh", 7))
