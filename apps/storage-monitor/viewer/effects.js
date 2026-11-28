@@ -73,7 +73,14 @@ export function bindEffects(store, fetcher = fetchResource) {
     if (!id || !session?.can_rescan || tracking(id)?.busy) return;
     observe(id,{phase:'starting',busy:true});
     const key = 'rescan/'+id;
-    const response = await request(key,{method:'POST',headers:{'X-CSRF-Token':session.csrf_token,'Content-Type':'application/json'},body:'{}'});
+    const post = token => request(key,{method:'POST',headers:{'X-CSRF-Token':token,'Content-Type':'application/json'},body:'{}'});
+    let response = await post(session.csrf_token);
+    if (!response && resource(key)?.code === 'BAD_CSRF') {
+      // The session lasts an hour and is re-keyed when the dashboard restarts, so a tab
+      // left open holds a stale token: fetch a fresh session (new cookie) and retry once.
+      const fresh = await request('session');
+      if (fresh?.csrf_token) response = await post(fresh.csrf_token);
+    }
     const error = resource(key);
     const job = response?.job ?? error?.problem?.job;
     if (!response && !(error?.code === 'ACTIVE_JOB' && job)) {

@@ -40,7 +40,7 @@ function runViewer(t,handle) {
   const calls = [];
   const api = bindEffects(store,async (key,signal,init) => {
     calls.push(key);
-    if (key === 'session') return {can_rescan:true,csrf_token:'token'};
+    if (key === 'session') return {can_rescan:true,csrf_token:'token',...handle.session?.()};
     if (key === 'fleet') return {servers:[{server_id:'a',revision:'x'},{server_id:'b',revision:'y'}]};
     return handle(key,init);
   });
@@ -107,6 +107,25 @@ test('conflict without local job never polls a persisted receipt, cooldown and f
   await viewer.rescan();
   assert.match(viewer.job().message,/FAILED/);
   assert.equal(viewer.job().busy,false);
+});
+
+test('a rescan rejected for a stale CSRF token retries once with a fresh session',async t => {
+  const sent = [];
+  const handle = (key,init) => {
+    if (key === 'detail/a') return {hostname:'a'};
+    if (key === 'rescan/a') {
+      sent.push(init.headers['X-CSRF-Token']);
+      if (sent.length === 1) throw Object.assign(new Error('forbidden'),{body:{error:{code:'BAD_CSRF'}}});
+      return {job:{request_id:'new',state:'running'}};
+    }
+    return {job:{request_id:'new',state:'running'}};
+  };
+  const viewer = runViewer(t,handle);
+  await viewer.refresh();
+  handle.session = () => ({csrf_token:'fresh'});
+  await viewer.rescan();
+  assert.deepEqual(sent,['token','fresh']);
+  assert.equal(viewer.job().busy,true);
 });
 
 test('the active volume capture is shared by SHA across focus and tab changes', async t => {
