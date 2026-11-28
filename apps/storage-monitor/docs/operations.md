@@ -290,6 +290,28 @@ python3 -m api.server --fixtures tests/fixtures/fleet
 
 Use `http://127.0.0.1:8088`. In this mode `/api/v2/fleet` reports `rollout: null`, the UI shows the sample marker, and `tests/fixtures/fleet/hosts.json` keeps the four generated sample servers in this exact order: `hinton`, `atlas`, `orion`, `zeus`. This mode is read-only sample data for local development. Production inventory mode is separate, reports a rollout object, and does not imply production storage is sample data.
 
+## Nexus network card
+
+The overview page shows a throughput card for the Nexus link, read from the storage switch's RouterOS API rather than from inside Nexus. The dashboard polls the switch's byte counters every 2 seconds over a persistent API connection and keeps 1-minute average and maximum buckets for 24 hours. The buckets are written to `network.json` in `STORAGE_VIZ_STATE_DIR` once a minute, so a release restart keeps the graph.
+
+Set all of these in `/etc/storage-viz/dashboard.env`. With none set the card is off, and a partial or malformed setting stops the dashboard at startup with a message naming the variable.
+
+```bash
+STORAGE_VIZ_NETWORK_SWITCH=192.168.0.250:8728
+STORAGE_VIZ_NETWORK_SECRET_FILE=/etc/storage-viz/switch-api.secret
+STORAGE_VIZ_NETWORK_USER=storage-viz
+STORAGE_VIZ_NETWORK_LINKS=nexus:bond_nas:200000
+```
+
+- `STORAGE_VIZ_NETWORK_SWITCH` is `host` or `host:port` (default port 8728, the plain API; `api-ssl` is not supported).
+- `STORAGE_VIZ_NETWORK_SECRET_FILE` holds the API password. The file must be readable by the dashboard user and is read again at each reconnect. The password is never logged or returned.
+- `STORAGE_VIZ_NETWORK_USER` defaults to `storage-viz`. Use a read-only account. The dashboard only sends `/login` and `/interface/print`.
+- `STORAGE_VIZ_NETWORK_LINKS` is a comma-separated list of `server_id:interface:capacity_mbps`. `bond_nas` carries 2 × 100 Gb/s, so its capacity is `200000`.
+
+`GET /api/v2/network` returns `{"links":[{"server_id","interface","capacity_bps","now","peak","buckets","state"}],"sample_seconds":2,"generated_unix":N}`, or `{"links":[]}` when the card is off. Rates are from the server's side: `rx` is traffic sent to the server (the switch interface's tx counter) and `tx` is traffic the server sends. Each bucket is `[minute_unix, rx_avg, rx_max, tx_avg, tx_max]` in bits per second. `peak` is the 24-hour maximum of the per-minute maxima, stamped with its minute. `state` is `ok`, `stale` (no sample for 30 seconds) or `error` (the switch is unreachable or the interface is missing). A counter reset or a gap over 10 seconds leaves a hole in the graph and no rate is made up.
+
+The dashboard unit does not restrict outbound TCP, so no unit change is needed. Sample mode (`--fixtures`) serves a synthetic Nexus day and never connects to a switch.
+
 ## Server inventory and SSH material
 
 `/etc/storage-viz/servers.json` is strict JSON-compatible configuration. Each enabled server references external SSH files:

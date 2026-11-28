@@ -43,10 +43,12 @@ export function bindEffects(store, fetcher = fetchResource) {
     if (!row) return;
     detail(id,force || row.revision !== resource(detailKey(id))?.data?.revision);
   }
+  const network = () => state().route.page === 'overview' && resource('network')?.status !== 'loading' ? request('network') : undefined;
   async function refresh(force = false) {
     if (!resource('session')?.data && !await request('session')) return;
     const fleet = await request('fleet');
     if (!fleet) return;
+    network();
     const id = state().route.serverId;
     for (const row of fleet.servers) {
       const held = resource(detailKey(row.server_id))?.data;
@@ -115,14 +117,17 @@ export function bindEffects(store, fetcher = fetchResource) {
   }
   store.subscribe((next,previous,event) => {
     if (next.route.serverId !== previous.route.serverId) openServer(next.route.serverId);
+    if (next.route.page === 'overview' && previous.route.page !== 'overview') network();
     if (next.route !== previous.route || event.type === 'DataLoaded' || event.type === 'Select') loadCaptures();
   });
   window.addEventListener('focus',() => refresh(true));
   document.addEventListener('visibilitychange',() => { if (!document.hidden) refresh(true); });
   setInterval(() => { if (!document.hidden) refresh(); },60000);
   setInterval(() => {
+    if (document.hidden) return;
+    if (state().route.page === 'overview') return network();
     const id = state().route.serverId;
-    if (!id || document.hidden) return;
+    if (!id) return;
     if (tracking(id)?.busy) return pollJob(id);
     const status = resource('activity/'+id)?.data;
     const summary = resource('fleet')?.data?.servers.find(row => row.server_id === id);

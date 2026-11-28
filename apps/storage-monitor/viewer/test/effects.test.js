@@ -31,12 +31,12 @@ test('session errors stay visible to the viewer',async t => {
   });
   await assert.rejects(fetchResource('session',new AbortController().signal),{status:404});
 });
-function runViewer(t,handle) {
+function runViewer(t,handle,url = '/?server=a') {
   const timers = new Map();
   t.mock.method(globalThis,'setInterval',(fn,ms) => timers.set(ms,fn));
   globalThis.window = new EventTarget();
   globalThis.document = new EventTarget();
-  const store = createStore(reducer,initialState(parseUrl('/?server=a')));
+  const store = createStore(reducer,initialState(parseUrl(url)));
   const calls = [];
   const api = bindEffects(store,async (key,signal,init) => {
     calls.push(key);
@@ -143,4 +143,33 @@ test('the active volume capture is shared by SHA across focus and tab changes', 
   await new Promise(setImmediate);
   assert.equal(viewer.calls.filter(key => key === 'capture/a').length,1);
   assert.equal(viewer.store.getState().resources['detail/a'].data.mounts[0].tree.name,'a');
+});
+
+test('the overview polls the network card every 5s and the server page never fetches it',async t => {
+  const overview = runViewer(t,key => key === 'network' ? {links:[]} : {},'/');
+  await overview.refresh();
+  assert.deepEqual(overview.calls,['session','fleet','network']);
+  await overview.tick();
+  await overview.tick();
+  assert.deepEqual(overview.calls.slice(3),['network','network']);
+  overview.store.dispatch({type:'Navigate',route:parseUrl('/?server=a')});
+  await new Promise(setImmediate);
+  const before = overview.calls.length;
+  await overview.tick();
+  assert.ok(!overview.calls.slice(before).includes('network'));
+  const server = runViewer(t,() => ({}));
+  await server.refresh();
+  assert.ok(!server.calls.includes('network'));
+  overview.store.dispatch({type:'Navigate',route:parseUrl('/')});
+  await new Promise(setImmediate);
+  assert.equal(overview.calls.at(-1),'network');
+});
+test('network resource is fetched from its own route and must carry links',async t => {
+  t.mock.method(globalThis,'fetch',async url => {
+    assert.equal(url,'/api/v2/network');
+    return Response.json({links:[]});
+  });
+  assert.deepEqual(await fetchResource('network',new AbortController().signal),{links:[]});
+  t.mock.method(globalThis,'fetch',async () => Response.json({}));
+  await assert.rejects(fetchResource('network',new AbortController().signal),/Missing network links/);
 });

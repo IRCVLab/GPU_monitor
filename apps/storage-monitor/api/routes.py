@@ -34,6 +34,7 @@ ASSETS = (
     "users-chart.js",
     "views/files.js",
     "views/header.js",
+    "views/network.js",
     "views/notices.js",
     "views/overview.js",
     "views/scan-status.js",
@@ -122,6 +123,11 @@ def fleet(handler):
     return Response([header[:-1], b',"servers":[', b",".join(rows), b"]}"])
 
 
+def network(handler):
+    traffic = handler.server.runtime.network
+    return json_response(traffic.snapshot() if traffic else {"links": []})
+
+
 def checked_view(source, sid):
     view = source.view(sid)
     if view.error and view.publication is None:
@@ -165,6 +171,7 @@ def capture(handler, sid, vid, sha):
 ROUTES = (
     ("GET", r"/api/v2/session", session, "session"),
     ("GET", r"/api/v2/fleet", fleet, "read"),
+    ("GET", r"/api/v2/network", network, "read"),
     ("GET", r"/api/v2/servers/([^/]+)", detail, "read"),
     ("GET", r"/api/v2/servers/([^/]+)/activity", activity, "read"),
     ("GET", r"/api/v2/servers/([^/]+)/volumes/([^/]+)/captures/([^/]+)", capture, "read"),

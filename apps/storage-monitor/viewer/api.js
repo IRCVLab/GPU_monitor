@@ -51,12 +51,13 @@ export async function fetchResource(key, signal, options = {}) {
   const server = '/api/v2/servers/' + encodeURIComponent(id);
   let path = server;
   if (kind === 'capture') path = server + '/volumes/' + encodeURIComponent(options.volumeId) + '/captures/' + options.sha;
-  else if (kind === 'session' || kind === 'fleet') path = '/api/v2/' + kind;
+  else if (kind === 'session' || kind === 'fleet' || kind === 'network') path = '/api/v2/' + kind;
   else if (kind !== 'detail') path += '/' + kind;
   const {sha, volumeId, ...init} = options;
   const body = await fetchJson(path,{...init, signal, cache:kind === 'capture' ? 'default' : 'no-store'});
   if (!body || typeof body !== 'object') throw new Error('Invalid '+kind+' response');
   if (kind === 'fleet' && !Array.isArray(body.servers)) throw new Error('Missing fleet rows');
+  if (kind === 'network' && !Array.isArray(body.links)) throw new Error('Missing network links');
   if (kind === 'detail') {
     if (body.server_id !== id || !Array.isArray(body.volumes)) throw new Error('Invalid server detail');
     return normalizeDetail(body);
