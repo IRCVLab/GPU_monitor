@@ -416,7 +416,7 @@ class Bootstrap:
     def data_directories(self):
         """(path, mode, group) of the directories ensure_directories creates, today's modes kept."""
         return (
-            (self.data, 0o750, GROUP), (self.data / "snapshots", 0o750, GROUP),
+            (self.data, 0o750, GROUP),
             # setgid: files the gate writes as monitoring get the collector group, which
             # the updater and scan units can read without CAP_DAC_OVERRIDE.
             (self.data / "requests", 0o2770, GROUP), (self.data / "update", 0o750, GROUP),
