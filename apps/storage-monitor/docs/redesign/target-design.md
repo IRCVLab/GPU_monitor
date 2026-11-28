@@ -1,6 +1,6 @@
 # Storage monitor: target design and migration plan
 
-Status: final proposal for owner review. No code is written yet. Inputs: `docs/redesign/as-is.md` and `docs/redesign/bug-catalog.md` at main 06cdd5f, the arena candidates and the reference branches `fix/storage-bug-sweep` (collector and API) and `fix/storage-viewer-sweep` (viewer). Paths are relative to `apps/storage-monitor/` unless they start with `/`.
+Status: deployed on 2026-11-27. The 2026-11-28 cleanup retired the transition code listed in §6.2. The milestone sequence records the original rollout plan. Inputs: `docs/redesign/as-is.md` and `docs/redesign/bug-catalog.md` at main 06cdd5f, the arena candidates and the reference branches `fix/storage-bug-sweep` (collector and API) and `fix/storage-viewer-sweep` (viewer). Paths are relative to `apps/storage-monitor/` unless they start with `/`.
 
 ## 0. The shape in one page
 
@@ -895,7 +895,7 @@ Rules for every unit: it lands as one commit series, or as the named a/b series.
 
 - Changes: retire the old store and duration-history readers. Existing directories stay on disk pending an owner decision. Ship `bootstrap_version 2` without S7 and rerun `bootstrap-agent.sh` on each host, one command per host. Update `docs/architecture.md` and `docs/operations.md`, and replace `docs/schema-v1.md` with `docs/schema-v2.md`.
 - Harness: `check_bug_coverage.py` green with no expected-failure markers left; `check_shims.py` finds no markers; `lint_owners.py`, `lint_ids.py` and `lint_viewer_judgments.py` over the whole tree.
-- Rollback: the store deletion is not reversible, so it runs only after the week. The bootstrap rerun reverts per host with `--revert`.
+- The old central store and duration-history directories stay on disk until the owner decides their disposition. Bootstrap 1 continues to support current bundles and central operations.
 
 ### 6.2 Temporary shims
 
@@ -912,7 +912,7 @@ Every shim carries a `SHIM(Mx..My)` marker that `tools/check_shims.py` checks (I
 | S7 | Gate verbs `get-snapshot` and `get-status` | M3 | central callers M5c; verbs M9 (`bootstrap_version 2`) (deleted 2026-11-28) |
 | S8 | New agent keeps the v1 files on hosts for rollback | M5b | M5c (deleted 2026-11-28) |
 | S9 | Installed health checker probes the session, ordered inventory IDs and an authenticated POST for a nonexistent hc- server. Release proxy forwards this probe until the checker is reinstalled. The reinstalled checker probes a rolled-back pre-redesign release the same way. | M8 | M9 (deleted 2026-11-28) |
-| R1 | Old store `STATE_DIR/<sid>/` kept for rollback (retained data, no code) | M2b | M9 (deleted 2026-11-28) |
+| R1 | Old store reader for `STATE_DIR/<sid>/`. The directories remain on disk. | M2b | M9 (deleted 2026-11-28) |
 
 ## 7. Alternatives considered and rejected
 
