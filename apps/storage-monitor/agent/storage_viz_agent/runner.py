@@ -1,5 +1,6 @@
 """The host's single-writer scan transaction."""
 import dataclasses
+import contextlib
 import logging
 import fcntl
 import os
@@ -7,6 +8,7 @@ from itertools import count, islice
 from pathlib import Path
 import socket
 import stat
+import threading
 import subprocess
 import tempfile
 import time
@@ -103,6 +105,40 @@ def prepare_volumes(manifest, roots, now):
                 last_attempt=previous.get("last_attempt") if reuse else None)
     manifest["volumes"] = list(volumes.values())
     return volumes
+
+
+# A slow group (a 20 TB HDD) can scan for hours. Capacity is otherwise sampled only at
+# group commits, and hourly timer runs exit 75 while this run holds the lock, so central
+# would see hours-old capacity. Refresh it on this interval during a group's scan.
+CAPACITY_REFRESH_SECONDS = 600
+
+
+@contextlib.contextmanager
+def refreshing_capacity(volumes, root_by_vid, samples, commit, clock, interval=None):
+    """While the block runs, sample every volume's capacity and commit the manifest each
+    interval. The refresher is the only writer while the scanner runs, and it stops before
+    the block's caller touches the manifest again."""
+    interval = CAPACITY_REFRESH_SECONDS if interval is None else interval
+    stop = threading.Event()
+
+    def loop():
+        while not stop.wait(interval):
+            for vid, roots in root_by_vid.items():
+                samples[vid] = capacity.sample_volume(roots, samples[vid], clock())
+                if vid in volumes:
+                    volumes[vid]["capacity"] = samples[vid]
+            try:
+                commit()
+            except Exception:  # a failed refresh must never abort the scan
+                logging.exception("capacity refresh commit failed")
+
+    thread = threading.Thread(target=loop, name="capacity-refresh", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 def run_group(cfg, record, group, volumes, execute, clock):
@@ -273,7 +309,8 @@ def _locked(cfg, scheduled, release, reader, resolver, execute, clock, persisted
         for group, members in groups.items():
             record["current"] = dict(group=group, started_unix=clock())
             save()
-            captures = run_group(cfg, record, group, members, execute, clock)
+            with refreshing_capacity(volumes, root_by_vid, samples, commit, clock):
+                captures = run_group(cfg, record, group, members, execute, clock)
             samples = {vid: capacity.sample_volume(rs, samples[vid], clock()) for vid, rs in root_by_vid.items()}
             for vid in members:
                 v = volumes[vid]

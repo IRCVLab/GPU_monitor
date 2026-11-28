@@ -304,3 +304,25 @@ def test_bad_scanner_user_rows_do_not_prevent_publication(tmp_path):
     assert host.volumes()["/data"]["capture"] != prior
     assert host.volumes()["/data"]["last_attempt"]["outcome"] == "complete"
     assert host.volumes()["/home"]["last_attempt"]["outcome"] == "complete"
+
+
+def test_capacity_is_refreshed_during_a_long_group_scan(tmp_path, monkeypatch):
+    # Live: turing's 21.8 TB HDD scanned for hours; capacity was sampled only at group
+    # commits, so central showed every volume's capacity as unknown mid-scan.
+    import threading
+    host = Host(tmp_path)
+    monkeypatch.setattr(runner, "CAPACITY_REFRESH_SECONDS", 0.05)
+    commits_during_scan = []
+    original = host.scan
+
+    def slow_scan(argv):
+        before = host.manifest()["seq"] if (host.data / "manifest.json").exists() else 0
+        host.now += 1000
+        deadline = threading.Event()
+        deadline.wait(0.4)  # the scanner runs; the refresher should commit meanwhile
+        commits_during_scan.append(host.manifest()["seq"] - before)
+        return original(argv)
+
+    host.scan = slow_scan
+    assert host.run() == 0
+    assert max(commits_during_scan) >= 1, "no manifest commit while the scanner ran"
