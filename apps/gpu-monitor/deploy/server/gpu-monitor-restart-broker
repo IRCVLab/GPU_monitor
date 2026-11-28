@@ -43,8 +43,14 @@ if [[ "$test_mode" == true ]]; then
   for part in "${path_parts[@]}"; do [[ "$part" == /* && -d "$part" ]] || fail "invalid test PATH"; done
 fi
 
-"$systemctl_command" "$action" "gpu-monitor-backend@${environment}.service"
-"$systemctl_command" "$action" "gpu-monitor-frontend@${environment}.service"
+units=("gpu-monitor-backend@${environment}.service" "gpu-monitor-frontend@${environment}.service")
 if [[ "$environment" == live ]]; then
-  "$systemctl_command" "$action" "gpu-monitor-bridge@live.service"
+  units+=("gpu-monitor-bridge@live.service")
 fi
+# A restarted release must survive a reboot. enable is idempotent; stop leaves boot state alone.
+if [[ "$action" == restart ]]; then
+  "$systemctl_command" enable "${units[@]}"
+fi
+for unit in "${units[@]}"; do
+  "$systemctl_command" "$action" "$unit"
+done

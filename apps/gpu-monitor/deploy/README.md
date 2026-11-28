@@ -98,6 +98,8 @@ The installer creates `/etc/gpu-monitor/github-token` empty, owned by `root:root
 sudo install -m 0640 -o root -g root /path/to/token /etc/gpu-monitor/github-token
 ```
 
+The installer never enables or starts the runtime units. Each activation enables the units it restarts through the restart broker (`gpu-monitor-backend@<env>` and `gpu-monitor-frontend@<env>`, plus `gpu-monitor-bridge@live` for Live), so the active release comes back after a reboot. A `stop` leaves the boot setting unchanged.
+
 On every install, the installer atomically rewrites and deduplicates only the exact reserved runtime keys below while preserving comments, unrelated settings, `MONITORING_EXPECTED_SERVER_COUNT`, database backup settings, `DATABASE_URL`, and secrets byte-for-byte:
 
 ```text
